@@ -7,6 +7,9 @@ import { redirect } from "next/navigation";
 
 export const signInAction = async () => {
   const supabase = await createClient();
+  console.log('Signing in');
+  console.log(process.env.VERCEL_PROJECT_PRODUCTION_URL);
+  console.log(process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL);
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'azure',
     options: {
