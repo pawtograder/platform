@@ -44,7 +44,16 @@ export type GitHubOIDCToken = {
     exp:                   number;
     iat:                   number;
 }
-
+export function getGithubPrivateKey(): string {
+    if(process.env.GITHUB_PRIVATE_KEY_STRING){
+        return process.env.GITHUB_PRIVATE_KEY_STRING;
+    } else if(process.env.GITHUB_PRIVATE_KEY_FILE){
+        return readFileSync(process.env.GITHUB_PRIVATE_KEY_FILE, 'utf8');
+    }
+    else{
+        throw new Error('No github private key found');
+    }
+}
 export default class GitHubController {
 
     private _app: App;
@@ -180,7 +189,7 @@ export default class GitHubController {
                     authStrategy: createAppAuth,
                     auth: {
                         appId: process.env.GITHUB_APP_ID,
-                        privateKey: readFileSync(process.env.GITHUB_PRIVATE_KEY_FILE || '', 'utf8'),
+                        privateKey: getGithubPrivateKey(),
                         installationId: installation.id,
                     },
                 })

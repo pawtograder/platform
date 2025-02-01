@@ -1,5 +1,5 @@
 import { AutograderController } from "./AutograderController.js";
-import GitHubController from "../GitHubController.js";
+import GitHubController, { getGithubPrivateKey } from "../GitHubController.js";
 import { App } from "@octokit/app";
 import { createAppAuth } from "@octokit/auth-app";
 import { readFileSync } from "fs";
@@ -14,7 +14,7 @@ describe('AutograderController', () => {
         const app = new App({
             authStrategy: createAppAuth,
             appId: process.env.GITHUB_APP_ID || -1,
-            privateKey: readFileSync(process.env.GITHUB_PRIVATE_KEY_FILE || 'process.env.GITHUB_PRIVATE_KEY_FILE is blank!', 'utf8'),
+            privateKey: getGithubPrivateKey(),
             oauth: {
                 clientId: process.env.GITHUB_OAUTH_CLIENT_ID || '',
                 clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET || '',
