@@ -6,11 +6,9 @@
   "type": "module",
   "scripts": {
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.js",
-    "build": "tsc",
     "dev": "nodemon",
     "lint": "tslint -c tslint.json src/**/*.ts",
     "prestart": "tsoa spec-and-routes",
-    "prepublish": "npm run build",
     "swagger": "tsoa spec",
     "start": "tsimp src/index.js"
   },
