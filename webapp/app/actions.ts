@@ -7,14 +7,11 @@ import { redirect } from "next/navigation";
 
 export const signInAction = async () => {
   const supabase = await createClient();
-  console.log('Signing in');
-  console.log(process.env.VERCEL_PROJECT_PRODUCTION_URL);
-  console.log(process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL);
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'azure',
     options: {
       scopes: 'email',
-      redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
+      redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
     },
   })
 
