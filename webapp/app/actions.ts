@@ -11,7 +11,7 @@ export const signInAction = async () => {
     provider: 'azure',
     options: {
       scopes: 'email',
-      redirectTo: `${process.env.VERCEL_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
+      redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
     },
   })
 
