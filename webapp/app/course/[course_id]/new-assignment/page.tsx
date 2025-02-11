@@ -1,4 +1,4 @@
-import { getCourse } from "@/lib/utils";
+import { getCourse } from "@/lib/ssrUtils";
 import CreateAssignment from "./form";
 
 export default async function NewAssignmentPage({

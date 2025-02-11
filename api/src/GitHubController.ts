@@ -96,6 +96,7 @@ export default class GitHubController {
     async getGraderURL(repo: string): Promise<string> {
         const octokit = this._installations[0].octokit;
         //get SHA of HEAD commit
+        console.log('Getting grader URL for', repo);
         const head = await octokit.request('GET /repos/{owner}/{repo}/git/ref/heads/main', {
             owner: repo.split('/')[0],
             repo: repo.split('/')[1]
@@ -229,7 +230,7 @@ export default class GitHubController {
 
         const octokit = this._installations[0].octokit;
         const repos = await octokit.request('GET /orgs/{org}/repos', {
-            org: 'autograder-dev'
+            org: 'pawtograder'
         });
         const templateRepos = repos.data.filter((repo) => repo.is_template);
 

@@ -87,17 +87,6 @@ export default function CreateAssignment({ course }: { course: Database['public'
 
     return (<div>
         <Heading size="2xl">Create Assignment</Heading>
-        <Button onClick={() => {
-            console.log("Clicked")
-            toaster.create({
-                title: "Toast Title",
-                description: "Toast Description",
-                duration: 5000,
-                type: "success",
-                placement: "bottom-end",
-            })
-
-        }}>Click</Button>
         <Toaster />
         <form onSubmit={handleSubmit(create)}>
             <Fieldset.Root size="lg" maxW="md">

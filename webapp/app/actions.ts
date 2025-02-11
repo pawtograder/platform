@@ -7,18 +7,22 @@ import { redirect } from "next/navigation";
 
 export const signInAction = async () => {
   const supabase = await createClient();
+
+  const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
+  console.log("Redirecting to")
+  console.log(redirectTo)
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'azure',
     options: {
       scopes: 'email',
-      redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
+      redirectTo
     },
   })
 
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
-  if(data.url){
+  if (data.url) {
     console.log(`Redirecting to ${data.url}`);
     return redirect(data.url);
   }
@@ -46,6 +50,6 @@ export const linkGitHubAction = async () => {
   });
   console.log(data);
   console.log(error);
-  if(data.url)
+  if (data.url)
     return redirect(data.url);
 }

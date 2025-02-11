@@ -1,9 +1,6 @@
-import { isInstructor } from "@/lib/utils";
-import { createClient } from "@/utils/supabase/server"
-import { Table } from "@chakra-ui/react";
-import { jwtDecode } from "jwt-decode";
+import { createClient } from "@/utils/supabase/server";
+import { Box, Table } from "@chakra-ui/react";
 import Link from "next/link";
-import { useRouter } from "next/navigation"
 
 export default async function CourseLanding({
     course_id }: {
@@ -14,7 +11,7 @@ export default async function CourseLanding({
 
     let actions = <></>;
     actions = <Link href={`/course/${course_id}/new-assignment`}>New Assignment</Link>
-    return <div>{actions}
+    return <Box>{actions}
         <Table.Root>
             <Table.Header>
                 <Table.Row>
@@ -35,6 +32,6 @@ export default async function CourseLanding({
                 ))}
             </Table.Body>
         </Table.Root>
-    </div>
+    </Box>
 
 }

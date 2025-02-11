@@ -10,7 +10,8 @@
     "lint": "tslint -c tslint.json src/**/*.ts",
     "prestart": "tsoa spec-and-routes",
     "swagger": "tsoa spec",
-    "start": "tsimp src/index.js"
+    "start": "tsimp src/index.js",
+    "client": "supabase gen types typescript --project-id 'pveyalbiqnrpvuazgyuo' --schema public >  src/SupabaseTypes.d.ts"
   },
   "author": {
     "name": "Jonathan Bell",
@@ -56,6 +57,7 @@
     "@types/unzipper": "^0.10.10",
     "concurrently": "^9.1.2",
     "nodemon": "^3.1.9",
+    "supabase": "^2.9.6",
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
     "tsimp": "^2.0.12"
