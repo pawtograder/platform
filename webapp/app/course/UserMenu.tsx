@@ -30,7 +30,8 @@ export default function UserMenu() {
                 if (error) {
                     console.error(error)
                 }
-                setProfile(data)
+                if (data)
+                    setProfile(data)
             }
             fetchProfile()
             setUser(data.user)
