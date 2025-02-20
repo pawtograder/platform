@@ -108,18 +108,21 @@ export type Database = {
         Row: {
           created_at: string
           discussion_thread: number
+          emoji: string
           id: number
           user: string
         }
         Insert: {
           created_at?: string
           discussion_thread: number
+          emoji: string
           id?: number
           user: string
         }
         Update: {
           created_at?: string
           discussion_thread?: number
+          emoji?: string
           id?: number
           user?: string
         }
@@ -158,6 +161,7 @@ export type Database = {
           root: number | null
           root_class_id: number | null
           subject: string
+          topic_id: number
         }
         Insert: {
           answer?: number | null
@@ -176,6 +180,7 @@ export type Database = {
           root?: number | null
           root_class_id?: number | null
           subject: string
+          topic_id: number
         }
         Update: {
           answer?: number | null
@@ -194,6 +199,7 @@ export type Database = {
           root?: number | null
           root_class_id?: number | null
           subject?: string
+          topic_id?: number
         }
         Relationships: [
           {
@@ -218,6 +224,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "discussion_threads_answer_fkey"
+            columns: ["answer"]
+            isOneToOne: false
+            referencedRelation: "discussion_threads"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "discussion_threads_author_fkey"
             columns: ["author"]
             isOneToOne: false
@@ -231,37 +244,82 @@ export type Database = {
             referencedRelation: "discussion_threads"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "discussion_threads_topic_id_fkey"
+            columns: ["topic_id"]
+            isOneToOne: false
+            referencedRelation: "discussion_topics"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      discussion_topics: {
+        Row: {
+          class_id: number
+          color: string
+          created_at: string
+          description: string
+          id: number
+          ordinal: number
+          topic: string
+        }
+        Insert: {
+          class_id: number
+          color: string
+          created_at?: string
+          description: string
+          id?: number
+          ordinal?: number
+          topic: string
+        }
+        Update: {
+          class_id?: number
+          color?: string
+          created_at?: string
+          description?: string
+          id?: number
+          ordinal?: number
+          topic?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "discussion_topics_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
         ]
       }
       grader_configs: {
         Row: {
-          assignment_id: number
           config: Json
           created_at: string
           grader_commit_sha: string | null
           grader_repo: string | null
+          id: number
           workflow_sha: string | null
         }
         Insert: {
-          assignment_id: number
           config: Json
           created_at?: string
           grader_commit_sha?: string | null
           grader_repo?: string | null
+          id: number
           workflow_sha?: string | null
         }
         Update: {
-          assignment_id?: number
           config?: Json
           created_at?: string
           grader_commit_sha?: string | null
           grader_repo?: string | null
+          id?: number
           workflow_sha?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "grader_configs_assignment_id_fkey"
-            columns: ["assignment_id"]
+            foreignKeyName: "grader_configs_id_fkey"
+            columns: ["id"]
             isOneToOne: true
             referencedRelation: "assignments"
             referencedColumns: ["id"]
@@ -300,41 +358,218 @@ export type Database = {
           },
         ]
       }
-      grader_results: {
+      grader_result_output: {
         Row: {
+          class_id: number
           created_at: string
-          errors: Json | null
-          execution_time: number | null
-          feedback: Json | null
-          grader_sha: string | null
+          format: string
+          id: number
+          output: string
+          student_id: string
+          submission_id: number
+          visibility: Database["public"]["Enums"]["feedback_visibility"]
+        }
+        Insert: {
+          class_id: number
+          created_at?: string
+          format: string
+          id?: number
+          output: string
+          student_id: string
+          submission_id: number
+          visibility: Database["public"]["Enums"]["feedback_visibility"]
+        }
+        Update: {
+          class_id?: number
+          created_at?: string
+          format?: string
+          id?: number
+          output?: string
+          student_id?: string
+          submission_id?: number
+          visibility?: Database["public"]["Enums"]["feedback_visibility"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "grader_result_output_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_result_output_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_result_output_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_result_output_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      grader_result_tests: {
+        Row: {
+          class_id: number
+          created_at: string
+          extra_data: Json | null
+          id: number
+          max_score: number | null
+          name: string
+          name_format: string
           output: string | null
-          ret_code: number | null
-          score: number
+          output_format: string | null
+          part: string | null
+          score: number | null
+          student_id: string
           submission_id: number
         }
         Insert: {
+          class_id: number
           created_at?: string
-          errors?: Json | null
-          execution_time?: number | null
-          feedback?: Json | null
-          grader_sha?: string | null
+          extra_data?: Json | null
+          id?: number
+          max_score?: number | null
+          name: string
+          name_format?: string
           output?: string | null
-          ret_code?: number | null
-          score: number
+          output_format?: string | null
+          part?: string | null
+          score?: number | null
+          student_id: string
           submission_id: number
         }
         Update: {
+          class_id?: number
+          created_at?: string
+          extra_data?: Json | null
+          id?: number
+          max_score?: number | null
+          name?: string
+          name_format?: string
+          output?: string | null
+          output_format?: string | null
+          part?: string | null
+          score?: number | null
+          student_id?: string
+          submission_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "grader_result_tests_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_test_results_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_test_results_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_test_results_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      grader_results: {
+        Row: {
+          class_id: number
+          created_at: string
+          errors: Json | null
+          execution_time: number | null
+          grader_sha: string | null
+          lint_output: string
+          lint_output_format: string
+          lint_passed: boolean
+          ret_code: number | null
+          score: number
+          submission_id: number
+          user_id: string | null
+        }
+        Insert: {
+          class_id: number
           created_at?: string
           errors?: Json | null
           execution_time?: number | null
-          feedback?: Json | null
           grader_sha?: string | null
-          output?: string | null
+          lint_output: string
+          lint_output_format: string
+          lint_passed: boolean
+          ret_code?: number | null
+          score: number
+          submission_id: number
+          user_id?: string | null
+        }
+        Update: {
+          class_id?: number
+          created_at?: string
+          errors?: Json | null
+          execution_time?: number | null
+          grader_sha?: string | null
+          lint_output?: string
+          lint_output_format?: string
+          lint_passed?: boolean
           ret_code?: number | null
           score?: number
           submission_id?: number
+          user_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "grader_results_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_results_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: true
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_results_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: true
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_results_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       help_queues: {
         Row: {
@@ -342,6 +577,7 @@ export type Database = {
           class: number
           closing_at: string | null
           created_at: string
+          depth: number
           description: string | null
           id: number
           name: string
@@ -351,6 +587,7 @@ export type Database = {
           class: number
           closing_at?: string | null
           created_at?: string
+          depth: number
           description?: string | null
           id?: number
           name: string
@@ -360,6 +597,7 @@ export type Database = {
           class?: number
           closing_at?: string | null
           created_at?: string
+          depth?: number
           description?: string | null
           id?: number
           name?: string
@@ -432,6 +670,27 @@ export type Database = {
           },
         ]
       }
+      name_generation_words: {
+        Row: {
+          id: number
+          is_adjective: boolean
+          is_noun: boolean
+          word: string
+        }
+        Insert: {
+          id?: number
+          is_adjective: boolean
+          is_noun: boolean
+          word: string
+        }
+        Update: {
+          id?: number
+          is_adjective?: boolean
+          is_noun?: boolean
+          word?: string
+        }
+        Relationships: []
+      }
       permissions: {
         Row: {
           created_at: string
@@ -491,21 +750,38 @@ export type Database = {
       }
       public_profiles: {
         Row: {
+          avatar: string
+          class_id: number
           created_at: string
           id: string
+          is_instructor: boolean
           username: string
         }
         Insert: {
+          avatar: string
+          class_id: number
           created_at?: string
           id?: string
+          is_instructor: boolean
           username: string
         }
         Update: {
+          avatar?: string
+          class_id?: number
           created_at?: string
           id?: string
+          is_instructor?: boolean
           username?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "public_profiles_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       repositories: {
         Row: {
@@ -542,6 +818,41 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rubrics: {
+        Row: {
+          class_id: number | null
+          created_at: string
+          deduction: number
+          id: number
+          name: string | null
+          ordinal: number
+        }
+        Insert: {
+          class_id?: number | null
+          created_at?: string
+          deduction: number
+          id?: number
+          name?: string | null
+          ordinal: number
+        }
+        Update: {
+          class_id?: number | null
+          created_at?: string
+          deduction?: number
+          id?: number
+          name?: string | null
+          ordinal?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_rubric_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
             referencedColumns: ["id"]
           },
         ]
@@ -633,6 +944,7 @@ export type Database = {
           id: number
           name: string
           submissions_id: number
+          user_id: string
         }
         Insert: {
           class_id: number
@@ -641,6 +953,7 @@ export type Database = {
           id?: number
           name: string
           submissions_id: number
+          user_id: string
         }
         Update: {
           class_id?: number
@@ -649,6 +962,7 @@ export type Database = {
           id?: number
           name?: string
           submissions_id?: number
+          user_id?: string
         }
         Relationships: [
           {
@@ -672,12 +986,20 @@ export type Database = {
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "submission_files_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
         ]
       }
       submissions: {
         Row: {
           assignment_id: number
-          class_id: number | null
+          check_run_id: number | null
+          class_id: number
           created_at: string
           id: number
           released: string | null
@@ -689,7 +1011,8 @@ export type Database = {
         }
         Insert: {
           assignment_id: number
-          class_id?: number | null
+          check_run_id?: number | null
+          class_id: number
           created_at?: string
           id?: number
           released?: string | null
@@ -701,7 +1024,8 @@ export type Database = {
         }
         Update: {
           assignment_id?: number
-          class_id?: number | null
+          check_run_id?: number | null
+          class_id?: number
           created_at?: string
           id?: number
           released?: string | null
@@ -818,6 +1142,16 @@ export type Database = {
         }
         Returns: Json
       }
+      generate_anon_name: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
+      intval: {
+        Args: {
+          "": string
+        }
+        Returns: number
+      }
       is_allowed_grader_key: {
         Args: {
           graderkey: string
@@ -856,7 +1190,13 @@ export type Database = {
       }
     }
     Enums: {
+      allowed_modes: "private" | "public" | "question" | "note"
       app_role: "admin" | "instructor" | "grader" | "student"
+      feedback_visibility:
+        | "visible"
+        | "hidden"
+        | "after_due_date"
+        | "after_published"
     }
     CompositeTypes: {
       [_ in never]: never

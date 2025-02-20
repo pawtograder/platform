@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import buildGetJwks from 'get-jwks';
 import { Database } from './SupabaseTypes.js';
 import { createClient } from '@supabase/supabase-js';
+import { AutograderFeedback } from './api/AutograderController.js';
 
 type ListReposResponse = Endpoints["GET /orgs/{org}/repos"]["response"];
 
@@ -91,6 +92,50 @@ export default class GitHubController {
 
 
         })
+    }
+
+    async completeCheckRun(submission: Database['public']['Tables']['submissions']['Row']
+        , feedback: AutograderFeedback) {
+        const octokit = this._installations[0].octokit;
+        let conclusion: 'success' | 'action_required' | 'neutral' | 'cancelled' | 'failure' | 'skipped' | 'stale' | 'timed_out' | undefined;
+        let score = feedback.score || feedback.tests.reduce((acc, test) => acc + (test.score || 0), 0);
+        let max_score = feedback.max_score || feedback.tests.reduce((acc, test) => acc + (test.max_score || 0), 0);
+        if(score === max_score){
+            conclusion = 'success';
+        } else if(score === 0){
+            conclusion = 'action_required';
+        } else {
+            conclusion = 'action_required';
+        }
+        await octokit.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
+            owner: submission.repository.split('/')[0],
+            repo: submission.repository.split('/')[1],
+            check_run_id: submission.check_run_id!,
+            status: 'completed',
+            conclusion,
+            output: {
+                title: 'PawtoGrader',
+                summary: `Grading script completed, ${feedback.score}/${feedback.max_score}`,
+                text: `View the complete results at [${process.env.PAWTOGRADER_WEBAPP_URL}/course/${submission.class_id}/assignment/${submission.assignment_id}/submission/${submission.id}](${process.env.PAWTOGRADER_WEBAPP_URL}/course/${submission.class_id}/assignment/${submission.assignment_id}/submission/${submission.id})
+${feedback.output.visible?.output}`
+            }
+        });
+    }
+
+    async createCheckRun(repository: string, sha: string, workflow_ref: string): Promise<number> {
+        const octokit = this._installations[0].octokit;
+        const checkRun = await octokit.request('POST /repos/{owner}/{repo}/check-runs', {
+            owner: repository.split('/')[0],
+            repo: repository.split('/')[1],
+            head_sha: sha,
+            name: 'PawtoGrader',
+            status: 'in_progress',
+            output: {
+                title: 'PawtoGrader',
+                summary: 'PawtoGrader is running...'
+            }
+        });
+        return checkRun.data.id;
     }
 
     async getGraderURL(repo: string): Promise<string> {

@@ -14,13 +14,13 @@ import {
     FiTrendingUp
 } from 'react-icons/fi'
 import UserMenu from "../UserMenu";
-import React from "react";
+import React, { useEffect } from "react";
 
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, target: `/course/${courseID}/assignments` },
     { name: 'Discussion', icon: FiStar, target: `/course/${courseID}/discussion` },
     { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
-    { name: 'Get Help Now', icon: FiMessageSquare, target: `/course/${courseID}/office-hours` },
+    { name: 'Get Help Now', icon: FiMessageSquare, target: `/course/${courseID}/help` },
     // {name: 'Trending', icon: FiTrendingUp },
     // {name: 'Explore', icon: FiCompass },
     // {name: 'Favourites', icon: FiStar },
@@ -33,6 +33,11 @@ export default function DynamicCourseNav({ course }: { course: null | Database['
     if (!course) {
         return <Skeleton height="40" width="100%" />;
     }
+    useEffect(() => {
+        LinkItems(course.id).map((link) => {
+            router.prefetch(link.target || '#')
+        })
+    }, [course])
     return (
         <VStack px={{ base: 4, md: 4 }}
             bg='bg.subtle'
@@ -64,7 +69,7 @@ export default function DynamicCourseNav({ course }: { course: null | Database['
                             _hover={{
                                 bg: "#EBEDEF"
                             }}
-                            fontSize="lg"
+                            fontSize="md"
                             // href={link.target || '#'}
                             // style={{ textDecoration: 'none' }}
                             variant="ghost"

@@ -5,10 +5,11 @@ import { createClient } from "@supabase/supabase-js";
 import { Open as openZip } from "unzipper";
 import { createHash } from "crypto";
 import { SecurityError, UserVisibleError } from "../InternalTypes.js";
+import { request } from "http";
 
 export type GraderConfig =
     Database["public"]["Tables"]["grader_configs"]["Row"];
-export type OutputFormat = "text"; // TODO also support: | 'ansi' | 'html' | 'markdown';
+export type OutputFormat = "text" | 'markdown' | 'ansi';
 export type OutputVisibility =
     | "hidden" // Never shown to students
     | "visible" // Always shown to students
@@ -17,6 +18,7 @@ export type OutputVisibility =
 
 export type AutograderFeedback = {
     score?: number;
+    max_score?: number;
     output: {
         [key in OutputVisibility]?: {
             output: string;
@@ -35,7 +37,7 @@ export type AutograderFeedback = {
         name_format?: OutputFormat;
         output: string;
         output_format?: OutputFormat;
-        tags?: string[];
+        part?: string;
         extra_data?: { [key: string]: string };
     }[];
 };
@@ -49,6 +51,7 @@ export type GradingScriptResult = {
 export type GradeResponse = {
     is_ok: boolean;
     message: string;
+    details_url: string;
 };
 
 export type SubmissionResponse = {
@@ -69,6 +72,7 @@ export class AutograderController extends Controller {
         const { repository, sha, workflow_ref } = decoded;
         // Find the corresponding student and assignment
         console.log("Creating submission for", repository, sha, workflow_ref);
+        // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
         const supabase = createClient<Database>(
             process.env.SUPABASE_URL || "",
             process.env.SUPABASE_SERVICE_ROLE_KEY || "",
@@ -89,6 +93,7 @@ export class AutograderController extends Controller {
                 run_number: Number.parseInt(decoded.run_id),
                 run_attempt: Number.parseInt(decoded.run_attempt),
                 class_id: data.assignments.class_id!,
+                // check_run_id: checkRunID,
             }).select("id").single();
         if (error) {
             throw new UserVisibleError(
@@ -99,7 +104,7 @@ export class AutograderController extends Controller {
         try {
             // Retrieve the autograder config
             const { data: config } = await supabase.from("grader_configs")
-                .select("*").eq("assignment_id", data.assignment_id).single();
+                .select("*").eq("id", data.assignment_id).single();
             if (!config) {
                 throw new UserVisibleError("Grader config not found");
             }
@@ -133,6 +138,9 @@ export class AutograderController extends Controller {
                 );
             }
             const expectedFiles = data.assignments.submission_files as string[];
+            if(expectedFiles.length === 0) {
+                throw new UserVisibleError("Incorrect instructor setup for assignment: no submission files set");
+            }
             const submittedFiles = zip.files.filter((file) =>
                 expectedFiles.includes(stripTopDir(file.path))
             );
@@ -153,6 +161,7 @@ export class AutograderController extends Controller {
                     submittedFilesWithContents.map((file) => ({
                         submissions_id: submission_id,
                         name: file.name,
+                        user_id: data.user_id,
                         contents: file.contents.toString("utf-8"),
                         class_id: data.assignments.class_id!,
                     })),
@@ -170,6 +179,8 @@ export class AutograderController extends Controller {
             };
         } catch (err) {
             console.error(err);
+            // TODO update the submission status to failed, save error, etc
+
             throw err;
         }
     }
@@ -183,8 +194,6 @@ export class AutograderController extends Controller {
         const ip = this.getHeader("x-forwarded-for") ||
             this.getHeader("x-real-ip");
         console.log("Remote IP", ip);
-        console.log("Received token", token);
-        console.log("Tests", JSON.stringify(requestBody.feedback.tests, null, 2));
         const decoded = await GitHubController.getInstance().validateOIDCToken(
             token,
         );
@@ -207,6 +216,8 @@ export class AutograderController extends Controller {
             "grader_results",
         ).insert({
             submission_id: submission.id,
+            user_id: submission.user_id,
+            class_id: submission.class_id,
             ret_code: requestBody.ret_code,
             grader_sha: requestBody.grader_sha,
             score: requestBody.feedback.score ||
@@ -214,6 +225,9 @@ export class AutograderController extends Controller {
                     (acc, test) => acc + (test.score || 0),
                     0,
                 ),
+            lint_output: requestBody.feedback.lint.output,
+            lint_output_format: requestBody.feedback.lint.output_format || "text",
+            lint_passed: requestBody.feedback.lint.status === "pass",
             execution_time: requestBody.execution_time,
         });
         if (error) {
@@ -260,7 +274,7 @@ export class AutograderController extends Controller {
                     name_format: test.name_format || "text",
                     score: test.score,
                     max_score: test.max_score,
-                    tags: test.tags,
+                    part: test.part,
                     extra_data: test.extra_data,
                 })),
             );
@@ -269,9 +283,12 @@ export class AutograderController extends Controller {
                 `Failed to insert test results: ${testResultsError.message}`,
             );
         }
+        // Update the check run status to completed
+        // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
         return {
             is_ok: true,
             message: `Submission ${submission.id} registered`,
+            details_url: `${process.env.PAWTOGRADER_WEBAPP_URL}/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}`,
         };
     }
 }

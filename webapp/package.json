@@ -15,6 +15,7 @@
     "client": "openapi-codegen gen pawtograder && npx supabase gen types typescript --project-id 'pveyalbiqnrpvuazgyuo' --schema public > utils/supabase/SupabaseTypes.d.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
     "@chakra-ui/pro-theme": "^0.10.0",
     "@chakra-ui/react": "^3.7.0",
     "@emotion/react": "^11.14.0",
@@ -35,12 +36,16 @@
     "@tanstack/react-query": "^5.66.0",
     "@tanstack/react-table": "^8.20.6",
     "@uiw/react-md-editor": "^4.0.5",
+    "amazon-chime-sdk-component-library-react": "^3.7.0",
+    "amazon-chime-sdk-js": "^3.26.0",
     "autoprefixer": "10.4.20",
     "axios": "^1.7.9",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.468.0",
+    "mdast-excerpt": "^0.0.10",
     "mermaid": "^11.4.1",
     "next": "latest",
     "next-remove-imports": "^1.0.12",
@@ -54,6 +59,7 @@
     "react-icons": "^5.4.0",
     "react-markdown": "^9.0.3",
     "react-syntax-highlighter": "^15.6.1",
+    "remark-gfm": "^4.0.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {

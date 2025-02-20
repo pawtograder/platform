@@ -86,6 +86,91 @@ export const useGetCanvasCourse = <TData = Schemas.Course,>(
   });
 };
 
+export type CreateSubmissionHeaders = {
+  Authorization: string;
+};
+
+export type CreateSubmissionError = Fetcher.ErrorWrapper<undefined>;
+
+export type CreateSubmissionVariables = {
+  headers: CreateSubmissionHeaders;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchCreateSubmission = (variables: CreateSubmissionVariables, signal?: AbortSignal) =>
+  pawtograderFetch<
+    Schemas.SubmissionResponse,
+    CreateSubmissionError,
+    undefined,
+    CreateSubmissionHeaders,
+    {},
+    {}
+  >({ url: '/api/autograder/submission', method: 'post', ...variables, signal });
+
+export const useCreateSubmission = (
+  options?: Omit<
+    reactQuery.UseMutationOptions<
+      Schemas.SubmissionResponse,
+      CreateSubmissionError,
+      CreateSubmissionVariables
+    >,
+    'mutationFn'
+  >,
+) => {
+  const { fetcherOptions } = usePawtograderContext();
+  return reactQuery.useMutation<
+    Schemas.SubmissionResponse,
+    CreateSubmissionError,
+    CreateSubmissionVariables
+  >({
+    mutationFn: (variables: CreateSubmissionVariables) =>
+      fetchCreateSubmission({ ...fetcherOptions, ...variables }),
+    ...options,
+  });
+};
+
+export type SubmitFeedbackHeaders = {
+  Authorization: string;
+};
+
+export type SubmitFeedbackError = Fetcher.ErrorWrapper<undefined>;
+
+export type SubmitFeedbackVariables = {
+  body: Schemas.GradingScriptResult;
+  headers: SubmitFeedbackHeaders;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchSubmitFeedback = (variables: SubmitFeedbackVariables, signal?: AbortSignal) =>
+  pawtograderFetch<
+    Schemas.GradeResponse,
+    SubmitFeedbackError,
+    Schemas.GradingScriptResult,
+    SubmitFeedbackHeaders,
+    {},
+    {}
+  >({ url: '/api/autograder/submission/feedback', method: 'post', ...variables, signal });
+
+export const useSubmitFeedback = (
+  options?: Omit<
+    reactQuery.UseMutationOptions<
+      Schemas.GradeResponse,
+      SubmitFeedbackError,
+      SubmitFeedbackVariables
+    >,
+    'mutationFn'
+  >,
+) => {
+  const { fetcherOptions } = usePawtograderContext();
+  return reactQuery.useMutation<
+    Schemas.GradeResponse,
+    SubmitFeedbackError,
+    SubmitFeedbackVariables
+  >({
+    mutationFn: (variables: SubmitFeedbackVariables) =>
+      fetchSubmitFeedback({ ...fetcherOptions, ...variables }),
+    ...options,
+  });
+};
+
 export type CreateAssignmentRepositoriesPathParams = {
   /**
    * @format double
@@ -404,91 +489,6 @@ export const useGetTemplateRepos = <TData = GetTemplateReposResponse,>(
     queryFn: ({ signal }) => fetchGetTemplateRepos({ ...fetcherOptions, ...variables }, signal),
     ...options,
     ...queryOptions,
-  });
-};
-
-export type CreateSubmissionHeaders = {
-  Authorization: string;
-};
-
-export type CreateSubmissionError = Fetcher.ErrorWrapper<undefined>;
-
-export type CreateSubmissionVariables = {
-  headers: CreateSubmissionHeaders;
-} & PawtograderContext['fetcherOptions'];
-
-export const fetchCreateSubmission = (variables: CreateSubmissionVariables, signal?: AbortSignal) =>
-  pawtograderFetch<
-    Schemas.SubmissionResponse,
-    CreateSubmissionError,
-    undefined,
-    CreateSubmissionHeaders,
-    {},
-    {}
-  >({ url: '/api/autograder/submission', method: 'post', ...variables, signal });
-
-export const useCreateSubmission = (
-  options?: Omit<
-    reactQuery.UseMutationOptions<
-      Schemas.SubmissionResponse,
-      CreateSubmissionError,
-      CreateSubmissionVariables
-    >,
-    'mutationFn'
-  >,
-) => {
-  const { fetcherOptions } = usePawtograderContext();
-  return reactQuery.useMutation<
-    Schemas.SubmissionResponse,
-    CreateSubmissionError,
-    CreateSubmissionVariables
-  >({
-    mutationFn: (variables: CreateSubmissionVariables) =>
-      fetchCreateSubmission({ ...fetcherOptions, ...variables }),
-    ...options,
-  });
-};
-
-export type SubmitFeedbackHeaders = {
-  Authorization: string;
-};
-
-export type SubmitFeedbackError = Fetcher.ErrorWrapper<undefined>;
-
-export type SubmitFeedbackVariables = {
-  body: Schemas.GradingScriptResult;
-  headers: SubmitFeedbackHeaders;
-} & PawtograderContext['fetcherOptions'];
-
-export const fetchSubmitFeedback = (variables: SubmitFeedbackVariables, signal?: AbortSignal) =>
-  pawtograderFetch<
-    Schemas.GradeResponse,
-    SubmitFeedbackError,
-    Schemas.GradingScriptResult,
-    SubmitFeedbackHeaders,
-    {},
-    {}
-  >({ url: '/api/autograder/submission/feedback', method: 'post', ...variables, signal });
-
-export const useSubmitFeedback = (
-  options?: Omit<
-    reactQuery.UseMutationOptions<
-      Schemas.GradeResponse,
-      SubmitFeedbackError,
-      SubmitFeedbackVariables
-    >,
-    'mutationFn'
-  >,
-) => {
-  const { fetcherOptions } = usePawtograderContext();
-  return reactQuery.useMutation<
-    Schemas.GradeResponse,
-    SubmitFeedbackError,
-    SubmitFeedbackVariables
-  >({
-    mutationFn: (variables: SubmitFeedbackVariables) =>
-      fetchSubmitFeedback({ ...fetcherOptions, ...variables }),
-    ...options,
   });
 };
 

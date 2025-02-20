@@ -13,31 +13,32 @@ import {
 } from "./color-mode";
 import { theme } from '@chakra-ui/pro-theme'
 
-const customConfig = defineConfig({
-  theme: {
-    semanticTokens: {
-      colors: {
-        bg: {
-          subtle: { value: "#F6F8FA" },
-        },
-      },
-    },
-    tokens: {
-      colors: {
-        brand: {
-          50: { value: "#e6f2ff" },
-          100: { value: "#e6f2ff" },
-          200: { value: "#bfdeff" },
-          300: { value: "#99caff" },
-          // ...
-          950: { value: "#001a33" },
-        },
-      },
-    },
-  },
-})
+// const customConfig = defineConfig({
+//   theme: {
+//     semanticTokens: {
+//       colors: {
+//         bg: {
+//           subtle: { value: "#F6F8FA" },
+//         },
+//       },
+//     },
+//     tokens: {
+//       colors: {
+//         brand: {
+//           50: { value: "#e6f2ff" },
+//           100: { value: "#e6f2ff" },
+//           200: { value: "#bfdeff" },
+//           300: { value: "#99caff" },
+//           // ...
+//           950: { value: "#001a33" },
+//         },
+//       },
+//     },
+//   },
+// })
 
-const system = createSystem(defaultConfig, customConfig)
+// const system = createSystem(defaultConfig, customConfig)
+const system = createSystem(defaultConfig)
 
 
 const supabaseClient = createClient();

@@ -52,6 +52,7 @@ export default function CreateAssignment({ course }: { course: Database['public'
                 allow_late: values.allow_late,
                 late_due_date: values.late_due_date,
                 description: values.description,
+                slug: values.slug,
                 points: values.points,
                 template_repo: values.template_repo,
                 class_id: course.id
@@ -61,9 +62,8 @@ export default function CreateAssignment({ course }: { course: Database['public'
                 throw new Error(resp.error.message)
             }
             if (resp.data) {
-                console.log(resp.data)
                 const assignment = resp.data;
-                router.push(`/course/${course.id}/assignments/${assignment.id}`)
+                router.push(`/course/${course.id}/assignments/${assignment.id}/autograder`)
             }
         }
         return toaster.promise(() => onSubmit(values), {
@@ -100,6 +100,16 @@ export default function CreateAssignment({ course }: { course: Database['public'
                         invalid={errors.title ? true : false}
                     ><Input
                             {...register('title', {
+                                required: 'This is required',
+                            })} /></Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                    <Field label="Slug" 
+                        helperText="A short identifier for the assignment, e.g. 'hw1' or 'project2'"
+                        errorText={errors.slug?.message?.toString()}
+                        invalid={errors.slug ? true : false}
+                    ><Input
+                            {...register('slug', {
                                 required: 'This is required',
                             })} /></Field>
                 </Fieldset.Content>
