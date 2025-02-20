@@ -279,7 +279,7 @@ export function RubricItem({ rubric }: { rubric: Rubric }) {
         </form>
     </Box>
 }
-export function Rubric({ submission }: { submission: SubmissionWithFilesAndComments }) {
+export function RubricView({ submission }: { submission: SubmissionWithFilesAndComments }) {
     const invalidateQuery = useInvalidate();
     const { data: rubrics } = useList<Rubric>({
         resource: "rubrics",
@@ -369,7 +369,7 @@ export default function FilesView({ submission_id }: { submission_id: number }) 
                     </SyntaxHighlighter>
                 </Box>
             </Box>
-            <Rubric submission={query.data.data} />
+            <RubricView submission={query.data.data} />
         </Flex>
     </Container>
 }
