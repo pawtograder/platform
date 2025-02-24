@@ -14,7 +14,6 @@ import { title, StyledInputGroup } from '../Styled';
 import { useAppState } from '../../../providers/AppStateProvider';
 import { VideoFiltersCpuUtilization } from '../../../types';
 import { VideoTransformDropdown } from '../CameraDevices/VideoTransformDropdown';
-import { BackgroundReplacementDropdown } from '../CameraDevices/BackgroundReplacementDropdown';
 
 const CameraDevices = () => {
   const { videoTransformCpuUtilization } = useAppState();
@@ -33,11 +32,6 @@ const CameraDevices = () => {
       { videoTransformsEnabled ?
         <StyledInputGroup>
           <VideoTransformDropdown />
-        </StyledInputGroup> : ''
-      }
-      { videoTransformsEnabled ?
-        <StyledInputGroup>
-          <BackgroundReplacementDropdown />
         </StyledInputGroup> : ''
       }
       <Label style={{ display: 'block', marginBottom: '.5rem' }}>

@@ -67,11 +67,11 @@ export function DiscussionPostSummary({ thread, standalone }: {
                 <HStack fontWeight="medium" mt="4">
                     <HStack>
                         <Avatar.Root size="sm" variant="outline" shape="square">
-                            <Avatar.Fallback name={thread.public_profiles.username} />
-                            <Avatar.Image src={`https://api.dicebear.com/9.x/identicon/svg?seed=${thread.public_profiles.username}`} />
+                            <Avatar.Fallback name={thread.public_profiles.name} />
+                            <Avatar.Image src={`https://api.dicebear.com/9.x/identicon/svg?seed=${thread.public_profiles.name}`} />
                         </Avatar.Root>
                         <Text textStyle="sm" hideBelow="sm">
-                            {thread.public_profiles.username}
+                            {thread.public_profiles.name}
                         </Text>
                     </HStack>
                     <Text textStyle="sm" color="fg.muted" ms="3">

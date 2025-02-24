@@ -13,16 +13,16 @@ export const ChatChannel = () => {
   //Group messages by contiguous messages from the same user
   const groupedMessages = messages.reduce((acc, msg) => {
     const lastGroup = acc[acc.length - 1]
-    if (lastGroup && lastGroup.user_id === msg.user_id) {
+    if (lastGroup && lastGroup.author === msg.author) {
       lastGroup.messages.push(msg)
     } else {
       acc.push({
-        user_id: msg.user_id,
+        author: msg.author,
         messages: [msg]
       })
     }
     return acc
-  }, [] as { user_id: string, messages: ChatMessageType[] }[])
+  }, [] as { author: string, messages: ChatMessageType[] }[])
   const sendMessage = useCallback(() => {
     if (!inputRef.current) { return }
     postMessage(inputRef.current.value).then(() => {
@@ -37,7 +37,7 @@ export const ChatChannel = () => {
         <Box paddingTop="20" paddingBottom="40">
           <ChatMessages>
             {groupedMessages.map((group) => (
-              <ChatMessage key={group.user_id} author_id={group.user_id} messages={group.messages} />
+              <ChatMessage key={group.author} author={group.author} messages={group.messages} />
             ))}
           </ChatMessages>
         </Box>

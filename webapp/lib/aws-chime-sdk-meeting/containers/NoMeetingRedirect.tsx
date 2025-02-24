@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT-0
 
 import React, { PropsWithChildren, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useRouter } from 'next/router';
 import {
   useMeetingManager,
   useNotificationDispatch,
@@ -13,7 +13,7 @@ import {
 import routes from '../constants/routes';
 
 const NoMeetingRedirect: React.FC<PropsWithChildren> = ({ children }) => {
-  const navigate = useNavigate();
+  const router = useRouter();
   const dispatch = useNotificationDispatch();
   const meetingManager = useMeetingManager();
 
@@ -29,7 +29,7 @@ const NoMeetingRedirect: React.FC<PropsWithChildren> = ({ children }) => {
         type: ActionType.ADD,
         payload: payload,
       });
-      navigate(routes.HOME);
+      router.push(routes.HOME);
     }
   }, []);
 

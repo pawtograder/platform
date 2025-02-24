@@ -22,7 +22,6 @@ export default function Messages() {
         variant={message.isSelf ? 'outgoing' : 'incoming'}
         senderName={message.senderName}
         key={message.timestamp}
-        marginLeft="1rem"
         showTail={message.isSelf ? true : false}
       >
         {message.message}

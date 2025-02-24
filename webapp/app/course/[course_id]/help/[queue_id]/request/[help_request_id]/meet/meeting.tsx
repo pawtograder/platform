@@ -17,7 +17,7 @@ const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => 
     return <ThemeProvider theme={lightTheme}>
         <GlobalStyles />
         <MeetingProvider>
-            <StyleSheetManager shouldForwardProp={propName => isValidProp(propName)}>
+            <StyleSheetManager>
                 <NavigationProvider>
                     <VoiceFocusProvider>
                         <BackgroundBlurProvider options={{

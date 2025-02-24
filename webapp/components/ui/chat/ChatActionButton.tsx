@@ -6,11 +6,10 @@ export function ChatActionButton(props: ButtonProps & { icon: React.ElementType 
     <Button
       bg="bg"
       size="sm"
-      variant="secondary"
+      variant="outline"
       {...rest}
-      leftIcon={<Icon as={icon} color="fg.subtle" />}
     >
-      {children}
+      <Icon as={icon} color="fg.subtle" />{children}
     </Button>
   )
 }

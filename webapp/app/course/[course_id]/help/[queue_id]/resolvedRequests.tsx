@@ -1,13 +1,8 @@
-import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { useState } from "react";
-import { Flex, HStack, Stack, Text, AvatarGroup, Box, IconButton, Icon, Textarea, Group, Button, } from "@chakra-ui/react";
-import { BsCameraVideo, BsCheck, BsSend } from "react-icons/bs";
-import { useUserProfile } from "@/hooks/useUserProfiles";
-import { ChatMessage } from "./ChatMessage";
-import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverHeader, PopoverBody } from "../popover";
-import { useUpdate } from "@refinedev/core";
-import { HelpRequestChatChannelProvider } from "@/lib/chat";
 import HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
+import { HelpRequestChatChannelProvider } from "@/lib/chat";
+import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { Box, HStack, Stack, Text } from "@chakra-ui/react";
+import { useState } from "react";
 
 export default function HelpRequestHistory({ queue, requests }: { queue: HelpQueue, requests: HelpRequest[] }) {
     const [curRequest, setCurRequest] = useState<HelpRequest | null>(requests[0]);

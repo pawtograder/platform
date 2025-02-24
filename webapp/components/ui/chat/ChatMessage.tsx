@@ -3,13 +3,13 @@ import { Avatar, Box, HStack, Stack, Text } from '@chakra-ui/react'
 import { ChatMessage as ChatMessageType } from '@/lib/chat'
 import Markdown from 'react-markdown'
 interface Props {
-  author_id: string
+  author: string
   messages: ChatMessageType[]
 }
 
 export const ChatMessage = (props: Props) => {
-  const { author_id, messages } = props
-  const userProfile = useUserProfile(author_id)
+  const { author, messages } = props
+  const userProfile = useUserProfile(author)
   return (
     <HStack align="flex-start" gap="5">
       <Box pt="1">
@@ -23,7 +23,7 @@ export const ChatMessage = (props: Props) => {
         <Stack spaceY="2">
           {messages.map((message, index) => (
             <Box key={index} color="fg.muted" lineHeight="tall">
-              <Markdown>{message.content}</Markdown>
+              <Markdown>{message.message}</Markdown>
             </Box>
           ))}
         </Stack>

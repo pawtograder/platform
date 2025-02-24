@@ -163,7 +163,7 @@ function LineComments({
             <LineCommentForm line={line} submission={submission} curFile={curFile} />
             {curFile.submission_file_comments?.filter((comment) => comment.line === line).map((comment) => (
                 <Box key={comment.id} mt={2} borderWidth="1px" borderColor="gray.400" p={2} borderRadius="md">
-                    <Text fontSize="sm" fontWeight="bold">{comment.public_profiles.username}</Text>
+                    <Text fontSize="sm" fontWeight="bold">{comment.public_profiles.name}</Text>
                     {comment.comment}
                 </Box>
             ))}

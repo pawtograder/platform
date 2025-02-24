@@ -19,7 +19,6 @@ import { useNavigation } from '../../providers/NavigationProvider';
 import { StyledControls } from './Styled';
 import { useAppState } from '../../providers/AppStateProvider';
 import { VideoFiltersCpuUtilization } from '../../types';
-import VideoInputTransformControl from '../../components/MeetingControls/VideoInputTransformControl';
 import { Box } from '@chakra-ui/react';
 
 const MeetingControls: React.FC = () => {
@@ -49,16 +48,16 @@ const MeetingControls: React.FC = () => {
           label="Menu"
         />
         <Box position="relative">
-        { isWebAudioEnabled ? <AudioInputVFControl /> :  <AudioInputControl /> }
+          {isWebAudioEnabled ? <AudioInputVFControl /> : <AudioInputControl />}
         </Box>
         <Box position="relative">
-        { videoTransformsEnabled ? <VideoInputTransformControl /> : <VideoInputControl/> }
+          <VideoInputControl />
         </Box>
         <Box position="relative">
-        <ContentShareControl />
+          <ContentShareControl />
         </Box>
         <Box position="relative">
-        <AudioOutputControl />
+          <AudioOutputControl />
         </Box>
         <EndMeetingControl />
       </ControlBar>
