@@ -149,13 +149,13 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                 pos="absolute" width="2px" left="16" top="10" bottom="0" bg="border" />}
             <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%">
                 <Avatar.Root size="sm" variant="outline" shape="square">
-                    <Avatar.Fallback name={thread.public_profiles.username} />
-                    <Avatar.Image src={`https://api.dicebear.com/9.x/identicon/svg?seed=${thread.public_profiles.username}`} />
+                    <Avatar.Fallback name={thread.public_profiles.name} />
+                    <Avatar.Image src={`https://api.dicebear.com/9.x/identicon/svg?seed=${thread.public_profiles.name}`} />
                 </Avatar.Root>
                 <Stack w="100%">
                     <Box bg="bg.muted" rounded="l3" py="2" px="3">
                         <Text textStyle="sm" fontWeight="semibold">
-                            {thread.public_profiles.username}
+                            {thread.public_profiles.name}
                             {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
                             {thread.public_profiles.is_instructor && <Badge ml="2" colorPalette="red">Instructor</Badge>}
                         </Text>

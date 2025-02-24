@@ -1,8 +1,8 @@
+import LinkAccount from "@/components/github/link-account";
 import { AssignmentWithRepositoryAndSubmissions } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
 import { Table } from "@chakra-ui/react";
 import Link from "next/link";
-
 export default async function StudentPage({ course_id }: { course_id: number }) {
     const client = await createClient();
     const user = (await client.auth.getUser()).data.user;
@@ -11,12 +11,21 @@ export default async function StudentPage({ course_id }: { course_id: number }) 
         .eq("class_id", course_id)
         .eq("repositories.user_id", user!.id);
 
+    //list identities
+    const identities = await client.auth.getUserIdentities();
+    const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
+
+    let actions = <></>;
+    if (!githubIdentity) {
+        actions = <LinkAccount />
+    }
     const getLatestSubmission = (assignment: AssignmentWithRepositoryAndSubmissions) => {
         assignment
         return assignment.submissions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
     }
     return (
         <div>
+            {actions}
             <h1>Assignments</h1>
             <Table.Root>
                 <Table.Header>
@@ -34,9 +43,9 @@ export default async function StudentPage({ course_id }: { course_id: number }) 
                             <Table.Cell>{assignment.due_date}</Table.Cell>
                             <Table.Cell>
                                 <Link href={`/course/${course_id}/assignments/${assignment.id}/submissions/${getLatestSubmission(assignment)?.id}`}>
-                                {getLatestSubmission(assignment)?.id}
+                                    {getLatestSubmission(assignment)?.id}
                                 </Link>
-                                </Table.Cell>
+                            </Table.Cell>
                             <Table.Cell>{assignment.repositories[0]?.repository}</Table.Cell>
                         </Table.Row>
                     ))}

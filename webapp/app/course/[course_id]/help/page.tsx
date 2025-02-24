@@ -1,11 +1,21 @@
 'use client'
 
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes"
-import { useList } from "@refinedev/core"
+import { Link, useList } from "@refinedev/core"
+import { useParams, useRouter } from "next/navigation"
 
 export default function HelpPage() {
+    const { course_id } = useParams()
+    const router = useRouter()
     const queues = useList<HelpQueue>({
         resource: 'help_queues',
+        filters: [
+            {
+                field: 'class',
+                operator: 'eq',
+                value: course_id
+            }
+        ]
 
     })
     if (queues.isLoading) {
@@ -14,12 +24,16 @@ export default function HelpPage() {
     if (queues.error) {
         return <div>Error: {queues.error.message}</div>
     }
-    console.log(queues.data)
+    if (queues.data?.data.length === 1) {
+        //Directly enter the queue
+        return router.push(`/course/${course_id}/help/${queues.data?.data[0].id}`)
+    }
     return <div>Help
 
         {queues.data?.data.map((queue) => (
             <div key={queue.id}>
                 <h2>{queue.name}</h2>
+                <Link to={`/course/${course_id}/help/${queue.id}`}>Enter</Link>
             </div>
         ))}
     </div>

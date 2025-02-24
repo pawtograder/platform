@@ -33,6 +33,7 @@ export async function pawtograderFetch<
 }: PawtograderFetcherOptions<TBody, THeaders, TQueryParams, TPathParams>): Promise<TData> {
   try {
 
+    console.log(`Fetching ${url} with headers ${JSON.stringify(headers)}`);
     const supabase = createClient();
     const token = (await supabase.auth.getSession()).data.session?.access_token;
 
@@ -41,6 +42,7 @@ export async function pawtograderFetch<
       ...headers,
       'Authorization': token!,
     };
+    console.log(requestHeaders);
 
     /**
      * As the fetch API is being used, when multipart/form-data is specified

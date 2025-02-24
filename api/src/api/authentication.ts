@@ -40,7 +40,7 @@ export async function expressAuthentication(
                 throw new Error('Forbidden');
             }
         }
-
+        return user;
     }
 
 }

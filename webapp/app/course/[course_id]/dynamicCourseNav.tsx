@@ -11,16 +11,19 @@ import {
     FiMessageSquare,
     FiSettings,
     FiStar,
-    FiTrendingUp
+    FiTrendingUp,
+    FiClipboard
 } from 'react-icons/fi'
 import UserMenu from "../UserMenu";
 import React, { useEffect } from "react";
+import useAuthState from "@/hooks/useAuthState";
 
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, target: `/course/${courseID}/assignments` },
     { name: 'Discussion', icon: FiStar, target: `/course/${courseID}/discussion` },
-    { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
+    // { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
     { name: 'Get Help Now', icon: FiMessageSquare, target: `/course/${courseID}/help` },
+    { name: 'Give Help Now (TA)', instructor_only: true,icon: FiClipboard, target: `/course/${courseID}/manage/help` },
     // {name: 'Trending', icon: FiTrendingUp },
     // {name: 'Explore', icon: FiCompass },
     // {name: 'Favourites', icon: FiStar },
@@ -30,6 +33,7 @@ const LinkItems = (courseID: number) => ([
 export default function DynamicCourseNav({ course }: { course: null | Database['public']['Tables']['classes']['Row'] }) {
     const router = useRouter();
     const pathname = usePathname();
+    const user = useAuthState();
     if (!course) {
         return <Skeleton height="40" width="100%" />;
     }

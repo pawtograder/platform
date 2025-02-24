@@ -32,7 +32,6 @@ export default function AutograderPage() {
     if (query.error) {
         return <div>Error: {query.error.message}</div>
     }
-    console.log(JSON.stringify(query.data, null, 2))
     return <div>
         Autograder
         <form>

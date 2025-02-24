@@ -108,18 +108,21 @@ export type Database = {
         Row: {
           created_at: string
           discussion_thread: number
+          emoji: string
           id: number
           user: string
         }
         Insert: {
           created_at?: string
           discussion_thread: number
+          emoji: string
           id?: number
           user: string
         }
         Update: {
           created_at?: string
           discussion_thread?: number
+          emoji?: string
           id?: number
           user?: string
         }
@@ -158,6 +161,7 @@ export type Database = {
           root: number | null
           root_class_id: number | null
           subject: string
+          topic_id: number
         }
         Insert: {
           answer?: number | null
@@ -176,6 +180,7 @@ export type Database = {
           root?: number | null
           root_class_id?: number | null
           subject: string
+          topic_id: number
         }
         Update: {
           answer?: number | null
@@ -194,6 +199,7 @@ export type Database = {
           root?: number | null
           root_class_id?: number | null
           subject?: string
+          topic_id?: number
         }
         Relationships: [
           {
@@ -218,6 +224,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "discussion_threads_answer_fkey"
+            columns: ["answer"]
+            isOneToOne: false
+            referencedRelation: "discussion_threads"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "discussion_threads_author_fkey"
             columns: ["author"]
             isOneToOne: false
@@ -231,32 +244,42 @@ export type Database = {
             referencedRelation: "discussion_threads"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "discussion_threads_topic_id_fkey"
+            columns: ["topic_id"]
+            isOneToOne: false
+            referencedRelation: "discussion_topics"
+            referencedColumns: ["id"]
+          },
         ]
       }
       discussion_topics: {
         Row: {
-          allowed_modes: Database["public"]["Enums"]["allowed_modes"][] | null
-          class_id: number | null
-          color: string | null
+          class_id: number
+          color: string
           created_at: string
+          description: string
           id: number
-          topic: string | null
+          ordinal: number
+          topic: string
         }
         Insert: {
-          allowed_modes?: Database["public"]["Enums"]["allowed_modes"][] | null
-          class_id?: number | null
-          color?: string | null
+          class_id: number
+          color: string
           created_at?: string
+          description: string
           id?: number
-          topic?: string | null
+          ordinal?: number
+          topic: string
         }
         Update: {
-          allowed_modes?: Database["public"]["Enums"]["allowed_modes"][] | null
-          class_id?: number | null
-          color?: string | null
+          class_id?: number
+          color?: string
           created_at?: string
+          description?: string
           id?: number
-          topic?: string | null
+          ordinal?: number
+          topic?: string
         }
         Relationships: [
           {
@@ -554,6 +577,7 @@ export type Database = {
           class: number
           closing_at: string | null
           created_at: string
+          depth: number
           description: string | null
           id: number
           name: string
@@ -563,6 +587,7 @@ export type Database = {
           class: number
           closing_at?: string | null
           created_at?: string
+          depth: number
           description?: string | null
           id?: number
           name: string
@@ -572,6 +597,7 @@ export type Database = {
           class?: number
           closing_at?: string | null
           created_at?: string
+          depth?: number
           description?: string | null
           id?: number
           name?: string
@@ -588,39 +614,50 @@ export type Database = {
       }
       help_requests: {
         Row: {
+          assignee: string | null
+          class_id: number
           created_at: string
           creator: string
           followup_to: number | null
-          help_ended_at: string | null
           help_queue: number
-          help_started_at: string | null
-          helper: string | null
           id: number
           request: string
         }
         Insert: {
+          assignee?: string | null
+          class_id: number
           created_at?: string
           creator: string
           followup_to?: number | null
-          help_ended_at?: string | null
           help_queue: number
-          help_started_at?: string | null
-          helper?: string | null
           id?: number
           request: string
         }
         Update: {
+          assignee?: string | null
+          class_id?: number
           created_at?: string
           creator?: string
           followup_to?: number | null
-          help_ended_at?: string | null
           help_queue?: number
-          help_started_at?: string | null
-          helper?: string | null
           id?: number
           request?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "help_requests_assignee_fkey"
+            columns: ["assignee"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_requests_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "help_requests_creator_fkey"
             columns: ["creator"]
@@ -635,14 +672,28 @@ export type Database = {
             referencedRelation: "help_queues"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "help_requests_helper_fkey"
-            columns: ["helper"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
         ]
+      }
+      name_generation_words: {
+        Row: {
+          id: number
+          is_adjective: boolean
+          is_noun: boolean
+          word: string
+        }
+        Insert: {
+          id?: number
+          is_adjective: boolean
+          is_noun: boolean
+          word: string
+        }
+        Update: {
+          id?: number
+          is_adjective?: boolean
+          is_noun?: boolean
+          word?: string
+        }
+        Relationships: []
       }
       permissions: {
         Row: {
@@ -703,21 +754,38 @@ export type Database = {
       }
       public_profiles: {
         Row: {
+          avatar: string
+          class_id: number
           created_at: string
           id: string
-          username: string
+          is_instructor: boolean
+          name: string
         }
         Insert: {
+          avatar: string
+          class_id: number
           created_at?: string
           id?: string
-          username: string
+          is_instructor: boolean
+          name: string
         }
         Update: {
+          avatar?: string
+          class_id?: number
           created_at?: string
           id?: string
-          username?: string
+          is_instructor?: boolean
+          name?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "public_profiles_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       repositories: {
         Row: {
@@ -754,6 +822,41 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rubrics: {
+        Row: {
+          class_id: number | null
+          created_at: string
+          deduction: number
+          id: number
+          name: string | null
+          ordinal: number
+        }
+        Insert: {
+          class_id?: number | null
+          created_at?: string
+          deduction: number
+          id?: number
+          name?: string | null
+          ordinal: number
+        }
+        Update: {
+          class_id?: number | null
+          created_at?: string
+          deduction?: number
+          id?: number
+          name?: string | null
+          ordinal?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_rubric_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
             referencedColumns: ["id"]
           },
         ]
@@ -999,6 +1102,51 @@ export type Database = {
           },
         ]
       }
+      video_meeting_sessions: {
+        Row: {
+          chime_meeting_id: string | null
+          class_id: number
+          created_at: string
+          ended: string | null
+          help_request_id: number
+          id: number
+          started: string | null
+        }
+        Insert: {
+          chime_meeting_id?: string | null
+          class_id: number
+          created_at?: string
+          ended?: string | null
+          help_request_id: number
+          id?: number
+          started?: string | null
+        }
+        Update: {
+          chime_meeting_id?: string | null
+          class_id?: number
+          created_at?: string
+          ended?: string | null
+          help_request_id?: number
+          id?: number
+          started?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "video_meeting_sessions_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "video_meeting_sessions_help_request_id_fkey"
+            columns: ["help_request_id"]
+            isOneToOne: false
+            referencedRelation: "help_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       submissions_agg: {
@@ -1042,6 +1190,16 @@ export type Database = {
           event: Json
         }
         Returns: Json
+      }
+      generate_anon_name: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
+      intval: {
+        Args: {
+          "": string
+        }
+        Returns: number
       }
       is_allowed_grader_key: {
         Args: {

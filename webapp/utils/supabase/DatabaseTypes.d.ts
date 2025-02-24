@@ -92,3 +92,27 @@ export type HelpRequest = GetResult<
     Database["public"]["Tables"]["help_requests"]["Relationships"],
     "*"
 >;
+
+export type PublicProfile = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["public_profiles"]["Row"],
+    "public_profiles",
+    Database["public"]["Tables"]["public_profiles"]["Relationships"],
+    "*"
+>;
+
+export type UserProfile = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["profiles"]["Row"],
+    "profiles",
+    Database["public"]["Tables"]["profiles"]["Relationships"],
+    "*"
+>;
+
+export type HelpRequestMessage = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["help_request_messages"]["Row"],
+    "help_request_messages",
+    Database["public"]["Tables"]["help_request_messages"]["Relationships"],
+    "*"
+>;

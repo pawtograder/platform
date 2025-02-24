@@ -5,12 +5,54 @@ import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-export const signInAction = async () => {
+export const signInOrSignUpWithEmailAction = async (data: FormData) => {
+  console.log("Signing in or signing up with email");
+  console.log(data);
+  const action = data.get("action");
+  const email = data.get("email");
+  const password = data.get("password");
+  if (action === "signin") {
+    return signInWithEmailAction(email as string, password as string);
+  } else if (action === "signup") {
+    return signUpWithEmailAction(email as string, password as string);
+  }
+}
+export const signInWithEmailAction = async (email: string, password: string) => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  })
+  if (error) {
+    return encodedRedirect("error", "/sign-in", error.message);
+  }
+  if (data.user) {
+    return redirect("/course");
+  }
+}
+export const signUpWithEmailAction = async (email: string, password: string) => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
+    }
+  })
+  console.log("Signing up with email");
+  console.log(data);
+  console.log(error);
+  if (error) {
+    return encodedRedirect("error", "/sign-in", error.message);
+  }
+  if (data.user) {
+    return redirect("/course");
+  }
+}
+export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
   const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
-  console.log("Redirecting to")
-  console.log(redirectTo)
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'azure',
     options: {

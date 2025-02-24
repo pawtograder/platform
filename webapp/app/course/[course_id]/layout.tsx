@@ -22,6 +22,7 @@ import { useShow } from '@refinedev/core'
 import { createClient } from '@/utils/supabase/server'
 import { Database } from '@/utils/supabase/SupabaseTypes'
 import DynamicCourseNav from './dynamicCourseNav'
+import { AuthStateProvider } from '@/hooks/useAuthState'
 interface LinkItemProps {
     name: string
     target: string
@@ -41,17 +42,23 @@ const ProtectedLayout = async ({ children, params }: Readonly<{
     const { course_id } = await params;
     const supabase = await createClient();
     const { data: classData } = await supabase.from('classes').select('*').eq('id', Number.parseInt(course_id)).single();
+    const { data: user } = await supabase.auth.getUser();
+    if (!user?.user) {
+        return <div>Not logged in (TODO redirect to login from layout)</div>
+    }
 
     // const {open, onOpen, onClose} = useDisclosure()
     return (
-        <Box minH="100vh">
-            <DynamicCourseNav course={classData} />
-            {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
-            {/* mobilenav */}
-            <Box ml={{ base: 0, md: 20 }} p="4">
-                {children}
+        <AuthStateProvider user={user?.user}>
+            <Box minH="100vh">
+                <DynamicCourseNav course={classData} />
+                {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
+                {/* mobilenav */}
+                <Box ml={{ base: 0, md: 20 }} p="4">
+                    {children}
+                </Box>
             </Box>
-        </Box>
+        </AuthStateProvider>
     )
 }
 

@@ -576,9 +576,10 @@ export type Database = {
           available: boolean
           class: number
           closing_at: string | null
+          color: string | null
           created_at: string
           depth: number
-          description: string | null
+          description: string
           id: number
           name: string
         }
@@ -586,9 +587,10 @@ export type Database = {
           available?: boolean
           class: number
           closing_at?: string | null
+          color?: string | null
           created_at?: string
           depth: number
-          description?: string | null
+          description: string
           id?: number
           name: string
         }
@@ -596,9 +598,10 @@ export type Database = {
           available?: boolean
           class?: number
           closing_at?: string | null
+          color?: string | null
           created_at?: string
           depth?: number
-          description?: string | null
+          description?: string
           id?: number
           name?: string
         }
@@ -612,41 +615,120 @@ export type Database = {
           },
         ]
       }
+      help_request_messages: {
+        Row: {
+          author: string
+          class_id: number
+          created_at: string
+          help_request_id: number
+          id: number
+          instructors_only: boolean
+          message: string
+        }
+        Insert: {
+          author: string
+          class_id: number
+          created_at?: string
+          help_request_id: number
+          id?: number
+          instructors_only?: boolean
+          message: string
+        }
+        Update: {
+          author?: string
+          class_id?: number
+          created_at?: string
+          help_request_id?: number
+          id?: number
+          instructors_only?: boolean
+          message?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "help_request_messages_author_fkey"
+            columns: ["author"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_author_fkey1"
+            columns: ["author"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_help_request_id_fkey"
+            columns: ["help_request_id"]
+            isOneToOne: false
+            referencedRelation: "help_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       help_requests: {
         Row: {
+          assignee: string | null
+          class_id: number
           created_at: string
           creator: string
           followup_to: number | null
-          help_ended_at: string | null
           help_queue: number
-          help_started_at: string | null
-          helper: string | null
           id: number
+          is_video_live: boolean
           request: string
+          resolved_at: string | null
+          resolved_by: string | null
         }
         Insert: {
+          assignee?: string | null
+          class_id: number
           created_at?: string
           creator: string
           followup_to?: number | null
-          help_ended_at?: string | null
           help_queue: number
-          help_started_at?: string | null
-          helper?: string | null
           id?: number
+          is_video_live?: boolean
           request: string
+          resolved_at?: string | null
+          resolved_by?: string | null
         }
         Update: {
+          assignee?: string | null
+          class_id?: number
           created_at?: string
           creator?: string
           followup_to?: number | null
-          help_ended_at?: string | null
           help_queue?: number
-          help_started_at?: string | null
-          helper?: string | null
           id?: number
+          is_video_live?: boolean
           request?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "help_requests_assignee_fkey"
+            columns: ["assignee"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_requests_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "help_requests_creator_fkey"
             columns: ["creator"]
@@ -662,8 +744,8 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "help_requests_helper_fkey"
-            columns: ["helper"]
+            foreignKeyName: "help_requests_resolved_by_fkey"
+            columns: ["resolved_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -755,7 +837,7 @@ export type Database = {
           created_at: string
           id: string
           is_instructor: boolean
-          username: string
+          name: string
         }
         Insert: {
           avatar: string
@@ -763,7 +845,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_instructor: boolean
-          username: string
+          name: string
         }
         Update: {
           avatar?: string
@@ -771,7 +853,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_instructor?: boolean
-          username?: string
+          name?: string
         }
         Relationships: [
           {
@@ -1094,6 +1176,51 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      video_meeting_sessions: {
+        Row: {
+          chime_meeting_id: string | null
+          class_id: number
+          created_at: string
+          ended: string | null
+          help_request_id: number
+          id: number
+          started: string | null
+        }
+        Insert: {
+          chime_meeting_id?: string | null
+          class_id: number
+          created_at?: string
+          ended?: string | null
+          help_request_id: number
+          id?: number
+          started?: string | null
+        }
+        Update: {
+          chime_meeting_id?: string | null
+          class_id?: number
+          created_at?: string
+          ended?: string | null
+          help_request_id?: number
+          id?: number
+          started?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "video_meeting_sessions_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "video_meeting_sessions_help_request_id_fkey"
+            columns: ["help_request_id"]
+            isOneToOne: false
+            referencedRelation: "help_requests"
             referencedColumns: ["id"]
           },
         ]

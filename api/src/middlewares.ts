@@ -7,6 +7,8 @@ import { JWTUserRoles } from "./api/AdminServiceController.js";
 const supabase = createClient<Database>(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '');
 export async function requiresCourseInstructorOrGrader(request: Request, response: Response, next: NextFunction) {
     const { headers } = request;
+    console.log("requiresCourseInstructorOrGrader")
+    console.log(headers)
     // Get the user object
     const token = (headers as any)['authorization'];
     if (!token) {

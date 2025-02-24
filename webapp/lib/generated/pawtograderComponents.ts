@@ -9,83 +9,6 @@ import type * as Fetcher from './pawtograderFetcher';
 import { pawtograderFetch } from './pawtograderFetcher';
 import type * as Schemas from './pawtograderSchemas';
 
-export type GetCanvasCoursesError = Fetcher.ErrorWrapper<undefined>;
-
-export type GetCanvasCoursesResponse = Schemas.Course[];
-
-export type GetCanvasCoursesVariables = PawtograderContext['fetcherOptions'];
-
-export const fetchGetCanvasCourses = (variables: GetCanvasCoursesVariables, signal?: AbortSignal) =>
-  pawtograderFetch<GetCanvasCoursesResponse, GetCanvasCoursesError, undefined, {}, {}, {}>({
-    url: '/api/admin/canvas/courses',
-    method: 'get',
-    ...variables,
-    signal,
-  });
-
-export const useGetCanvasCourses = <TData = GetCanvasCoursesResponse,>(
-  variables: GetCanvasCoursesVariables,
-  options?: Omit<
-    reactQuery.UseQueryOptions<GetCanvasCoursesResponse, GetCanvasCoursesError, TData>,
-    'queryKey' | 'queryFn' | 'initialData'
-  >,
-) => {
-  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
-  return reactQuery.useQuery<GetCanvasCoursesResponse, GetCanvasCoursesError, TData>({
-    queryKey: queryKeyFn({
-      path: '/api/admin/canvas/courses',
-      operationId: 'getCanvasCourses',
-      variables,
-    }),
-    queryFn: ({ signal }) => fetchGetCanvasCourses({ ...fetcherOptions, ...variables }, signal),
-    ...options,
-    ...queryOptions,
-  });
-};
-
-export type GetCanvasCoursePathParams = {
-  /**
-   * @format double
-   */
-  courseId: number;
-};
-
-export type GetCanvasCourseError = Fetcher.ErrorWrapper<undefined>;
-
-export type GetCanvasCourseVariables = {
-  pathParams: GetCanvasCoursePathParams;
-} & PawtograderContext['fetcherOptions'];
-
-export const fetchGetCanvasCourse = (variables: GetCanvasCourseVariables, signal?: AbortSignal) =>
-  pawtograderFetch<
-    Schemas.Course,
-    GetCanvasCourseError,
-    undefined,
-    {},
-    {},
-    GetCanvasCoursePathParams
-  >({ url: '/api/admin/canvas/courses/{courseId}', method: 'get', ...variables, signal });
-
-export const useGetCanvasCourse = <TData = Schemas.Course,>(
-  variables: GetCanvasCourseVariables,
-  options?: Omit<
-    reactQuery.UseQueryOptions<Schemas.Course, GetCanvasCourseError, TData>,
-    'queryKey' | 'queryFn' | 'initialData'
-  >,
-) => {
-  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
-  return reactQuery.useQuery<Schemas.Course, GetCanvasCourseError, TData>({
-    queryKey: queryKeyFn({
-      path: '/api/admin/canvas/courses/{courseId}',
-      operationId: 'getCanvasCourse',
-      variables,
-    }),
-    queryFn: ({ signal }) => fetchGetCanvasCourse({ ...fetcherOptions, ...variables }, signal),
-    ...options,
-    ...queryOptions,
-  });
-};
-
 export type CreateSubmissionHeaders = {
   Authorization: string;
 };
@@ -168,6 +91,83 @@ export const useSubmitFeedback = (
     mutationFn: (variables: SubmitFeedbackVariables) =>
       fetchSubmitFeedback({ ...fetcherOptions, ...variables }),
     ...options,
+  });
+};
+
+export type GetCanvasCoursesError = Fetcher.ErrorWrapper<undefined>;
+
+export type GetCanvasCoursesResponse = Schemas.Course[];
+
+export type GetCanvasCoursesVariables = PawtograderContext['fetcherOptions'];
+
+export const fetchGetCanvasCourses = (variables: GetCanvasCoursesVariables, signal?: AbortSignal) =>
+  pawtograderFetch<GetCanvasCoursesResponse, GetCanvasCoursesError, undefined, {}, {}, {}>({
+    url: '/api/admin/canvas/courses',
+    method: 'get',
+    ...variables,
+    signal,
+  });
+
+export const useGetCanvasCourses = <TData = GetCanvasCoursesResponse,>(
+  variables: GetCanvasCoursesVariables,
+  options?: Omit<
+    reactQuery.UseQueryOptions<GetCanvasCoursesResponse, GetCanvasCoursesError, TData>,
+    'queryKey' | 'queryFn' | 'initialData'
+  >,
+) => {
+  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
+  return reactQuery.useQuery<GetCanvasCoursesResponse, GetCanvasCoursesError, TData>({
+    queryKey: queryKeyFn({
+      path: '/api/admin/canvas/courses',
+      operationId: 'getCanvasCourses',
+      variables,
+    }),
+    queryFn: ({ signal }) => fetchGetCanvasCourses({ ...fetcherOptions, ...variables }, signal),
+    ...options,
+    ...queryOptions,
+  });
+};
+
+export type GetCanvasCoursePathParams = {
+  /**
+   * @format double
+   */
+  courseId: number;
+};
+
+export type GetCanvasCourseError = Fetcher.ErrorWrapper<undefined>;
+
+export type GetCanvasCourseVariables = {
+  pathParams: GetCanvasCoursePathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchGetCanvasCourse = (variables: GetCanvasCourseVariables, signal?: AbortSignal) =>
+  pawtograderFetch<
+    Schemas.Course,
+    GetCanvasCourseError,
+    undefined,
+    {},
+    {},
+    GetCanvasCoursePathParams
+  >({ url: '/api/admin/canvas/courses/{courseId}', method: 'get', ...variables, signal });
+
+export const useGetCanvasCourse = <TData = Schemas.Course,>(
+  variables: GetCanvasCourseVariables,
+  options?: Omit<
+    reactQuery.UseQueryOptions<Schemas.Course, GetCanvasCourseError, TData>,
+    'queryKey' | 'queryFn' | 'initialData'
+  >,
+) => {
+  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
+  return reactQuery.useQuery<Schemas.Course, GetCanvasCourseError, TData>({
+    queryKey: queryKeyFn({
+      path: '/api/admin/canvas/courses/{courseId}',
+      operationId: 'getCanvasCourse',
+      variables,
+    }),
+    queryFn: ({ signal }) => fetchGetCanvasCourse({ ...fetcherOptions, ...variables }, signal),
+    ...options,
+    ...queryOptions,
   });
 };
 
@@ -540,6 +540,49 @@ export const useCreateCourseForCanvasCourse = (
   });
 };
 
+export type GetMeetingPathParams = {
+  /**
+   * @format double
+   */
+  requestId: number;
+};
+
+export type GetMeetingError = Fetcher.ErrorWrapper<undefined>;
+
+export type GetMeetingVariables = {
+  pathParams: GetMeetingPathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchGetMeeting = (variables: GetMeetingVariables, signal?: AbortSignal) =>
+  pawtograderFetch<
+    Schemas.JoinMeetingResponse,
+    GetMeetingError,
+    undefined,
+    {},
+    {},
+    GetMeetingPathParams
+  >({ url: '/api/help-queue/help-request/{requestId}', method: 'get', ...variables, signal });
+
+export const useGetMeeting = <TData = Schemas.JoinMeetingResponse,>(
+  variables: GetMeetingVariables,
+  options?: Omit<
+    reactQuery.UseQueryOptions<Schemas.JoinMeetingResponse, GetMeetingError, TData>,
+    'queryKey' | 'queryFn' | 'initialData'
+  >,
+) => {
+  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
+  return reactQuery.useQuery<Schemas.JoinMeetingResponse, GetMeetingError, TData>({
+    queryKey: queryKeyFn({
+      path: '/api/help-queue/help-request/{requestId}',
+      operationId: 'getMeeting',
+      variables,
+    }),
+    queryFn: ({ signal }) => fetchGetMeeting({ ...fetcherOptions, ...variables }, signal),
+    ...options,
+    ...queryOptions,
+  });
+};
+
 export type QueryOperation =
   | {
       path: '/api/admin/canvas/courses';
@@ -555,4 +598,9 @@ export type QueryOperation =
       path: '/api/instructor/{courseId}/template-repos';
       operationId: 'getTemplateRepos';
       variables: GetTemplateReposVariables;
+    }
+  | {
+      path: '/api/help-queue/help-request/{requestId}';
+      operationId: 'getMeeting';
+      variables: GetMeetingVariables;
     };

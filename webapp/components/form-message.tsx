@@ -1,3 +1,5 @@
+import { Text } from "@chakra-ui/react";
+
 export type Message =
   | { success: string }
   | { error: string }
@@ -12,9 +14,7 @@ export function FormMessage({ message }: { message: Message }) {
         </div>
       )}
       {"error" in message && (
-        <div className="text-destructive-foreground border-l-2 border-destructive-foreground px-4">
-          {message.error}
-        </div>
+          <Text color="red">{message.error}</Text>
       )}
       {"message" in message && (
         <div className="text-foreground border-l-2 px-4">{message.message}</div>
