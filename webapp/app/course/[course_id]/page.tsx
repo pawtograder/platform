@@ -63,7 +63,7 @@ export default async function CourseLanding({
                 </DataListItem>
                 <DataListItem>
                   <DataListItemLabel>Most recent submission</DataListItemLabel>
-                  <DataListItemValue>#{mostRecentSubmission.id}, score: {mostRecentSubmission.grader_results?.score}</DataListItemValue>
+                  <DataListItemValue>{mostRecentSubmission ? `#{mostRecentSubmission.id}, score: ${mostRecentSubmission.grader_results?.score}` : "No submissions"}</DataListItemValue>
                 </DataListItem>
                 </DataListRoot>
               </CardBody>

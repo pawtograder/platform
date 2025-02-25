@@ -40,11 +40,11 @@ export type AutograderFeedback = {
     status: 'pass' | 'fail';
   };
   output: {
-    hidden?: {
+    visible?: {
       output_format?: OutputFormat;
       output: string;
     };
-    visible?: {
+    hidden?: {
       output_format?: OutputFormat;
       output: string;
     };

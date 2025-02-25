@@ -1,7 +1,7 @@
 'use client'
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, Flex, HStack, Skeleton, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Skeleton, VStack, Text } from "@chakra-ui/react";
 import { usePathname, useRouter } from "next/navigation";
 import {
     FiBook,
@@ -12,12 +12,27 @@ import {
     FiSettings,
     FiStar,
     FiTrendingUp,
-    FiClipboard
+    FiClipboard,
+    FiMenu
 } from 'react-icons/fi'
 import UserMenu from "../UserMenu";
-import React, { useEffect } from "react";
+import React, { Fragment, useEffect } from "react";
 import useAuthState from "@/hooks/useAuthState";
-
+import { Course, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import {
+    DrawerActionTrigger,
+    DrawerBackdrop,
+    DrawerBody,
+    DrawerCloseTrigger,
+    DrawerContent,
+    DrawerFooter,
+    DrawerHeader,
+    DrawerRoot,
+    DrawerTitle,
+    DrawerTrigger,
+  } from "@/components/ui/drawer"
+import Link from "@/components/ui/link";
+import SemesterText from "@/components/ui/semesterText";
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, target: `/course/${courseID}/assignments` },
     { name: 'Discussion', icon: FiStar, target: `/course/${courseID}/discussion` },
@@ -30,7 +45,49 @@ const LinkItems = (courseID: number) => ([
     { name: 'Settings', icon: FiSettings },
 ]);
 
-export default function DynamicCourseNav({ course }: { course: null | Database['public']['Tables']['classes']['Row'] }) {
+function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[], currentCourse: Course }) {
+    if(courses.length === 1) {
+        return <></>
+    }
+    const uniqueCourses: Course[] = [];
+    courses.forEach(c => {
+        if (c.classes && !uniqueCourses.some(uc => uc.id === c.classes!.id)) {
+            uniqueCourses.push(c.classes);
+        }
+    });
+    const courseSorter = (a: Course, b: Course) => {
+        if (a.semester && b.semester) {
+            const ret = b.semester - a.semester;
+            if(ret !== 0) {
+                return ret;
+            }
+        }
+        return a.name!.localeCompare(b.name!);
+    }
+    return <DrawerRoot size='xs' placement='start'>
+    <DrawerBackdrop />
+    <DrawerTrigger asChild>
+      <Button variant="ghost" colorPalette="gray" size="sm" aria-label="Open course picker">
+      <FiMenu />
+      </Button>
+    </DrawerTrigger>
+    <DrawerContent>
+      <DrawerHeader>
+        <DrawerTitle>Your Courses</DrawerTitle>
+      </DrawerHeader>
+      <DrawerBody>
+        {Array.from(uniqueCourses).sort(courseSorter).map((course) => (
+            <Fragment key={course.id}>
+            <Link variant={course.id === currentCourse.id ? "underline" : "plain"} href={`/course/${course.id}`}>{course.name}</Link>
+            <Text fontSize="sm" color="gray.500"><SemesterText semester={course.semester} /></Text>
+            </Fragment>
+        ))}
+      </DrawerBody>
+      <DrawerCloseTrigger />
+    </DrawerContent>
+  </DrawerRoot>
+}
+export default function DynamicCourseNav({ course, courses }: { course: null | Course, courses: UserRoleWithCourse[]}) {
     const router = useRouter();
     const pathname = usePathname();
     const { isInstructor } = useAuthState();
@@ -53,10 +110,13 @@ export default function DynamicCourseNav({ course }: { course: null | Database['
                 alignItems="center"
                 justifyContent={{ base: 'space-between' }}
             >
+                
                 <Box
                     fontSize="2xl"
                     fontWeight="bold"
-                >{course.name}</Box>
+                ><CoursePicker courses={courses} currentCourse={course} />
+                {course.name}
+                </Box>
                 <UserMenu />
             </Flex>
             <HStack

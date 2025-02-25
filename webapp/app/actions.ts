@@ -6,8 +6,6 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
-  console.log("Signing in or signing up with email");
-  console.log(data);
   const action = data.get("action");
   const email = data.get("email");
   const password = data.get("password");

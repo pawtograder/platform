@@ -1,15 +1,23 @@
-import { Body, Controller, Header, Hidden, Post, Response, Route } from "tsoa";
-import GitHubController, { GitHubOIDCToken } from "../GitHubController.js";
-import { Database } from "../SupabaseTypes.js";
-import { createClient } from "@supabase/supabase-js";
-import { Open as openZip } from "unzipper";
+import { createClient, User } from "@supabase/supabase-js";
 import { createHash } from "crypto";
+import {
+    Body,
+    Controller,
+    Header,
+    Post,
+    Request,
+    Response,
+    Route,
+    Security,
+} from "tsoa";
+import { Open as openZip } from "unzipper";
+import GitHubController from "../GitHubController.js";
 import { SecurityError, UserVisibleError } from "../InternalTypes.js";
-import { request } from "http";
+import { Database } from "../SupabaseTypes.js";
 
 export type GraderConfig =
     Database["public"]["Tables"]["grader_configs"]["Row"];
-export type OutputFormat = "text" | 'markdown' | 'ansi';
+export type OutputFormat = "text" | "markdown" | "ansi";
 export type OutputVisibility =
     | "hidden" // Never shown to students
     | "visible" // Always shown to students
@@ -60,6 +68,70 @@ export type SubmissionResponse = {
 
 @Route("/api/autograder")
 export class AutograderController extends Controller {
+    @Security("supabase", ["student"])
+    @Post("/create-github-repos-for-student")
+    async createGitHubReposForStudent(@Request() request: Express.Request) {
+        const user = (request as any).user.user as User;
+        console.log("Creating GitHub repos for student ", user.email);
+        const supabase = createClient<Database>(
+            process.env.SUPABASE_URL || "",
+            process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+        );
+        // Get the user's Github username
+        const { data: userData } = await supabase.from("profiles").select(
+            "github_username, repositories(*)",
+        ).eq("id", user.id).single();
+        if (!userData) {
+            throw new SecurityError(`Invalid user: ${user.id}`);
+        }
+        const githubUsername = userData.github_username;
+        if (!githubUsername) {
+            throw new UserVisibleError(
+                `User ${user.id} has no Github username linked`,
+            );
+        }
+        const existingRepos = userData.repositories;
+        const { data: classes } = await supabase.from("user_roles").select(
+            "class_id",
+        ).eq(
+            "user_id",
+            user.id,
+        ).eq("role", "student");
+        //Find all assignments that the student is enrolled in that have been released
+        const { data: assignments } = await supabase.from("assignments").select(
+            "*, classes(slug)",
+        ).in("class_id", classes!.map((c) => c!.class_id))
+            .lte("release_date", new Date().toISOString());
+        
+        const requests = assignments!.filter(assignment => !existingRepos.find(repo => repo.assignment_id === assignment.id)).map(async (assignment) => {
+            const repoName = `${
+                assignment.classes!.slug
+            }-${assignment.slug}-${githubUsername}`;
+            const repo = await GitHubController.getInstance().createRepo(
+                "autograder-dev",
+                repoName,
+                assignment.template_repo,
+                githubUsername,
+            );
+            const { error } = await supabase.from("repositories").insert({
+                user_id: user.id,
+                assignment_id: assignment.id,
+                repository: `autograder-dev/${repoName}`,
+            });
+            if (error) {
+                console.error(error);
+            }
+            return repo;
+        });
+        await Promise.all(requests);
+        return {
+            is_ok: true,
+            message: `Repositories created for ${
+                assignments!.length
+            } assignments`,
+        };
+    }
+
     @Response<void>("401", "Invalid GitHub OIDC token")
     @Post("/submission")
     async createSubmission(
@@ -138,8 +210,10 @@ export class AutograderController extends Controller {
                 );
             }
             const expectedFiles = data.assignments.submission_files as string[];
-            if(expectedFiles.length === 0) {
-                throw new UserVisibleError("Incorrect instructor setup for assignment: no submission files set");
+            if (expectedFiles.length === 0) {
+                throw new UserVisibleError(
+                    "Incorrect instructor setup for assignment: no submission files set",
+                );
             }
             const submittedFiles = zip.files.filter((file) =>
                 expectedFiles.includes(stripTopDir(file.path))
@@ -231,7 +305,8 @@ export class AutograderController extends Controller {
                     0,
                 ),
             lint_output: requestBody.feedback.lint.output,
-            lint_output_format: requestBody.feedback.lint.output_format || "text",
+            lint_output_format: requestBody.feedback.lint.output_format ||
+                "text",
             lint_passed: requestBody.feedback.lint.status === "pass",
             execution_time: requestBody.execution_time,
         });
@@ -293,7 +368,8 @@ export class AutograderController extends Controller {
         return {
             is_ok: true,
             message: `Submission ${submission.id} registered`,
-            details_url: `${process.env.PAWTOGRADER_WEBAPP_URL}/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}`,
+            details_url:
+                `${process.env.PAWTOGRADER_WEBAPP_URL}/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}`,
         };
     }
 }

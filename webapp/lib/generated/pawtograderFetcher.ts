@@ -33,16 +33,15 @@ export async function pawtograderFetch<
 }: PawtograderFetcherOptions<TBody, THeaders, TQueryParams, TPathParams>): Promise<TData> {
   try {
 
-    console.log(`Fetching ${url} with headers ${JSON.stringify(headers)}`);
     const supabase = createClient();
-    const token = (await supabase.auth.getSession()).data.session?.access_token;
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
 
     const requestHeaders: HeadersInit = {
       'Content-Type': 'application/json',
-      ...headers,
       'Authorization': token!,
+      ...headers,
     };
-    console.log(requestHeaders);
 
     /**
      * As the fetch API is being used, when multipart/form-data is specified
@@ -54,7 +53,12 @@ export async function pawtograderFetch<
       delete requestHeaders['Content-Type'];
     }
 
-    const response = await window.fetch(`${baseUrl}${resolveUrl(url, queryParams, pathParams)}`, {
+    const response = (typeof window !== 'undefined') ? await window.fetch(`${baseUrl}${resolveUrl(url, queryParams, pathParams)}`, {
+      signal,
+      method: method.toUpperCase(),
+      body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
+      headers: requestHeaders,
+    }) : await fetch(`${baseUrl}${resolveUrl(url, queryParams, pathParams)}`, {
       signal,
       method: method.toUpperCase(),
       body: body ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,

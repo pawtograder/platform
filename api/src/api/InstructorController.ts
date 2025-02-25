@@ -18,6 +18,7 @@ export class CourseAdminController {
         const { data: assignment } = await supabase.from('assignments')
             .select('*, classes(slug, user_roles(profiles(id, name,github_username, sortable_name)))') // , classes(canvas_id), user_roles(user_id)')
             .eq('id', assignmentId)
+            .lte('release_date', new Date().toISOString())
             .eq('class_id', courseId).single();
         if (!assignment) {
             throw new Error('Assignment not found');

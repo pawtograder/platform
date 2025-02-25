@@ -26,6 +26,7 @@ export default function AutograderPage() {
             }
         }
     });
+    console.log(query);
     if (!query || formLoading) {
         return <div>Loading...</div>
     }

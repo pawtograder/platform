@@ -19,7 +19,7 @@ import { useParams, usePathname } from "next/navigation";
 import { FaFile, FaHistory, FaQuestionCircle, FaRobot } from "react-icons/fa";
 
 
-export function SubmissionHistory({ submission }: { submission: SubmissionWithFilesAndComments }) {
+function SubmissionHistory({ submission }: { submission: SubmissionWithFilesAndComments }) {
     const pathname = usePathname();
     const { data, isLoading } = useList<SubmissionWithGraderResults>({
         resource: "submissions",

@@ -14,7 +14,6 @@ async function getRolesForCourse(course_id: number){
   }
   export async function isInstructor(course_id: number){
     const roles = await getRolesForCourse(course_id);
-    console.log(roles);
     return (await getRolesForCourse(course_id)).includes("instructor");
   }
   

@@ -846,7 +846,6 @@ export type Database = {
       public_profiles: {
         Row: {
           avatar: string
-          class_id: number
           created_at: string
           id: string
           is_instructor: boolean
@@ -854,7 +853,6 @@ export type Database = {
         }
         Insert: {
           avatar: string
-          class_id: number
           created_at?: string
           id?: string
           is_instructor: boolean
@@ -862,21 +860,12 @@ export type Database = {
         }
         Update: {
           avatar?: string
-          class_id?: number
           created_at?: string
           id?: string
           is_instructor?: boolean
           name?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "public_profiles_class_id_fkey"
-            columns: ["class_id"]
-            isOneToOne: false
-            referencedRelation: "classes"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       repositories: {
         Row: {

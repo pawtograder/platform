@@ -4,6 +4,14 @@ export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
 
+export type UserRoleWithCourse = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["user_roles"]["Row"],
+    "user_roles",
+    Database["public"]["Tables"]["user_roles"]["Relationships"],
+    "*, classes(*)"
+>;
+
 export type Repo = Database["public"]["Tables"]["repositories"]["Row"];
 
 export type AssignmentWithRepositoryAndSubmissionsAndGraderResults = GetResult<

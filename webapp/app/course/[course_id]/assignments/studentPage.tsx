@@ -1,13 +1,17 @@
 import LinkAccount from "@/components/github/link-account";
 import { AssignmentWithRepositoryAndSubmissionsAndGraderResults } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Container, Heading, Table } from "@chakra-ui/react";
+import { Button, Container, Heading, Table } from "@chakra-ui/react";
 import { format, formatDistanceToNowStrict, formatRelative } from "date-fns";
 import Link from "@/components/ui/link";
+import CreateStudentReposButton from "./createStudentReposButton";
+import { fetchCreateGitHubReposForStudent } from "@/lib/generated/pawtograderComponents";
+import { revalidatePath } from "next/cache";
+import { Alert } from "@/components/ui/alert";
 export default async function StudentPage({ course_id }: { course_id: number }) {
     const client = await createClient();
     const user = (await client.auth.getUser()).data.user;
-    const assignments = await client.from("assignments")
+    let assignments = await client.from("assignments")
         .select("*, submissions(*, grader_results(*)), repositories(*)")
         .eq("class_id", course_id)
         .eq("repositories.user_id", user!.id)
@@ -20,6 +24,23 @@ export default async function StudentPage({ course_id }: { course_id: number }) 
     let actions = <></>;
     if (!githubIdentity) {
         actions = <LinkAccount />
+    } else {
+        const assignmentsWithoutRepos = assignments.data?.filter((assignment) => !assignment.repositories.length);
+        const session = await client.auth.getSession();
+        if (assignmentsWithoutRepos?.length) {
+            console.log("Creating GitHub repos for student");
+            const ret = await fetchCreateGitHubReposForStudent({
+                headers: {
+                    Authorization: `${session.data.session?.access_token}`
+                }
+            });
+            assignments = await client.from("assignments")
+                .select("*, submissions(*, grader_results(*)), repositories(*)")
+                .eq("class_id", course_id)
+                .eq("repositories.user_id", user!.id)
+                .order("due_date", { ascending: false });
+            actions = <><Alert status="info">GitHub repos created for you. Please refresh the page to see them. IDK why this is needed/Fixme.</Alert></>;
+        }
     }
     const getLatestSubmission = (assignment: AssignmentWithRepositoryAndSubmissionsAndGraderResults) => {
         assignment
@@ -43,15 +64,15 @@ export default async function StudentPage({ course_id }: { course_id: number }) 
                         const mostRecentSubmission = getLatestSubmission(assignment);
                         return <Table.Row key={assignment.id}>
                             <Table.Cell><Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`}>{format(new Date(assignment.due_date!), "MMM d h:mm aaa")}</Link></Table.Cell>
-                            <Table.Cell><Link 
-                            prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`}>{assignment.title}</Link></Table.Cell>
+                            <Table.Cell><Link
+                                prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`}>{assignment.title}</Link></Table.Cell>
                             <Table.Cell>
                                 {mostRecentSubmission ? <Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`}>
                                     #{mostRecentSubmission.ordinal} ({mostRecentSubmission.grader_results?.score || 0}/{mostRecentSubmission.grader_results?.max_score || 0})
                                 </Link> : '-'}
                             </Table.Cell>
                             <Table.Cell><Link
-                            target="_blank" href={`https://github.com/${assignment.repositories[0]?.repository}`}>{assignment.repositories[0]?.repository}</Link> </Table.Cell>
+                                target="_blank" href={`https://github.com/${assignment.repositories[0]?.repository}`}>{assignment.repositories[0]?.repository}</Link> </Table.Cell>
                         </Table.Row>
                     })}
                 </Table.Body>

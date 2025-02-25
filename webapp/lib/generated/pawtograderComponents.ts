@@ -9,6 +9,55 @@ import type * as Fetcher from './pawtograderFetcher';
 import { pawtograderFetch } from './pawtograderFetcher';
 import type * as Schemas from './pawtograderSchemas';
 
+export type CreateGitHubReposForStudentError = Fetcher.ErrorWrapper<undefined>;
+
+export type CreateGitHubReposForStudentResponse = {
+  message: string;
+  is_ok: boolean;
+};
+
+export type CreateGitHubReposForStudentVariables = PawtograderContext['fetcherOptions'];
+
+export const fetchCreateGitHubReposForStudent = (
+  variables: CreateGitHubReposForStudentVariables,
+  signal?: AbortSignal,
+) =>
+  pawtograderFetch<
+    CreateGitHubReposForStudentResponse,
+    CreateGitHubReposForStudentError,
+    undefined,
+    {},
+    {},
+    {}
+  >({
+    url: '/api/autograder/create-github-repos-for-student',
+    method: 'post',
+    ...variables,
+    signal,
+  });
+
+export const useCreateGitHubReposForStudent = (
+  options?: Omit<
+    reactQuery.UseMutationOptions<
+      CreateGitHubReposForStudentResponse,
+      CreateGitHubReposForStudentError,
+      CreateGitHubReposForStudentVariables
+    >,
+    'mutationFn'
+  >,
+) => {
+  const { fetcherOptions } = usePawtograderContext();
+  return reactQuery.useMutation<
+    CreateGitHubReposForStudentResponse,
+    CreateGitHubReposForStudentError,
+    CreateGitHubReposForStudentVariables
+  >({
+    mutationFn: (variables: CreateGitHubReposForStudentVariables) =>
+      fetchCreateGitHubReposForStudent({ ...fetcherOptions, ...variables }),
+    ...options,
+  });
+};
+
 export type CreateSubmissionHeaders = {
   Authorization: string;
 };
