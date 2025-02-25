@@ -1,17 +1,18 @@
 'use client';
 
 import { Button } from "@/components/ui/button";
+import PersonName from "@/components/ui/person-name";
 import { Skeleton } from "@/components/ui/skeleton";
+import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
 import { Rubric, SubmissionFileWithComments, SubmissionWithFilesAndComments } from "@/utils/supabase/DatabaseTypes";
-import { Box, chakra, Stack, DrawerContent, DrawerTrigger, DrawerRoot, HStack, Text, IconButton, DrawerBackdrop, DrawerCloseTrigger, Container, Flex, Table, TableCaption, Link, Editable, } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useList, useShow, useUpdate } from "@refinedev/core";
+import { Box, chakra, Container, Editable, Flex, HStack, IconButton, Link, Table, Text } from "@chakra-ui/react";
+import { useCreate, useInvalidate, useList, useShow } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
-import { useMutation } from "@tanstack/react-query";
-import { Sidebar } from "lucide-react";
+import { useParams, usePathname } from "next/navigation";
 import { useCallback, useState } from "react";
 import { FaPlus } from "react-icons/fa";
-import { LuAlignRight, LuCheck, LuPencilLine, LuX } from "react-icons/lu";
+import { LuCheck, LuPencilLine, LuX } from "react-icons/lu";
 import SyntaxHighlighter, { createElement } from 'react-syntax-highlighter';
 import { github } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 
@@ -55,25 +56,25 @@ function LineCommentForm({
             setValue('author', (await supabase.auth.getUser()).data.user!.id);
             setValue('line', line);
             handleSubmit(refineCore.onFinish)();
+            setValue('comment', '');
         }
         populate();
     }, [submission, line, supabase]);
 
 
-    if (!isReplying) {
-        return (
-            <Box>
-                <Button
-                    onClick={() => setIsReplying(true)}
-                    fontSize="sm"
-                    color="blue.500"
-                    _hover={{ textDecoration: 'underline' }}
-                >
-                    Reply
-                </Button>
-            </Box>
-        );
-    }
+    // if (!isReplying) {
+    //     return (
+    //         <Box>
+    //             <Button
+    //                 onClick={() => setIsReplying(true)}
+    //                 fontSize="sm"
+    //                 _hover={{ textDecoration: 'underline' }}
+    //             >
+    //                 Reply
+    //             </Button>
+    //         </Box>
+    //     );
+    // }
 
     return (
         <form onSubmit={onSubmit}>
@@ -82,12 +83,16 @@ function LineCommentForm({
                 rows={3}
                 className="w-full p-2 border rounded"
                 placeholder="Write a comment..."
+                onKeyDown={(e) => {
+                    if (e.metaKey && e.key === 'Enter') {
+                        e.preventDefault();
+                        onSubmit(e as unknown as React.FormEvent<HTMLFormElement>);
+                    }
+                }}
             />
             <HStack spaceY={2} mt={2}>
                 <Button
                     type="submit"
-                    bg="blue.500"
-                    color="white"
                     px={4}
                     py={2}
                     rounded="md"
@@ -95,14 +100,14 @@ function LineCommentForm({
                 >
                     Post
                 </Button>
-                <Button
+                {/* <Button
                     onClick={() => setIsReplying(false)}
                     color="gray.500"
                     px={4}
                     py={2}
                 >
                     Cancel
-                </Button>
+                </Button> */}
             </HStack>
         </form>
     );
@@ -121,12 +126,12 @@ function LineComments({
     expanded: boolean,
     setExpanded: (expanded: boolean) => void
 }) {
-    const comments = curFile.submission_file_comments?.filter((comment) => comment.line === line);
-    const hasComments = comments && comments.length > 0;
 
     if (!submission || !curFile) {
         return null;
     }
+    const comments = curFile.submission_file_comments?.filter((comment) => comment.line === line);
+    const hasComments = comments && comments.length > 0;
     if (!expanded && !hasComments) {
         return <></>;
     }
@@ -160,13 +165,13 @@ function LineComments({
             boxShadow="sm"
         >
             Comment
-            <LineCommentForm line={line} submission={submission} curFile={curFile} />
             {curFile.submission_file_comments?.filter((comment) => comment.line === line).map((comment) => (
                 <Box key={comment.id} mt={2} borderWidth="1px" borderColor="gray.400" p={2} borderRadius="md">
-                    <Text fontSize="sm" fontWeight="bold">{comment.public_profiles.name}</Text>
-                    {comment.comment}
+                    <PersonName uid={comment.author} />
+                    <Text>{comment.comment}</Text>
                 </Box>
             ))}
+            <LineCommentForm line={line} submission={submission} curFile={curFile} />
         </Box>
         {/* ))} */}
     </Box>
@@ -181,7 +186,7 @@ const LineNumber = chakra("div", {
     }
 });
 
-export function CodeLine({ line, row, stylesheet, useInlineStyles, data, curFile }: { line: number, row: any, stylesheet: any, useInlineStyles: any, data: SubmissionWithFilesAndComments, curFile: number }) {
+function CodeLine({ line, row, stylesheet, useInlineStyles, data, curFile }: { line: number, row: any, stylesheet: any, useInlineStyles: any, data: SubmissionWithFilesAndComments, curFile: number }) {
     const [isExpanded, setIsExpanded] = useState(false);
 
     return (<div>
@@ -214,22 +219,22 @@ export function CodeLine({ line, row, stylesheet, useInlineStyles, data, curFile
         <LineComments line={line + 1} expanded={isExpanded} setExpanded={setIsExpanded} submission={data} curFile={data.submission_files[curFile]} />
     </div>)
 }
-export function FilePicker({ submission, setCurFile }: { submission: SubmissionWithFilesAndComments, setCurFile: (file: number) => void }) {
+function FilePicker({ submission, curFile, setCurFile }: { submission: SubmissionWithFilesAndComments, curFile: number, setCurFile: (file: number) => void }) {
     return (
         <Table.Root borderWidth="1px" borderColor="border.emphasized"
             w="2xl"
+            m={2}
             borderRadius="md">
-            <Table.Caption>Submission Files</Table.Caption>
             <Table.Header>
-                <Table.Row>
-                    <Table.Cell>File</Table.Cell>
-                    <Table.Cell>Comments</Table.Cell>
+                <Table.Row bg="bg.subtle">
+                    <Table.ColumnHeader>File</Table.ColumnHeader>
+                    <Table.ColumnHeader>Comments</Table.ColumnHeader>
                 </Table.Row>
             </Table.Header>
             <Table.Body>
                 {submission.submission_files.map((file, idx) => (
                     <Table.Row key={file.id}>
-                        <Table.Cell><Link onClick={() => setCurFile(idx)}>{file.name}</Link></Table.Cell>
+                        <Table.Cell><Link variant={curFile === idx ? "underline" : undefined} onClick={() => setCurFile(idx)}>{file.name}</Link></Table.Cell>
                         <Table.Cell>{file.submission_file_comments?.length || 0}</Table.Cell>
                     </Table.Row>
                 ))}
@@ -237,7 +242,7 @@ export function FilePicker({ submission, setCurFile }: { submission: SubmissionW
         </Table.Root>
     )
 }
-export function RubricItem({ rubric }: { rubric: Rubric }) {
+function RubricItem({ rubric }: { rubric: Rubric }) {
     const invalidateQuery = useInvalidate();
     const { register, control, getValues, handleSubmit, refineCore, formState: { errors, isSubmitting } } = useForm<Rubric>({
         refineCoreProps: {
@@ -279,7 +284,7 @@ export function RubricItem({ rubric }: { rubric: Rubric }) {
         </form>
     </Box>
 }
-export function RubricView({ submission }: { submission: SubmissionWithFilesAndComments }) {
+function RubricView({ submission }: { submission: SubmissionWithFilesAndComments }) {
     const invalidateQuery = useInvalidate();
     const { data: rubrics } = useList<Rubric>({
         resource: "rubrics",
@@ -330,11 +335,14 @@ export function RubricView({ submission }: { submission: SubmissionWithFilesAndC
         </Box>
     </Box>
 }
-export default function FilesView({ submission_id }: { submission_id: number }) {
+export default function FilesView() {
+    const { submissions_id } = useParams();
+    const { isInstructor } = useAuthState();
     const [curFile, setCurFile] = useState<number>(0);
+    const pathname = usePathname();
     const { query } = useShow<SubmissionWithFilesAndComments>({
         resource: "submissions",
-        id: submission_id,
+        id: Number.parseInt(submissions_id as string),
         meta: {
             select: "*, assignments(*), submission_files(*, submission_file_comments(*, public_profiles(*)))"
         }
@@ -354,22 +362,20 @@ export default function FilesView({ submission_id }: { submission_id: number }) 
         return <Skeleton height="100%" width="100%" />
     }
 
-    return <Container>
+    return <Container pt={4}>
         <Flex>
             <Box>
-                <FilePicker submission={query.data.data} setCurFile={setCurFile} />
-                <h1>Submission for {query.data.data.assignments.title}</h1>
+                <FilePicker submission={query.data.data} curFile={curFile} setCurFile={setCurFile} />
                 <Box>
-                    <h2>Current File</h2>
                     <SyntaxHighlighter showLineNumbers={false}
                         wrapLines={true}
                         renderer={renderer}
-                        language='js' style={github}>
+                        language='java' style={github}>
                         {query.data.data.submission_files[curFile]?.contents || ''}
                     </SyntaxHighlighter>
                 </Box>
             </Box>
-            <RubricView submission={query.data.data} />
+            {isInstructor && <RubricView submission={query.data.data} />}
         </Flex>
     </Container>
 }

@@ -24,9 +24,9 @@ function HelpRequestChatInput() {
 
     return (
         <Flex>
-            <MdEditor value={newMessage} onChange={(value) => setNewMessage(value)} 
-            preview="edit"
-                 textareaProps={
+            <MdEditor value={newMessage} onChange={(value) => setNewMessage(value)}
+                preview="edit"
+                textareaProps={
                     {
                         placeholder: `Type a message... Press Cmd+Enter to send`,
                         onKeyDown: (e) => {
@@ -36,7 +36,7 @@ function HelpRequestChatInput() {
                         }
                     }
                 }
-                />
+            />
             <IconButton
                 size="sm"
                 aria-label="Send message"
@@ -74,7 +74,7 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
         mutationMode: "optimistic",
 
     })
-    const user = useAuthState();
+    const { user } = useAuthState();
     const resolveRequest = useCallback(() => {
         mutate({ id: request.id, values: { resolved_by: user?.id, resolved_at: new Date().toISOString() } });
     }, [mutate, request.id, user?.id]);

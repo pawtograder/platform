@@ -1,9 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { formatDueDate } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/server";
-import { CardRoot, Heading, HStack, Table } from "@chakra-ui/react";
+import { Box, DataList, DataListRoot, Heading, HStack, Table, VStack } from "@chakra-ui/react";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
-import Link from "next/link";
+import Link from "@/components/ui/link";
 
 export default async function AssignmentHome({ params,
 }: {
@@ -19,23 +19,33 @@ export default async function AssignmentHome({ params,
         // eq("role", "student").
         eq("class_id", Number.parseInt(course_id));
     const { error: subError, data: submissions } = await client.from("submissions_agg").select("*").eq("assignment_id", Number.parseInt(assignment_id));
-    console.log(submissions);
-    console.log(subError);
-
 
     if (!assignment) {
         return <div>Assignment not found</div>
     }
     return (
-        <div>
-            <Heading size="2xl">Assignment: {assignment.title}</Heading>
-            <HStack>
-                <CardRoot>
-                    <Heading size="lg">Released: {formatDueDate(assignment.release_date)}</Heading>
-                    <Heading size="lg">Due: {formatDueDate(assignment.due_date)}</Heading>
-                </CardRoot>
-            </HStack>
-            <CreateGitHubRepos courseId={Number.parseInt(course_id)} assignmentId={Number.parseInt(assignment_id)} />
+        <Box borderColor="border.muted"
+            borderWidth="2px"
+            borderRadius="md"
+        >
+            <Box p={4}>
+                <HStack justify="space-between">
+                    <VStack align="flex-start">
+                        <Heading size="lg">Assignment: {assignment.title}</Heading>
+                        <DataList.Root orientation="horizontal">
+                            <DataList.Item>
+                                <DataList.ItemLabel>Released</DataList.ItemLabel>
+                                <DataList.ItemValue>{formatDueDate(assignment.release_date)}</DataList.ItemValue>
+                            </DataList.Item>
+                            <DataList.Item>
+                                <DataList.ItemLabel>Due</DataList.ItemLabel>
+                                <DataList.ItemValue>{formatDueDate(assignment.due_date)}</DataList.ItemValue>
+                            </DataList.Item>
+                        </DataList.Root>
+                    </VStack>
+                    <CreateGitHubRepos courseId={Number.parseInt(course_id)} assignmentId={Number.parseInt(assignment_id)} />
+                </HStack>
+            </Box>
             <Table.Root striped>
                 <Table.Header>
                     <Table.Row>
@@ -50,8 +60,8 @@ export default async function AssignmentHome({ params,
                         return (<Table.Row key={user.user_id}>
                             <Table.Cell>
                                 {submisison ? <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submisison?.id}`}>{user.profiles.name}</Link>
-                                : user.profiles.name}
-                                </Table.Cell>
+                                    : user.profiles.name}
+                            </Table.Cell>
                             <Table.Cell>{submisison?.submissioncount}</Table.Cell>
                             <Table.Cell>{submisison?.score}</Table.Cell>
                         </Table.Row>
@@ -60,6 +70,6 @@ export default async function AssignmentHome({ params,
                 </Table.Body>
 
             </Table.Root>
-        </div>
+        </Box>
     );
 }

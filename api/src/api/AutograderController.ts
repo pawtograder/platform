@@ -225,6 +225,11 @@ export class AutograderController extends Controller {
                     (acc, test) => acc + (test.score || 0),
                     0,
                 ),
+            max_score: requestBody.feedback.max_score ||
+                requestBody.feedback.tests.reduce(
+                    (acc, test) => acc + (test.max_score || 0),
+                    0,
+                ),
             lint_output: requestBody.feedback.lint.output,
             lint_output_format: requestBody.feedback.lint.output_format || "text",
             lint_passed: requestBody.feedback.lint.status === "pass",

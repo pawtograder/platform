@@ -1,3 +1,4 @@
+'use client'
 import { DiscussionThreadWithAuthorAndTopic } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
@@ -11,7 +12,7 @@ import {
 } from "@chakra-ui/react";
 import excerptAst from "mdast-excerpt"
 
-import Link from "next/link";
+import Link from "@/components/ui/link";
 import { useRouter } from "next/navigation";
 import { BsChat, BsChevronUp } from 'react-icons/bs';
 import { FaCheckCircle, FaQuestionCircle, FaRegHeart, FaRegStickyNote, FaReply } from "react-icons/fa";
@@ -21,12 +22,39 @@ import Markdown from "react-markdown";
 import { formatRelative } from "date-fns";
 import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { DiscussionThread, DiscussionThreadReply } from "@/app/course/[course_id]/discussion/discussion_thread";
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { createClient } from "@/utils/supabase/client";
+import useAuthState from "@/hooks/useAuthState";
+import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
+export function DiscussionThreadLikeButton({ thread }: {
+    thread: DiscussionThreadWithAuthorAndTopic | ThreadWithChildren,
+}) {
+    const supabase = createClient();
+    const user = useAuthState();
+    const likeStatus = useDiscussionThreadLikes(thread.id);
+    const toggleLike = useCallback(async () => {
+        if (likeStatus) {
+            await supabase.from("discussion_thread_likes").delete().eq("id", likeStatus.id);
+        }
+        else {
+            await supabase.from("discussion_thread_likes").insert({
+                discussion_thread: thread.id,
+                creator: user.user!.id,
+                emoji: "👍"
+            });
+        }
+    }, [thread.class, thread.id, likeStatus]);
+
+    return <Button variant="ghost" size="sm" onClick={toggleLike}>
+        {likeStatus ? <Icon as={FaRegHeart} /> : <Icon as={FaRegHeart} />}
+    </Button>
+}
 export function DiscussionPostSummary({ thread, standalone }: {
     thread: DiscussionThreadWithAuthorAndTopic | ThreadWithChildren,
     standalone?: boolean
 }) {
     const router = useRouter();
+    const user = useAuthState();
     const [replyVisible, setReplyVisible] = useState(false);
     const getIcon = () => {
         if (thread.is_question) {
@@ -92,7 +120,8 @@ export function DiscussionPostSummary({ thread, standalone }: {
                 </HStack>
             </Stack>
             <VStack px="4" justify="center" flexShrink="0">
-                <BsChevronUp />
+                {/* <Button variant="ghost" size="sm" ><BsChevronUp /></Button> */}
+                <DiscussionThreadLikeButton thread={thread} />
                 <Text textStyle="sm" fontWeight="semibold">
                     {thread.likes_count}
                 </Text>

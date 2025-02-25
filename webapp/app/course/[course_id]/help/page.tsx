@@ -3,6 +3,7 @@
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes"
 import { Link, useList } from "@refinedev/core"
 import { useParams, useRouter } from "next/navigation"
+import { redirect } from 'next/navigation'
 
 export default function HelpPage() {
     const { course_id } = useParams()
@@ -26,7 +27,7 @@ export default function HelpPage() {
     }
     if (queues.data?.data.length === 1) {
         //Directly enter the queue
-        return router.push(`/course/${course_id}/help/${queues.data?.data[0].id}`)
+        return redirect(`/course/${course_id}/help/${queues.data?.data[0].id}`)
     }
     return <div>Help
 

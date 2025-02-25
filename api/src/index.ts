@@ -10,6 +10,7 @@ import { RegisterRoutes } from "../generated/routes.js";
 import GitHubController, { getGithubPrivateKey } from "./GitHubController.js";
 import { ValidateError } from "tsoa";
 import { SecurityError, UserVisibleError } from "./InternalTypes.js";
+import { VideoChatController } from "./api/VideoChatController.js";
 dotenv.config();
 
 const app = new App({
@@ -31,8 +32,8 @@ const expressApp = express();
 expressApp.use(express.text());
 expressApp.post("/api/help-queue/meeting-callback",
   (req: Request, res: Response, next: NextFunction) => {
-    console.log(req.headers);
-    console.log(req.body);
+    const body = JSON.parse(req.body);
+    (new VideoChatController()).processSNSMessage(JSON.parse(body.Message));
     res.send("OK");
   },
 );

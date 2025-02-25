@@ -27,7 +27,7 @@ import { useUserProfile } from '@/hooks/useUserProfiles'
 import { useRouter } from 'next/navigation';
 import HelpRequestChat from './HelpRequestChat'
 const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
-  const user = useAuthState();
+  const { user } = useAuthState();
   const [assignee, setAssignee] = useState(request.assignee);
   useEffect(() => {
     setAssignee(request.assignee);
@@ -55,7 +55,7 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
 
 
 export const HelpQueue = ({ queue_id }: { queue_id: number }) => {
-  const user = useAuthState();
+  const {user} = useAuthState();
   const [activeRequest, setActiveRequest] = useState<HelpRequest | null>(null);
 
   const { data } = useList<HelpRequest>({

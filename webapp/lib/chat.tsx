@@ -25,7 +25,7 @@ export const useChatChannel = () => {
     return ctx
 }
 export function HelpRequestChatChannelProvider({ help_request, children }: { help_request: HelpRequest, children: React.ReactNode }) {
-    const user = useAuthState()
+    const { user } = useAuthState()
     const [participants, setParticipants] = useState<string[]>([])
     const { data: help_request_messages } = useList<HelpRequestMessage>({
         resource: "help_request_messages",
@@ -100,7 +100,7 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
 export function EphemeralChatChannelProvider({ queue_id, class_id, children }: { queue_id: number, class_id: number, children: React.ReactNode }) {
     const [channel, setChannel] = useState<RealtimeChannel>()
     const [messages, setMessages] = useState<ChatMessage[]>([])
-    const user = useAuthState()
+    const { user } = useAuthState()
     const [participants, setParticipants] = useState<string[]>([])
     const postMessage = useCallback(async (message: string) => {
         if (!channel || !user) { return }

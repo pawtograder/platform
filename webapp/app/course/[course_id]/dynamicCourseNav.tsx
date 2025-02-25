@@ -22,8 +22,8 @@ const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, target: `/course/${courseID}/assignments` },
     { name: 'Discussion', icon: FiStar, target: `/course/${courseID}/discussion` },
     // { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
-    { name: 'Get Help Now', icon: FiMessageSquare, target: `/course/${courseID}/help` },
-    { name: 'Give Help Now (TA)', instructor_only: true,icon: FiClipboard, target: `/course/${courseID}/manage/help` },
+    { name: 'Get Help Now', student_only: true, icon: FiMessageSquare, target: `/course/${courseID}/help` },
+    { name: 'Give Help Now', instructor_only: true, icon: FiClipboard, target: `/course/${courseID}/manage/help` },
     // {name: 'Trending', icon: FiTrendingUp },
     // {name: 'Explore', icon: FiCompass },
     // {name: 'Favourites', icon: FiStar },
@@ -33,7 +33,7 @@ const LinkItems = (courseID: number) => ([
 export default function DynamicCourseNav({ course }: { course: null | Database['public']['Tables']['classes']['Row'] }) {
     const router = useRouter();
     const pathname = usePathname();
-    const user = useAuthState();
+    const { isInstructor } = useAuthState();
     if (!course) {
         return <Skeleton height="40" width="100%" />;
     }
@@ -62,7 +62,7 @@ export default function DynamicCourseNav({ course }: { course: null | Database['
             <HStack
                 width="100%"
             >
-                {LinkItems(course.id).map((link) => (
+                {LinkItems(course.id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => (
                     <Box key={link.name} paddingBottom="2"
                         borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
                         borderColor="orange.600"

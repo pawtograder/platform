@@ -42,6 +42,7 @@ function HelpMeeting() {
     const meetingManager = useMeetingManager()
     const { users } = useUserProfiles()
     const { help_request_id } = useParams()
+
     useEffect(() => {
         meetingManager.getAttendee = async (chimeAttendeeId: string, externalUserId?: string) => {
             const user = users.find((user) => user.id === externalUserId)
@@ -81,6 +82,9 @@ function HelpMeeting() {
             console.log("Triggering join meeting");
             console.log(meetingManager);
             joinMeeting().catch(console.error);
+        }
+        return () => {
+            meetingManager.leave();
         }
     }, [meetingManager])
     return <>

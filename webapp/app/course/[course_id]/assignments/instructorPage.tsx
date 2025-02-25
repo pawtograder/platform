@@ -1,6 +1,6 @@
 import { createClient } from "@/utils/supabase/server";
 import { Box, Table } from "@chakra-ui/react";
-import Link from "next/link";
+import Link from "@/components/ui/link";
 import StudentPage from "./studentPage";
 
 export default async function CourseLanding({
@@ -28,14 +28,11 @@ export default async function CourseLanding({
                         <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment.id}`}>{assignment.title}</Link></Table.Cell>
                         <Table.Cell>{assignment.release_date}</Table.Cell>
                         <Table.Cell>{assignment.due_date}</Table.Cell>
-                        <Table.Cell>{assignment.submissions[0].count}</Table.Cell>
+                        <Table.Cell>{assignment.submissions[0]?.count || 0}</Table.Cell>
                     </Table.Row>
                 ))}
             </Table.Body>
         </Table.Root>
-        <br />
-        <h1>Student View</h1>
-        {await StudentPage({ course_id: course_id })}
     </Box>
 
 }

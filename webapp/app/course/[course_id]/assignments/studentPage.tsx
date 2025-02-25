@@ -1,15 +1,17 @@
 import LinkAccount from "@/components/github/link-account";
-import { AssignmentWithRepositoryAndSubmissions } from "@/utils/supabase/DatabaseTypes";
+import { AssignmentWithRepositoryAndSubmissionsAndGraderResults } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Table } from "@chakra-ui/react";
-import Link from "next/link";
+import { Container, Heading, Table } from "@chakra-ui/react";
+import { format, formatDistanceToNowStrict, formatRelative } from "date-fns";
+import Link from "@/components/ui/link";
 export default async function StudentPage({ course_id }: { course_id: number }) {
     const client = await createClient();
     const user = (await client.auth.getUser()).data.user;
     const assignments = await client.from("assignments")
-        .select("*, submissions(*), repositories(*)")
+        .select("*, submissions(*, grader_results(*)), repositories(*)")
         .eq("class_id", course_id)
-        .eq("repositories.user_id", user!.id);
+        .eq("repositories.user_id", user!.id)
+        .order("due_date", { ascending: false });
 
     //list identities
     const identities = await client.auth.getUserIdentities();
@@ -19,38 +21,41 @@ export default async function StudentPage({ course_id }: { course_id: number }) 
     if (!githubIdentity) {
         actions = <LinkAccount />
     }
-    const getLatestSubmission = (assignment: AssignmentWithRepositoryAndSubmissions) => {
+    const getLatestSubmission = (assignment: AssignmentWithRepositoryAndSubmissionsAndGraderResults) => {
         assignment
         return assignment.submissions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
     }
     return (
-        <div>
+        <Container>
             {actions}
-            <h1>Assignments</h1>
+            <Heading size="lg" mb={4}>Assignments</Heading>
             <Table.Root>
                 <Table.Header>
                     <Table.Row>
-                        <Table.ColumnHeader>Title</Table.ColumnHeader>
                         <Table.ColumnHeader>Due Date</Table.ColumnHeader>
+                        <Table.ColumnHeader>Name</Table.ColumnHeader>
                         <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
-                        <Table.ColumnHeader>GitHub Repo</Table.ColumnHeader>
+                        <Table.ColumnHeader>GitHub Repository</Table.ColumnHeader>
                     </Table.Row>
                 </Table.Header>
                 <Table.Body>
-                    {assignments.data?.map((assignment) => (
-                        <Table.Row key={assignment.id}>
-                            <Table.Cell>{assignment.title}</Table.Cell>
-                            <Table.Cell>{assignment.due_date}</Table.Cell>
+                    {assignments.data?.map((assignment) => {
+                        const mostRecentSubmission = getLatestSubmission(assignment);
+                        return <Table.Row key={assignment.id}>
+                            <Table.Cell><Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`}>{format(new Date(assignment.due_date!), "MMM d h:mm aaa")}</Link></Table.Cell>
+                            <Table.Cell><Link 
+                            prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`}>{assignment.title}</Link></Table.Cell>
                             <Table.Cell>
-                                <Link href={`/course/${course_id}/assignments/${assignment.id}/submissions/${getLatestSubmission(assignment)?.id}`}>
-                                    {getLatestSubmission(assignment)?.id}
-                                </Link>
+                                {mostRecentSubmission ? <Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`}>
+                                    #{mostRecentSubmission.ordinal} ({mostRecentSubmission.grader_results?.score || 0}/{mostRecentSubmission.grader_results?.max_score || 0})
+                                </Link> : '-'}
                             </Table.Cell>
-                            <Table.Cell>{assignment.repositories[0]?.repository}</Table.Cell>
+                            <Table.Cell><Link
+                            target="_blank" href={`https://github.com/${assignment.repositories[0]?.repository}`}>{assignment.repositories[0]?.repository}</Link> </Table.Cell>
                         </Table.Row>
-                    ))}
+                    })}
                 </Table.Body>
             </Table.Root>
-        </div>
+        </Container>
     );
 }

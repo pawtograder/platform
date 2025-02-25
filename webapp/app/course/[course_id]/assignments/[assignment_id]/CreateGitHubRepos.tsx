@@ -9,7 +9,7 @@ export function CreateGitHubRepos({ courseId, assignmentId }: { courseId: number
                 pathParams:
                     { courseId, assignmentId }
             });
-        }}>Create Repos</Button>
+        }}>Manually create repos</Button>
 
     )
 }

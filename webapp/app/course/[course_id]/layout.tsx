@@ -23,6 +23,7 @@ import { createClient } from '@/utils/supabase/server'
 import { Database } from '@/utils/supabase/SupabaseTypes'
 import DynamicCourseNav from './dynamicCourseNav'
 import { AuthStateProvider } from '@/hooks/useAuthState'
+import { isInstructor } from '@/lib/ssrUtils'
 interface LinkItemProps {
     name: string
     target: string
@@ -46,10 +47,11 @@ const ProtectedLayout = async ({ children, params }: Readonly<{
     if (!user?.user) {
         return <div>Not logged in (TODO redirect to login from layout)</div>
     }
-
+    //
+    const instructor = await isInstructor(Number.parseInt(course_id));
     // const {open, onOpen, onClose} = useDisclosure()
     return (
-        <AuthStateProvider user={user?.user}>
+        <AuthStateProvider user={user?.user} isInstructor={instructor}>
             <Box minH="100vh">
                 <DynamicCourseNav course={classData} />
                 {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}

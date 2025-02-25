@@ -107,24 +107,24 @@ export type Database = {
       discussion_thread_likes: {
         Row: {
           created_at: string
+          creator: string
           discussion_thread: number
           emoji: string
           id: number
-          user: string
         }
         Insert: {
           created_at?: string
+          creator: string
           discussion_thread: number
           emoji: string
           id?: number
-          user: string
         }
         Update: {
           created_at?: string
+          creator?: string
           discussion_thread?: number
           emoji?: string
           id?: number
-          user?: string
         }
         Relationships: [
           {
@@ -136,7 +136,7 @@ export type Database = {
           },
           {
             foreignKeyName: "discussion_thread_likes_user_fkey"
-            columns: ["user"]
+            columns: ["creator"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -507,6 +507,7 @@ export type Database = {
           lint_output: string
           lint_output_format: string
           lint_passed: boolean
+          max_score: number
           ret_code: number | null
           score: number
           submission_id: number
@@ -521,6 +522,7 @@ export type Database = {
           lint_output: string
           lint_output_format: string
           lint_passed: boolean
+          max_score?: number
           ret_code?: number | null
           score: number
           submission_id: number
@@ -535,6 +537,7 @@ export type Database = {
           lint_output?: string
           lint_output_format?: string
           lint_passed?: boolean
+          max_score?: number
           ret_code?: number | null
           score?: number
           submission_id?: number
@@ -624,6 +627,7 @@ export type Database = {
           id: number
           instructors_only: boolean
           message: string
+          requestor: string | null
         }
         Insert: {
           author: string
@@ -633,6 +637,7 @@ export type Database = {
           id?: number
           instructors_only?: boolean
           message: string
+          requestor?: string | null
         }
         Update: {
           author?: string
@@ -642,6 +647,7 @@ export type Database = {
           id?: number
           instructors_only?: boolean
           message?: string
+          requestor?: string | null
         }
         Relationships: [
           {
@@ -670,6 +676,13 @@ export type Database = {
             columns: ["help_request_id"]
             isOneToOne: false
             referencedRelation: "help_requests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_requestor_fkey"
+            columns: ["requestor"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -1084,6 +1097,7 @@ export type Database = {
           class_id: number
           created_at: string
           id: number
+          ordinal: number
           released: string | null
           repository: string
           run_attempt: number
@@ -1097,6 +1111,7 @@ export type Database = {
           class_id: number
           created_at?: string
           id?: number
+          ordinal?: number
           released?: string | null
           repository: string
           run_attempt: number
@@ -1110,6 +1125,7 @@ export type Database = {
           class_id?: number
           created_at?: string
           id?: number
+          ordinal?: number
           released?: string | null
           repository?: string
           run_attempt?: number

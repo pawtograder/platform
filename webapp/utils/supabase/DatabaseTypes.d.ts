@@ -6,12 +6,12 @@ export type Course = Database["public"]["Tables"]["classes"]["Row"];
 
 export type Repo = Database["public"]["Tables"]["repositories"]["Row"];
 
-export type AssignmentWithRepositoryAndSubmissions = GetResult<
+export type AssignmentWithRepositoryAndSubmissionsAndGraderResults = GetResult<
     Database["public"],
     Database["public"]["Tables"]["assignments"]["Row"],
     "assignments",
     Database["public"]["Tables"]["assignments"]["Relationships"],
-    "*, submissions(*), repositories(*)"
+    "*, submissions(*, grader_results(*)), repositories(*)"
 >;
 export type SubmissionFileWithComments = GetResult<
     Database["public"],
@@ -114,5 +114,13 @@ export type HelpRequestMessage = GetResult<
     Database["public"]["Tables"]["help_request_messages"]["Row"],
     "help_request_messages",
     Database["public"]["Tables"]["help_request_messages"]["Relationships"],
+    "*"
+>;
+
+export type DiscussionThreadLike = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["discussion_thread_likes"]["Row"],
+    "discussion_thread_likes",
+    Database["public"]["Tables"]["discussion_thread_likes"]["Relationships"],
     "*"
 >;

@@ -44,8 +44,70 @@ type VideoMeetingSession =
     Database["public"]["Tables"]["video_meeting_sessions"]["Row"];
 type HelpRequest = Database["public"]["Tables"]["help_requests"]["Row"];
 
+export type ChimeSNSMessage = {
+    id: string;
+    version: string;
+    "detail-type": string;
+    source: string;
+    account: string;
+    time: string;
+    region: string;
+    resources: string[];
+    detail: {
+        version: string;
+        eventType: string;
+        meetingId: string;
+        attendeeId: string;
+        networkType: string;
+        externalMeetingId: string;
+        mediaRegion: string;
+        transitionReason: string;
+        attendeeCount: number;
+    };
+};
+
 @Route("/api/help-queue/")
 export class VideoChatController {
+    async processSNSMessage(message: ChimeSNSMessage): Promise<void> {
+        console.log(JSON.stringify(message, null, 2));
+        if (message.detail.eventType === "chime:AttendeeLeft") {
+            const remainingAttendees = message.detail.attendeeCount;
+            if (remainingAttendees === 0) {
+                const chime = new ChimeSDKMeetings({
+                    region: "us-east-1",
+                });
+                await chime.deleteMeeting({
+                    MeetingId: message.detail.meetingId,
+                });
+            }
+        } else if (message.detail.eventType === "chime:MeetingEnded") {
+            //format: `video-meeting-session-${newSession.class_id}-${newSession.help_request_id}-${newSession.id}`,
+            const match = message.detail.externalMeetingId.match(
+                /video-meeting-session-(.*)-(.*)-(.*)/,
+            );
+            if (!match) {
+                throw new Error("Invalid external meeting ID");
+            }
+            const sessionID = parseInt(match[3]);
+            const helpRequestID = parseInt(match[2]);
+            await supabase.from("video_meeting_sessions").update({
+                ended: new Date().toISOString(),
+            }).eq("id", sessionID);
+            await supabase.from("help_requests").update({
+                is_video_live: false,
+            }).eq("id", helpRequestID);
+        } else if (message.detail.eventType === "chime:MeetingStarted") {
+            const match = message.detail.externalMeetingId.match(
+                /video-meeting-session-(.*)-(.*)-(.*)/,
+            );
+            if (!match) {
+                throw new Error("Invalid external meeting ID");
+            }
+            await supabase.from("help_requests").update({
+                is_video_live: true,
+            }).eq("id", parseInt(match[2]));
+        }
+    }
     async getActiveMeeting(
         helpRequest: HelpRequest,
     ): Promise<VideoMeetingSession> {
@@ -53,9 +115,9 @@ export class VideoChatController {
             .select("*").eq(
                 "help_request_id",
                 helpRequest.id,
-            ).
-            is("ended", null).
-            not("chime_meeting_id", "is", null).single();
+            )
+            .is("ended", null)
+            .not("chime_meeting_id", "is", null).single();
         if (!activeMeeting.data) {
             // Create new video meeting session record
             //TODO: This could race for two users trying to join the meeting concurrently
@@ -80,8 +142,6 @@ export class VideoChatController {
                 );
             }
 
-            console.log(process.env.AWS_ACCESS_KEY_ID!, process.env.AWS_SECRET_ACCESS_KEY!);
-            console.log(process.env.CHIME_SNS_TOPIC_ARN);
             const chime = new ChimeSDKMeetings({
                 region: "us-east-1",
                 credentials: {
@@ -92,24 +152,22 @@ export class VideoChatController {
             const newMeeting = await chime.createMeeting({
                 ClientRequestToken: uuid(),
                 MediaRegion: "us-east-1",
-                NotificationsConfiguration: {
-                    SnsTopicArn: process.env.CHIME_SNS_TOPIC_ARN,
-                },
                 ExternalMeetingId:
-                    `video-meeting-session-${newSession.class_id}-${newSession.id}`,
+                    `video-meeting-session-${newSession.class_id}-${newSession.help_request_id}-${newSession.id}`,
             });
             if (!newMeeting) {
                 throw new Error("Chime SDK Meeting Creation Failed");
             }
             //Enable transcription
-            await chime.startMeetingTranscription({
-                MeetingId: newMeeting.Meeting?.MeetingId!,
-                TranscriptionConfiguration: {
-                    EngineTranscribeSettings: {
-                        Region: "us-east-1",
-                    },
-                },
-            });
+            // await chime.startMeetingTranscription({
+            //     MeetingId: newMeeting.Meeting?.MeetingId!,
+            //     TranscriptionConfiguration: {
+            //         EngineTranscribeSettings: {
+            //             Region: "us-east-1",
+            //             LanguageCode: "en-US",
+            //         },
+            //     },
+            // });
             //Update the video meeting session with the meeting id
             const { error: updateError } = await supabase.from(
                 "video_meeting_sessions",

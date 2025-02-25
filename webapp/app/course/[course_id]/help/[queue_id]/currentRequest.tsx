@@ -19,6 +19,7 @@ function ChatChannelParticipants() {
     </>
 }
 function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
+    console.log(request.is_video_live)
     if (request.is_video_live)
         return <>
             <IconButton

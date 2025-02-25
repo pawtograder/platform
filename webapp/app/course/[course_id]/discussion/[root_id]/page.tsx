@@ -1,22 +1,21 @@
 'use client';
 
-import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box } from "@chakra-ui/react";
-import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { set } from "react-hook-form";
-import { DiscussionThread, threadsToTree } from "../discussion_thread";
-import { Skeleton } from "@/components/ui/skeleton";
-import { useList, useMany } from "@refinedev/core";
-import { DiscussionThreadWithAuthorAndTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
+import { Skeleton } from "@/components/ui/skeleton";
+import { DiscussionThreadWithAuthorAndTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Breadcrumb } from "@chakra-ui/react";
+import { useList } from "@refinedev/core";
+import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { threadsToTree } from "../discussion_thread";
+import Link from "@/components/ui/link";
 
 type Thread = Database['public']['Tables']['discussion_threads']['Row'];
 
 export default function ThreadView() {
     const [thread, setThread] = useState<ThreadWithChildren>();
-    const { root_id } = useParams();
+    const { course_id, root_id } = useParams();
     const { data, isLoading, error } = useList<DiscussionThreadWithAuthorAndTopic>({
         resource: "discussion_threads",
         meta: {
@@ -64,6 +63,17 @@ export default function ThreadView() {
     const rootThread = data.data.find((t) => t.id === Number.parseInt(root_id as string));
 
     return <Box>
+        <Breadcrumb.Root>
+            <Breadcrumb.List>
+                <Breadcrumb.Item>
+                    <Link href={`/course/${course_id}/discussion`} prefetch={true}>Discussion</Link>
+                </Breadcrumb.Item>
+                <Breadcrumb.Separator />
+                <Breadcrumb.Item>
+                    {rootThread?.subject}
+                </Breadcrumb.Item>
+            </Breadcrumb.List>
+        </Breadcrumb.Root>
         {rootThread ?
             <DiscussionPostSummary thread={thread} standalone={true} />
             // <DiscussionThread thread={thread} />

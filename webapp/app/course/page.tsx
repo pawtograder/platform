@@ -3,7 +3,7 @@ import { Box, InfoIcon } from "lucide-react";
 import { redirect } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { CardBody, CardHeader, CardRoot, Flex, Heading, List, Stack, VStack } from "@chakra-ui/react";
-import Link from "next/link";
+import Link from "@/components/ui/link";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import LinkAccount from "@/components/github/link-account";
@@ -25,6 +25,9 @@ export default async function ProtectedPage() {
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
   const courses = await supabase.from("classes").select("*");
 
+  if (courses.data?.length === 1) {
+    return redirect(`/course/${courses.data[0].id}}`);
+  }
   let actions = <></>;
   if (!githubIdentity) {
     actions = <LinkAccount />

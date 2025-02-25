@@ -202,7 +202,7 @@ export default function NewDiscussionThread() {
                                     }} />
                             </Field>
                         </Fieldset.Content>
-                        <Button type="submit" loading={isSubmitting}>Submit</Button>
+                        <Button type="submit" loading={isSubmitting} disabled={isSubmitting}>Submit</Button>
                     </Fieldset.Root>
                 </form>
             </Box>

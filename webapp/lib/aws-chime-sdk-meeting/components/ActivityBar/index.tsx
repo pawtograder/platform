@@ -16,7 +16,7 @@ const Progress = styled.div`
   background-color: #18bc9c;
   border-radius: 0.25rem;
   transform: scaleX(0);
-  transform-origin: left;
+  transformOrigin: left;
   transition: transform 33ms ease-in-out;
   will-change: transform;
 `;

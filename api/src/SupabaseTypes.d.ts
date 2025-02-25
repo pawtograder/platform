@@ -576,9 +576,10 @@ export type Database = {
           available: boolean
           class: number
           closing_at: string | null
+          color: string | null
           created_at: string
           depth: number
-          description: string | null
+          description: string
           id: number
           name: string
         }
@@ -586,9 +587,10 @@ export type Database = {
           available?: boolean
           class: number
           closing_at?: string | null
+          color?: string | null
           created_at?: string
           depth: number
-          description?: string | null
+          description: string
           id?: number
           name: string
         }
@@ -596,9 +598,10 @@ export type Database = {
           available?: boolean
           class?: number
           closing_at?: string | null
+          color?: string | null
           created_at?: string
           depth?: number
-          description?: string | null
+          description?: string
           id?: number
           name?: string
         }
@@ -612,6 +615,75 @@ export type Database = {
           },
         ]
       }
+      help_request_messages: {
+        Row: {
+          author: string
+          class_id: number
+          created_at: string
+          help_request_id: number
+          id: number
+          instructors_only: boolean
+          message: string
+          requestor: string | null
+        }
+        Insert: {
+          author: string
+          class_id: number
+          created_at?: string
+          help_request_id: number
+          id?: number
+          instructors_only?: boolean
+          message: string
+          requestor?: string | null
+        }
+        Update: {
+          author?: string
+          class_id?: number
+          created_at?: string
+          help_request_id?: number
+          id?: number
+          instructors_only?: boolean
+          message?: string
+          requestor?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "help_request_messages_author_fkey"
+            columns: ["author"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_author_fkey1"
+            columns: ["author"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_help_request_id_fkey"
+            columns: ["help_request_id"]
+            isOneToOne: false
+            referencedRelation: "help_requests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_request_messages_requestor_fkey"
+            columns: ["requestor"]
+            isOneToOne: false
+            referencedRelation: "public_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       help_requests: {
         Row: {
           assignee: string | null
@@ -621,7 +693,10 @@ export type Database = {
           followup_to: number | null
           help_queue: number
           id: number
+          is_video_live: boolean
           request: string
+          resolved_at: string | null
+          resolved_by: string | null
         }
         Insert: {
           assignee?: string | null
@@ -631,7 +706,10 @@ export type Database = {
           followup_to?: number | null
           help_queue: number
           id?: number
+          is_video_live?: boolean
           request: string
+          resolved_at?: string | null
+          resolved_by?: string | null
         }
         Update: {
           assignee?: string | null
@@ -641,7 +719,10 @@ export type Database = {
           followup_to?: number | null
           help_queue?: number
           id?: number
+          is_video_live?: boolean
           request?: string
+          resolved_at?: string | null
+          resolved_by?: string | null
         }
         Relationships: [
           {
@@ -670,6 +751,13 @@ export type Database = {
             columns: ["help_queue"]
             isOneToOne: false
             referencedRelation: "help_queues"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "help_requests_resolved_by_fkey"
+            columns: ["resolved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]

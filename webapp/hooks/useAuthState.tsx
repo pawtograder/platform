@@ -5,16 +5,17 @@ import { PublicProfile } from "@/utils/supabase/DatabaseTypes"
 import { createClient } from "@/utils/supabase/client"
 type AuthStateContextType = {
     user: User | null
+    isInstructor: boolean
 }
-const AuthStateContext = createContext<AuthStateContextType>({ user: null })
-export function AuthStateProvider({ children, user}: { children: React.ReactNode, user: User | null }) {
+const AuthStateContext = createContext<AuthStateContextType>({ user: null, isInstructor: false })
+export function AuthStateProvider({ children, user, isInstructor }: { children: React.ReactNode, user: User | null, isInstructor: boolean }) {
     return (
-        <AuthStateContext.Provider value={{ user }}>
+        <AuthStateContext.Provider value={{ user, isInstructor }}>
             {children}
         </AuthStateContext.Provider>
     )
 }
 export default function useAuthState() {
-    const { user } = useContext(AuthStateContext)
-    return user
+    const state = useContext(AuthStateContext)
+    return state
 }
