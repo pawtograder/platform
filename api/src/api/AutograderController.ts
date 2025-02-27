@@ -117,7 +117,7 @@ export class AutograderController extends Controller {
                 user_id: user.id,
                 assignment_id: assignment.id,
                 repository: `autograder-dev/${repoName}`,
-            });
+            }, );
             if (error) {
                 console.error(error);
             }

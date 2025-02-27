@@ -6,6 +6,10 @@ import '@uiw/react-markdown-preview/markdown.css';
 import { createClient } from '@/utils/supabase/client';
 import { useParams } from 'next/navigation';
 import { createHash } from 'crypto';
+import 'katex/dist/katex.min.css';
+import { MDEditorProps } from '@uiw/react-md-editor';
+import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
 //https://github.com/uiwjs/react-md-editor/issues/83
 
 const insertToTextArea = (intsertString: string) => {
@@ -32,7 +36,7 @@ const insertToTextArea = (intsertString: string) => {
 
 
 
-const MdEditor = (props: React.ComponentProps<typeof MDEditor>) => {
+const MdEditor = (props: MDEditorProps) => {
     const onChange = props.onChange;
     if (!onChange) {
         throw new Error('onChange is required');
@@ -42,12 +46,13 @@ const MdEditor = (props: React.ComponentProps<typeof MDEditor>) => {
     const onImagePasted = useCallback(async (dataTransfer: DataTransfer, setMarkdown: (value: string | undefined) => void) => {
         const fileUpload = async (file: File) => {
             const uuid = crypto.randomUUID();
-            const fileName = `${uuid}-${file.name}`;
-            const { data, error } = await supabase.storage.from('uploads').upload(`${course_id}/discussion/${fileName}`, file);
+            const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, '_');
+            const { data, error } = await supabase.storage.from('uploads').upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
             if (error) {
                 console.error('Error uploading image:', error);
             }
-            const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${data!.fullPath}`;
+            const urlEncodedFilename = encodeURIComponent(fileName);
+            const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
             return url;
         };
         const files: File[] = [];
@@ -63,8 +68,9 @@ const MdEditor = (props: React.ComponentProps<typeof MDEditor>) => {
             files.map(async (file) => {
                 const url = await fileUpload(file);
                 const isImage = file.type.startsWith('image/');
-                const insertedMarkdown = insertToTextArea(isImage ? `![](${url})` : `[${file.name}](${url})`);
-                if (!insertedMarkdown) {
+                const insertedMarkdown = isImage ? `[![](${url})](${url})` : `[${file.name}](${url})`;
+                if (!insertToTextArea(insertedMarkdown)
+                ) {
                     return;
                 }
                 onChange(insertedMarkdown);
@@ -108,6 +114,10 @@ const MdEditor = (props: React.ComponentProps<typeof MDEditor>) => {
                 target.style.cursor = 'default';
                 e.preventDefault();
                 e.stopPropagation();
+            }}
+            previewOptions={{
+                rehypePlugins: [rehypeKatex],
+                remarkPlugins: [remarkMath],
             }}
         />
     );

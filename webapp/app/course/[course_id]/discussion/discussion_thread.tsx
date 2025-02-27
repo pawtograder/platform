@@ -1,14 +1,12 @@
 import { Button } from "@/components/ui/button";
-import { Field } from "@/components/ui/field";
-import { createClient } from "@/utils/supabase/client";
+import Markdown from "@/components/ui/markdown";
+import MessageInput from "@/components/ui/message-input";
+import useAuthState from "@/hooks/useAuthState";
 import { DiscussionThreadWithAuthorAndTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Container, Fieldset, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
-import { useForm } from "@refinedev/react-hook-form";
-import MDEditor from "@uiw/react-md-editor";
+import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
+import { useCreate, useInvalidate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useCallback, useState } from "react";
-import { Controller } from "react-hook-form";
-import Markdown from "react-markdown";
 
 
 export function threadsToTree(threads: DiscussionThreadWithAuthorAndTopic[]): ThreadWithChildren {
@@ -33,75 +31,48 @@ export function threadsToTree(threads: DiscussionThreadWithAuthorAndTopic[]): Th
     return root;
 }
 export function DiscussionThreadReply({ thread, visible, setVisible }: { thread: DiscussionThreadWithAuthorAndTopic, visible: boolean, setVisible: (visible: boolean) => void }) {
-    const {
-        getValues,
-        setValue,
-        refineCore,
-        handleSubmit,
-        control,
-        formState: { errors, isSubmitting },
-    } = useForm({
-        refineCoreProps: {
-            action: "create",
-            resource: "discussion_threads",
-            onMutationSuccess: () => {
-                setVisible(false);
-            }
-        }
+
+    const [count, setCount] = useState(0);//DEBUG
+    const invalidate = useInvalidate();
+    const { mutateAsync: mutate } = useCreate({
+        resource: "discussion_threads",
     });
-    const onSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
-        async function populate() {
-            setValue("subject", `Re: ${thread.subject}`)
-            setValue("parent", thread.id)
-            setValue("root", thread.root || thread.id)
-            setValue("topic_id", thread.topic_id)
-            setValue("instructors_only", thread.instructors_only)
-            setValue("class", thread.class)
-            const supabase = await createClient();
-            const user = await supabase.auth.getUser();
-            setValue("author", user.data!.user!.id)
-            handleSubmit(refineCore.onFinish)();
+    const { user } = useAuthState();
+    const sendMessage = useCallback(async (message: string, close = true) => {
+        console.log("sendMessage", message);
+        await mutate({
+            resource: "discussion_threads",
+            values: {
+                subject: `Re: ${thread.subject}`,
+                parent: thread.id,
+                root: thread.root || thread.id,
+                topic_id: thread.topic_id,
+                instructors_only: thread.instructors_only,
+                class: thread.class,
+                author: user!.id,
+                body: message
+            }
+        });
+        invalidate({
+            resource: "discussion_threads",
+            invalidates: ['detail'],
+            id: thread.parent!
+        });
+        if (close) {
+            setVisible(false);
         }
-        populate();
-    }, [getValues, handleSubmit, refineCore, setValue, thread]);
-
-
+        setCount((count) => count + 1);
+    }, [mutate, thread, user]);
     if (!visible) {
         return <></>
     }
-    return <Container ml="2" w="100%" bg="bg.muted" p="2"
-    rounded="l3" py="2" px="3"
+    return <Container ml="2" w="100%" bg="bg.subtle" p="2"
+        rounded="l3" py="2" px="3"
     >
-            <form onSubmit={onSubmit}>
-                <Fieldset.Root size="lg" maxW="100%">
-                    <Fieldset.Content>
-                        <Field label="Reply"
-                            errorText={errors.body?.message?.toString()}
-                            invalid={errors.body ? true : false}
-                        >
-                            <Controller
-                                name="body"
-                                control={control}
-                                rules={{
-                                    required: {
-                                        message: "Please enter a message or click cancel",
-                                        value: true
-                                    }
-                                }}
-                                render={({ field }) => {
-                                    return (<MDEditor style={{ width: "100%" }} onChange={field.onChange} value={field.value} />)
-                                }} />
-                        </Field>
-                    </Fieldset.Content>
-
-                </Fieldset.Root>
-
-                <HStack justify="flex-end">
-                    <Button variant="ghost" onClick={() => setVisible(false)}>Cancel</Button>
-                    <Button type="submit">Submit</Button>
-                </HStack>
-            </form>
+        <MessageInput defaultSingleLine={true}
+            sendMessage={sendMessage}
+        />
+        <Button variant="ghost" onClick={() => setVisible(false)}>Cancel</Button>
     </Container>
 }
 export function DiscussionThread({ thread, borders, originalPoster }: {
@@ -170,7 +141,7 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                         <Text color="fg.muted">Like</Text>
                         <Link onClick={() => setReplyVisible(true)} color="fg.muted">Reply</Link>
                     </HStack>
-                        <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
+                    <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
                 </Stack>
             </Flex>
         </Box>

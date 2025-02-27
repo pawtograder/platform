@@ -2,13 +2,14 @@ import { createClient } from "@/utils/supabase/server";
 import { Box, InfoIcon } from "lucide-react";
 import { redirect } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
-import { CardBody, CardHeader, CardRoot, Flex, Heading, List, Stack, VStack } from "@chakra-ui/react";
+import { CardBody, Card, CardHeader, Flex, Heading, List, Stack, VStack } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import LinkAccount from "@/components/github/link-account";
 import { linkGitHubAction } from "../actions";
 import UserMenu from "./UserMenu";
+import SemesterText from "@/components/ui/semesterText";
 export default async function ProtectedPage() {
   const supabase = await createClient();
 
@@ -23,7 +24,7 @@ export default async function ProtectedPage() {
   //list identities
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
-  const courses = await supabase.from("classes").select("*");
+  const courses = await supabase.from("classes").select("*").order('semester', { ascending: false }).order('name', { ascending: true });
 
   if (courses.data?.length === 1) {
     return redirect(`/course/${courses.data[0].id}}`);
@@ -55,13 +56,21 @@ export default async function ProtectedPage() {
         <Flex>
           <Stack gap="4" direction="row" wrap="wrap">
             {courses.data!.map((course) => (
-              <CardRoot key={course.id} p="4" w="300px">
-                <CardHeader><Link href={`/course/${course.id}`}>{course.name}</Link></CardHeader>
-                <CardBody>
-                  Canvas ID: {course.canvas_id}
-                  Semester: {course.semester}
-                </CardBody>
-              </CardRoot>
+              <Link key={course.id} href={`/course/${course.id}`}>
+                <Card.Root key={course.id} p="4" w="300px"
+                  _hover={{
+                    bg: "bg.subtle",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Card.Body>
+                    <Card.Title>{course.name}</Card.Title>
+                    <Card.Description>  
+                      Semester: <SemesterText semester={course.semester} />
+                    </Card.Description>
+                  </Card.Body>
+                </Card.Root>
+              </Link>
             ))}
           </Stack>
         </Flex>

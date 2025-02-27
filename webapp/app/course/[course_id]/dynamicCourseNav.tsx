@@ -115,7 +115,7 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                     fontSize="2xl"
                     fontWeight="bold"
                 ><CoursePicker courses={courses} currentCourse={course} />
-                {course.name}
+                <Link variant="plain" href={`/course/${course.id}`}>{course.name}</Link>
                 </Box>
                 <UserMenu />
             </Flex>
