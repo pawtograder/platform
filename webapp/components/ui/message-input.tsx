@@ -12,7 +12,6 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover"
 import remarkGfm from 'remark-gfm';
-import torchlight from 'remark-torchlight';
 import { Box, Button, Field, HStack, Textarea, VStack, SimpleGrid, Popover } from "@chakra-ui/react";
 import Picker from '@emoji-mart/react';
 import { GiphyFetch } from '@giphy/js-fetch-api';
@@ -91,50 +90,49 @@ export default function MessageInput(props: MessageInputProps) {
     }, []);
     if (singleLine) {
         return (
-            <VStack align="stretch" spaceY="2">
+            <VStack align="stretch" spaceY="0" gap="0">
                 {showMarkdownPreview && (<Box
+                width="100%"
                     bg="bg.muted"
                     position="relative"
-                    border={"1px solid"} borderColor="teal.subtle" rounded="md" px="3" py="2">
+                    border={"1px solid"} borderColor="teal.subtle" rounded="md" px="3" py="2"
+                    m="0">
                     <Markdown
                     >
                         {value}
                     </Markdown>
                 </Box>
                 )}
-                <Box
-                    bg="bg.muted"
-                    position="relative"
-                    onDragEnter={(e) => {
-                        const target = e.target as HTMLElement;
-                        target.style.border = '2px dashed #999';
-                        target.style.backgroundColor = 'rgba(0, 0, 0, 0.05)';
-                        e.preventDefault();
-                        e.stopPropagation();
-                    }}
-                    onDragLeave={(e) => {
-                        const target = e.target as HTMLElement;
-                        target.style.border = 'none';
-                        target.style.backgroundColor = 'transparent';
-                        e.preventDefault();
-                        e.stopPropagation();
-                    }}
-                    onDragOver={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                    }}
-                    onDrop={async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        await onFileTransfer(e.dataTransfer);
-                    }}
 
-                    border={focused ? "2px solid" : "none"} borderColor="teal.solid" rounded="md" px="3" py="2">
                     <Textarea
-                        p="0"
+                        p="2"
+                        width="100%"
+                        placeholder="Reply..."
                         m="0"
-                        border="none"
-                        _focus={{ outline: "none" }}
+                        onDragEnter={(e) => {
+                            const target = e.target as HTMLElement;
+                            target.style.border = '2px dashed #999';
+                            target.style.backgroundColor = 'rgba(0, 0, 0, 0.05)';
+                            e.preventDefault();
+                            e.stopPropagation();
+                        }}
+                        onDragLeave={(e) => {
+                            const target = e.target as HTMLElement;
+                            target.style.border = 'none';
+                            target.style.backgroundColor = 'transparent';
+                            e.preventDefault();
+                            e.stopPropagation();
+                        }}
+                        onDragOver={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                        }}
+                        onDrop={async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            await onFileTransfer(e.dataTransfer);
+                        }}
+
                         onFocus={() => setFocused(true)}
                         onBlur={() => setFocused(false)}
                         variant="subtle" autoresize value={value} onChange={e => onChange(e.target.value)}
@@ -145,6 +143,7 @@ export default function MessageInput(props: MessageInputProps) {
                                     return;
                                 }
                                 props.sendMessage(value!);
+                                setValue('');
                             }
                         }}
                     />
@@ -154,50 +153,49 @@ export default function MessageInput(props: MessageInputProps) {
                             setValue((value ?? '') + emoji.native)
                             setShowEmojiPicker(false)
                         }} />}
-                        <HStack justify="flex-end">
-                    <Box>
-                    <Field.Root orientation="horizontal">
-                        <Field.Label fontSize="xs"> 
-                            Enter to send
-                        </Field.Label>
-                        <Checkbox checked={enterToSend} onChange={e => setEnterToSend(!enterToSend)} />
-                    </Field.Root>
-                    </Box>
-                    <HStack spaceX="0" gap="0">
-                        <Tooltip content="Toggle anonymous mode">
-                            <Button aria-label="Toggle anonymous mode" onClick={toggleAnonymousMode} variant="ghost" size="xs" colorScheme={anonymousMode ? "red" : "teal"} p={0}><FaUserSecret /></Button>
-                        </Tooltip>
-                        <Tooltip content="Attach a file">
-                            <Button aria-label="Attach a file" onClick={() => fileInputRef.current?.click()} variant="ghost" size="xs" colorScheme="teal" p={0}><FaPaperclip /></Button>
-                        </Tooltip>
-                        <Tooltip content="Toggle markdown preview (supports LaTeX)">
-                            <Button aria-label="Toggle markdown preview (supports LaTeX)" onClick={() => setShowMarkdownPreview(!showMarkdownPreview)} variant="ghost" size="xs" colorScheme="teal" p={0}><TbMathFunction /></Button>
-                        </Tooltip>
-                        <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={attachFile} />
-                        <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
-                            <PopoverTrigger asChild>
-                                <Tooltip content="Toggle giphy picker">
-                                    <Button aria-label="Toggle giphy picker" variant="ghost" size="xs" colorScheme="teal" p={0}>GIF</Button>
-                                </Tooltip>
-                            </PopoverTrigger>
-                            <PopoverContent width="400px">
-                                <PopoverArrow />
-                                <PopoverBody>
-                                    <GiphyPicker onGifSelect={(gif: IGif) => {
-                                        setShowGiphyPicker(false);
-                                        props.sendMessage(`![${gif.title}](${gif.images.original.url})`, false)
-                                    }} />
-                                </PopoverBody>
-                            </PopoverContent>
-                        </PopoverRoot>
-                        <Tooltip content="Toggle emoji picker">
-                            <Button aria-label="Toggle emoji picker" onClick={toggleEmojiPicker} variant="ghost" size="xs" colorScheme="teal" p={0}><FaSmile /></Button>
-                        </Tooltip>
+                    <HStack justify="flex-end">
+                        <HStack spaceX="0" gap="0">
+                            <Tooltip content="Toggle anonymous mode">
+                                <Button aria-label="Toggle anonymous mode" onClick={toggleAnonymousMode} variant="ghost" size="xs" colorScheme={anonymousMode ? "red" : "teal"} p={0}><FaUserSecret /></Button>
+                            </Tooltip>
+                            <Tooltip content="Attach a file">
+                                <Button aria-label="Attach a file" onClick={() => fileInputRef.current?.click()} variant="ghost" size="xs" colorScheme="teal" p={0}><FaPaperclip /></Button>
+                            </Tooltip>
+                            <Tooltip content="Toggle markdown preview (supports LaTeX)">
+                                <Button aria-label="Toggle markdown preview (supports LaTeX)" onClick={() => setShowMarkdownPreview(!showMarkdownPreview)} variant="ghost" size="xs" colorScheme="teal" p={0}><TbMathFunction /></Button>
+                            </Tooltip>
+                            <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={attachFile} />
+                            <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
+                                <PopoverTrigger asChild>
+                                    <Tooltip content="Toggle giphy picker">
+                                        <Button aria-label="Toggle giphy picker" variant="ghost" size="xs" colorScheme="teal" p={0}>GIF</Button>
+                                    </Tooltip>
+                                </PopoverTrigger>
+                                <PopoverContent width="400px">
+                                    <PopoverArrow />
+                                    <PopoverBody>
+                                        <GiphyPicker onGifSelect={(gif: IGif) => {
+                                            setShowGiphyPicker(false);
+                                            props.sendMessage(`![${gif.title}](${gif.images.original.url})`, false)
+                                        }} />
+                                    </PopoverBody>
+                                </PopoverContent>
+                            </PopoverRoot>
+                            <Tooltip content="Toggle emoji picker">
+                                <Button aria-label="Toggle emoji picker" onClick={toggleEmojiPicker} variant="ghost" size="xs" colorScheme="teal" p={0}><FaSmile /></Button>
+                            </Tooltip>
 
+                        </HStack>
+                        <Box>
+                            <Field.Root orientation="horizontal">
+                                <Field.Label fontSize="xs">
+                                    Enter to send
+                                </Field.Label>
+                                <Checkbox checked={enterToSend} onChange={e => setEnterToSend(!enterToSend)} />
+                            </Field.Root>
+                        </Box>
                     </HStack>
-                </HStack>
-                </Box>
-                
+
             </VStack>
         )
     }

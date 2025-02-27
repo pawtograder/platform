@@ -4,6 +4,13 @@ export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
 
+export type SubmissionFileComment = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submission_file_comments"]["Row"],
+    "submission_file_comments",
+    Database["public"]["Tables"]["submission_file_comments"]["Relationships"],
+    "*"
+>;
 export type UserRoleWithCourse = GetResult<
     Database["public"],
     Database["public"]["Tables"]["user_roles"]["Row"],

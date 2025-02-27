@@ -33,6 +33,7 @@
     "express": "^4.21.2",
     "fast-jwt": "^5.0.5",
     "get-jwks": "^11.0.0",
+    "hast-util-to-jsx-runtime": "^2.3.5",
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
     "swagger-ui-express": "^5.0.1",

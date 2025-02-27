@@ -15,6 +15,7 @@ import {
     FiClipboard,
     FiMenu
 } from 'react-icons/fi'
+import NextLink from "next/link";
 import UserMenu from "../UserMenu";
 import React, { Fragment, useEffect } from "react";
 import useAuthState from "@/hooks/useAuthState";
@@ -94,11 +95,6 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
     if (!course) {
         return <Skeleton height="40" width="100%" />;
     }
-    useEffect(() => {
-        LinkItems(course.id).map((link) => {
-            router.prefetch(link.target || '#')
-        })
-    }, [course])
     return (
         <VStack px={{ base: 4, md: 4 }}
             bg='bg.subtle'
@@ -128,7 +124,6 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                         borderColor="orange.600"
                     >
                         <Button
-                            onClick={() => router.push(link.target || '#')}
                             colorPalette="gray"
                             _hover={{
                                 bg: "#EBEDEF"
@@ -137,7 +132,9 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                             // href={link.target || '#'}
                             // style={{ textDecoration: 'none' }}
                             variant="ghost"
+                            asChild
                         >
+                            <NextLink prefetch={true} href={link.target || '#'}>
                             <Flex
                                 align="center"
                                 role="group"
@@ -154,6 +151,7 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                          /> */}
                                     {link.name}</HStack>
                             </Flex>
+                            </NextLink>
                         </Button></Box>
                 ))}
             </HStack>

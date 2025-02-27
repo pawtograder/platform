@@ -10,15 +10,14 @@ import {
     Text,
     VStack
 } from "@chakra-ui/react";
-import excerptAst from "mdast-excerpt"
+import excerpt from '@stefanprobst/remark-excerpt'
 
 import Link from "@/components/ui/link";
 import { useRouter } from "next/navigation";
 import { BsChat, BsChevronUp } from 'react-icons/bs';
 import { FaCheckCircle, FaQuestionCircle, FaRegHeart, FaRegStickyNote, FaReply } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
-
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 import { formatRelative } from "date-fns";
 import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { DiscussionThread, DiscussionThreadReply } from "@/app/course/[course_id]/discussion/discussion_thread";
@@ -83,14 +82,15 @@ export function DiscussionPostSummary({ thread, standalone }: {
                 <Text textStyle="lg" fontWeight="semibold" mt="2">
                     {thread.subject}
                 </Text>
-                <Markdown components={{
-                    a: ({ children, href }) => {
-                        if (!href || !standalone) {
+                {!standalone ? <Markdown
+                    components={{
+                        a: ({ children, href }) => {
                             return <>{children}</>
                         }
-                        return <Link href={href} target="_blank">{children}</Link>
-                    }
-                }}>{thread.body}</Markdown>
+
+                    }}
+                    remarkPlugins={[[excerpt, { maxLength: 500 }]]}
+                    >{thread.body}</Markdown> : <Markdown>{thread.body}</Markdown>}
 
                 <HStack fontWeight="medium" mt="4">
                     <HStack>

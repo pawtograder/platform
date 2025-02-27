@@ -4,7 +4,7 @@ import { GraderResultOutput, GraderResultTest, SubmissionWithGraderResults } fro
 import { Box, CardBody, CardHeader, CardRoot, List, Skeleton, Tabs, Text, Heading, Table, HStack } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { Fragment } from "react";
-import Markdown from "react-markdown";
+import Markdown from "@/components/ui/markdown";
 import { useParams } from "next/navigation";
 function format_result_output(result: { output: string | null | undefined, output_format: string | null | undefined }) {
     if (result.output === undefined && result.output_format === undefined) {
