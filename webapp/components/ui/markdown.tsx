@@ -1,14 +1,11 @@
-import remarkMath from 'remark-math';
-import remarkGfm from 'remark-gfm';
-import rehypeKatex from 'rehype-katex';
-import rehypeHighlight from 'rehype-highlight';
+import { Container } from '@chakra-ui/react';
 import ReactMarkdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import remarkBreaks from 'remark-breaks';
 import remarkGemoji from 'remark-gemoji';
-import remarkMentions from 'remark-mentions';
-import rehypeMermaid from 'rehype-mermaid';
-import { Container } from '@chakra-ui/react';
-import { createStarryNight } from '@wooorm/starry-night';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 
 export default function Markdown(props: Parameters<typeof ReactMarkdown>[0]) {
     return <Container>
