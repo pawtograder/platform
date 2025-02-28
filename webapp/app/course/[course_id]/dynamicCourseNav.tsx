@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/drawer"
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
+import { ColorModeButton } from "@/components/ui/color-mode";
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, target: `/course/${courseID}/assignments` },
     { name: 'Discussion', icon: FiStar, target: `/course/${courseID}/discussion` },
@@ -168,8 +169,6 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                         ))}
                     </HStack>
                 </VStack>
-
-
                 <UserMenu />
             </Flex>
         </Box>

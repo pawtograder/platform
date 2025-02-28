@@ -11,6 +11,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { User } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
 import { Avatar, AvatarGroup } from "@/components/ui/avatar"
+import { ColorModeButton } from "@/components/ui/color-mode";
 export default function UserMenu() {
     const [profile, setProfile] = useState<Database['public']['Tables']['profiles']['Row'] | undefined>()
     const [user, setUser] = useState<User | null>(null)
@@ -42,6 +43,8 @@ export default function UserMenu() {
 
     return (
         <HStack>
+            <ColorModeButton />
+
             {profile && profile.avatar_url ? <Avatar
                 size={'sm'}
                 src={

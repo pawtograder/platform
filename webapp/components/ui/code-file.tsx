@@ -3,7 +3,7 @@ import { createStarryNight, common } from '@wooorm/starry-night';
 import { toJsxRuntime, Components } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { Skeleton } from './skeleton';
-import '@wooorm/starry-night/style/tritanopia';
+import '@wooorm/starry-night/style/both';
 import { ElementContent, Element, RootContent, Root } from 'hast'
 import { Box, chakra, HStack } from '@chakra-ui/react';
 import { SubmissionWithFilesAndComments, SubmissionFileWithComments } from '@/utils/supabase/DatabaseTypes';
@@ -62,7 +62,7 @@ export default function CodeFile({
             "& .source-code-line": {
                 cursor: "pointer",
                 "&:hover": {
-                    bg: "yellow.100",
+                    bg: "bg.emphasized",
                     width: "100%",
                 }
             },
@@ -198,7 +198,6 @@ function CodeLineComment({ lineNumber }: { lineNumber: number }) {
             backgroundColor="bg"
             boxShadow="sm"
         >
-            {/* TODO: make bg for text entry look like GH, show on click */}
             {file.submission_file_comments?.filter((comment) => comment.line === lineNumber).map((comment) => (
                 <Box key={comment.id} m={0} p={2}>
                     <HStack spaceX={0} mb={2}>
@@ -212,7 +211,6 @@ function CodeLineComment({ lineNumber }: { lineNumber: number }) {
             ))}
             <LineCommentForm lineNumber={lineNumber} submission={submission} file={file} />
         </Box>
-        {/* ))} */}
     </Box>
 }
 /**
