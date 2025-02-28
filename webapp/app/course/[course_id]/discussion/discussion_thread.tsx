@@ -99,10 +99,10 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
         }
         return <>{ret}</>
     }
-    return <Container alignSelf="flex-start">
+    return <Container pl="8" pr="0" alignSelf="flex-start">
 
 
-        <Box pos="relative" w="xl" pt="2">
+        <Box pos="relative" w="100%" pt="2">
             <Box
                 pos="absolute"
                 width="5"

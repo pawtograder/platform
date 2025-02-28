@@ -12,18 +12,16 @@ interface MessageData {
 
 interface Props {
   data: MessageData
-  onClick?: () => void
   selected?: boolean
 }
 
 export const HelpRequestTeaser = (props: Props) => {
   const { user, updatedAt, message, isResolved, isAssigned } = props.data
-  const { onClick, selected } = props;
+  const { selected } = props;
   const userProfile = useUserProfile(user);
   return (
     <HStack align="flex-start" gap="3" px="4" py="3"
       _hover={{ bg: 'bg.muted' }} rounded="md"
-      onClick={onClick}
       bg={selected ? 'bg.muted' : ''}
     >
       <Box pt="1">

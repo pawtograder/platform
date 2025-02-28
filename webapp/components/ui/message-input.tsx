@@ -90,15 +90,14 @@ export default function MessageInput(props: MessageInputProps) {
     }, []);
     if (singleLine) {
         return (
-            <VStack align="stretch" spaceY="0" gap="0">
+            <VStack align="stretch" spaceY="0" p="0" gap="0">
                 {showMarkdownPreview && (<Box
                     width="100%"
+                    p="2"
                     bg="bg.muted"
-                    position="relative"
-                    border={"1px solid"} borderColor="teal.subtle" rounded="md" px="3" py="2"
+                    border={"1px solid"} borderColor="border.subtle" rounded="md"
                     m="0">
-                    <Markdown
-                    >
+                    <Markdown>
                         {value}
                     </Markdown>
                 </Box>

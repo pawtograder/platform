@@ -17,7 +17,7 @@ import {
 } from 'react-icons/fi'
 import NextLink from "next/link";
 import UserMenu from "../UserMenu";
-import React, { Fragment, useEffect } from "react";
+import React, { Fragment, useEffect, useRef } from "react";
 import useAuthState from "@/hooks/useAuthState";
 import { Course, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -31,7 +31,7 @@ import {
     DrawerRoot,
     DrawerTitle,
     DrawerTrigger,
-  } from "@/components/ui/drawer"
+} from "@/components/ui/drawer"
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 const LinkItems = (courseID: number) => ([
@@ -47,7 +47,7 @@ const LinkItems = (courseID: number) => ([
 ]);
 
 function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[], currentCourse: Course }) {
-    if(courses.length === 1) {
+    if (courses.length === 1) {
         return <></>
     }
     const uniqueCourses: Course[] = [];
@@ -59,89 +59,100 @@ function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[
     const courseSorter = (a: Course, b: Course) => {
         if (a.semester && b.semester) {
             const ret = b.semester - a.semester;
-            if(ret !== 0) {
+            if (ret !== 0) {
                 return ret;
             }
         }
         return a.name!.localeCompare(b.name!);
     }
     return <DrawerRoot size='xs' placement='start'>
-    <DrawerBackdrop />
-    <DrawerTrigger asChild>
-      <Button variant="ghost" colorPalette="gray" size="sm" aria-label="Open course picker">
-      <FiMenu />
-      </Button>
-    </DrawerTrigger>
-    <DrawerContent>
-      <DrawerHeader>
-        <DrawerTitle>Your Courses</DrawerTitle>
-      </DrawerHeader>
-      <DrawerBody>
-        {Array.from(uniqueCourses).sort(courseSorter).map((course) => (
-            <Fragment key={course.id}>
-            <Link variant={course.id === currentCourse.id ? "underline" : "plain"} href={`/course/${course.id}`}>{course.name}</Link>
-            <Text fontSize="sm" color="gray.500"><SemesterText semester={course.semester} /></Text>
-            </Fragment>
-        ))}
-      </DrawerBody>
-      <DrawerCloseTrigger />
-    </DrawerContent>
-  </DrawerRoot>
+        <DrawerBackdrop />
+        <DrawerTrigger asChild>
+            <Button variant="ghost" colorPalette="gray" size="sm" aria-label="Open course picker">
+                <FiMenu />
+            </Button>
+        </DrawerTrigger>
+        <DrawerContent>
+            <DrawerHeader>
+                <DrawerTitle>Your Courses</DrawerTitle>
+            </DrawerHeader>
+            <DrawerBody>
+                {Array.from(uniqueCourses).sort(courseSorter).map((course) => (
+                    <Fragment key={course.id}>
+                        <Link variant={course.id === currentCourse.id ? "underline" : "plain"} href={`/course/${course.id}`}>{course.name}</Link>
+                        <Text fontSize="sm" color="gray.500"><SemesterText semester={course.semester} /></Text>
+                    </Fragment>
+                ))}
+            </DrawerBody>
+            <DrawerCloseTrigger />
+        </DrawerContent>
+    </DrawerRoot>
 }
-export default function DynamicCourseNav({ course, courses }: { course: null | Course, courses: UserRoleWithCourse[]}) {
+export default function DynamicCourseNav({ course, courses }: { course: null | Course, courses: UserRoleWithCourse[] }) {
     const router = useRouter();
     const pathname = usePathname();
+    const courseNavRef = useRef<HTMLDivElement>(null);
     const { isInstructor } = useAuthState();
     if (!course) {
         return <Skeleton height="40" width="100%" />;
     }
+    useEffect(() => {
+        if (courseNavRef.current) {
+            const height = courseNavRef.current.offsetHeight;
+            document.documentElement.style.setProperty('--nav-height', `${height + 10}px`);
+        }
+    }, [courseNavRef?.current]);
     return (
-        <VStack px={{ base: 4, md: 4 }}
+        <Box px={{ base: 4, md: 4 }}
+            ref={courseNavRef}
+            id="course-nav"
             bg='bg.subtle'
+            gap="0"
             borderBottomWidth="1px"
-            borderBottomColor='border.emphasized'>
+            borderBottomColor='border.emphasized'
+        >
             <Flex
                 width="100%"
-                height="20"
+                pt="2"
                 alignItems="center"
                 justifyContent={{ base: 'space-between' }}
             >
-                
-                <Box
-                    fontSize="2xl"
-                    fontWeight="bold"
-                ><CoursePicker courses={courses} currentCourse={course} />
-                <Link variant="plain" href={`/course/${course.id}`}>{course.name}</Link>
-                </Box>
-                <UserMenu />
-            </Flex>
-            <HStack
-                width="100%"
-            >
-                {LinkItems(course.id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => (
-                    <Box key={link.name} paddingBottom="2"
-                        borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
-                        borderColor="orange.600"
+                <VStack gap="0">
+                    <Box
+                        fontSize="xl"
+                        fontWeight="bold"
+                    ><CoursePicker courses={courses} currentCourse={course} />
+                        <Link variant="plain" href={`/course/${course.id}`}>{course.name}</Link>
+                    </Box>
+                    <HStack
+                        width="100%"
                     >
-                        <Button
-                            colorPalette="gray"
-                            _hover={{
-                                bg: "#EBEDEF"
-                            }}
-                            fontSize="md"
-                            // href={link.target || '#'}
-                            // style={{ textDecoration: 'none' }}
-                            variant="ghost"
-                            asChild
-                        >
-                            <NextLink prefetch={true} href={link.target || '#'}>
-                            <Flex
-                                align="center"
-                                role="group"
+                        {LinkItems(course.id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => (
+                            <Box key={link.name}
+                                borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
+                                borderColor="orange.600"
                             >
-                                <HStack>
-                                    {React.createElement(link.icon)}
-                                    {/* <Icon
+                                <Button
+                                    colorPalette="gray"
+                                    _hover={{
+                                        bg: "#EBEDEF"
+                                    }}
+                                    size="xs"
+                                    fontSize="sm"
+                                    pt="0"
+                                    // href={link.target || '#'}
+                                    // style={{ textDecoration: 'none' }}
+                                    variant="ghost"
+                                    asChild
+                                >
+                                    <NextLink prefetch={true} href={link.target || '#'}>
+                                        <Flex
+                                            align="center"
+                                            role="group"
+                                        >
+                                            <HStack>
+                                                {React.createElement(link.icon)}
+                                                {/* <Icon
                              mr="4"
                              fontSize="16"
                              _groupHover={{
@@ -149,12 +160,17 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                              }}
                              as={icon}
                          /> */}
-                                    {link.name}</HStack>
-                            </Flex>
-                            </NextLink>
-                        </Button></Box>
-                ))}
-            </HStack>
-        </VStack>
+                                                {link.name}</HStack>
+                                        </Flex>
+                                    </NextLink>
+                                </Button></Box>
+                        ))}
+                    </HStack>
+                </VStack>
+
+
+                <UserMenu />
+            </Flex>
+        </Box>
     )
 }

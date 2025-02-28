@@ -8,7 +8,7 @@ import {
     PopoverTrigger
 } from "@/components/ui/popover";
 import { SubmissionWithFilesAndComments, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, HStack, Skeleton, Text } from "@chakra-ui/react";
+import { Box, Flex, Heading, HStack, Skeleton, Text } from "@chakra-ui/react";
 
 import Link from "@/components/ui/link";
 import { Icon } from "@chakra-ui/react";
@@ -79,11 +79,12 @@ export default function SubmissionsLayout({ children }: { children: React.ReactN
             <Skeleton height="100px" />
         </Box>
     }
-    return <Box borderColor="border.muted"
+    return <Flex direction="column" borderColor="border.muted"
+        height="calc(100vh - var(--nav-height))"
         borderWidth="2px"
         borderRadius="md"
     >
-        <HStack p={4} alignItems="center" justify="space-between" align="center">
+        <HStack pl={4} pr={4} alignItems="center" justify="space-between" align="center">
             <Box><Heading size="lg">{query.data?.data.assignments.title} - Submission #{query.data?.data.ordinal}</Heading><Link href={`https://github.com/${query.data?.data.repository}/commit/${query.data?.data.sha}`} target="_blank">
                 Commit {query.data?.data.sha.substring(0, 7)}
             </Link></Box>
@@ -123,6 +124,8 @@ export default function SubmissionsLayout({ children }: { children: React.ReactN
                 </Button>
             </NextLink>
         </Box>
-        {children}
-    </Box>
+        <Box flex={1} overflowY="auto">
+            {children}
+        </Box>
+    </Flex>
 }

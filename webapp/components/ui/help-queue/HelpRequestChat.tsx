@@ -12,6 +12,7 @@ import useAuthState from "@/hooks/useAuthState";
 import { PopConfirm } from "../popconfirm";
 import { Avatar } from "../avatar";
 import MdEditor from "../md-editor";
+import MessageInput from "../message-input";
 
 function HelpRequestChatInput() {
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -50,12 +51,10 @@ function HelpRequestChatInput() {
 }
 export default function HelpRequestChat({ request, actions }: { request: HelpRequest, actions: React.ReactNode }) {
     const { messages, participants, postMessage: _postMessage } = useChatChannel();
-    const inputRef = useRef<HTMLTextAreaElement>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
     const secondFromBottomRef = useRef<HTMLDivElement>(null);
     const profiles = useUserProfiles();
     const creator = useUserProfile(request.creator);
-    const router = useRouter();
 
     useEffect(() => {
         if (!request.resolved_by && bottomRef.current && secondFromBottomRef.current) {
@@ -79,8 +78,10 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
         mutate({ id: request.id, values: { resolved_by: user?.id, resolved_at: new Date().toISOString() } });
     }, [mutate, request.id, user?.id]);
 
-    return (<Flex direction="column" flex="1">
-        <Flex borderBottomWidth="1px" px="4" py="4">
+    return (<Flex direction="column" width="100%" 
+    height="calc(100vh - var(--nav-height))"
+    justify="space-between" align="center">
+        <Flex width="100%" borderBottomWidth="1px" px="4" py="4">
             <HStack spaceX="4" flex="1">
                 {/* <Avatar.Root /> */}
                 <Stack spaceY="0">
@@ -118,7 +119,7 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
             </AvatarGroup>
         </Flex>
 
-        <Box flex="1" overflow="auto" px="5" py="4" borderWidth="1px" borderStyle="solid" height="full">
+        <Box width="100%" flex="1" overflow="auto" px="5" py="4" borderWidth="1px" borderStyle="solid" height="full">
             <ChatMessage data={{
                 user: request.creator,
                 updatedAt: request.created_at,
@@ -137,8 +138,8 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
             {messages.length < 2 && <Box ref={secondFromBottomRef} />}
             <Box ref={bottomRef} />
         </Box>
-        {!request.resolved_by && <Box bg="bg.subtle" py="4" px="5" borderTopWidth="1px">
-            <HelpRequestChatInput />
+        {!request.resolved_by && <Box width="100%" bg="bg.subtle" py="4" px="5" borderTopWidth="1px">
+            <MessageInput defaultSingleLine={true} sendMessage={_postMessage} />
         </Box>}
     </Flex>)
 }

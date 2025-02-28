@@ -1,18 +1,24 @@
-import { Box } from "@chakra-ui/react";
-
+import { Box, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
+import DiscussionThreadList from "./DiscussionThreadList";
 const DiscussionLayout = async ({ children, params }: Readonly<{
     children: React.ReactNode;
     params: Promise<{ course_id: string }>
 }>) => {
     const { course_id } = await params;
 
-    // const {open, onOpen, onClose} = useDisclosure()
     return (
-        <Box minH="100vh">
-            {/* mobilenav */}
-            <Box p="4">
-                {children}
-            </Box>
+        <Box height="calc(100vh - var(--nav-height))">
+            <Flex flex="1">
+                <Box w="314px"
+                    borderRight="1px solid"
+                    borderColor="border.emphasized"
+                    pt="4">
+                    <DiscussionThreadList />
+                </Box>
+                <Box p="8" width="100%" overflowY="auto" height="calc(100vh - var(--nav-height))">
+                    {children}
+                </Box>
+            </Flex>
         </Box>
     )
 }

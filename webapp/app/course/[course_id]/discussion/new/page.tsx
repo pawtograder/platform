@@ -95,6 +95,8 @@ export default function NewDiscussionThread() {
                                                 {topics?.data?.map((topic: DiscussionTopic) => (
                                                     <Box key={topic.id} w="sm">
                                                         <RadioCardItem
+                                                        p="0"
+                                                        m="0"
                                                             indicator={false}
                                                             colorPalette={topic.color}
                                                             description={topic.description}

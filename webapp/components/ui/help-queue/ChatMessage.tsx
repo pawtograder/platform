@@ -1,6 +1,6 @@
 import { useUserProfile } from '@/hooks/useUserProfiles'
 import { Avatar, Box, HStack, Stack, Text } from '@chakra-ui/react'
-import Markdown from 'react-markdown'
+import Markdown from '../markdown'
 interface MessageData {
   user: string
   updatedAt: string

@@ -1,10 +1,10 @@
 'use client'
-import { HelpQueue } from "@/components/ui/help-queue/HelpQueue"
 import { useList } from "@refinedev/core"
 import { HelpQueue as HelpQueueType } from "@/utils/supabase/DatabaseTypes"
 import { useParams } from "next/navigation"
+import { Box } from "@chakra-ui/react"
 export default function HelpManagePage() {
-    const { course_id   } = useParams()
+    const { course_id } = useParams()
     const queues = useList<HelpQueueType>({
         resource: "help_queues",
         filters:
@@ -18,6 +18,8 @@ export default function HelpManagePage() {
     if (queues.error) {
         return <div>Error: {queues.error.message}</div>
     }
-    return <HelpQueue queue_id={queues.data?.data[0].id} />
+    return <Box>
+        (Dashboard goes here)
+    </Box>
 
 }
