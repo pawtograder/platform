@@ -19,7 +19,11 @@ export default async function CourseLanding({
 
   const instructor = await isInstructor(course_id);
   if (instructor) {
-    return <InstructorDashboard course_id={course_id} />
+    return <Box height="calc(100vh - var(--nav-height))" overflowY="auto">
+      <InstructorDashboard course_id={course_id} />
+    </Box>
   }
-  return <StudentDashboard course_id={course_id} />
+  return <Box height="calc(100vh - var(--nav-height))" overflowY="auto">
+    <StudentDashboard course_id={course_id} />
+  </Box>
 }

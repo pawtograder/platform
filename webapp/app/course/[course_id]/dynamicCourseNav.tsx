@@ -106,6 +106,7 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
         <Box px={{ base: 4, md: 4 }}
             ref={courseNavRef}
             id="course-nav"
+            alignItems="start"
             bg='bg.subtle'
             gap="0"
             borderBottomWidth="1px"
@@ -117,7 +118,7 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                 alignItems="center"
                 justifyContent={{ base: 'space-between' }}
             >
-                <VStack gap="0">
+                <VStack gap="0" align="start">
                     <Box
                         fontSize="xl"
                         fontWeight="bold"
