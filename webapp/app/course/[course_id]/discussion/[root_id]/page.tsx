@@ -1,19 +1,17 @@
 'use client';
 
-import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
-import { DiscussionThread as DiscussionThreadType, DiscussionTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
-import { Box, Breadcrumb, Button, Heading, VStack, Text, HStack, Avatar, Badge } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { DiscussionThread as DiscussionThreadType, DiscussionTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { Avatar, Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
+import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { DiscussionThread, DiscussionThreadReply, threadsToTree } from "../discussion_thread";
-import Link from "@/components/ui/link";
-import Markdown from "react-markdown";
-import { useUserProfile } from "@/hooks/useUserProfiles";
-import { formatRelative } from "date-fns";
 import { FaReply, FaSmile } from "react-icons/fa";
+import Markdown from "react-markdown";
+import { DiscussionThread, DiscussionThreadReply, threadsToTree } from "../discussion_thread";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: DiscussionTopic | undefined }) {
     const userProfile = useUserProfile(thread.author);

@@ -1,4 +1,4 @@
-import { CardHeader, CardRoot, CardBody, DataListRoot, DataListItem, DataListItemLabel, DataListItemValue } from "@chakra-ui/react";
+import { CardHeader, CardRoot, CardBody, DataListRoot, DataListItem, DataListItemLabel, DataListItemValue, Skeleton } from "@chakra-ui/react";
 import { Stack } from "@chakra-ui/react";
 import { Box, Heading } from "@chakra-ui/react";
 import { VStack } from "@chakra-ui/react";
@@ -17,12 +17,15 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     if (assignmentsError) {
         console.error(assignmentsError);
     }
+    const { data: topics } = await supabase
+        .from("discussion_topics")
+        .select("*")
+        .eq("class_id", course_id);
 
     const { data: discussions } = await supabase
         .from("discussion_threads")
         .select("*, public_profiles(*), discussion_topics(*)")
-        .eq("class", course_id)
-        .is("root", null)
+        .eq("root_class_id", course_id)
         .order("created_at", { ascending: false })
         .limit(5);
 
@@ -70,11 +73,15 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
             <Box>
                 <Heading size="lg" mb={4}>Recent Discussions</Heading>
                 <Stack spaceY={4}>
-                    {discussions?.map(thread => (
-                        <Link prefetch={true} href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
-                            <DiscussionPostSummary thread={thread} />
+                    {discussions?.map(thread => {
+                        const topic = topics?.find(t => t.id === thread.topic_id);
+                        if (!topic) {
+                            return <Skeleton key={thread.id} height="100px" />
+                        }
+                        return <Link prefetch={true} href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
+                            <DiscussionPostSummary thread={thread} topic={topic} />
                         </Link>
-                    ))}
+                    })}
                 </Stack>
             </Box>
 

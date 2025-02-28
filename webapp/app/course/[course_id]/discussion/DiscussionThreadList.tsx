@@ -3,19 +3,17 @@
 import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 
-import { DiscussionThreadWithAuthorAndTopic } from "@/utils/supabase/DatabaseTypes";
-import { Container, Separator, VStack, Spacer, Heading, Button, Icon, Flex } from "@chakra-ui/react";
-import { Tooltip } from "@/components/ui/tooltip"
-import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
-import { useUserProfile } from '@/hooks/useUserProfiles'
-import { Avatar, Box, HStack, Stack, Text } from '@chakra-ui/react'
-import excerpt from '@stefanprobst/remark-excerpt'
-import NextLink from "next/link";
 import Markdown from "@/components/ui/markdown";
-import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
-import { useId, Fragment } from "react";
-import { FaPlus } from "react-icons/fa";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip } from "@/components/ui/tooltip";
+import { useUserProfile } from '@/hooks/useUserProfiles';
+import { DiscussionThreadWithAuthorAndTopic } from "@/utils/supabase/DatabaseTypes";
+import { Avatar, Box, Button, Flex, Heading, HStack, Icon, Separator, Spacer, Stack, Text } from "@chakra-ui/react";
+import excerpt from '@stefanprobst/remark-excerpt';
+import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
+import NextLink from "next/link";
+import { Fragment, useId } from "react";
+import { FaPlus } from "react-icons/fa";
 interface MessageData {
     user: string
     updatedAt: string

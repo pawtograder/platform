@@ -1,9 +1,7 @@
 'use client';
-import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { DiscussionThreadWithAuthorAndTopic } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Container, Flex, Heading, Skeleton, Stack, Text } from "@chakra-ui/react";
+import { Container } from "@chakra-ui/react";
 import { useTable } from "@refinedev/core";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 
 

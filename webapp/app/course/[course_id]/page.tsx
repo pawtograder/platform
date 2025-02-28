@@ -1,13 +1,8 @@
-import { CardHeader, CardRoot, CardBody, DataListRoot, DataListItem, DataListItemLabel, DataListItemValue } from "@chakra-ui/react";
-import { Stack } from "@chakra-ui/react";
-import { Box, Heading } from "@chakra-ui/react";
-import { VStack } from "@chakra-ui/react";
-import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
-import { createClient } from "@/utils/supabase/server";
-import Link from "next/link";
 import { isInstructor } from "@/lib/ssrUtils";
-import StudentDashboard from "./studentDashboard";
+import { createClient } from "@/utils/supabase/server";
+import { Box } from "@chakra-ui/react";
 import InstructorDashboard from "./instructorDashboard";
+import StudentDashboard from "./studentDashboard";
 
 export default async function CourseLanding({
   params,

@@ -1,32 +1,31 @@
 'use client'
-import { DiscussionThreadWithAuthorAndTopic } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import {
     Avatar,
-    Badge, Box, Button, Container,
+    Badge, Box, Button,
     Flex, HStack, Icon, Spacer,
     Stack,
     Status,
     Text,
     VStack
 } from "@chakra-ui/react";
-import excerpt from '@stefanprobst/remark-excerpt'
+import excerpt from '@stefanprobst/remark-excerpt';
 
-import Link from "@/components/ui/link";
-import { useRouter } from "next/navigation";
-import { BsChat, BsChevronUp } from 'react-icons/bs';
-import { FaCheckCircle, FaQuestionCircle, FaRegHeart, FaRegStickyNote, FaReply } from "react-icons/fa";
-import { RxQuestionMarkCircled } from "react-icons/rx";
 import Markdown from "@/components/ui/markdown";
-import { formatRelative } from "date-fns";
-import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
-import { DiscussionThread, DiscussionThreadReply } from "@/app/course/[course_id]/discussion/discussion_thread";
-import { useCallback, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
 import useAuthState from "@/hooks/useAuthState";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { createClient } from "@/utils/supabase/client";
+import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { formatRelative } from "date-fns";
+import { useRouter } from "next/navigation";
+import { useCallback, useState } from "react";
+import { BsChat } from 'react-icons/bs';
+import { FaCheckCircle, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
+import { RxQuestionMarkCircled } from "react-icons/rx";
+import { Skeleton } from "./skeleton";
 export function DiscussionThreadLikeButton({ thread }: {
-    thread: DiscussionThreadWithAuthorAndTopic | ThreadWithChildren,
+    thread: DiscussionThreadType | ThreadWithChildren,
 }) {
     const supabase = createClient();
     const user = useAuthState();
@@ -48,12 +47,13 @@ export function DiscussionThreadLikeButton({ thread }: {
         {likeStatus ? <Icon as={FaRegHeart} /> : <Icon as={FaRegHeart} />}
     </Button>
 }
-export function DiscussionPostSummary({ thread, standalone }: {
-    thread: DiscussionThreadWithAuthorAndTopic | ThreadWithChildren,
-    standalone?: boolean
+export function DiscussionPostSummary({ thread, topic }: {
+    thread: DiscussionThreadType | ThreadWithChildren,
+    topic: DiscussionTopic
 }) {
     const router = useRouter();
     const user = useAuthState();
+    const userProfile = useUserProfile(thread.author);
     const [replyVisible, setReplyVisible] = useState(false);
     const getIcon = () => {
         if (thread.is_question) {
@@ -72,17 +72,17 @@ export function DiscussionPostSummary({ thread, standalone }: {
 
         <Flex borderWidth="1px" divideX="1px" borderRadius="l3" bg="bg"
             _hover={{
-                bg: standalone ? 'bg' : 'bg.subtle'
+                bg: 'bg.subtle'
             }}>
             <Stack p="6" flex="1">
-                <Badge variant="surface" alignSelf="flex-start" colorPalette={thread.discussion_topics.color}>
-                    {thread.discussion_topics.topic}
+                <Badge variant="surface" alignSelf="flex-start" colorPalette={topic.color}>
+                    {topic.topic}
                     {getIcon()}
                 </Badge>
                 <Text textStyle="lg" fontWeight="semibold" mt="2">
                     {thread.subject}
                 </Text>
-                {!standalone ? <Markdown
+                <Markdown
                     components={{
                         a: ({ children, href }) => {
                             return <>{children}</>
@@ -90,18 +90,18 @@ export function DiscussionPostSummary({ thread, standalone }: {
 
                     }}
                     remarkPlugins={[[excerpt, { maxLength: 500 }]]}
-                    >{thread.body}</Markdown> : <Markdown>{thread.body}</Markdown>}
+                    >{thread.body}</Markdown> 
 
                 <HStack fontWeight="medium" mt="4">
-                    <HStack>
+                    {userProfile ? <HStack>
                         <Avatar.Root size="sm" variant="outline" shape="square">
-                            <Avatar.Fallback name={thread.public_profiles.name} />
-                            <Avatar.Image src={`https://api.dicebear.com/9.x/identicon/svg?seed=${thread.public_profiles.name}`} />
+                            <Avatar.Fallback name={userProfile?.name} />
+                            <Avatar.Image src={userProfile?.avatar_url} />
                         </Avatar.Root>
                         <Text textStyle="sm" hideBelow="sm">
-                            {thread.public_profiles.name}
+                            {userProfile?.name}
                         </Text>
-                    </HStack>
+                    </HStack> : <Skeleton width="100px" />}
                     <Text textStyle="sm" color="fg.muted" ms="3">
                         {formatRelative(thread.created_at, new Date())}
                     </Text>
@@ -109,7 +109,7 @@ export function DiscussionPostSummary({ thread, standalone }: {
 
                     <HStack gap="4">
                         <HStack gap="1">
-                            {standalone && <Button variant="ghost" onClick={() => setReplyVisible(true)}>{comments}</Button>}
+                            <Button variant="ghost">{comments}</Button>
 
                         </HStack>
                         <Status.Root hideBelow="sm">
@@ -127,19 +127,5 @@ export function DiscussionPostSummary({ thread, standalone }: {
                 </Text>
             </VStack>
         </Flex>
-        <DiscussionThreadReply thread={thread} visible={replyVisible && standalone === true} setVisible={setReplyVisible} />
-        {
-            (thread as ThreadWithChildren).children && (thread as ThreadWithChildren).children.map((child, index) => (
-                <DiscussionThread key={child.id} thread={child}
-                    borders={{
-                        indent: false,
-                        outerSiblings: (thread as ThreadWithChildren).children.length > 1 && index !== (thread as ThreadWithChildren).children.length - 1 ? [true] : [false],
-                        descendant: child.children_count > 0,
-                        isFirstDescendantOfParent: index === 0,
-                    }}
-                    originalPoster={thread.author}
-                />
-            ))
-        }
     </Box >
 }
