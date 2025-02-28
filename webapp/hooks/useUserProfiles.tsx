@@ -26,7 +26,7 @@ export function getUserProfile(allProfiles: (PublicProfile | UserProfile)[], id:
 }
 
 
-export function useUserProfile(id: string | null): { id: string, name: string, avatar_url: string } | undefined {
+export function useUserProfile(id: string | null): { is_instructor: boolean, id: string, name: string, avatar_url: string } | undefined {
     const allProfiles = useUserProfiles();
     if(id == null) {
         return undefined;
@@ -37,6 +37,7 @@ export function useUserProfile(id: string | null): { id: string, name: string, a
     }
     if ('avatar' in profile) {
         return {
+            is_instructor: profile.is_instructor,
             id: profile.id,
             name: profile.name,
             avatar_url: profile.avatar == 'identicon' || !profile.avatar ? `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}` : profile.avatar
@@ -44,6 +45,7 @@ export function useUserProfile(id: string | null): { id: string, name: string, a
     }
     else if ('avatar_url' in profile) {
         return {
+            is_instructor: true, // TODO actually have a flag, use singular profiles
             id: profile.id,
             name: profile.name,
             avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,

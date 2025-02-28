@@ -81,9 +81,11 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@faker-js/faker": "^9.5.1",
     "@octokit/types": "^13.7.0",
     "@openapi-codegen/cli": "^3.0.1",
     "@openapi-codegen/typescript": "^8.1.1",
+    "@playwright/test": "^1.50.1",
     "@tanstack/eslint-plugin-query": "^5.66.0",
     "@types/lodash.isequal": "^4.5.8",
     "@types/node": "22.10.2",

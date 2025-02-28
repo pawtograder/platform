@@ -1,9 +1,8 @@
 'use client';
 
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
-import { Skeleton } from "@/components/ui/skeleton";
-import { DiscussionThreadWithAuthorAndTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
+import { DiscussionThread as DiscussionThreadType, DiscussionTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { Box, Breadcrumb, Button, Heading, VStack, Text, HStack, Avatar, Badge } from "@chakra-ui/react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useList } from "@refinedev/core";
@@ -15,22 +14,21 @@ import Markdown from "react-markdown";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { formatRelative } from "date-fns";
 import { FaReply, FaSmile } from "react-icons/fa";
-type Thread = Database['public']['Tables']['discussion_threads']['Row'];
 
-function ThreadHeader({ thread }: { thread: DiscussionThreadWithAuthorAndTopic }) {
+function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: DiscussionTopic | undefined }) {
     const userProfile = useUserProfile(thread.author);
     return <Box>
         <VStack gap="0" align="start">
             <HStack align="start" gap="2" alignSelf="flex-start">
-                <Avatar.Root size="xs">
+                {userProfile ? <Avatar.Root size="xs">
                     <Avatar.Image src={userProfile?.avatar_url} />
                     <Avatar.Fallback>{userProfile?.name.charAt(0)}</Avatar.Fallback>
-                </Avatar.Root>
+                </Avatar.Root> : <SkeletonCircle size="xs" />}
                 <VStack gap="0" alignSelf="flex-start" align="start">
                     <HStack>
-                        <Heading size="sm">{userProfile?.name}</Heading>
-                        <Text fontSize="sm" color="text.muted">{thread.is_question ? "Asked a question" : "Posted a note"} to </Text>
-                        <Badge colorScheme={thread.discussion_topics.color}>{thread.discussion_topics.topic}</Badge>
+                        <Heading size="sm">{userProfile?.name || <Skeleton width="100px" />}</Heading>
+                        <Text fontSize="sm" color="text.muted">{thread.is_question ? "Asked question" : "Posted note"} #{thread.ordinal} to </Text>
+                        {topic ? <Badge colorScheme={topic.color}>{topic.topic}</Badge> : <Skeleton width="100px" height="20px" />}
                     </HStack>
                     <Text fontSize="sm" color="text.muted">{formatRelative(new Date(thread.created_at), new Date())}</Text>
                 </VStack>
@@ -39,7 +37,7 @@ function ThreadHeader({ thread }: { thread: DiscussionThreadWithAuthorAndTopic }
         </VStack>
     </Box>
 }
-function ThreadActions({ thread }: { thread: DiscussionThreadWithAuthorAndTopic }) {
+function ThreadActions({ thread }: { thread: DiscussionThreadType }) {
     const [replyVisible, setReplyVisible] = useState(false);
     return <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">
         <Tooltip content="Reply">
@@ -54,10 +52,23 @@ function ThreadActions({ thread }: { thread: DiscussionThreadWithAuthorAndTopic 
 export default function ThreadView() {
     const [thread, setThread] = useState<ThreadWithChildren>();
     const { course_id, root_id } = useParams();
-    const { data, isLoading, error } = useList<DiscussionThreadWithAuthorAndTopic>({
+    const { data: discussion_topics } = useList<DiscussionTopic>({
+        resource: "discussion_topics",
+        meta: {
+            select: "*"
+        },
+        filters: [
+            {
+                field: 'class_id',
+                operator: 'eq',
+                value: course_id
+            }
+        ]
+    })
+    const { data, isLoading, error } = useList<DiscussionThreadType>({
         resource: "discussion_threads",
         meta: {
-            select: "*, discussion_topics(*), public_profiles(*)"
+            select: "*"
         },
         pagination: {
             pageSize: 10000
@@ -68,19 +79,9 @@ export default function ThreadView() {
         }],
         filters: [
             {
-                operator: 'or',
-                value: [
-                    {
-                        field: 'id',
-                        operator: 'eq',
-                        value: root_id
-                    },
-                    {
-                        field: 'root',
-                        operator: 'eq',
-                        value: root_id
-                    }
-                ]
+                field: 'root',
+                operator: 'eq',
+                value: root_id
             }
         ]
     })
@@ -106,7 +107,7 @@ export default function ThreadView() {
     }
 
     return <Box width="100%" height="calc(100vh - var(--nav-height))" overflowY="auto">
-        <ThreadHeader thread={rootThread} />
+        <ThreadHeader thread={rootThread} topic={discussion_topics?.data.find((t) => t.id === rootThread.topic_id)} />
         <Box>
             <Markdown>{rootThread.body}</Markdown>
         </Box>

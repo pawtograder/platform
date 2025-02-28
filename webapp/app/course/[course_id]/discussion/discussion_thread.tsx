@@ -1,15 +1,17 @@
 import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
+import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import useAuthState from "@/hooks/useAuthState";
-import { DiscussionThreadWithAuthorAndTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { DiscussionThread as DiscussionThreadType, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text  } from "@chakra-ui/react";
 import { useCreate, useInvalidate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useCallback, useState } from "react";
 
 
-export function threadsToTree(threads: DiscussionThreadWithAuthorAndTopic[]): ThreadWithChildren {
+export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildren {
     const threadMap = new Map<number, ThreadWithChildren>();
     let root: ThreadWithChildren | undefined;
     for (const thread of threads) {
@@ -30,7 +32,7 @@ export function threadsToTree(threads: DiscussionThreadWithAuthorAndTopic[]): Th
     }
     return root;
 }
-export function DiscussionThreadReply({ thread, visible, setVisible }: { thread: DiscussionThreadWithAuthorAndTopic, visible: boolean, setVisible: (visible: boolean) => void }) {
+export function DiscussionThreadReply({ thread, visible, setVisible }: { thread: DiscussionThreadType, visible: boolean, setVisible: (visible: boolean) => void }) {
 
     const [count, setCount] = useState(0);//DEBUG
     const invalidate = useInvalidate();
@@ -86,6 +88,7 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
     originalPoster: string
 }) {
     const [replyVisible, setReplyVisible] = useState(false);
+    const authorProfile = useUserProfile(thread.author);
 
     const outerBorders = (present: boolean[]): JSX.Element => {
         let ret: JSX.Element[] = []
@@ -119,17 +122,22 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
             {borders.descendant && <Box
                 pos="absolute" width="2px" left="16" top="10" bottom="0" bg="border" />}
             <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%">
-                <Avatar.Root size="sm" variant="outline" shape="square">
-                    <Avatar.Fallback name={thread.public_profiles.name} />
-                    <Avatar.Image src={`https://api.dicebear.com/9.x/identicon/svg?seed=${thread.public_profiles.name}`} />
-                </Avatar.Root>
+                {authorProfile ? <Avatar.Root size="sm" variant="outline" shape="square">
+                    <Avatar.Fallback name={authorProfile!.name} />
+                    <Avatar.Image src={authorProfile!.avatar_url} />
+                </Avatar.Root> : <SkeletonCircle size="sm" />}
                 <Stack w="100%">
                     <Box bg="bg.muted" rounded="l3" py="2" px="3">
-                        <Text textStyle="sm" fontWeight="semibold">
-                            {thread.public_profiles.name}
-                            {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
-                            {thread.public_profiles.is_instructor && <Badge ml="2" colorPalette="red">Instructor</Badge>}
-                        </Text>
+                        <HStack gap="1">
+                            <Text textStyle="sm" fontWeight="semibold">
+                                <Link id={`post-${thread.ordinal}`} href={`/course/${thread.class}/discussion/${thread.root}#post-${thread.ordinal}`}>#{thread.ordinal}</Link>
+                            </Text>
+                            {authorProfile ? <Text textStyle="sm" fontWeight="semibold">
+                                {authorProfile?.name}
+                                {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
+                                {authorProfile?.is_instructor && <Badge ml="2" colorPalette="red">Instructor</Badge>}
+                            </Text> : <Skeleton width="100px" />}
+                        </HStack>
                         <Box textStyle="sm" color="fg.muted">
                             <Markdown>{thread.body}</Markdown>
                         </Box>

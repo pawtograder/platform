@@ -157,6 +157,7 @@ export type Database = {
           instructors_only: boolean
           is_question: boolean
           likes_count: number
+          ordinal: number | null
           parent: number | null
           root: number | null
           root_class_id: number | null
@@ -176,6 +177,7 @@ export type Database = {
           instructors_only?: boolean
           is_question?: boolean
           likes_count?: number
+          ordinal?: number | null
           parent?: number | null
           root?: number | null
           root_class_id?: number | null
@@ -195,6 +197,7 @@ export type Database = {
           instructors_only?: boolean
           is_question?: boolean
           likes_count?: number
+          ordinal?: number | null
           parent?: number | null
           root?: number | null
           root_class_id?: number | null

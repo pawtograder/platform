@@ -56,7 +56,7 @@ export default function UserMenu() {
                 alignItems="flex-start"
                 gap="0"
                 ml="2">
-                {profile ? <Text fontSize="sm" color="black">{profile.name}</Text> : <Skeleton />}
+                {profile ? <Text fontSize="sm">{profile.name}</Text> : <Skeleton />}
                 <Link fontSize="sm" onClick={signOutAction}>Sign out</Link>
             </VStack>
         </HStack>

@@ -53,7 +53,7 @@ const DiscussionThreadTeaser = (props: Props) => {
             </Box>
             <Stack spaceY="0" fontSize="sm" flex="1" truncate>
                 <Text fontWeight="medium" flex="1" css={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
-                    {subject}
+                    #{props.thread.ordinal} {subject}
                 </Text>
                 <Box color="fg.subtle" truncate>
                     <Markdown
@@ -145,7 +145,7 @@ export default function DiscussionThreadList() {
         </Box>
 
         <Box width="100%" flex={1} overflow="auto" pr="4">
-            <Box>
+            <Box role="list" aria-busy={list.isLoading} aria-live="polite" aria-label="Discussion threads">
 
                 {list.isLoading && <Skeleton height="300px" />}
                 {list.data?.data.map((thread, index) => {

@@ -62,8 +62,9 @@ export default function CodeFile({
             "& .source-code-line": {
                 cursor: "pointer",
                 "&:hover": {
-                    bg: "bg.emphasized",
+                    bg: "yellow.subtle",
                     width: "100%",
+                    cursor: "cell",
                 }
             },
             "& .line-number": {

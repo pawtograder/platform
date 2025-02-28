@@ -72,7 +72,15 @@ export type DiscussionThreadWithAuthorAndTopic = GetResult<
     "*, public_profiles(*), discussion_topics(*)"
 >;
 
-export type ThreadWithChildren = DiscussionThreadWithAuthorAndTopic & {
+export type DiscussionThread = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["discussion_threads"]["Row"],
+    "discussion_threads",
+    Database["public"]["Tables"]["discussion_threads"]["Relationships"],
+    "*"
+>;
+
+export type ThreadWithChildren = DiscussionThread & {
     children: ThreadWithChildren[]
 }
 
