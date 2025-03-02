@@ -541,6 +541,733 @@ export const useGetTemplateRepos = <TData = GetTemplateReposResponse,>(
   });
 };
 
+export type GetReposPathParams = {
+  /**
+   * @format double
+   */
+  courseId: number;
+};
+
+export type GetReposError = Fetcher.ErrorWrapper<undefined>;
+
+export type GetReposResponse = {
+  security_and_analysis?: {
+    secret_scanning_ai_detection?: {
+      status?: 'enabled' | 'disabled';
+    };
+    secret_scanning_non_provider_patterns?: {
+      status?: 'enabled' | 'disabled';
+    };
+    secret_scanning_push_protection?: {
+      status?: 'enabled' | 'disabled';
+    };
+    secret_scanning?: {
+      status?: 'enabled' | 'disabled';
+    };
+    dependabot_security_updates?: {
+      status?: 'enabled' | 'disabled';
+    };
+    advanced_security?: {
+      status?: 'enabled' | 'disabled';
+    };
+  };
+  web_commit_signoff_required?: boolean;
+  allow_forking?: boolean;
+  /**
+   * @format double
+   */
+  watchers?: number;
+  /**
+   * @format double
+   */
+  open_issues?: number;
+  /**
+   * @format double
+   */
+  forks?: number;
+  license?: {
+    node_id?: string;
+    url?: string;
+    spdx_id?: string;
+    name?: string;
+    key?: string;
+  };
+  code_of_conduct?: {
+    html_url: string;
+    body?: string;
+    url: string;
+    name: string;
+    key: string;
+  };
+  /**
+   * @format double
+   */
+  network_count?: number;
+  /**
+   * @format double
+   */
+  subscribers_count?: number;
+  delete_branch_on_merge?: boolean;
+  temp_clone_token?: string;
+  role_name?: string;
+  permissions?: {
+    pull?: boolean;
+    triage?: boolean;
+    push?: boolean;
+    maintain?: boolean;
+    admin?: boolean;
+  };
+  updated_at?: string;
+  created_at?: string;
+  pushed_at?: string;
+  visibility?: string;
+  disabled?: boolean;
+  archived?: boolean;
+  has_discussions?: boolean;
+  has_downloads?: boolean;
+  has_pages?: boolean;
+  has_wiki?: boolean;
+  has_projects?: boolean;
+  has_issues?: boolean;
+  topics?: string[];
+  is_template?: boolean;
+  /**
+   * @format double
+   */
+  open_issues_count?: number;
+  default_branch?: string;
+  /**
+   * @format double
+   */
+  size?: number;
+  /**
+   * @format double
+   */
+  watchers_count?: number;
+  /**
+   * @format double
+   */
+  stargazers_count?: number;
+  /**
+   * @format double
+   */
+  forks_count?: number;
+  language?: string;
+  homepage?: string;
+  svn_url?: string;
+  hooks_url: string;
+  mirror_url?: string;
+  clone_url?: string;
+  trees_url: string;
+  teams_url: string;
+  tags_url: string;
+  subscription_url: string;
+  subscribers_url: string;
+  statuses_url: string;
+  stargazers_url: string;
+  ssh_url?: string;
+  releases_url: string;
+  pulls_url: string;
+  notifications_url: string;
+  milestones_url: string;
+  merges_url: string;
+  languages_url: string;
+  labels_url: string;
+  keys_url: string;
+  issues_url: string;
+  issue_events_url: string;
+  issue_comment_url: string;
+  git_url?: string;
+  git_tags_url: string;
+  git_refs_url: string;
+  git_commits_url: string;
+  forks_url: string;
+  events_url: string;
+  downloads_url: string;
+  deployments_url: string;
+  contributors_url: string;
+  contents_url: string;
+  compare_url: string;
+  commits_url: string;
+  comments_url: string;
+  collaborators_url: string;
+  branches_url: string;
+  blobs_url: string;
+  assignees_url: string;
+  archive_url: string;
+  url: string;
+  fork: boolean;
+  description: string;
+  html_url: string;
+  private: boolean;
+  owner: {
+    user_view_type?: string;
+    starred_at?: string;
+    site_admin: boolean;
+    type: string;
+    received_events_url: string;
+    events_url: string;
+    repos_url: string;
+    organizations_url: string;
+    subscriptions_url: string;
+    starred_url: string;
+    gists_url: string;
+    following_url: string;
+    followers_url: string;
+    html_url: string;
+    url: string;
+    gravatar_id: string;
+    avatar_url: string;
+    node_id: string;
+    /**
+     * @format double
+     */
+    id: number;
+    login: string;
+    email?: string;
+    name?: string;
+  };
+  full_name: string;
+  name: string;
+  node_id: string;
+  /**
+   * @format double
+   */
+  id: number;
+}[];
+
+export type GetReposVariables = {
+  pathParams: GetReposPathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchGetRepos = (variables: GetReposVariables, signal?: AbortSignal) =>
+  pawtograderFetch<GetReposResponse, GetReposError, undefined, {}, {}, GetReposPathParams>({
+    url: '/api/instructor/{courseId}/repos',
+    method: 'get',
+    ...variables,
+    signal,
+  });
+
+export const useGetRepos = <TData = GetReposResponse,>(
+  variables: GetReposVariables,
+  options?: Omit<
+    reactQuery.UseQueryOptions<GetReposResponse, GetReposError, TData>,
+    'queryKey' | 'queryFn' | 'initialData'
+  >,
+) => {
+  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
+  return reactQuery.useQuery<GetReposResponse, GetReposError, TData>({
+    queryKey: queryKeyFn({
+      path: '/api/instructor/{courseId}/repos',
+      operationId: 'getRepos',
+      variables,
+    }),
+    queryFn: ({ signal }) => fetchGetRepos({ ...fetcherOptions, ...variables }, signal),
+    ...options,
+    ...queryOptions,
+  });
+};
+
+export type ListFilesInRepoPathParams = {
+  /**
+   * @format double
+   */
+  courseId: number;
+  orgName: string;
+  repoName: string;
+};
+
+export type ListFilesInRepoError = Fetcher.ErrorWrapper<undefined>;
+
+export type ListFilesInRepoResponse = Schemas.FileListing[];
+
+export type ListFilesInRepoVariables = {
+  pathParams: ListFilesInRepoPathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchListFilesInRepo = (variables: ListFilesInRepoVariables, signal?: AbortSignal) =>
+  pawtograderFetch<
+    ListFilesInRepoResponse,
+    ListFilesInRepoError,
+    undefined,
+    {},
+    {},
+    ListFilesInRepoPathParams
+  >({
+    url: '/api/instructor/{courseId}/repos/{orgName}/{repoName}/files',
+    method: 'get',
+    ...variables,
+    signal,
+  });
+
+export const useListFilesInRepo = <TData = ListFilesInRepoResponse,>(
+  variables: ListFilesInRepoVariables,
+  options?: Omit<
+    reactQuery.UseQueryOptions<ListFilesInRepoResponse, ListFilesInRepoError, TData>,
+    'queryKey' | 'queryFn' | 'initialData'
+  >,
+) => {
+  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
+  return reactQuery.useQuery<ListFilesInRepoResponse, ListFilesInRepoError, TData>({
+    queryKey: queryKeyFn({
+      path: '/api/instructor/{courseId}/repos/{orgName}/{repoName}/files',
+      operationId: 'listFilesInRepo',
+      variables,
+    }),
+    queryFn: ({ signal }) => fetchListFilesInRepo({ ...fetcherOptions, ...variables }, signal),
+    ...options,
+    ...queryOptions,
+  });
+};
+
+export type GetFileFromRepoPathParams = {
+  /**
+   * @format double
+   */
+  courseId: number;
+  orgName: string;
+  repoName: string;
+  path: string;
+};
+
+export type GetFileFromRepoError = Fetcher.ErrorWrapper<undefined>;
+
+export type GetFileFromRepoVariables = {
+  pathParams: GetFileFromRepoPathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchGetFileFromRepo = (variables: GetFileFromRepoVariables, signal?: AbortSignal) =>
+  pawtograderFetch<
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        content?: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        type: 'dir' | 'file' | 'submodule' | 'symlink';
+      }[]
+    | {
+        submodule_git_url?: string;
+        target?: string;
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        content: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        encoding: string;
+        type: 'file';
+      }
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        target: string;
+        type: 'symlink';
+      }
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        submodule_git_url: string;
+        type: 'submodule';
+      },
+    GetFileFromRepoError,
+    undefined,
+    {},
+    {},
+    GetFileFromRepoPathParams
+  >({
+    url: '/api/instructor/{courseId}/repos/{orgName}/{repoName}/files/{path}',
+    method: 'get',
+    ...variables,
+    signal,
+  });
+
+export const useGetFileFromRepo = <
+  TData =
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        content?: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        type: 'dir' | 'file' | 'submodule' | 'symlink';
+      }[]
+    | {
+        submodule_git_url?: string;
+        target?: string;
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        content: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        encoding: string;
+        type: 'file';
+      }
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        target: string;
+        type: 'symlink';
+      }
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        submodule_git_url: string;
+        type: 'submodule';
+      },
+>(
+  variables: GetFileFromRepoVariables,
+  options?: Omit<
+    reactQuery.UseQueryOptions<
+      | {
+          _links: {
+            self: string;
+            html: string;
+            git: string;
+          };
+          download_url: string;
+          html_url: string;
+          git_url: string;
+          url: string;
+          sha: string;
+          content?: string;
+          path: string;
+          name: string;
+          /**
+           * @format double
+           */
+          size: number;
+          type: 'dir' | 'file' | 'submodule' | 'symlink';
+        }[]
+      | {
+          submodule_git_url?: string;
+          target?: string;
+          _links: {
+            self: string;
+            html: string;
+            git: string;
+          };
+          download_url: string;
+          html_url: string;
+          git_url: string;
+          url: string;
+          sha: string;
+          content: string;
+          path: string;
+          name: string;
+          /**
+           * @format double
+           */
+          size: number;
+          encoding: string;
+          type: 'file';
+        }
+      | {
+          _links: {
+            self: string;
+            html: string;
+            git: string;
+          };
+          download_url: string;
+          html_url: string;
+          git_url: string;
+          url: string;
+          sha: string;
+          path: string;
+          name: string;
+          /**
+           * @format double
+           */
+          size: number;
+          target: string;
+          type: 'symlink';
+        }
+      | {
+          _links: {
+            self: string;
+            html: string;
+            git: string;
+          };
+          download_url: string;
+          html_url: string;
+          git_url: string;
+          url: string;
+          sha: string;
+          path: string;
+          name: string;
+          /**
+           * @format double
+           */
+          size: number;
+          submodule_git_url: string;
+          type: 'submodule';
+        },
+      GetFileFromRepoError,
+      TData
+    >,
+    'queryKey' | 'queryFn' | 'initialData'
+  >,
+) => {
+  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
+  return reactQuery.useQuery<
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        content?: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        type: 'dir' | 'file' | 'submodule' | 'symlink';
+      }[]
+    | {
+        submodule_git_url?: string;
+        target?: string;
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        content: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        encoding: string;
+        type: 'file';
+      }
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        target: string;
+        type: 'symlink';
+      }
+    | {
+        _links: {
+          self: string;
+          html: string;
+          git: string;
+        };
+        download_url: string;
+        html_url: string;
+        git_url: string;
+        url: string;
+        sha: string;
+        path: string;
+        name: string;
+        /**
+         * @format double
+         */
+        size: number;
+        submodule_git_url: string;
+        type: 'submodule';
+      },
+    GetFileFromRepoError,
+    TData
+  >({
+    queryKey: queryKeyFn({
+      path: '/api/instructor/{courseId}/repos/{orgName}/{repoName}/files/{path}',
+      operationId: 'getFileFromRepo',
+      variables,
+    }),
+    queryFn: ({ signal }) => fetchGetFileFromRepo({ ...fetcherOptions, ...variables }, signal),
+    ...options,
+    ...queryOptions,
+  });
+};
+
+export type TestSolutionWorkflowPathParams = {
+  /**
+   * @format double
+   */
+  courseId: number;
+  /**
+   * @format double
+   */
+  assignmentId: number;
+  studentId: string;
+};
+
+export type TestSolutionWorkflowError = Fetcher.ErrorWrapper<undefined>;
+
+export type TestSolutionWorkflowVariables = {
+  pathParams: TestSolutionWorkflowPathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchTestSolutionWorkflow = (
+  variables: TestSolutionWorkflowVariables,
+  signal?: AbortSignal,
+) =>
+  pawtograderFetch<
+    undefined,
+    TestSolutionWorkflowError,
+    undefined,
+    {},
+    {},
+    TestSolutionWorkflowPathParams
+  >({
+    url: '/api/instructor/{courseId}/autograder/{assignmentId}/{studentId}',
+    method: 'post',
+    ...variables,
+    signal,
+  });
+
+export const useTestSolutionWorkflow = (
+  options?: Omit<
+    reactQuery.UseMutationOptions<
+      undefined,
+      TestSolutionWorkflowError,
+      TestSolutionWorkflowVariables
+    >,
+    'mutationFn'
+  >,
+) => {
+  const { fetcherOptions } = usePawtograderContext();
+  return reactQuery.useMutation<
+    undefined,
+    TestSolutionWorkflowError,
+    TestSolutionWorkflowVariables
+  >({
+    mutationFn: (variables: TestSolutionWorkflowVariables) =>
+      fetchTestSolutionWorkflow({ ...fetcherOptions, ...variables }),
+    ...options,
+  });
+};
+
 export type CreateCourseForCanvasCoursePathParams = {
   /**
    * @format double
@@ -647,6 +1374,21 @@ export type QueryOperation =
       path: '/api/instructor/{courseId}/template-repos';
       operationId: 'getTemplateRepos';
       variables: GetTemplateReposVariables;
+    }
+  | {
+      path: '/api/instructor/{courseId}/repos';
+      operationId: 'getRepos';
+      variables: GetReposVariables;
+    }
+  | {
+      path: '/api/instructor/{courseId}/repos/{orgName}/{repoName}/files';
+      operationId: 'listFilesInRepo';
+      variables: ListFilesInRepoVariables;
+    }
+  | {
+      path: '/api/instructor/{courseId}/repos/{orgName}/{repoName}/files/{path}';
+      operationId: 'getFileFromRepo';
+      variables: GetFileFromRepoVariables;
     }
   | {
       path: '/api/help-queue/help-request/{requestId}';

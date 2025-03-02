@@ -1,17 +1,15 @@
 import { createClient } from "@/utils/supabase/server";
-import { Box, Table } from "@chakra-ui/react";
+import { Box,Button, Table } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
-import StudentPage from "./studentPage";
+import NextLink from "next/link";
 
-export default async function CourseLanding({
-    course_id }: {
-        course_id: number
-    }) {
+export default async function ManageAssignmentsPage({ params }: { params: Promise<{ course_id: string }> }) {
+    const { course_id } = await params;
     const client = await createClient();
-    const assignments = await client.from("assignments").select("*, submissions(count)").eq("class_id", course_id);
+    const assignments = await client.from("assignments").select("*, submissions(count)").eq("class_id", Number(course_id));
 
     let actions = <></>;
-    actions = <Link href={`/course/${course_id}/new-assignment`}>New Assignment</Link>
+    actions = <Button asChild><NextLink href={`/course/${course_id}/manage/assignments/new`}>New Assignment</NextLink></Button>
     return <Box>{actions}
         <Table.Root>
             <Table.Header>
@@ -25,7 +23,7 @@ export default async function CourseLanding({
             <Table.Body>
                 {assignments?.data?.map((assignment) => (
                     <Table.Row key={assignment.id}>
-                        <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment.id}`}>{assignment.title}</Link></Table.Cell>
+                        <Table.Cell><Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>{assignment.title}</Link></Table.Cell>
                         <Table.Cell>{assignment.release_date}</Table.Cell>
                         <Table.Cell>{assignment.due_date}</Table.Cell>
                         <Table.Cell>{assignment.submissions[0]?.count || 0}</Table.Cell>
@@ -34,5 +32,4 @@ export default async function CourseLanding({
             </Table.Body>
         </Table.Root>
     </Box>
-
 }

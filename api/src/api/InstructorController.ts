@@ -4,6 +4,7 @@ import { Get, Path, Post, Route, Security } from "tsoa";
 import { CanvasController } from "./CanvasController.js";
 import GitHubController from "../GitHubController.js";
 import { Database } from "../SupabaseTypes.js";
+import { UserVisibleError, NotFoundError } from "../InternalTypes.js";
 
 const supabase = createClient<Database>(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '');
 @Route('/api/instructor/')
@@ -127,8 +128,63 @@ export class CourseAdminController {
 
         // Fetch repos from GitHub
         const repos = await GitHubController.getInstance().getRepos(course);
-        // const templateRepos = await this.supabase.from('template_repos').select('*').eq('class_id', courseId);
-        return repos;
+        const templateRepos = repos.filter((repo) => repo.is_template);
 
+        return templateRepos;
+    }
+
+    @Get('/{courseId}/repos')
+    async getRepos(@Path() courseId: number) {
+        const { data: course } = await supabase.from('classes').select('*').eq('id', courseId).single();
+        if (!course) {
+            throw new Error('Course not found');
+        }
+        try {        
+            return await GitHubController.getInstance().getRepos(course);
+        } catch (error) {
+            if('status' in (error as any) && (error as any).status === 404) {
+                throw new NotFoundError(`Repository not found in ${course.name}`);
+            }
+            throw error;
+        }
+    }
+    @Get('/{courseId}/repos/{orgName}/{repoName}/files')
+    async listFilesInRepo(@Path() courseId: number, @Path() orgName: string, @Path() repoName: string) {
+        // Validate that the repo belongs to the course
+        // TODO support different orgs for different courses
+        if(orgName !== 'autograder-dev' && orgName !== 'pawtograder') {
+            throw new UserVisibleError(`Repository not found in ${orgName}`);
+        }
+        try {
+            return await GitHubController.getInstance().listFilesInRepo(orgName + '/' + repoName);
+        } catch (error) {
+            if('status' in (error as any) && (error as any).status === 404) {
+                throw new NotFoundError(`Repository ${orgName}/${repoName} not found`);
+            }
+            throw error;
+        }
+    }
+
+    @Get('/{courseId}/repos/{orgName}/{repoName}/files/{path}')
+    async getFileFromRepo(@Path() courseId: number, @Path() orgName: string, @Path() repoName: string, @Path() path: string) {
+        // Validate that the repo belongs to the course
+        // TODO support different orgs for different courses
+        const org = 'autograder-dev';
+        if(orgName !== org && orgName !== 'pawtograder') {
+            throw new UserVisibleError(`Repository not found in ${org}`);
+        }
+        try {
+            return await GitHubController.getInstance().getFileFromRepo(orgName + '/' + repoName, path);
+        } catch (error) {
+            if('status' in (error as any) && (error as any).status === 404) {
+                throw new NotFoundError(`File ${path} not found in ${orgName}/${repoName}`);
+            }
+            throw error;
+        }
+    }
+
+    @Post('/{courseId}/autograder/{assignmentId}/{studentId}')
+    async testSolutionWorkflow(@Path() courseId: number, @Path() assignmentId: number, @Path() studentId: string) {
+        throw new Error('Not implemented');
     }
 }

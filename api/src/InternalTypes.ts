@@ -16,3 +16,11 @@ export class UserVisibleError extends Error implements Exception {
         this.details = details;
     }
 };
+export class NotFoundError extends Error implements Exception {
+    details: string;
+    status: number = 404;
+    constructor(details: string) {
+        super('Not Found');
+        this.details = details;
+    }
+};

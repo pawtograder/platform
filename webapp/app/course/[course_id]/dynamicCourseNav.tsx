@@ -36,7 +36,8 @@ import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { ColorModeButton } from "@/components/ui/color-mode";
 const LinkItems = (courseID: number) => ([
-    { name: 'Assignments', icon: FiCompass, target: `/course/${courseID}/assignments` },
+    { name: 'Assignments', icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
+    { name: 'Manage Assignments', icon: FiCompass, instructor_only: true, target: `/course/${courseID}/manage/assignments` },
     { name: 'Discussion', icon: FiStar, target: `/course/${courseID}/discussion` },
     // { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
     { name: 'Get Help Now', student_only: true, icon: FiMessageSquare, target: `/course/${courseID}/help` },

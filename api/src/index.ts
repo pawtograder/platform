@@ -9,7 +9,7 @@ import swaggerUi from "swagger-ui-express";
 import { RegisterRoutes } from "../generated/routes.js";
 import GitHubController, { getGithubPrivateKey } from "./GitHubController.js";
 import { ValidateError } from "tsoa";
-import { SecurityError, UserVisibleError } from "./InternalTypes.js";
+import { NotFoundError, SecurityError, UserVisibleError } from "./InternalTypes.js";
 import { VideoChatController } from "./api/VideoChatController.js";
 dotenv.config();
 
@@ -84,6 +84,12 @@ expressApp.use(function errorHandler(
       details: err.details,
     });
   }
+  if (err instanceof NotFoundError) {
+    return res.status(404).json({
+      message: "Not Found",
+      details: err.details,
+    });
+  }
   if (err instanceof Error) {
     return res.status(500).json({
       message: "Internal Server Error",
@@ -102,6 +108,12 @@ expressApp.get("/", (req, res) => {
 GitHubController.getInstance().initializeApp().then(() => {
   // expressApp.use(createAdminMiddleware(adminService));
 
+  // GitHubController.getInstance().listFilesInRepo("pawtograder/example-assignment-java-handout").then((files) => {
+  //   console.log(files);
+  // });
+  // GitHubController.getInstance().retrieveFileFromRepo("pawtograder/example-assignment-java-handout",".github/workflows/grade.yml").then((file) => {
+  //   console.log(file);
+  // });
   expressApp.listen(process.env.PORT || 3100, () => {
     console.log(
       `Server started on http://localhost:${process.env.PORT || 3100}`,

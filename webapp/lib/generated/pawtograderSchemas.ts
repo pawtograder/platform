@@ -243,6 +243,16 @@ export type Course = {
   restrict_enrollments_to_course_dates: boolean;
 };
 
+export type FileListing = {
+  sha: string;
+  /**
+   * @format double
+   */
+  size: number;
+  path: string;
+  name: string;
+};
+
 /**
  * <p>A set of endpoints used by clients to connect to the media service group for an Amazon Chime SDK meeting.</p>
  */

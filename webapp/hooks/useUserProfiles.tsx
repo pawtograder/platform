@@ -58,12 +58,18 @@ export default function useUserProfiles(): {
 } {
     const { data: userProfiles, isLoading: userProfilesLoading } = useList<UserProfile>({
         resource: "profiles",
+        queryOptions: {
+            staleTime: Infinity,
+        },
         pagination: {
             pageSize: 1000,
         },
     });
     const { data: publicProfiles, isLoading: publicProfilesLoading } = useList<PublicProfile>({
         resource: "public_profiles",
+        queryOptions: {
+            staleTime: Infinity,
+        },
         pagination: {
             pageSize: 1000,
         },

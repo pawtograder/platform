@@ -49,7 +49,10 @@ export function Provider(props: ColorModeProviderProps) {
       <Refine dataProvider={dataProvider(supabaseClient)}
         // notificationProvider={notificationProvider}
         liveProvider={liveProvider(supabaseClient)}
-        options={{liveMode: "auto"}}>
+        onLiveEvent={(event) => {
+          console.log(event)
+        }}
+        options={{ liveMode: "auto" }}>
         <ColorModeProvider {...props} />
       </Refine>
     </ChakraProvider>

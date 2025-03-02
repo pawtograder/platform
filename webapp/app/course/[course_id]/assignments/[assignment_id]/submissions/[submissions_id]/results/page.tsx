@@ -39,7 +39,7 @@ export default function GraderResults() {
         resource: "submissions",
         id: Number(submissions_id),
         meta: {
-            select: "*, assignments(*), grader_results(*), grader_result_tests(*), grader_result_output(*)"
+            select: "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*))"
         }
     });
     if (query.isLoading) {
@@ -63,13 +63,13 @@ export default function GraderResults() {
         <Tabs.Root m={3} defaultValue="tests">
             <Tabs.List>
                 <Tabs.Trigger value="tests">Test Results</Tabs.Trigger>
-                {data.grader_result_output?.map((output) => (
+                {data.grader_results?.grader_result_output?.map((output) => (
                     <Tabs.Trigger key={output.id} value={output.visibility}>
-                        {data.grader_result_output.length === 1 ? "Output" : output.visibility === "visible" ? "Student Visible Output" : "Instructor-Only Debug Output"}
+                        {data.grader_results?.grader_result_output.length === 1 ? "Output" : output.visibility === "visible" ? "Student Visible Output" : "Instructor-Only Debug Output"}
                     </Tabs.Trigger>
                 ))}
             </Tabs.List>
-            {data.grader_result_output?.map((output) => (
+            {data.grader_results?.grader_result_output?.map((output) => (
                 <Tabs.Content key={output.id} value={output.visibility}>
                     {format_output(output)}
                 </Tabs.Content>
@@ -90,14 +90,14 @@ export default function GraderResults() {
                         </Table.Row>
                     </Table.Header>
                     <Table.Body>
-                        {data.grader_result_tests[0]?.part &&
+                        {data.grader_results?.grader_result_tests[0]?.part &&
                             <Table.Row>
                                 <Table.Cell
                                     bg="bg.muted" colSpan={3} fontWeight="bold" textAlign="center">
-                                    {data.grader_result_tests[0]?.part}
+                                    {data.grader_results?.grader_result_tests[0]?.part}
                                 </Table.Cell></Table.Row>}
-                        {data.grader_result_tests?.map((result, index) => {
-                            const isNewPart = index > 0 && result.part !== data.grader_result_tests[index - 1].part;
+                        {data.grader_results?.grader_result_tests?.map((result, index) => {
+                            const isNewPart = index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
                             return <Fragment key={result.id}>
                                 {isNewPart && (
                                     <Table.Row>
@@ -119,7 +119,7 @@ export default function GraderResults() {
                         })}
                     </Table.Body>
                 </Table.Root>
-                {data.grader_result_tests?.map((result) => (
+                {data.grader_results?.grader_result_tests?.map((result) => (
                     <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
                         <CardHeader bg="bg.muted" p={2}>
                             <Heading size="lg" color={result.score === result.max_score ? "green" : "red"}>{result.name} ({result.score} / {result.max_score})</Heading>

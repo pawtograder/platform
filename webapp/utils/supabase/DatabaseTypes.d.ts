@@ -47,7 +47,7 @@ export type SubmissionWithGraderResults = GetResult<
     Database["public"]["Tables"]["submissions"]["Row"],
     "submissions",
     Database["public"]["Tables"]["submissions"]["Relationships"],
-    "*, assignments(*), grader_results(*), grader_result_tests(*), grader_result_output(*)"
+    "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*))"
 >;
 export type GraderResultTest = GetResult<
     Database["public"],
@@ -146,4 +146,28 @@ export type DiscussionThreadLike = GetResult<
     "discussion_thread_likes",
     Database["public"]["Tables"]["discussion_thread_likes"]["Relationships"],
     "*"
+>;
+
+export type Autograder = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["autograder"]["Row"],
+    "autograder",
+    Database["public"]["Tables"]["autograder"]["Relationships"],
+    "*"
+>;
+
+export type AutograderRegressionTest = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["autograder_regression_tests"]["Row"],
+    "autograder_regression_tests",
+    Database["public"]["Tables"]["autograder_regression_tests"]["Relationships"],
+    "*"
+>;
+
+export type RepositoryWithSubmissionsAndGraderResults = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["repositories"]["Row"],
+    "repositories",
+    Database["public"]["Tables"]["repositories"]["Relationships"],
+    "*, submissions(*, grader_results(*))"
 >;

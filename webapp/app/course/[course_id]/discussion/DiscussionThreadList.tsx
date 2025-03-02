@@ -7,7 +7,7 @@ import Markdown from "@/components/ui/markdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useUserProfile } from '@/hooks/useUserProfiles';
-import { DiscussionThreadWithAuthorAndTopic } from "@/utils/supabase/DatabaseTypes";
+import { DiscussionThread } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Box, Button, Flex, Heading, HStack, Icon, Separator, Spacer, Stack, Text } from "@chakra-ui/react";
 import excerpt from '@stefanprobst/remark-excerpt';
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
@@ -24,12 +24,12 @@ interface MessageData {
 }
 
 interface Props {
-    thread: DiscussionThreadWithAuthorAndTopic
+    thread: DiscussionThread
     selected?: boolean
 }
 
 const DiscussionThreadTeaser = (props: Props) => {
-    const { author, created_at, body, subject, children_count, discussion_topics } = props.thread
+    const { author, created_at, body, subject, children_count} = props.thread
     const avatarTriggerId = useId()
     const { root_id } = useParams();
     const selected = root_id ? props.thread.id === Number.parseInt(root_id as string) : false;
@@ -98,10 +98,13 @@ const DiscussionThreadTeaser = (props: Props) => {
 
 export default function DiscussionThreadList() {
     const { course_id } = useParams();
-    const list = useList<DiscussionThreadWithAuthorAndTopic>({
+    const list = useList<DiscussionThread>({
         resource: "discussion_threads",
         meta: {
-            select: "*, public_profiles(*), discussion_topics(*)"
+            select: "*"
+        },
+        queryOptions: {
+            staleTime: Infinity, // Realtime data
         },
         filters: [
             {

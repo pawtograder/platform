@@ -15,8 +15,8 @@ import GitHubController from "../GitHubController.js";
 import { SecurityError, UserVisibleError } from "../InternalTypes.js";
 import { Database } from "../SupabaseTypes.js";
 
-export type GraderConfig =
-    Database["public"]["Tables"]["grader_configs"]["Row"];
+export type Autograder =
+    Database["public"]["Tables"]["autograder"]["Row"];
 export type OutputFormat = "text" | "markdown" | "ansi";
 export type OutputVisibility =
     | "hidden" // Never shown to students
@@ -175,7 +175,7 @@ export class AutograderController extends Controller {
         const submission_id = subID?.id;
         try {
             // Retrieve the autograder config
-            const { data: config } = await supabase.from("grader_configs")
+            const { data: config } = await supabase.from("autograder")
                 .select("*").eq("id", data.assignment_id).single();
             if (!config) {
                 throw new UserVisibleError("Grader config not found");
@@ -309,7 +309,7 @@ export class AutograderController extends Controller {
                 "text",
             lint_passed: requestBody.feedback.lint.status === "pass",
             execution_time: requestBody.execution_time,
-        });
+        }).select("id").single();
         if (error) {
             console.error(error);
             throw new UserVisibleError(
@@ -332,8 +332,8 @@ export class AutograderController extends Controller {
                 if (output) {
                     await supabase.from("grader_result_output").insert({
                         class_id: submission.class_id,
-                        submission_id: submission.id,
                         student_id: submission.user_id,
+                        grader_result_id: resultID.id,
                         visibility: visibility as OutputVisibility,
                         format: output.output_format || "text",
                         output: output.output,
@@ -347,7 +347,7 @@ export class AutograderController extends Controller {
                 requestBody.feedback.tests.map((test) => ({
                     class_id: submission.class_id,
                     student_id: submission.user_id,
-                    submission_id: submission.id,
+                    grader_result_id: resultID.id,
                     name: test.name,
                     output: test.output,
                     output_format: test.output_format || "text",

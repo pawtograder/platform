@@ -71,6 +71,13 @@ export default function ThreadView() {
         pagination: {
             pageSize: 10000
         },
+        liveMode: "manual",
+        onLiveEvent: (event) => {
+            console.log(event)
+        },
+        queryOptions: {
+            staleTime: Infinity, // Realtime data
+        },
         sorters: [{
             field: "created_at",
             order: "asc"

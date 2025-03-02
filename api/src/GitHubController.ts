@@ -10,6 +10,7 @@ import buildGetJwks from "get-jwks";
 import { Database } from "./SupabaseTypes.js";
 import { createClient } from "@supabase/supabase-js";
 import { AutograderFeedback } from "./api/AutograderController.js";
+import { UserVisibleError } from "./InternalTypes.js";
 
 type ListReposResponse = Endpoints["GET /orgs/{org}/repos"]["response"];
 
@@ -47,6 +48,12 @@ export type GitHubOIDCToken = {
     exp: number;
     iat: number;
 };
+type FileListing = {
+    name: string;
+    path: string;
+    size: number;
+    sha: string;
+}
 export function getGithubPrivateKey(): string {
     if (process.env.GITHUB_PRIVATE_KEY_STRING) {
         return process.env.GITHUB_PRIVATE_KEY_STRING;
@@ -97,6 +104,60 @@ export default class GitHubController {
         });
     }
 
+    async getFileFromRepo(repoName: string, path: string) {
+        const octokit = this._installations[0].octokit;
+        const file = await octokit.request(
+            "GET /repos/{owner}/{repo}/contents/{path}",
+            {
+                owner: repoName.split("/")[0],
+                repo: repoName.split("/")[1],
+                path,
+            },
+        );
+        return file.data;
+    }
+
+    async listFilesInRepoDirectory(repoName: string, path: string): Promise<FileListing[]> {
+        
+        const octokit = this._installations[0].octokit;
+        const files = await octokit.request(
+            "GET /repos/{owner}/{repo}/contents/{path}",
+            {
+                owner: repoName.split("/")[0],
+                repo: repoName.split("/")[1],
+                path,
+                mediaType: {
+                    format: "raw",
+                },
+            },
+        );
+        if (Array.isArray(files.data)) {
+            const ret = await Promise.all(files.data.map(
+                async (file): Promise<FileListing[]> => {
+                if (file.type === "dir") {
+                    return await this.listFilesInRepoDirectory(repoName, file.path);
+                }
+                if (file.type === "file") {
+                    return [{
+                        name: file.name,
+                        path: file.path,
+                        size: file.size,
+                        sha: file.sha,
+                    }];
+                }
+                else {
+                    return [];
+                }
+            }));
+            return ret.flat();
+        }
+        throw new UserVisibleError(
+            `Failed to list files in repo directory: not an array, in ${repoName} at ${path}`,
+        );
+    }
+    async listFilesInRepo(repoName: string) {
+        return this.listFilesInRepoDirectory(repoName, "");
+    }
     async completeCheckRun(
         submission: Database["public"]["Tables"]["submissions"]["Row"],
         feedback: AutograderFeedback,
@@ -371,8 +432,7 @@ ${feedback.output.visible?.output}`,
         const repos = await octokit.request("GET /orgs/{org}/repos", {
             org: "pawtograder",
         });
-        const templateRepos = repos.data.filter((repo) => repo.is_template);
 
-        return templateRepos;
+        return repos.data;
     }
 }
