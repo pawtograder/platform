@@ -13,7 +13,8 @@ export function getUserProfile(allProfiles: (PublicProfile | UserProfile)[], id:
             name: profile.name,
             badge: profile.is_instructor ? 'Instructor' : undefined,
             badge_color: profile.is_instructor ? 'blue' : undefined,
-            avatar_url: profile.avatar == 'identicon' || !profile.avatar ? `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}` : profile.avatar        };
+            avatar_url: profile.avatar == 'identicon' || !profile.avatar ? `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}` : profile.avatar
+        };
     }
     else if ('avatar_url' in profile) {
         return {
@@ -28,7 +29,7 @@ export function getUserProfile(allProfiles: (PublicProfile | UserProfile)[], id:
 
 export function useUserProfile(id: string | null): { is_instructor: boolean, id: string, name: string, avatar_url: string } | undefined {
     const allProfiles = useUserProfiles();
-    if(id == null) {
+    if (id == null) {
         return undefined;
     }
     const profile = allProfiles.users.find((user) => user.id === id);
@@ -79,17 +80,9 @@ export default function useUserProfiles(): {
             users: [],
         }
     }
-    if (userProfiles?.total && userProfiles.total <= 1) {
-        //We are a student, so we need to get the public profiles
-        const ret: (PublicProfile | UserProfile)[] = userProfiles?.data || [];
-        ret.push(...(publicProfiles?.data.filter(p => !userProfiles.data.find(o => o.id === p.id)) || []));
-        return {
-            users: ret,
-        }
-    }
-    else {
-        return {
-            users: userProfiles?.data || [],
-        }
+    const ret: (PublicProfile | UserProfile)[] = userProfiles?.data || [];
+    ret.push(...(publicProfiles?.data.filter(p => !userProfiles?.data.find(o => o.id === p.id)) || []));
+    return {
+        users: ret,
     }
 }

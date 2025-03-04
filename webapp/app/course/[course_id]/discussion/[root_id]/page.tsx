@@ -21,7 +21,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: 
                 {userProfile ? <Avatar.Root size="xs">
                     <Avatar.Image src={userProfile?.avatar_url} />
                     <Avatar.Fallback>{userProfile?.name.charAt(0)}</Avatar.Fallback>
-                </Avatar.Root> : <SkeletonCircle size="xs" />}
+                </Avatar.Root> : <SkeletonCircle width="20px" height="20px" />}
                 <VStack gap="0" alignSelf="flex-start" align="start">
                     <HStack>
                         <Heading size="sm">{userProfile?.name || <Skeleton width="100px" />}</Heading>
