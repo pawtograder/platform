@@ -3,8 +3,11 @@ import { createHash } from "crypto";
 import {
     Body,
     Controller,
+    Get,
     Header,
+    Path,
     Post,
+    Query,
     Request,
     Response,
     Route,
@@ -15,8 +18,9 @@ import GitHubController from "../GitHubController.js";
 import { SecurityError, UserVisibleError } from "../InternalTypes.js";
 import { Database } from "../SupabaseTypes.js";
 
-export type Autograder =
-    Database["public"]["Tables"]["autograder"]["Row"];
+export type Autograder = Database["public"]["Tables"]["autograder"]["Row"];
+export type AutograderRegressionTest =
+    Database["public"]["Tables"]["autograder_regression_test"]["Row"];
 export type OutputFormat = "text" | "markdown" | "ansi";
 export type OutputVisibility =
     | "hidden" // Never shown to students
@@ -55,6 +59,9 @@ export type GradingScriptResult = {
     execution_time: number;
     feedback: AutograderFeedback;
     grader_sha: string;
+    action_ref: string;
+    action_repository: string;
+    regression_test_repo?: string;
 };
 export type GradeResponse = {
     is_ok: boolean;
@@ -64,6 +71,11 @@ export type GradeResponse = {
 
 export type SubmissionResponse = {
     grader_url: string;
+    grader_sha: string;
+};
+export type RegressionTestRunResponse = {
+    regression_test_url: string;
+    regression_test_sha: string;
 };
 
 @Route("/api/autograder")
@@ -102,8 +114,10 @@ export class AutograderController extends Controller {
             "*, classes(slug)",
         ).in("class_id", classes!.map((c) => c!.class_id))
             .lte("release_date", new Date().toISOString());
-        
-        const requests = assignments!.filter(assignment => !existingRepos.find(repo => repo.assignment_id === assignment.id)).map(async (assignment) => {
+
+        const requests = assignments!.filter((assignment) =>
+            !existingRepos.find((repo) => repo.assignment_id === assignment.id)
+        ).map(async (assignment) => {
             const repoName = `${
                 assignment.classes!.slug
             }-${assignment.slug}-${githubUsername}`;
@@ -117,7 +131,7 @@ export class AutograderController extends Controller {
                 user_id: user.id,
                 assignment_id: assignment.id,
                 repository: `autograder-dev/${repoName}`,
-            }, );
+            });
             if (error) {
                 console.error(error);
             }
@@ -132,6 +146,28 @@ export class AutograderController extends Controller {
         };
     }
 
+    @Get("/regression-tests")
+    async retrieveAutograderRegressionTests(
+        @Header("Authorization") token: string,
+    ): Promise<{ configs: { id: number }[] }> {
+        const decoded = await GitHubController.getInstance().validateOIDCToken(
+            token,
+        );
+        const supabase = createClient<Database>(
+            process.env.SUPABASE_URL || "",
+            process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+        );
+        const { data, error } = await supabase.from(
+            "autograder_regression_test_by_grader",
+        )
+            .select("*").eq("grader_repo", decoded.repository);
+        if (error) {
+            throw new UserVisibleError(
+                `Error retrieving regression tests: ${error.message}`,
+            );
+        }
+        return { configs: data.map((d) => ({ id: d.id! })) };
+    }
     @Response<void>("401", "Invalid GitHub OIDC token")
     @Post("/submission")
     async createSubmission(
@@ -140,6 +176,7 @@ export class AutograderController extends Controller {
         const decoded = await GitHubController.getInstance().validateOIDCToken(
             token,
         );
+        console.log(decoded);
         // Retrieve the student's submisison
         const { repository, sha, workflow_ref } = decoded;
         // Find the corresponding student and assignment
@@ -149,38 +186,38 @@ export class AutograderController extends Controller {
             process.env.SUPABASE_URL || "",
             process.env.SUPABASE_SERVICE_ROLE_KEY || "",
         );
-        const { data } = await supabase.from("repositories").select(
+        const { data: repoData } = await supabase.from("repositories").select(
             "*, assignments(submission_files, class_id)",
         ).eq("repository", repository).single();
-        if (!data) {
-            throw new SecurityError(`Repository not found: ${repository}`);
-        }
-        // Create a submission record
-        const { error, data: subID } = await supabase.from("submissions")
-            .insert({
-                user_id: data.user_id,
-                assignment_id: data.assignment_id,
-                repository,
-                sha,
-                run_number: Number.parseInt(decoded.run_id),
-                run_attempt: Number.parseInt(decoded.run_attempt),
-                class_id: data.assignments.class_id!,
-                // check_run_id: checkRunID,
-            }).select("id").single();
-        if (error) {
-            throw new UserVisibleError(
-                `Failed to create submission: ${error.message}`,
-            );
-        }
-        const submission_id = subID?.id;
-        try {
-            // Retrieve the autograder config
-            const { data: config } = await supabase.from("autograder")
-                .select("*").eq("id", data.assignment_id).single();
-            if (!config) {
-                throw new UserVisibleError("Grader config not found");
-            }
 
+        if (repoData) {
+            //It's a student repo
+            const assignment_id = repoData.assignment_id;
+            if (
+                !workflow_ref.endsWith(
+                    `.github/workflows/grade.yml@refs/heads/main`,
+                )
+            ) {
+                throw new Error(`Invalid workflow, got ${workflow_ref}`);
+            }
+            // Create a submission record
+            const { error, data: subID } = await supabase.from("submissions")
+                .insert({
+                    user_id: repoData?.user_id,
+                    assignment_id: repoData.assignment_id,
+                    repository,
+                    sha,
+                    run_number: Number.parseInt(decoded.run_id),
+                    run_attempt: Number.parseInt(decoded.run_attempt),
+                    class_id: repoData.assignments.class_id!,
+                    // check_run_id: checkRunID,
+                }).select("id").single();
+            if (error) {
+                throw new UserVisibleError(
+                    `Failed to create submission: ${error.message}`,
+                );
+            }
+            const submission_id = subID?.id;
             // Clone the repository
             const repo = await GitHubController.getInstance().cloneRepository(
                 repository,
@@ -202,6 +239,12 @@ export class AutograderController extends Controller {
                     "Failed to read workflow file in repository",
                 );
             }
+            // Retrieve the autograder config
+            const { data: config } = await supabase.from("autograder")
+                .select("*").eq("id", assignment_id).single();
+            if (!config) {
+                throw new UserVisibleError("Grader config not found");
+            }
             hash.update(contents!);
             const hashStr = hash.digest("hex");
             if (hashStr !== config.workflow_sha) {
@@ -209,7 +252,8 @@ export class AutograderController extends Controller {
                     `Workflow file SHA does not match expected value: ${hashStr} !== ${config.workflow_sha}`,
                 );
             }
-            const expectedFiles = data.assignments.submission_files as string[];
+            const expectedFiles = repoData.assignments
+                .submission_files as string[];
             if (expectedFiles.length === 0) {
                 throw new UserVisibleError(
                     "Incorrect instructor setup for assignment: no submission files set",
@@ -235,9 +279,9 @@ export class AutograderController extends Controller {
                     submittedFilesWithContents.map((file) => ({
                         submissions_id: submission_id,
                         name: file.name,
-                        user_id: data.user_id,
+                        user_id: repoData.user_id,
                         contents: file.contents.toString("utf-8"),
-                        class_id: data.assignments.class_id!,
+                        class_id: repoData.assignments.class_id!,
                     })),
                 );
             if (fileError) {
@@ -245,17 +289,96 @@ export class AutograderController extends Controller {
                     `Failed to insert submission files: ${fileError.message}`,
                 );
             }
-            const grader_url = await GitHubController.getInstance()
-                .getGraderURL(config.grader_repo!);
-            console.log(grader_url);
-            return {
-                grader_url,
-            };
-        } catch (err) {
-            console.error(err);
-            // TODO update the submission status to failed, save error, etc
+            try {
+                const { download_link: grader_url, sha: grader_sha } =
+                    await GitHubController.getInstance()
+                        .getRepoTarballURL(config.grader_repo!);
+                return {
+                    grader_url,
+                    grader_sha,
+                };
+            } catch (err) {
+                console.error(err);
+                // TODO update the submission status to failed, save error, etc
 
-            throw err;
+                throw err;
+            }
+        } else {
+            throw new SecurityError(`Repository not found: ${repository}`);
+        }
+    }
+
+    @Response<void>("401", "Invalid GitHub OIDC token")
+    @Post("/regression-test-run/:regression_test_id")
+    async createRegressionTestRun(
+        @Header("Authorization") token: string,
+        @Path() regression_test_id: number,
+    ): Promise<RegressionTestRunResponse> {
+        const decoded = await GitHubController.getInstance().validateOIDCToken(
+            token,
+        );
+        const { repository, sha, workflow_ref } = decoded;
+        console.log(
+            "Creating regression test run for",
+            repository,
+            sha,
+            workflow_ref,
+            regression_test_id,
+        );
+
+        const supabase = createClient<Database>(
+            process.env.SUPABASE_URL || "",
+            process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+        );
+        const { data: graderData } = await supabase.from("autograder").select(
+            "*, assignments(id, submission_files, class_id)",
+        ).eq("grader_repo", repository).limit(1).single();
+        if (graderData) {
+            //It's a grader repo
+            if (
+                !workflow_ref.endsWith(
+                    `.github/workflows/regression-test.yml@refs/heads/main`,
+                )
+            ) {
+                throw new Error(`Invalid workflow, got ${workflow_ref}`);
+            }
+            try {
+                //Validate that the regression test repo is registered for this grader
+                const { data: regressionTestRepoData } = await supabase.from(
+                    "autograder_regression_test_by_grader",
+                ).select(
+                    "*",
+                ).eq("id", regression_test_id)
+                    .eq("grader_repo", graderData.grader_repo!)
+                    .limit(1).single();
+                if (!regressionTestRepoData) {
+                    throw new SecurityError(
+                        `Regression test repo not found for grader ${graderData.grader_repo} and test id ${regression_test_id}`,
+                    );
+                }
+                if (!regressionTestRepoData.sha) {
+                    throw new UserVisibleError(
+                        `Regression test repo has no SHA: ${regressionTestRepoData.repository}`,
+                    );
+                }
+                const { download_link: regression_test_url } =
+                    await GitHubController.getInstance()
+                        .getRepoTarballURL(
+                            regressionTestRepoData.repository!,
+                            regressionTestRepoData.sha,
+                        );
+                return {
+                    regression_test_url,
+                    regression_test_sha: regressionTestRepoData.sha,
+                };
+            } catch (err) {
+                console.error(err);
+                // TODO update the submission status to failed, save error, etc
+
+                throw err;
+            }
+        } else {
+            throw new SecurityError(`Repository not found: ${repository}`);
         }
     }
 
@@ -264,6 +387,7 @@ export class AutograderController extends Controller {
     async submitFeedback(
         @Header("Authorization") token: string,
         @Body() requestBody: GradingScriptResult,
+        @Query() autograder_regression_test_id?: number,
     ): Promise<GradeResponse> {
         const ip = this.getHeader("x-forwarded-for") ||
             this.getHeader("x-real-ip");
@@ -277,21 +401,56 @@ export class AutograderController extends Controller {
             process.env.SUPABASE_SERVICE_ROLE_KEY || "",
         );
         const { repository, sha } = decoded;
-        const { data: submission } = await supabase.from("submissions")
-            .select("*").eq("repository", repository).eq("sha", sha)
-            .eq("run_attempt", Number.parseInt(decoded.run_attempt))
-            .eq("run_number", Number.parseInt(decoded.run_id)).single();
-        if (!submission) {
-            throw new SecurityError(
-                `Submission not found: ${repository} ${sha} ${decoded.run_id}`,
-            );
+        let class_id, assignment_id: number;
+        let submission_id: number | null = null;
+        let user_id: string | null = null;
+        if (autograder_regression_test_id) {
+            //It's a regression test run
+            const { data: regressionTestRun } = await supabase.from(
+                "autograder_regression_test",
+            ).select("*,autograder(assignments(id, class_id))").eq(
+                "id",
+                autograder_regression_test_id,
+            )
+                .eq("autograder.grader_repo", repository)
+                .single();
+            if (!regressionTestRun) {
+                throw new SecurityError(
+                    `Regression test run not found: ${autograder_regression_test_id}, grader repo: ${repository}`,
+                );
+            }
+            if (!regressionTestRun.autograder.assignments.class_id) {
+                throw new UserVisibleError(
+                    `Regression test class ID not found: ${autograder_regression_test_id}, grader repo: ${repository}`,
+                );
+            }
+            class_id = regressionTestRun.autograder.assignments.class_id;
+            assignment_id = regressionTestRun.autograder.assignments.id;
+        } else {
+            const { data: submission } = await supabase.from("submissions")
+                .select("*").eq("repository", repository).eq("sha", sha)
+                .eq("run_attempt", Number.parseInt(decoded.run_attempt))
+                .eq("run_number", Number.parseInt(decoded.run_id)).single();
+            if (!submission) {
+                throw new SecurityError(
+                    `Submission not found: ${repository} ${sha} ${decoded.run_id}`,
+                );
+            }
+            class_id = submission.class_id;
+            submission_id = submission.id;
+            user_id = submission.user_id;
+            assignment_id = submission.assignment_id;
         }
+
+        //Resolve the action SHA
+        const action_sha = await GitHubController.getInstance().resolveRef(requestBody.action_repository, requestBody.action_ref);
+        console.log("Action SHA", action_sha);
         const { error, data: resultID } = await supabase.from(
             "grader_results",
         ).insert({
-            submission_id: submission.id,
-            user_id: submission.user_id,
-            class_id: submission.class_id,
+            submission_id: submission_id,
+            user_id: user_id,
+            class_id: class_id,
             ret_code: requestBody.ret_code,
             grader_sha: requestBody.grader_sha,
             score: requestBody.feedback.score ||
@@ -309,6 +468,7 @@ export class AutograderController extends Controller {
                 "text",
             lint_passed: requestBody.feedback.lint.status === "pass",
             execution_time: requestBody.execution_time,
+            grader_action_sha: action_sha
         }).select("id").single();
         if (error) {
             console.error(error);
@@ -331,8 +491,8 @@ export class AutograderController extends Controller {
                     requestBody.feedback.output[visibility as OutputVisibility];
                 if (output) {
                     await supabase.from("grader_result_output").insert({
-                        class_id: submission.class_id,
-                        student_id: submission.user_id,
+                        class_id: class_id,
+                        student_id: user_id,
                         grader_result_id: resultID.id,
                         visibility: visibility as OutputVisibility,
                         format: output.output_format || "text",
@@ -345,8 +505,8 @@ export class AutograderController extends Controller {
         const { error: testResultsError } = await supabase
             .from("grader_result_tests").insert(
                 requestBody.feedback.tests.map((test) => ({
-                    class_id: submission.class_id,
-                    student_id: submission.user_id,
+                    class_id: class_id,
+                    student_id: user_id,
                     grader_result_id: resultID.id,
                     name: test.name,
                     output: test.output,
@@ -365,11 +525,20 @@ export class AutograderController extends Controller {
         }
         // Update the check run status to completed
         // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
-        return {
-            is_ok: true,
-            message: `Submission ${submission.id} registered`,
-            details_url:
-                `${process.env.PAWTOGRADER_WEBAPP_URL}/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}`,
-        };
+        if (submission_id) {
+            return {
+                is_ok: true,
+                message: `Submission ${submission_id} registered`,
+                details_url:
+                    `${process.env.PAWTOGRADER_WEBAPP_URL}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
+            };
+        } else {
+            return {
+                is_ok: true,
+                message: `Regression test run ${resultID} registered`,
+                details_url:
+                    `${process.env.PAWTOGRADER_WEBAPP_URL}/course/${class_id}/manage/assignments/${assignment_id}/autograder/regression-test-run/${resultID}`,
+            };
+        }
     }
 }

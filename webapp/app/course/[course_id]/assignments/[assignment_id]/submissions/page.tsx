@@ -7,7 +7,7 @@ export default async function SubmissionsListing({ params }: { params: Promise<{
     if (!submissions) {
         return <div>No submissions found</div>
     }
-    return <div style={{ height: "calc(100vh - var(--nav-height))", overflowY: "auto" }}>
+    return <div>
         <h1>Submissions for {submissions[0].assignments.title}</h1>
         <ul>
             {submissions.map((submission) => (

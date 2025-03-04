@@ -32,7 +32,6 @@ export default function AutograderPage() {
             }
         }
     });
-    console.log(query);
     if (!query || formLoading) {
         return <div>Loading...</div>
     }
@@ -52,7 +51,7 @@ export default function AutograderPage() {
                             name="assignments.has_autograder"
                             control={control}
                             render={({ field }) => (
-                                <RadioGroup.Root name={field.name} value={field.value} onValueChange={field.onChange}>
+                                <RadioGroup.Root name={field.name} value={field.value ? "true" : "false"} onValueChange={field.onChange}>
                                     <Radio value="true">Enabled</Radio>
                                     <Radio value="false">Disabled</Radio>
                                 </RadioGroup.Root>
@@ -63,20 +62,21 @@ export default function AutograderPage() {
                 <Fieldset.Content>
                     <Field label="Solution Repository" helperText="The repository that contains the solution code for this assignment. This repository must contain a `pawtograder.yml` file at its root.">
                         <Controller
-                            name="assignments.grader_repo"
+                            name="grader_repo"
                             control={control}
-                            render={({ field }) => (
-                                <RepoSelector name={field.name} value={field.value} onBlur={field.onBlur}
+                            render={({ field }) => {
+                                console.log(field.value)
+                                return <RepoSelector name={field.name} value={[field.value]} onBlur={field.onBlur}
                                     onChange={(repo) => {
                                         setGraderRepo(repo);
-                                        field.onChange(repo);
+                                        field.onChange(repo.full_name);
                                     }}
                                 />
-                            )} />
+                            }} />
                     </Field>
                 </Fieldset.Content>
             </Fieldset.Root>
-            {graderRepo && <AutograderConfiguration graderRepo={graderRepo} />}
+            <AutograderConfiguration graderRepo={graderRepo} />
         </form>
 
     </div>

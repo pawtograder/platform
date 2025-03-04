@@ -132,7 +132,7 @@ export default function DiscussionThreadList() {
 
 
     return <Flex width="314px"
-        height="calc(100vh - var(--nav-height))"
+        height="100vh"
         direction="column"
         top={0} justify="space-between" align="center">
         <Box>

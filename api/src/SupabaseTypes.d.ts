@@ -108,22 +108,22 @@ export type Database = {
       }
       autograder_regression_test: {
         Row: {
-          autograder_id: number | null
+          autograder_id: number
           created_at: string
           id: number
-          repository: string | null
+          repository: string
         }
         Insert: {
-          autograder_id?: number | null
+          autograder_id: number
           created_at?: string
           id?: number
-          repository?: string | null
+          repository: string
         }
         Update: {
-          autograder_id?: number | null
+          autograder_id?: number
           created_at?: string
           id?: number
-          repository?: string | null
+          repository?: string
         }
         Relationships: [
           {
@@ -570,6 +570,13 @@ export type Database = {
             columns: ["autograder_regression_test"]
             isOneToOne: false
             referencedRelation: "autograder_regression_test"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_results_autograder_regression_test_fkey"
+            columns: ["autograder_regression_test"]
+            isOneToOne: false
+            referencedRelation: "autograder_regression_test_by_grader"
             referencedColumns: ["id"]
           },
           {
@@ -1260,6 +1267,24 @@ export type Database = {
       }
     }
     Views: {
+      autograder_regression_test_by_grader: {
+        Row: {
+          class_id: number | null
+          grader_repo: string | null
+          id: number | null
+          repository: string | null
+          sha: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submissions_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       submissions_agg: {
         Row: {
           assignment_id: number | null

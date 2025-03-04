@@ -52,6 +52,7 @@ export default function CreateAssignment({ course }: { course: Database['public'
             const supabase = await createClient();
             const user = await supabase.auth.getUser();
             // console.log(getValues("submission_files"));
+            console.log(getValues("template_repo").full_name);
             const { data, error } = await supabase.from("assignments").insert({
                 title: getValues("title"),
                 slug: getValues("slug"),
@@ -61,7 +62,7 @@ export default function CreateAssignment({ course }: { course: Database['public'
                 late_due_date: getValues("late_due_date"),
                 description: getValues("description"),
                 points: getValues("points"),
-                template_repo: getValues("template_repo"),
+                template_repo: getValues("template_repo").full_name,
                 submission_files: getValues("submission_files"),
                 class_id: course.id,
             }).select("id").single();

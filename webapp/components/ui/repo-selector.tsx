@@ -23,7 +23,7 @@ export default function RepoSelector({ name, value, onBlur, onChange, templateRe
                  fetchGetRepos({ pathParams: { courseId: Number(course_id) } }));
             const reposCollection = createListCollection({
                 items: repos || [],
-                itemToValue: (repo) => '' + repo.id,
+                itemToValue: (repo) => repo.owner.login + "/" + repo.name,
                 itemToString: (repo) => repo.owner.login + "/" + repo.name
             });
 

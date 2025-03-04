@@ -164,6 +164,14 @@ export type AutograderRegressionTest = GetResult<
     "*"
 >;
 
+export type Repository = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["repositories"]["Row"],
+    "repositories",
+    Database["public"]["Tables"]["repositories"]["Relationships"],
+    "*"
+>;
+
 export type RepositoryWithSubmissionsAndGraderResults = GetResult<
     Database["public"],
     Database["public"]["Tables"]["repositories"]["Row"],

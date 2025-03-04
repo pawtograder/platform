@@ -5,7 +5,7 @@ export default function HelpManageLayout({ children, params }: Readonly<{
     params: Promise<{ course_id: string }>
 }>) {
     return (
-        <Box height="calc(100vh - var(--nav-height))">
+        <Box>
              <Flex flex="1">
                 <Box w="314px"
                     borderRight="1px solid"
@@ -13,7 +13,7 @@ export default function HelpManageLayout({ children, params }: Readonly<{
                     pt="4">
                     <HelpRequestList />
                 </Box>
-                <Box p="4" overflowY="auto"  width="100%" height="calc(100vh - var(--nav-height))">
+                <Box p="4" overflowY="auto" width="100%" height="100vh">
                     {children}
                 </Box>
             </Flex>

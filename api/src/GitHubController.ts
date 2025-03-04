@@ -53,7 +53,7 @@ type FileListing = {
     path: string;
     size: number;
     sha: string;
-}
+};
 export function getGithubPrivateKey(): string {
     if (process.env.GITHUB_PRIVATE_KEY_STRING) {
         return process.env.GITHUB_PRIVATE_KEY_STRING;
@@ -117,8 +117,10 @@ export default class GitHubController {
         return file.data;
     }
 
-    async listFilesInRepoDirectory(repoName: string, path: string): Promise<FileListing[]> {
-        
+    async listFilesInRepoDirectory(
+        repoName: string,
+        path: string,
+    ): Promise<FileListing[]> {
         const octokit = this._installations[0].octokit;
         const files = await octokit.request(
             "GET /repos/{owner}/{repo}/contents/{path}",
@@ -134,21 +136,24 @@ export default class GitHubController {
         if (Array.isArray(files.data)) {
             const ret = await Promise.all(files.data.map(
                 async (file): Promise<FileListing[]> => {
-                if (file.type === "dir") {
-                    return await this.listFilesInRepoDirectory(repoName, file.path);
-                }
-                if (file.type === "file") {
-                    return [{
-                        name: file.name,
-                        path: file.path,
-                        size: file.size,
-                        sha: file.sha,
-                    }];
-                }
-                else {
-                    return [];
-                }
-            }));
+                    if (file.type === "dir") {
+                        return await this.listFilesInRepoDirectory(
+                            repoName,
+                            file.path,
+                        );
+                    }
+                    if (file.type === "file") {
+                        return [{
+                            name: file.name,
+                            path: file.path,
+                            size: file.size,
+                            sha: file.sha,
+                        }];
+                    } else {
+                        return [];
+                    }
+                },
+            ));
             return ret.flat();
         }
         throw new UserVisibleError(
@@ -230,18 +235,24 @@ ${feedback.output.visible?.output}`,
         return checkRun.data.id;
     }
 
-    async getGraderURL(repo: string): Promise<string> {
+    async getRepoTarballURL(
+        repo: string,
+        sha?: string,
+    ): Promise<{ download_link: string; sha: string }> {
         const octokit = this._installations[0].octokit;
-        //get SHA of HEAD commit
-        console.log("Getting grader URL for", repo);
-        const head = await octokit.request(
-            "GET /repos/{owner}/{repo}/git/ref/heads/main",
-            {
-                owner: repo.split("/")[0],
-                repo: repo.split("/")[1],
-            },
-        );
-        const sha = head.data.object.sha;
+        let resolved_sha: string;
+        if (sha) {
+            resolved_sha = sha;
+        } else {
+            const head = await octokit.request(
+                "GET /repos/{owner}/{repo}/git/ref/heads/main",
+                {
+                    owner: repo.split("/")[0],
+                    repo: repo.split("/")[1],
+                },
+            );
+            resolved_sha = head.data.object.sha;
+        }
         //Check if the grader exists in supabase storage
         const supabase = createClient<Database>(
             process.env.SUPABASE_URL || "",
@@ -250,7 +261,7 @@ ${feedback.output.visible?.output}`,
         const { data, error: firstError } = await supabase.storage.from(
             "graders",
         ).createSignedUrl(
-            `${repo}/${sha}/grader.tgz`,
+            `${repo}/${sha}/archive.tgz`,
             60,
         );
         if (firstError) {
@@ -260,14 +271,15 @@ ${feedback.output.visible?.output}`,
                 {
                     owner: repo.split("/")[0],
                     repo: repo.split("/")[1],
-                    ref: sha,
+                    ref: resolved_sha,
                 },
             );
             //Upload the grader to supabase storage
+            //TODO do some garbage collection in this bucket, especially for regression tests
             const { error: saveGraderError } = await supabase.storage.from(
                 "graders",
             ).upload(
-                `${repo}/${sha}/grader.tgz`,
+                `${repo}/${sha}/archive.tgz`,
                 grader.data as ArrayBuffer,
             );
             if (saveGraderError) {
@@ -278,7 +290,7 @@ ${feedback.output.visible?.output}`,
             //Return the grader
             const { data: secondAttempt, error: secondError } = await supabase
                 .storage.from("graders").createSignedUrl(
-                    `${repo}/${sha}/grader.tgz`,
+                    `${repo}/${sha}/archive.tgz`,
                     60,
                 );
             if (secondError || !secondAttempt) {
@@ -286,9 +298,15 @@ ${feedback.output.visible?.output}`,
                     `Failed to retrieve grader: ${secondError.message}`,
                 );
             }
-            return secondAttempt.signedUrl;
+            return {
+                download_link: secondAttempt.signedUrl,
+                sha: resolved_sha,
+            };
         } else {
-            return data.signedUrl;
+            return {
+                download_link: data.signedUrl,
+                sha: resolved_sha,
+            };
         }
     }
 
@@ -335,15 +353,6 @@ ${feedback.output.visible?.output}`,
         const payload = await validator(token);
         if (!payload) {
             throw new Error("Invalid token");
-        }
-        //Check that the workflow ref refers to our blessed grade.yml on the main branch
-        const workflow_ref = payload.workflow_ref;
-        if (
-            !workflow_ref.endsWith(
-                ".github/workflows/grade.yml@refs/heads/main",
-            )
-        ) {
-            throw new Error(`Invalid workflow, got ${workflow_ref}`);
         }
         return payload;
     }
@@ -434,5 +443,41 @@ ${feedback.output.visible?.output}`,
         });
 
         return repos.data;
+    }
+    async resolveRef(action_repository: string, action_ref: string) {
+        const octokit = this._installations[0].octokit;
+        async function getRefOrUndefined(ref: string) {
+            try {
+                const heads = await octokit.request(
+                    "GET /repos/{owner}/{repo}/git/ref/{ref}",
+                    {
+                        owner: action_repository.split("/")[0],
+                        repo: action_repository.split("/")[1],
+                        ref,
+                    },
+                );
+                return heads.data.object.sha;
+            } catch (e) {
+                console.error(e);
+                return undefined;
+            }
+        }
+        if (action_ref.startsWith("heads/") || action_ref.startsWith("tags/")) {
+            return await getRefOrUndefined(action_ref);
+        } else if (action_ref === "main") {
+            return await getRefOrUndefined("heads/main");
+        } else {
+            const ret2 = await getRefOrUndefined(`tags/${action_ref}`);
+            if (ret2) {
+                return ret2;
+            }
+            const ret = await getRefOrUndefined(`heads/${action_ref}`);
+            if (ret) {
+                return ret;
+            }
+        }
+        throw new UserVisibleError(
+            `Ref not found: ${action_ref} in ${action_repository}`,
+        );
     }
 }

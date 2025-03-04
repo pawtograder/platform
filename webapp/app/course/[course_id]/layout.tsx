@@ -61,7 +61,7 @@ const ProtectedLayout = async ({ children, params }: Readonly<{
                 <DynamicCourseNav courses={courses} course={currentCourse!.classes} />
                 {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
                 {/* mobilenav */}
-                <Box pt="0" pl="4" pr="4" height="calc(100vh - var(--nav-height))">
+                <Box pt="0" pl="4" pr="4">
                     {children}
                 </Box>
             </Box>

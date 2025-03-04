@@ -111,7 +111,7 @@ export default function ThreadView() {
         </Box>
     }
 
-    return <Box width="100%" height="calc(100vh - var(--nav-height))" overflowY="auto">
+    return <Box width="100%">
         <ThreadHeader thread={rootThread} topic={discussion_topics?.data.find((t) => t.id === rootThread.topic_id)} />
         <Box>
             <Markdown>{rootThread.body}</Markdown>

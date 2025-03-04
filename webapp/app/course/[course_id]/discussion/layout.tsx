@@ -7,7 +7,7 @@ const DiscussionLayout = async ({ children, params }: Readonly<{
     const { course_id } = await params;
 
     return (
-        <Box height="calc(100vh - var(--nav-height))">
+        <Box>
             <Flex flex="1">
                 <Box w="314px"
                     borderRight="1px solid"
@@ -15,7 +15,7 @@ const DiscussionLayout = async ({ children, params }: Readonly<{
                     pt="4">
                     <DiscussionThreadList />
                 </Box>
-                <Box p="8" width="100%" overflowY="auto" height="calc(100vh - var(--nav-height))">
+                <Box p="8" width="100%">
                     {children}
                 </Box>
             </Flex>

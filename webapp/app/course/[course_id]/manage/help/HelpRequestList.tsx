@@ -40,7 +40,7 @@ export default function HelpRequestList() {
         ]
     })
     const requests = data?.data;
-    return (<Flex height="calc(100vh - var(--nav-height))" overflow="hidden">
+    return (<Flex height="100vh" overflow="hidden">
         <Stack spaceY="4" width="320px" borderEndWidth="1px" pt="6">
             <Box px="5">
                 <Text fontSize="lg" fontWeight="medium">

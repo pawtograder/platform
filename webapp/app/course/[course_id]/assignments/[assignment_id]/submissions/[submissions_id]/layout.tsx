@@ -80,7 +80,7 @@ export default function SubmissionsLayout({ children }: { children: React.ReactN
         </Box>
     }
     return <Flex direction="column" borderColor="border.muted"
-        height="calc(100vh - var(--nav-height))"
+        height="100vh"
         borderWidth="2px"
         borderRadius="md"
     >
