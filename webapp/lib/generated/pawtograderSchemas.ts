@@ -4,7 +4,13 @@
  * @version 0.0.1
  */
 export type SubmissionResponse = {
+  grader_sha: string;
   grader_url: string;
+};
+
+export type RegressionTestRunResponse = {
+  regression_test_sha: string;
+  regression_test_url: string;
 };
 
 export type GradeResponse = {
@@ -68,6 +74,9 @@ export type AutograderFeedback = {
 };
 
 export type GradingScriptResult = {
+  regression_test_repo?: string;
+  action_repository: string;
+  action_ref: string;
   grader_sha: string;
   feedback: AutograderFeedback;
   /**

@@ -14,43 +14,8 @@ import { Avatar } from "../avatar";
 import MdEditor from "../md-editor";
 import MessageInput from "../message-input";
 
-function HelpRequestChatInput() {
-    const inputRef = useRef<HTMLTextAreaElement>(null);
-    const [newMessage, setNewMessage] = useState<string | undefined>(undefined);
-    const { postMessage: _postMessage } = useChatChannel();
-    const postMessage = useCallback((message: string) => {
-        _postMessage(message);
-        setNewMessage(undefined);
-    }, [_postMessage]);
-
-    return (
-        <Flex>
-            <MdEditor value={newMessage} onChange={(value) => setNewMessage(value)}
-                preview="edit"
-                textareaProps={
-                    {
-                        placeholder: `Type a message... Press Cmd+Enter to send`,
-                        onKeyDown: (e) => {
-                            if (e.metaKey && e.key === 'Enter') {
-                                postMessage(newMessage ?? '');
-                            }
-                        }
-                    }
-                }
-            />
-            <IconButton
-                size="sm"
-                aria-label="Send message"
-                onClick={() => postMessage(newMessage ?? '')}
-            >
-                <Icon as={BsSend} fontSize="md!" />
-            </IconButton>
-
-        </Flex>
-    )
-}
 export default function HelpRequestChat({ request, actions }: { request: HelpRequest, actions: React.ReactNode }) {
-    const { messages, participants, postMessage: _postMessage } = useChatChannel();
+    const { messages, participants, postMessage } = useChatChannel();
     const bottomRef = useRef<HTMLDivElement>(null);
     const secondFromBottomRef = useRef<HTMLDivElement>(null);
     const profiles = useUserProfiles();
@@ -73,14 +38,14 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
         mutationMode: "optimistic",
 
     })
-    const { user } = useAuthState();
+    const { private_profile_id } = useAuthState();
     const resolveRequest = useCallback(() => {
-        mutate({ id: request.id, values: { resolved_by: user?.id, resolved_at: new Date().toISOString() } });
-    }, [mutate, request.id, user?.id]);
+        mutate({ id: request.id, values: { resolved_by: private_profile_id, resolved_at: new Date().toISOString() } });
+    }, [mutate, request.id, private_profile_id]);
 
-    return (<Flex direction="column" width="100%" 
-    height="calc(100vh - var(--nav-height))"
-    justify="space-between" align="center">
+    return (<Flex direction="column" width="100%"
+        height="calc(100vh - var(--nav-height))"
+        justify="space-between" align="center">
         <Flex width="100%" borderBottomWidth="1px" px="4" py="4">
             <HStack spaceX="4" flex="1">
                 {/* <Avatar.Root /> */}
@@ -139,7 +104,7 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
             <Box ref={bottomRef} />
         </Box>
         {!request.resolved_by && <Box width="100%" bg="bg.subtle" py="4" px="5" borderTopWidth="1px">
-            <MessageInput defaultSingleLine={true} sendMessage={_postMessage} />
+            <MessageInput defaultSingleLine={true} sendMessage={postMessage} />
         </Box>}
     </Flex>)
 }

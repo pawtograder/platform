@@ -1,10 +1,9 @@
-import { HStack, Button } from "@chakra-ui/react";
-import { useForm } from "@refinedev/react-hook-form";
 import { createClient } from "@/utils/supabase/client";
+import { SubmissionFileComment, SubmissionFileWithComments, SubmissionWithFilesAndComments } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useInvalidate } from "@refinedev/core";
-import { useState, useCallback } from "react";
-import { SubmissionWithFilesAndComments, SubmissionFileWithComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
+import { useCallback, useState } from "react";
 import MessageInput from "./message-input";
+import useAuthState from "@/hooks/useAuthState";
 
 function LineCommentForm({
     lineNumber,
@@ -24,14 +23,23 @@ function LineCommentForm({
     const [isReplying, setIsReplying] = useState(false);
     const supabase = createClient();
     const invalidateQuery = useInvalidate();
+    const { private_profile_id } = useAuthState();
 
     const postComment = useCallback(async (message: string) => {
+        console.log(JSON.stringify({
+            submissions_id: submission.id,
+            submission_files_id: file.id,
+            class_id: file.class_id,
+            author: private_profile_id!,
+            line: lineNumber,
+            comment: message
+                }))
         await createComment({
             values: {
                 submissions_id: submission.id,
                 submission_files_id: file.id,
                 class_id: file.class_id,
-                author: (await supabase.auth.getUser()).data.user!.id,
+                author: private_profile_id!,
                 line: lineNumber,
                 comment: message
             }
@@ -39,7 +47,7 @@ function LineCommentForm({
         invalidateQuery({ resource: "submission_files", id: file.id,
             invalidates: ['all'] });
 
-    }, [submission, file, lineNumber, supabase, createComment]);
+    }, [submission, file, lineNumber, supabase, createComment, private_profile_id]);
 
 
     return (

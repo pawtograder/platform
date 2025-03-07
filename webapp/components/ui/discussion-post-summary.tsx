@@ -28,7 +28,7 @@ export function DiscussionThreadLikeButton({ thread }: {
     thread: DiscussionThreadType | ThreadWithChildren,
 }) {
     const supabase = createClient();
-    const user = useAuthState();
+    const { private_profile_id } = useAuthState();
     const likeStatus = useDiscussionThreadLikes(thread.id);
     const toggleLike = useCallback(async () => {
         if (likeStatus) {
@@ -37,11 +37,11 @@ export function DiscussionThreadLikeButton({ thread }: {
         else {
             await supabase.from("discussion_thread_likes").insert({
                 discussion_thread: thread.id,
-                creator: user.user!.id,
+                creator: private_profile_id!,
                 emoji: "👍"
             });
         }
-    }, [thread.class, thread.id, likeStatus]);
+    }, [thread.class_id, thread.id, likeStatus]);
 
     return <Button variant="ghost" size="sm" onClick={toggleLike}>
         {likeStatus ? <Icon as={FaRegHeart} /> : <Icon as={FaRegHeart} />}
@@ -52,7 +52,6 @@ export function DiscussionPostSummary({ thread, topic }: {
     topic: DiscussionTopic
 }) {
     const router = useRouter();
-    const user = useAuthState();
     const userProfile = useUserProfile(thread.author);
     const [replyVisible, setReplyVisible] = useState(false);
     const getIcon = () => {

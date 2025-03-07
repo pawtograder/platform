@@ -7,18 +7,20 @@ import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton"
 import { Box } from "lucide-react";
 import { FiBell, FiChevronDown } from "react-icons/fi";
 import { useEffect, useState } from "react";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { User } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
 import { Avatar, AvatarGroup } from "@/components/ui/avatar"
 import { ColorModeButton } from "@/components/ui/color-mode";
+import { useParams } from "next/navigation";
 export default function UserMenu() {
-    const [profile, setProfile] = useState<Database['public']['Tables']['profiles']['Row'] | undefined>()
+    const [profile, setProfile] = useState<UserProfile | undefined>()
     const [user, setUser] = useState<User | null>(null)
+    const { course_id } = useParams();
+    const supabase = createClient();
 
     useEffect(() => {
         // Fetch profile
-        const supabase = createClient();
         const fetchUser = async () => {
             const { data, error } = await supabase.auth.getUser();
             if (error) {
@@ -26,20 +28,29 @@ export default function UserMenu() {
             }
             const uid = data!.user!.id;
             const fetchProfile = async () => {
-                const { data, error } = await supabase.from('profiles').select('*').
-                    eq('id', uid).single();
-                if (error) {
-                    console.error(error)
+                if (course_id) {
+                    const { data, error } = await supabase.from('user_roles').select('profiles!private_profile_id(*)').
+                        eq('user_id', uid).eq('class_id', Number(course_id)).single();
+                    if (error) {
+                        console.error(error)
+                    }
+                    if (data)
+                        setProfile(data.profiles!)
+                } else {
+                    const { data, error } = await supabase.from('user_roles').select('profiles!private_profile_id(*)').
+                        eq('user_id', uid).limit(1).single();
+                    if (error) {
+                        console.error(error)
+                    }
+                    if (data)
+                        setProfile(data.profiles!)
                 }
-                if (data)
-                    setProfile(data)
-            }
+                setUser(data.user)
+            };
             fetchProfile()
-            setUser(data.user)
-        };
+        }
         fetchUser();
-    }
-        , [])
+    }, [course_id])
 
     return (
         <HStack>

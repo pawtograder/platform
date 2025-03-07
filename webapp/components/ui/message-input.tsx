@@ -12,7 +12,7 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover"
 import remarkGfm from 'remark-gfm';
-import { Box, Button, Field, HStack, Textarea, VStack, SimpleGrid, Popover } from "@chakra-ui/react";
+import { Box, Button, Field, HStack, Textarea, VStack, SimpleGrid, Popover, Text } from "@chakra-ui/react";
 import Picker from '@emoji-mart/react';
 import { GiphyFetch } from '@giphy/js-fetch-api';
 import { FaEye, FaPaperclip, FaSmile, FaUserSecret } from "react-icons/fa";
@@ -23,10 +23,11 @@ import Markdown from '@/components/ui/markdown';
 import { createClient } from '@/utils/supabase/client';
 import { useParams } from 'next/navigation';
 import { Tooltip } from './tooltip';
-
+import useAuthState from '@/hooks/useAuthState';
+import { useUserProfile } from '@/hooks/useUserProfiles';
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
     defaultSingleLine?: boolean;
-    sendMessage: (message: string, close?: boolean) => Promise<void>;
+    sendMessage: (message: string, profile_id: string, close?: boolean) => Promise<void>;
 }
 export default function MessageInput(props: MessageInputProps) {
     const { course_id } = useParams();
@@ -44,6 +45,11 @@ export default function MessageInput(props: MessageInputProps) {
         setValue(value);
         props.onChange?.(value);
     }, [props.onChange]);
+    const { public_profile_id, private_profile_id } = useAuthState();
+    const public_profile = useUserProfile(public_profile_id);
+    const private_profile = useUserProfile(private_profile_id);
+    const profile_id = anonymousMode ? public_profile_id! : private_profile_id!;
+
     const toggleEmojiPicker = () => setShowEmojiPicker(!showEmojiPicker);
     const toggleGiphyPicker = () => setShowGiphyPicker(!showGiphyPicker);
     const toggleAnonymousMode = () => setAnonymousMode(!anonymousMode);
@@ -59,7 +65,7 @@ export default function MessageInput(props: MessageInputProps) {
         const urlEncodedFilename = encodeURIComponent(fileName);
 
         const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
-        props.sendMessage(`Attachment: [${file.name}](${url})`, false);
+        props.sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
         return url;
     }, [props.sendMessage, course_id]);
 
@@ -85,7 +91,7 @@ export default function MessageInput(props: MessageInputProps) {
             const insertedMarkdown = isImage ? `![](${url})` : `[${file.name}](${url})`;
             return insertedMarkdown;
         }));
-        props.sendMessage('Attachment: ' + insertedMarkdowns.join('\n'), false);
+        props.sendMessage('Attachment: ' + insertedMarkdowns.join('\n'), profile_id, false);
 
     }, []);
     if (singleLine) {
@@ -141,7 +147,7 @@ export default function MessageInput(props: MessageInputProps) {
                             if (value?.trim() === '') {
                                 return;
                             }
-                            props.sendMessage(value!);
+                            props.sendMessage(value!, profile_id, true);
                             setValue('');
                         }
                     }}
@@ -154,8 +160,11 @@ export default function MessageInput(props: MessageInputProps) {
                     }} />}
                 <HStack justify="flex-end">
                     <HStack spaceX="0" gap="0">
+                        <Text color="text.muted" fontSize="xs">
+                            Post {anonymousMode ? `with your pseudonym, ${public_profile?.name} ` : `as ${private_profile?.name}`}
+                        </Text>
                         <Tooltip content="Toggle anonymous mode">
-                            <Button aria-label="Toggle anonymous mode" onClick={toggleAnonymousMode} variant="ghost" size="xs" colorScheme={anonymousMode ? "red" : "teal"} p={0}><FaUserSecret /></Button>
+                            <Button aria-label="Toggle anonymous mode" onClick={toggleAnonymousMode} variant={anonymousMode ? "solid" : "ghost"} size="xs" colorScheme={anonymousMode ? "red" : "teal"} p={0}><FaUserSecret /></Button>
                         </Tooltip>
                         <Tooltip content="Attach a file">
                             <Button aria-label="Attach a file" onClick={() => fileInputRef.current?.click()} variant="ghost" size="xs" colorScheme="teal" p={0}><FaPaperclip /></Button>
@@ -173,7 +182,7 @@ export default function MessageInput(props: MessageInputProps) {
                                 <PopoverBody>
                                     <GiphyPicker onGifSelect={(gif: IGif) => {
                                         setShowGiphyPicker(false);
-                                        props.sendMessage(`![${gif.title}](${gif.images.original.url})`, false)
+                                        props.sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false)
                                     }} />
                                 </PopoverBody>
                             </PopoverContent>

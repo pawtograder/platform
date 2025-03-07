@@ -23,7 +23,7 @@ describe('AutograderController', () => {
                 secret: process.env.GITHUB_WEBHOOK_SECRET || '',
             },
         });
-        GitHubController.initialize(app);
+        GitHubController.initialize();
         await GitHubController.getInstance().initializeApp();
     })
     beforeEach(() => {

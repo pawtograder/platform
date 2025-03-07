@@ -58,6 +58,69 @@ export const useCreateGitHubReposForStudent = (
   });
 };
 
+export type RetrieveAutograderRegressionTestsHeaders = {
+  Authorization: string;
+};
+
+export type RetrieveAutograderRegressionTestsError = Fetcher.ErrorWrapper<undefined>;
+
+export type RetrieveAutograderRegressionTestsResponse = {
+  configs: {
+    /**
+     * @format double
+     */
+    id: number;
+  }[];
+};
+
+export type RetrieveAutograderRegressionTestsVariables = {
+  headers: RetrieveAutograderRegressionTestsHeaders;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchRetrieveAutograderRegressionTests = (
+  variables: RetrieveAutograderRegressionTestsVariables,
+  signal?: AbortSignal,
+) =>
+  pawtograderFetch<
+    RetrieveAutograderRegressionTestsResponse,
+    RetrieveAutograderRegressionTestsError,
+    undefined,
+    RetrieveAutograderRegressionTestsHeaders,
+    {},
+    {}
+  >({ url: '/api/autograder/regression-tests', method: 'get', ...variables, signal });
+
+export const useRetrieveAutograderRegressionTests = <
+  TData = RetrieveAutograderRegressionTestsResponse,
+>(
+  variables: RetrieveAutograderRegressionTestsVariables,
+  options?: Omit<
+    reactQuery.UseQueryOptions<
+      RetrieveAutograderRegressionTestsResponse,
+      RetrieveAutograderRegressionTestsError,
+      TData
+    >,
+    'queryKey' | 'queryFn' | 'initialData'
+  >,
+) => {
+  const { fetcherOptions, queryOptions, queryKeyFn } = usePawtograderContext(options);
+  return reactQuery.useQuery<
+    RetrieveAutograderRegressionTestsResponse,
+    RetrieveAutograderRegressionTestsError,
+    TData
+  >({
+    queryKey: queryKeyFn({
+      path: '/api/autograder/regression-tests',
+      operationId: 'retrieveAutograderRegressionTests',
+      variables,
+    }),
+    queryFn: ({ signal }) =>
+      fetchRetrieveAutograderRegressionTests({ ...fetcherOptions, ...variables }, signal),
+    ...options,
+    ...queryOptions,
+  });
+};
+
 export type CreateSubmissionHeaders = {
   Authorization: string;
 };
@@ -100,6 +163,71 @@ export const useCreateSubmission = (
   });
 };
 
+export type CreateRegressionTestRunPathParams = {
+  /**
+   * @format double
+   */
+  regressionTestId: number;
+};
+
+export type CreateRegressionTestRunHeaders = {
+  Authorization: string;
+};
+
+export type CreateRegressionTestRunError = Fetcher.ErrorWrapper<undefined>;
+
+export type CreateRegressionTestRunVariables = {
+  headers: CreateRegressionTestRunHeaders;
+  pathParams: CreateRegressionTestRunPathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchCreateRegressionTestRun = (
+  variables: CreateRegressionTestRunVariables,
+  signal?: AbortSignal,
+) =>
+  pawtograderFetch<
+    Schemas.RegressionTestRunResponse,
+    CreateRegressionTestRunError,
+    undefined,
+    CreateRegressionTestRunHeaders,
+    {},
+    CreateRegressionTestRunPathParams
+  >({
+    url: '/api/autograder/regression-test-run/{regressionTestId}',
+    method: 'post',
+    ...variables,
+    signal,
+  });
+
+export const useCreateRegressionTestRun = (
+  options?: Omit<
+    reactQuery.UseMutationOptions<
+      Schemas.RegressionTestRunResponse,
+      CreateRegressionTestRunError,
+      CreateRegressionTestRunVariables
+    >,
+    'mutationFn'
+  >,
+) => {
+  const { fetcherOptions } = usePawtograderContext();
+  return reactQuery.useMutation<
+    Schemas.RegressionTestRunResponse,
+    CreateRegressionTestRunError,
+    CreateRegressionTestRunVariables
+  >({
+    mutationFn: (variables: CreateRegressionTestRunVariables) =>
+      fetchCreateRegressionTestRun({ ...fetcherOptions, ...variables }),
+    ...options,
+  });
+};
+
+export type SubmitFeedbackQueryParams = {
+  /**
+   * @format double
+   */
+  autograder_regression_test_id?: number;
+};
+
 export type SubmitFeedbackHeaders = {
   Authorization: string;
 };
@@ -109,6 +237,7 @@ export type SubmitFeedbackError = Fetcher.ErrorWrapper<undefined>;
 export type SubmitFeedbackVariables = {
   body: Schemas.GradingScriptResult;
   headers: SubmitFeedbackHeaders;
+  queryParams?: SubmitFeedbackQueryParams;
 } & PawtograderContext['fetcherOptions'];
 
 export const fetchSubmitFeedback = (variables: SubmitFeedbackVariables, signal?: AbortSignal) =>
@@ -117,7 +246,7 @@ export const fetchSubmitFeedback = (variables: SubmitFeedbackVariables, signal?:
     SubmitFeedbackError,
     Schemas.GradingScriptResult,
     SubmitFeedbackHeaders,
-    {},
+    SubmitFeedbackQueryParams,
     {}
   >({ url: '/api/autograder/submission/feedback', method: 'post', ...variables, signal });
 
@@ -1360,6 +1489,11 @@ export const useGetMeeting = <TData = Schemas.JoinMeetingResponse,>(
 };
 
 export type QueryOperation =
+  | {
+      path: '/api/autograder/regression-tests';
+      operationId: 'retrieveAutograderRegressionTests';
+      variables: RetrieveAutograderRegressionTestsVariables;
+    }
   | {
       path: '/api/admin/canvas/courses';
       operationId: 'getCanvasCourses';

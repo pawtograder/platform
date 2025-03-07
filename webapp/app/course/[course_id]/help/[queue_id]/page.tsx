@@ -50,7 +50,7 @@ export default function HelpQueuePage() {
     }
     const unResolvedRequest = requests?.data?.filter((request) => !request.resolved_by)
     return <Box>
-        <EphemeralChatChannelProvider queue_id={queue.data?.data.id} class_id={queue.data?.data.class}>
+        <EphemeralChatChannelProvider queue_id={queue.data?.data.id} class_id={queue.data?.data.class_id}>
             <Heading>Help Queue: {queue.data?.data.name}</Heading>
             <Tabs.Root 
             size='md' orientation="vertical" defaultValue="current">

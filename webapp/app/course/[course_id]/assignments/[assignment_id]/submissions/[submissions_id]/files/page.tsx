@@ -44,7 +44,6 @@ function RubricItem({ rubric }: { rubric: Rubric }) {
             id: rubric.id,
         }
     });
-    console.log(getValues("name"));
     return <Box>
         <form onSubmit={handleSubmit(refineCore.onFinish)}>
             <Editable.Root {...register("name")} placeholder="Click to enter a comment"
@@ -137,7 +136,7 @@ export default function FilesView() {
         resource: "submissions",
         id: Number.parseInt(submissions_id as string),
         meta: {
-            select: "*, assignments(*), submission_files(*, submission_file_comments(*, public_profiles(*)))"
+            select: "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*)))"
         }
     });
 

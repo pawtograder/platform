@@ -1,62 +1,47 @@
 import { useList } from "@refinedev/core";
-import { PublicProfile, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { useParams } from "next/navigation";
 
 
-export function getUserProfile(allProfiles: (PublicProfile | UserProfile)[], id: string): { badge?: string, badge_color?: string, id: string, name: string, avatar_url: string } | undefined {
+export function getUserProfile(allProfiles: UserProfile[], id: string): { badge?: string, badge_color?: string, id: string, name: string, avatar_url: string } | undefined {
     const profile = allProfiles.find((user) => user.id === id);
     if (!profile || !profile.name) {
         return undefined;
     }
-    if ('avatar' in profile) {
-        return {
-            id: profile.id,
-            name: profile.name,
-            badge: profile.is_instructor ? 'Instructor' : undefined,
-            badge_color: profile.is_instructor ? 'blue' : undefined,
-            avatar_url: profile.avatar == 'identicon' || !profile.avatar ? `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}` : profile.avatar
-        };
-    }
-    else if ('avatar_url' in profile) {
-        return {
-            id: profile.id,
-            name: profile.name,
-            avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
-        };
-    }
-    throw new Error("Invalid profile type");
+    return {
+        id: profile.id,
+        name: profile.name,
+        avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
+        badge: profile.flair || undefined,
+        badge_color: profile.flair_color || undefined,
+    };
 }
 
 
-export function useUserProfile(id: string | null): { is_instructor: boolean, id: string, name: string, avatar_url: string } | undefined {
+export function useUserProfile(id: string | null): { flair?: string, flair_color?: string, id: string, name: string, avatar_url: string } | undefined {
     const allProfiles = useUserProfiles();
     if (id == null) {
         return undefined;
     }
+
     const profile = allProfiles.users.find((user) => user.id === id);
     if (!profile || !profile.name) {
         return undefined;
     }
-    if ('avatar' in profile) {
-        return {
-            is_instructor: profile.is_instructor,
-            id: profile.id,
-            name: profile.name,
-            avatar_url: profile.avatar == 'identicon' || !profile.avatar ? `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}` : profile.avatar
-        };
-    }
-    else if ('avatar_url' in profile) {
-        return {
-            is_instructor: true, // TODO actually have a flag, use singular profiles
-            id: profile.id,
-            name: profile.name,
-            avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
-        };
-    }
-    throw new Error("Invalid profile type");
+
+    //TODO resolve public profiles for instructors
+    return {
+        id: profile.id,
+        name: profile.name,
+        avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
+        flair: profile.flair || undefined,
+        flair_color: profile.flair_color || undefined,
+    };
 }
 export default function useUserProfiles(): {
-    users: (PublicProfile | UserProfile)[]
+    users: UserProfile[]
 } {
+    const { course_id } = useParams();
     const { data: userProfiles, isLoading: userProfilesLoading } = useList<UserProfile>({
         resource: "profiles",
         queryOptions: {
@@ -65,24 +50,16 @@ export default function useUserProfiles(): {
         pagination: {
             pageSize: 1000,
         },
+        filters: [
+            { field: "class_id", operator: "eq", value: Number(course_id as string) }
+        ]
     });
-    const { data: publicProfiles, isLoading: publicProfilesLoading } = useList<PublicProfile>({
-        resource: "public_profiles",
-        queryOptions: {
-            staleTime: Infinity,
-        },
-        pagination: {
-            pageSize: 1000,
-        },
-    });
-    if (userProfilesLoading || publicProfilesLoading) {
+    if (userProfilesLoading) {
         return {
             users: [],
         }
     }
-    const ret: (PublicProfile | UserProfile)[] = userProfiles?.data || [];
-    ret.push(...(publicProfiles?.data.filter(p => !userProfiles?.data.find(o => o.id === p.id)) || []));
     return {
-        users: ret,
+        users: userProfiles?.data || [],
     }
 }

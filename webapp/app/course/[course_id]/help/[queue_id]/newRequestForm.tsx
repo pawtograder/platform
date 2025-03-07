@@ -11,7 +11,7 @@ import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
 import { useRouter } from "next/navigation";
 import MdEditor from "@/components/ui/md-editor";
-
+import useAuthState from "@/hooks/useAuthState";
 export default function HelpRequestForm() {
     const { course_id } = useParams();
     const supabase = createClient();
@@ -47,18 +47,17 @@ export default function HelpRequestForm() {
                 { field: "class", operator: "eq", value: course_id }
             ]
     });
+    const { private_profile_id } = useAuthState();
 
     const onSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         async function populate() {
-            const supabase = await createClient();
-            const user = await supabase.auth.getUser();
-            setValue("creator", user.data!.user!.id)
+            setValue("creator", private_profile_id!)
             setValue("class_id", Number.parseInt(course_id as string))
             handleSubmit(onFinish)()
         }
         populate()
-    }, [handleSubmit, onFinish])
+    }, [handleSubmit, onFinish, private_profile_id])
     if (query?.error) {
         return <div>Error: {query.error.message}</div>;
     }

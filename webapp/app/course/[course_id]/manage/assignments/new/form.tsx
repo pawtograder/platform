@@ -50,7 +50,6 @@ export default function CreateAssignment({ course }: { course: Database['public'
     const onSubmit = useCallback((values: FieldValues) => {
         async function create() {
             const supabase = await createClient();
-            const user = await supabase.auth.getUser();
             // console.log(getValues("submission_files"));
             console.log(getValues("template_repo").full_name);
             const { data, error } = await supabase.from("assignments").insert({

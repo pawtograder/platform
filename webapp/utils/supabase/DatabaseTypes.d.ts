@@ -11,6 +11,13 @@ export type SubmissionFileComment = GetResult<
     Database["public"]["Tables"]["submission_file_comments"]["Relationships"],
     "*"
 >;
+export type UserRole = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["user_roles"]["Row"],
+    "user_roles",
+    Database["public"]["Tables"]["user_roles"]["Relationships"],
+    "*"
+>;
 export type UserRoleWithCourse = GetResult<
     Database["public"],
     Database["public"]["Tables"]["user_roles"]["Row"],
@@ -33,14 +40,14 @@ export type SubmissionFileWithComments = GetResult<
     Database["public"]["Tables"]["submission_files"]["Row"],
     "submission_files",
     Database["public"]["Tables"]["submission_files"]["Relationships"],
-    "*, submission_file_comments(*, public_profiles(*))"
+    "*, submission_file_comments(*, profiles(*))"
 >;
 export type SubmissionWithFilesAndComments = GetResult<
     Database["public"],
     Database["public"]["Tables"]["submissions"]["Row"],
     "submissions",
     Database["public"]["Tables"]["submissions"]["Relationships"],
-    "*, assignments(*), submission_files(*, submission_file_comments(*, public_profiles(*)))"
+    "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*)))"
 >;
 export type SubmissionWithGraderResults = GetResult<
     Database["public"],
@@ -113,14 +120,6 @@ export type HelpRequest = GetResult<
     Database["public"]["Tables"]["help_requests"]["Row"],
     "help_requests",
     Database["public"]["Tables"]["help_requests"]["Relationships"],
-    "*"
->;
-
-export type PublicProfile = GetResult<
-    Database["public"],
-    Database["public"]["Tables"]["public_profiles"]["Row"],
-    "public_profiles",
-    Database["public"]["Tables"]["public_profiles"]["Relationships"],
     "*"
 >;
 

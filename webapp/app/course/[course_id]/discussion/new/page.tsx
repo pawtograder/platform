@@ -15,6 +15,7 @@ import { useCallback } from "react";
 import { Controller } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
+import useAuthState from "@/hooks/useAuthState";
 export default function NewDiscussionThread() {
     const { course_id } = useParams();
     const router = useRouter()
@@ -53,19 +54,19 @@ export default function NewDiscussionThread() {
             }
         ]
     })
+    const { private_profile_id } = useAuthState()
     const onSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         async function populate() {
             const supabase = await createClient();
-            const user = await supabase.auth.getUser();
-            setValue("author", user.data!.user!.id)
+            setValue("author", private_profile_id!)
             setValue("is_question", false)
             setValue("root_class_id", Number.parseInt(course_id as string))
-            setValue("class", Number.parseInt(course_id as string))
+            setValue("class_id", Number.parseInt(course_id as string))
             handleSubmit(refineCore.onFinish)()
         }
         populate()
-    }, [handleSubmit, refineCore.onFinish])
+    }, [handleSubmit, refineCore.onFinish, private_profile_id])
     return (
         <Box>
             <Heading as="h1">New Discussion Thread</Heading>

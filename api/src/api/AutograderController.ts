@@ -90,25 +90,25 @@ export class AutograderController extends Controller {
             process.env.SUPABASE_SERVICE_ROLE_KEY || "",
         );
         // Get the user's Github username
-        const { data: userData } = await supabase.from("profiles").select(
-            "github_username, repositories(*)",
-        ).eq("id", user.id).single();
+        const { data: userData } = await supabase.from("user_roles").select(
+            "users(github_username)"
+        ).eq("user_id", user.id).single();
         if (!userData) {
             throw new SecurityError(`Invalid user: ${user.id}`);
         }
-        const githubUsername = userData.github_username;
+        const githubUsername = userData.users.github_username;
         if (!githubUsername) {
             throw new UserVisibleError(
                 `User ${user.id} has no Github username linked`,
             );
         }
-        const existingRepos = userData.repositories;
         const { data: classes } = await supabase.from("user_roles").select(
-            "class_id",
+            "class_id, profiles!private_profile_id(id, name, sortable_name, repositories(*))",
         ).eq(
             "user_id",
             user.id,
         ).eq("role", "student");
+        const existingRepos = classes!.flatMap((c) => c!.profiles!.repositories);
         //Find all assignments that the student is enrolled in that have been released
         const { data: assignments } = await supabase.from("assignments").select(
             "*, classes(slug)",
@@ -118,6 +118,10 @@ export class AutograderController extends Controller {
         const requests = assignments!.filter((assignment) =>
             !existingRepos.find((repo) => repo.assignment_id === assignment.id)
         ).map(async (assignment) => {
+            const userProfileID = classes!.find((c) => c!.class_id === assignment.class_id)?.profiles!.id;
+            if (!userProfileID) {
+                throw new UserVisibleError(`User profile ID not found for class ${assignment.class_id}`);
+            }
             const repoName = `${
                 assignment.classes!.slug
             }-${assignment.slug}-${githubUsername}`;
@@ -128,7 +132,8 @@ export class AutograderController extends Controller {
                 githubUsername,
             );
             const { error } = await supabase.from("repositories").insert({
-                user_id: user.id,
+                profile_id: userProfileID,
+                class_id: assignment.class_id!,
                 assignment_id: assignment.id,
                 repository: `autograder-dev/${repoName}`,
             });
@@ -203,7 +208,7 @@ export class AutograderController extends Controller {
             // Create a submission record
             const { error, data: subID } = await supabase.from("submissions")
                 .insert({
-                    user_id: repoData?.user_id,
+                    profile_id: repoData?.profile_id,
                     assignment_id: repoData.assignment_id,
                     repository,
                     sha,
@@ -279,7 +284,7 @@ export class AutograderController extends Controller {
                     submittedFilesWithContents.map((file) => ({
                         submissions_id: submission_id,
                         name: file.name,
-                        user_id: repoData.user_id,
+                        profile_id: repoData.profile_id,
                         contents: file.contents.toString("utf-8"),
                         class_id: repoData.assignments.class_id!,
                     })),
@@ -438,18 +443,21 @@ export class AutograderController extends Controller {
             }
             class_id = submission.class_id;
             submission_id = submission.id;
-            user_id = submission.user_id;
+            user_id = submission.profile_id;
             assignment_id = submission.assignment_id;
         }
 
         //Resolve the action SHA
-        const action_sha = await GitHubController.getInstance().resolveRef(requestBody.action_repository, requestBody.action_ref);
+        const action_sha = await GitHubController.getInstance().resolveRef(
+            requestBody.action_repository,
+            requestBody.action_ref,
+        );
         console.log("Action SHA", action_sha);
         const { error, data: resultID } = await supabase.from(
             "grader_results",
         ).insert({
             submission_id: submission_id,
-            user_id: user_id,
+            profile_id: user_id,
             class_id: class_id,
             ret_code: requestBody.ret_code,
             grader_sha: requestBody.grader_sha,
@@ -468,7 +476,7 @@ export class AutograderController extends Controller {
                 "text",
             lint_passed: requestBody.feedback.lint.status === "pass",
             execution_time: requestBody.execution_time,
-            grader_action_sha: action_sha
+            grader_action_sha: action_sha,
         }).select("id").single();
         if (error) {
             console.error(error);

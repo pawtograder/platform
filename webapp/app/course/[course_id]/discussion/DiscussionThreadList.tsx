@@ -35,7 +35,7 @@ const DiscussionThreadTeaser = (props: Props) => {
     const selected = root_id ? props.thread.id === Number.parseInt(root_id as string) : false;
 
     const userProfile = useUserProfile(author);
-    return (<><NextLink href={`/course/${props.thread.class}/discussion/${props.thread.id}`}>
+    return (<><NextLink href={`/course/${props.thread.class_id}/discussion/${props.thread.id}`}>
         <HStack align="flex-start" gap="3" px="4" py="3"
             _hover={{ bg: 'bg.muted' }} rounded="md"
             width="100%"

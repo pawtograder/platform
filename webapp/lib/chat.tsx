@@ -13,7 +13,7 @@ export type ChatMessage = {
 }
 export type ChatChannelContextType = {
     messages: ChatMessage[]
-    postMessage: (message: string) => Promise<void>
+    postMessage: (message: string, profile_id: string) => Promise<void>
     participants: string[]
 }
 const ChatChannelContext = createContext<ChatChannelContextType | undefined>(undefined)
@@ -25,7 +25,7 @@ export const useChatChannel = () => {
     return ctx
 }
 export function HelpRequestChatChannelProvider({ help_request, children }: { help_request: HelpRequest, children: React.ReactNode }) {
-    const { user } = useAuthState()
+    const { private_profile_id } = useAuthState()
     const [participants, setParticipants] = useState<string[]>([])
     const { data: help_request_messages } = useList<HelpRequestMessage>({
         resource: "help_request_messages",
@@ -41,9 +41,8 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
         resource: "help_request_messages",
     })
     const helpRequestID = help_request.id;
-    const userID = user?.id;
+    const userID = private_profile_id;
     useEffect(() => {
-        console.log("HelpRequestID", helpRequestID)
         const supabase = createClient();
 
         const chan = supabase.realtime.channel(`help_request_${helpRequestID}`, {
@@ -61,7 +60,6 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
                         uids.add(presence[key][0].user_id)
                     }
                 })
-                console.log(uids)
                 return Array.from(uids)
             }
             chan.on('presence', { event: 'sync' }, () => {
@@ -69,7 +67,6 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
                 setParticipants(getUidsFromPresence(chan.presenceState()))
             })
             // console.log("Tracking user")
-            console.log(userID)
             const presenceTrackStatus = chan.track({
                 user_id: userID
             })
@@ -83,10 +80,11 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
     return (
         <ChatChannelContext.Provider value={{
             participants,
-            messages: help_request_messages?.data ?? [], postMessage: async (message: string) => {
+            messages: help_request_messages?.data ?? [], postMessage: async (message: string, profile_id: string) => {
+                console.log(message, profile_id)
                 await createMessage({
                     values: {
-                        message, help_request_id: help_request.id, author: user?.id,
+                        message, help_request_id: help_request.id, author: profile_id,
                         class_id: help_request.class_id,
                         requestor: help_request.creator
                     }
@@ -100,25 +98,24 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
 export function EphemeralChatChannelProvider({ queue_id, class_id, children }: { queue_id: number, class_id: number, children: React.ReactNode }) {
     const [channel, setChannel] = useState<RealtimeChannel>()
     const [messages, setMessages] = useState<ChatMessage[]>([])
-    const { user } = useAuthState()
+    const { private_profile_id } = useAuthState()
     const [participants, setParticipants] = useState<string[]>([])
-    const postMessage = useCallback(async (message: string) => {
-        if (!channel || !user) { return }
+    const postMessage = useCallback(async (message: string, profile_id: string) => {
+        if (!channel || !private_profile_id) { return }
         channel.send({
             type: 'broadcast',
             event: 'chat_message',
             message: {
                 id: crypto.randomUUID(),
                 message,
-                author: user.id,
+                author: profile_id,
                 created_at: new Date().toISOString(),
             } as ChatMessage
         })
-    }, [channel, user])
+    }, [channel, private_profile_id])
     useEffect(() => {
         const subscribe = async () => {
             const supabase = createClient();
-            const user = await supabase.auth.getUser();
             const chan = supabase.realtime.channel(`help_queue_${class_id}_${queue_id}`, {
                 config: {
                     broadcast: { self: true },
@@ -143,7 +140,7 @@ export function EphemeralChatChannelProvider({ queue_id, class_id, children }: {
                     setMessages((prev) => [...prev, payload.message as ChatMessage]);
                 });
                 const presenceTrackStatus = chan.track({
-                    user_id: user.data.user?.id
+                    user_id: private_profile_id!
                 })
             })
         }

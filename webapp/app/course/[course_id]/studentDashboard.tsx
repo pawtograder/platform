@@ -32,8 +32,8 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
 
     const { data: helpRequests } = await supabase
         .from("help_requests")
-        .select("*, public_profiles(*)")
-        .eq("class", course_id)
+        .select("*, profiles(*)")
+        .eq("class_id", course_id)
         .eq("status", "open")
         .order("created_at", { ascending: true });
 

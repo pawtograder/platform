@@ -77,8 +77,35 @@ export default class GitHubController {
         issuersWhitelist: ["https://token.actions.githubusercontent.com/"],
     });
 
-    static initialize(app: App) {
-        this._instance = new GitHubController(app);
+    static initialize() {
+        try {
+            const app = new App({
+                authStrategy: createAppAuth,
+                appId: process.env.GITHUB_APP_ID || -1,
+                privateKey: getGithubPrivateKey(),
+                oauth: {
+                    clientId: process.env.GITHUB_OAUTH_CLIENT_ID || "",
+                    clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET || "",
+                },
+                webhooks: {
+                    secret: process.env.GITHUB_WEBHOOK_SECRET || "",
+                },
+            });
+            this._instance = new GitHubController(app);
+            return app;
+        } catch (e) {
+            console.error(e);
+            console.error(
+                "Failed to initialize GitHubController - No GitHub features will be available. To fix: create a new GitHub App and set the environment variables in the .env file.",
+            );
+            return null;
+        }
+    }
+    static async initializeApp() {
+        const app = GitHubController._instance;
+        if (app) {
+            await app.initializeApp();
+        }
     }
     static getInstance(): GitHubController {
         return this._instance;
@@ -357,6 +384,12 @@ ${feedback.output.visible?.output}`,
         return payload;
     }
     async initializeApp() {
+        if (!this._app) {
+            console.error(
+                "GitHubController not initialized, skipping installation retrieval",
+            );
+            return;
+        }
         const installations = await this._app.octokit.request(
             "GET /app/installations",
         );

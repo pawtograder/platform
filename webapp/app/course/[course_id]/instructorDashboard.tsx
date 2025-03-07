@@ -9,7 +9,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     const supabase = await createClient();
     const { data: assignments, error: assignmentsError } = await supabase
         .from("assignments")
-        .select("*,repositories(id), submissions(user_id, grader_results(score,max_score))")
+        .select("*,repositories(id), submissions(profile_id, grader_results(score,max_score))")
         .eq("class_id", course_id)
         .gte("due_date", new Date().toISOString())
         .order("due_date", { ascending: false })
@@ -24,15 +24,15 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
 
     const { data: discussions } = await supabase
         .from("discussion_threads")
-        .select("*, public_profiles(*), discussion_topics(*)")
+        .select("*, profiles(*), discussion_topics(*)")
         .eq("root_class_id", course_id)
         .order("created_at", { ascending: false })
         .limit(5);
 
     const { data: helpRequests } = await supabase
         .from("help_requests")
-        .select("*, public_profiles(*)")
-        .eq("class", course_id)
+        .select("*, profiles(*)")
+        .eq("class_id", course_id)
         .eq("status", "open")
         .order("created_at", { ascending: true });
 
@@ -61,7 +61,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                                     </DataListItem>
                                     <DataListItem>
                                         <DataListItemLabel>Students who have submitted</DataListItemLabel>
-                                        <DataListItemValue>{new Set(assignment.submissions.map(s => s.user_id)).size}</DataListItemValue>
+                                        <DataListItemValue>{new Set(assignment.submissions.map(s => s.profile_id)).size}</DataListItemValue>
                                     </DataListItem>
                                 </DataListRoot>
                             </CardBody>

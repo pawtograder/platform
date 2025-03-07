@@ -34,14 +34,13 @@ export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildr
 }
 export function DiscussionThreadReply({ thread, visible, setVisible }: { thread: DiscussionThreadType, visible: boolean, setVisible: (visible: boolean) => void }) {
 
-    const [count, setCount] = useState(0);//DEBUG
     const invalidate = useInvalidate();
     const { mutateAsync: mutate } = useCreate({
         resource: "discussion_threads",
     });
-    const { user } = useAuthState();
-    const sendMessage = useCallback(async (message: string, close = true) => {
+    const sendMessage = useCallback(async (message: string, profile_id: string, close = true) => {
         console.log("sendMessage", message);
+        
         await mutate({
             resource: "discussion_threads",
             values: {
@@ -50,8 +49,8 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
                 root: thread.root || thread.id,
                 topic_id: thread.topic_id,
                 instructors_only: thread.instructors_only,
-                class: thread.class,
-                author: user!.id,
+                class_id: thread.class_id,
+                author: profile_id,
                 body: message
             }
         });
@@ -63,8 +62,7 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
         if (close) {
             setVisible(false);
         }
-        setCount((count) => count + 1);
-    }, [mutate, thread, user]);
+    }, [mutate, thread]);
     if (!visible) {
         return <></>
     }
@@ -130,12 +128,12 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                     <Box bg="bg.muted" rounded="l3" py="2" px="3">
                         <HStack gap="1">
                             <Text textStyle="sm" fontWeight="semibold">
-                                <Link id={`post-${thread.ordinal}`} href={`/course/${thread.class}/discussion/${thread.root}#post-${thread.ordinal}`}>#{thread.ordinal}</Link>
+                                <Link id={`post-${thread.ordinal}`} href={`/course/${thread.class_id}/discussion/${thread.root}#post-${thread.ordinal}`}>#{thread.ordinal}</Link>
                             </Text>
                             {authorProfile ? <Text textStyle="sm" fontWeight="semibold">
                                 {authorProfile?.name}
                                 {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
-                                {authorProfile?.is_instructor && <Badge ml="2" colorPalette="red">Instructor</Badge>}
+                                {authorProfile?.flair && <Badge ml="2" colorPalette={authorProfile?.flair_color}>{authorProfile?.flair}</Badge>}
                             </Text> : <Skeleton width="100px" />}
                         </HStack>
                         <Box textStyle="sm" color="fg.muted">

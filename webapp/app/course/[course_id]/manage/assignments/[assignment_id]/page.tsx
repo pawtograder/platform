@@ -14,12 +14,13 @@ export default async function AssignmentHome({ params,
     const session = await client.auth.getSession();
     const { data: assignment } = await client.from("assignments").select("*").eq("id", Number.parseInt(assignment_id)).single();
     const { data: roster, error } = await client.from("user_roles").
-        select("role,user_id, profiles(*)").
+        select("role,user_id, profiles!private_profile_id(*)").
         // select("*").
         // eq("role", "student").
         eq("class_id", Number.parseInt(course_id));
     const { error: subError, data: submissions } = await client.from("submissions_agg").select("*").eq("assignment_id", Number.parseInt(assignment_id));
-
+    console.log(submissions)
+    console.log(subError)
     if (!assignment) {
         return <div>Assignment not found</div>
     }
@@ -56,11 +57,11 @@ export default async function AssignmentHome({ params,
                 </Table.Header>
                 <Table.Body>
                     {roster?.map((user) => {
-                        const submisison = submissions?.find((sub) => sub.user_id === user.user_id);
+                        const submisison = submissions?.find((sub) => sub.user_id === user.profiles!.id);
                         return (<Table.Row key={user.user_id}>
                             <Table.Cell>
-                                {submisison ? <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submisison?.id}`}>{user.profiles.name}</Link>
-                                    : user.profiles.name}
+                                {submisison ? <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submisison?.id}`}>{user.profiles?.name}</Link>
+                                    : user.profiles?.name}
                             </Table.Cell>
                             <Table.Cell>{submisison?.submissioncount}</Table.Cell>
                             <Table.Cell>{submisison?.score}</Table.Cell>

@@ -11,7 +11,7 @@ import useAuthState from "@/hooks/useAuthState";
 import { useEffect } from "react";
 import { useState } from "react";
 const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
-    const { user } = useAuthState();
+    const { private_profile_id } = useAuthState();
     const [assignee, setAssignee] = useState(request.assignee);
     useEffect(() => {
       setAssignee(request.assignee);
@@ -28,12 +28,12 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
       }
     });
   
-    if (assignee === user?.id) {
+    if (assignee === private_profile_id) {
       return <Text>Assigned to you <IconButton aria-label="Drop Assignment" onClick={() => updateRequest({ id: request.id, values: { assignee: null } })}><Icon as={BsClipboardCheckFill} /></IconButton></Text>
     } else if (assignee) {
       return <Text>Assigned to {request.assignee}</Text>
     } else {
-      return <Text>Not assigned <IconButton aria-label="Assume Assignment" variant="outline" onClick={() => updateRequest({ id: request.id, values: { assignee: user?.id } })}><Icon as={BsClipboardCheck} /></IconButton></Text>
+      return <Text>Not assigned <IconButton aria-label="Assume Assignment" variant="outline" onClick={() => updateRequest({ id: request.id, values: { assignee: private_profile_id } })}><Icon as={BsClipboardCheck} /></IconButton></Text>
     }
   }
 

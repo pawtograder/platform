@@ -9,28 +9,20 @@ import swaggerUi from "swagger-ui-express";
 import { RegisterRoutes } from "../generated/routes.js";
 import GitHubController, { getGithubPrivateKey } from "./GitHubController.js";
 import { ValidateError } from "tsoa";
-import { NotFoundError, SecurityError, UserVisibleError } from "./InternalTypes.js";
+import {
+  NotFoundError,
+  SecurityError,
+  UserVisibleError,
+} from "./InternalTypes.js";
 import { VideoChatController } from "./api/VideoChatController.js";
 dotenv.config();
 
-const app = new App({
-  authStrategy: createAppAuth,
-  appId: process.env.GITHUB_APP_ID || -1,
-  privateKey: getGithubPrivateKey(),
-  oauth: {
-    clientId: process.env.GITHUB_OAUTH_CLIENT_ID || "",
-    clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET || "",
-  },
-  webhooks: {
-    secret: process.env.GITHUB_WEBHOOK_SECRET || "",
-  },
-});
-
-GitHubController.initialize(app);
+const app = GitHubController.initialize();
 
 const expressApp = express();
 expressApp.use(express.text());
-expressApp.post("/api/help-queue/meeting-callback",
+expressApp.post(
+  "/api/help-queue/meeting-callback",
   (req: Request, res: Response, next: NextFunction) => {
     const body = JSON.parse(req.body);
     (new VideoChatController()).processSNSMessage(JSON.parse(body.Message));
@@ -42,9 +34,10 @@ expressApp.use(cors({
   origin: "*",
 }));
 
-
-//@ts-ignore
-expressApp.use(createNodeMiddleware(app));
+if (app) {
+  //@ts-ignore
+  expressApp.use(createNodeMiddleware(app));
+}
 RegisterRoutes(expressApp);
 expressApp.use(
   "/docs",
@@ -105,7 +98,7 @@ expressApp.get("/", (req, res) => {
   res.send("1Hello World!");
 });
 
-GitHubController.getInstance().initializeApp().then(() => {
+GitHubController.initializeApp().then(() => {
   // expressApp.use(createAdminMiddleware(adminService));
 
   // GitHubController.getInstance().listFilesInRepo("pawtograder/example-assignment-java-handout").then((files) => {
