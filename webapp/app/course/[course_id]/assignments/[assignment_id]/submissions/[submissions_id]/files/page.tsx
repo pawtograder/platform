@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import CodeFile from "@/components/ui/code-file";
 import { Skeleton } from "@/components/ui/skeleton";
 import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Rubric, SubmissionWithFilesAndComments } from "@/utils/supabase/DatabaseTypes";
 import { Box, Container, Editable, Flex, IconButton, Link, Table } from "@chakra-ui/react";
 import { useCreate, useInvalidate, useList, useShow } from "@refinedev/core";
@@ -129,7 +130,8 @@ function RubricView({ submission }: { submission: SubmissionWithFilesAndComments
 }
 export default function FilesView() {
     const { submissions_id } = useParams();
-    const { isInstructor } = useAuthState();
+    const { role } = useClassProfiles();
+    const isInstructor = role?.role === "instructor";
     const [curFile, setCurFile] = useState<number>(0);
     const pathname = usePathname();
     const { query } = useShow<SubmissionWithFilesAndComments>({

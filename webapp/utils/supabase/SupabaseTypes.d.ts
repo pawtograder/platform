@@ -204,6 +204,52 @@ export type Database = {
           },
         ]
       }
+      discussion_thread_watchers: {
+        Row: {
+          class_id: number
+          created_at: string
+          discussion_thread_root_id: number
+          id: number
+          user_id: string
+        }
+        Insert: {
+          class_id: number
+          created_at?: string
+          discussion_thread_root_id: number
+          id?: number
+          user_id: string
+        }
+        Update: {
+          class_id?: number
+          created_at?: string
+          discussion_thread_root_id?: number
+          id?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "discussion_thread_watchers_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "discussion_thread_watchers_discussion_thread_root_id_fkey"
+            columns: ["discussion_thread_root_id"]
+            isOneToOne: false
+            referencedRelation: "discussion_threads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "discussion_thread_watchers_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       discussion_threads: {
         Row: {
           answer: number | null
@@ -803,6 +849,54 @@ export type Database = {
         }
         Relationships: []
       }
+      notifications: {
+        Row: {
+          body: Json
+          class_id: number
+          created_at: string
+          id: number
+          style: string | null
+          subject: Json
+          user_id: string
+          viewed_at: string | null
+        }
+        Insert: {
+          body: Json
+          class_id: number
+          created_at?: string
+          id?: number
+          style?: string | null
+          subject: Json
+          user_id: string
+          viewed_at?: string | null
+        }
+        Update: {
+          body?: Json
+          class_id?: number
+          created_at?: string
+          id?: number
+          style?: string | null
+          subject?: Json
+          user_id?: string
+          viewed_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       permissions: {
         Row: {
           created_at: string
@@ -905,6 +999,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "classes"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "user_roles"
+            referencedColumns: ["private_profile_id"]
           },
           {
             foreignKeyName: "repositories_user_id_fkey1"
@@ -1059,6 +1160,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "submission_files_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "user_roles"
+            referencedColumns: ["private_profile_id"]
+          },
+          {
             foreignKeyName: "submission_files_submissions_id_fkey"
             columns: ["submissions_id"]
             isOneToOne: false
@@ -1146,33 +1254,40 @@ export type Database = {
             referencedRelation: "classes"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "submissions_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "user_roles"
+            referencedColumns: ["private_profile_id"]
+          },
         ]
       }
       user_roles: {
         Row: {
           canvas_id: number | null
-          class_id: number | null
+          class_id: number
           id: number
-          private_profile_id: string | null
-          public_profile_id: string | null
+          private_profile_id: string
+          public_profile_id: string
           role: Database["public"]["Enums"]["app_role"]
           user_id: string
         }
         Insert: {
           canvas_id?: number | null
-          class_id?: number | null
+          class_id: number
           id?: number
-          private_profile_id?: string | null
-          public_profile_id?: string | null
+          private_profile_id: string
+          public_profile_id: string
           role: Database["public"]["Enums"]["app_role"]
           user_id: string
         }
         Update: {
           canvas_id?: number | null
-          class_id?: number | null
+          class_id?: number
           id?: number
-          private_profile_id?: string | null
-          public_profile_id?: string | null
+          private_profile_id?: string
+          public_profile_id?: string
           role?: Database["public"]["Enums"]["app_role"]
           user_id?: string
         }
@@ -1187,14 +1302,14 @@ export type Database = {
           {
             foreignKeyName: "user_roles_private_profile_id_fkey"
             columns: ["private_profile_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_roles_public_profile_id_fkey"
             columns: ["public_profile_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
@@ -1327,6 +1442,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submissions_profile_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "user_roles"
+            referencedColumns: ["private_profile_id"]
           },
         ]
       }

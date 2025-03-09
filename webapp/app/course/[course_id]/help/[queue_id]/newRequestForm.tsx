@@ -11,7 +11,7 @@ import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
 import { useRouter } from "next/navigation";
 import MdEditor from "@/components/ui/md-editor";
-import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 export default function HelpRequestForm() {
     const { course_id } = useParams();
     const supabase = createClient();
@@ -47,7 +47,7 @@ export default function HelpRequestForm() {
                 { field: "class", operator: "eq", value: course_id }
             ]
     });
-    const { private_profile_id } = useAuthState();
+    const { private_profile_id } = useClassProfiles();
 
     const onSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();

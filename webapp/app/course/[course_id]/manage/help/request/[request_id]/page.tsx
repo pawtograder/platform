@@ -7,11 +7,11 @@ import { BsCameraVideo, BsClipboardCheckFill, BsClipboardCheck } from "react-ico
 import { HelpRequestChatChannelProvider } from "@/lib/chat";
 import { Icon, IconButton, Skeleton, Text } from "@chakra-ui/react";
 import  HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
-import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useEffect } from "react";
 import { useState } from "react";
 const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
-    const { private_profile_id } = useAuthState();
+    const { private_profile_id } = useClassProfiles();
     const [assignee, setAssignee] = useState(request.assignee);
     useEffect(() => {
       setAssignee(request.assignee);

@@ -16,6 +16,7 @@ import { Controller } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
 import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 export default function NewDiscussionThread() {
     const { course_id } = useParams();
     const router = useRouter()
@@ -54,7 +55,7 @@ export default function NewDiscussionThread() {
             }
         ]
     })
-    const { private_profile_id } = useAuthState()
+    const { private_profile_id } = useClassProfiles()
     const onSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         async function populate() {

@@ -6,14 +6,16 @@ import { Skeleton } from './skeleton';
 import '@wooorm/starry-night/style/both';
 import { ElementContent, Element, RootContent, Root } from 'hast'
 import { Box, chakra, HStack } from '@chakra-ui/react';
-import { SubmissionWithFilesAndComments, SubmissionFileWithComments } from '@/utils/supabase/DatabaseTypes';
+import { SubmissionWithFilesAndComments, SubmissionFileWithComments, SubmissionFileComment, SubmissionWithFiles } from '@/utils/supabase/DatabaseTypes';
 import PersonName from './person-name';
 import { Text } from '@chakra-ui/react';
 import LineCommentForm from './line-comments-form';
 import Markdown from './markdown';
 import { format } from 'date-fns';
+import { useList } from '@refinedev/core';
 type CodeLineCommentContextType = {
-    submission: SubmissionWithFilesAndComments;
+    submission: SubmissionWithFiles;
+    comments: SubmissionFileComment[];
     file: SubmissionFileWithComments;
     expanded: number[];
     close: (line: number) => void;
@@ -32,10 +34,19 @@ export default function CodeFile({
     submission
 }: {
     file: SubmissionFileWithComments;
-    submission: SubmissionWithFilesAndComments;
+    submission: SubmissionWithFiles;
 }) {
     const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
     const [expanded, setExpanded] = useState<number[]>([]);
+    const { data: comments } = useList<SubmissionFileComment>({
+        resource: "submission_file_comments",
+        filters: [
+            { field: "submission_files_id", operator: "eq", value: file.id }
+        ],
+        sorters: [
+            { field: "created_at", order: "asc" }
+        ]
+    });
     useEffect(() => {
         async function highlight() {
             const highlighter = await createStarryNight(common);
@@ -79,6 +90,7 @@ export default function CodeFile({
     >
         <CodeLineCommentContext.Provider value={{
             submission,
+            comments: comments?.data || [],
             file,
             expanded,
             close: (line: number) => {
@@ -169,11 +181,11 @@ export function starryNightGutter(tree: Root, setExpanded: Dispatch<SetStateActi
 }
 
 function CodeLineComment({ lineNumber }: { lineNumber: number }) {
-    const { submission, file, expanded, close } = useCodeLineCommentContext();
+    const { submission,comments: allCommentsForFile, file, expanded, close } = useCodeLineCommentContext();
     if (!submission || !file) {
         return null;
     }
-    const comments = file.submission_file_comments?.filter((comment) => comment.line === lineNumber);
+    const comments = allCommentsForFile.filter((comment) => comment.line === lineNumber);
     const hasComments = comments && comments.length > 0;
     if (!expanded.includes(lineNumber) && !hasComments) {
         return <></>;
@@ -199,7 +211,7 @@ function CodeLineComment({ lineNumber }: { lineNumber: number }) {
             backgroundColor="bg"
             boxShadow="sm"
         >
-            {file.submission_file_comments?.filter((comment) => comment.line === lineNumber).map((comment) => (
+            {comments.map((comment) => (
                 <Box key={comment.id} m={0} p={2}>
                     <HStack spaceX={0} mb={2}>
                         <PersonName size="xs" uid={comment.author} />

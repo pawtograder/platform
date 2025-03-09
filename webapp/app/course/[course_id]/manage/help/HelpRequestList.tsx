@@ -2,7 +2,7 @@
 import { ChatGroupHeader } from '@/components/ui/help-queue/ChatGroupHeader'
 import { HelpRequestTeaser } from '@/components/ui/help-queue/HelpRequestTeaser'
 import { SearchInput } from '@/components/ui/help-queue/SearchInput'
-import useAuthState from '@/hooks/useAuthState'
+import { useClassProfiles } from '@/hooks/useClassProfiles'
 import { HelpRequest } from '@/utils/supabase/DatabaseTypes'
 import {
     Box,
@@ -16,7 +16,7 @@ import { useParams } from 'next/navigation'
 import { BsChatTextFill, BsClipboardCheckFill } from 'react-icons/bs'
 export default function HelpRequestList() {
     const { course_id, request_id } = useParams();
-    const { private_profile_id } = useAuthState();
+    const { private_profile_id } = useClassProfiles();
     const activeRequestID = request_id ? Number.parseInt(request_id as string) : null;
 
     const { data } = useList<HelpRequest>({

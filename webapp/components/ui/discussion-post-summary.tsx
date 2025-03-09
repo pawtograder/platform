@@ -24,11 +24,12 @@ import { BsChat } from 'react-icons/bs';
 import { FaCheckCircle, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { Skeleton } from "./skeleton";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 export function DiscussionThreadLikeButton({ thread }: {
     thread: DiscussionThreadType | ThreadWithChildren,
 }) {
     const supabase = createClient();
-    const { private_profile_id } = useAuthState();
+    const { private_profile_id } = useClassProfiles();
     const likeStatus = useDiscussionThreadLikes(thread.id);
     const toggleLike = useCallback(async () => {
         if (likeStatus) {

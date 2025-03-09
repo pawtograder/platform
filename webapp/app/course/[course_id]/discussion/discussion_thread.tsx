@@ -39,7 +39,6 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
         resource: "discussion_threads",
     });
     const sendMessage = useCallback(async (message: string, profile_id: string, close = true) => {
-        console.log("sendMessage", message);
         
         await mutate({
             resource: "discussion_threads",
@@ -123,7 +122,7 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                 {authorProfile ? <Avatar.Root size="sm" variant="outline" shape="square">
                     <Avatar.Fallback name={authorProfile!.name} />
                     <Avatar.Image src={authorProfile!.avatar_url} />
-                </Avatar.Root> : <SkeletonCircle size="sm" />}
+                </Avatar.Root> : <SkeletonCircle width="40px" height="40px" />}
                 <Stack w="100%">
                     <Box bg="bg.muted" rounded="l3" py="2" px="3">
                         <HStack gap="1">
@@ -132,9 +131,10 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                             </Text>
                             {authorProfile ? <Text textStyle="sm" fontWeight="semibold">
                                 {authorProfile?.name}
+                                {authorProfile?.real_name && (" (" + authorProfile?.real_name + " to self and instructors)")}
                                 {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
                                 {authorProfile?.flair && <Badge ml="2" colorPalette={authorProfile?.flair_color}>{authorProfile?.flair}</Badge>}
-                            </Text> : <Skeleton width="100px" />}
+                            </Text> : <Skeleton width="100px" height="20px" />}
                         </HStack>
                         <Box textStyle="sm" color="fg.muted">
                             <Markdown>{thread.body}</Markdown>

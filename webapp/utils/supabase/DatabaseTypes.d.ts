@@ -4,6 +4,20 @@ export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
 
+export type Notification = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["notifications"]["Row"],
+    "notifications",
+    Database["public"]["Tables"]["notifications"]["Relationships"],
+    "*"
+>;
+export type SubmissionWithFiles = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submissions"]["Row"],
+    "submissions",
+    Database["public"]["Tables"]["submissions"]["Relationships"],
+    "*, submission_files(*)"
+>;
 export type SubmissionFileComment = GetResult<
     Database["public"],
     Database["public"]["Tables"]["submission_file_comments"]["Row"],
@@ -84,6 +98,13 @@ export type DiscussionThread = GetResult<
     Database["public"]["Tables"]["discussion_threads"]["Row"],
     "discussion_threads",
     Database["public"]["Tables"]["discussion_threads"]["Relationships"],
+    "*"
+>;
+export type DiscussionThreadWatcher = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["discussion_thread_watchers"]["Row"],
+    "discussion_thread_watchers",
+    Database["public"]["Tables"]["discussion_thread_watchers"]["Relationships"],
     "*"
 >;
 

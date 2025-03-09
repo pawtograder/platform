@@ -35,6 +35,7 @@ import {
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { ColorModeButton } from "@/components/ui/color-mode";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
     { name: 'Manage Assignments', icon: FiCompass, instructor_only: true, target: `/course/${courseID}/manage/assignments` },
@@ -90,20 +91,22 @@ function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[
         </DrawerContent>
     </DrawerRoot>
 }
-export default function DynamicCourseNav({ course, courses }: { course: null | Course, courses: UserRoleWithCourse[] }) {
+export default function DynamicCourseNav() {
     const router = useRouter();
     const pathname = usePathname();
     const courseNavRef = useRef<HTMLDivElement>(null);
-    const { isInstructor } = useAuthState();
-    if (!course) {
-        return <Skeleton height="40" width="100%" />;
-    }
+    const { role: course } = useClassProfiles();
+    const { roles: courses } = useAuthState();
+    const isInstructor = course.role === "instructor";
     useEffect(() => {
         if (courseNavRef.current) {
             const height = courseNavRef.current.offsetHeight;
             document.documentElement.style.setProperty('--nav-height', `${height + 10}px`);
         }
     }, [courseNavRef?.current]);
+    if (!course || !courses) {
+        return <Skeleton height="40" width="100%" />;
+    }
     return (
         <Box px={{ base: 4, md: 4 }}
             ref={courseNavRef}
@@ -124,8 +127,8 @@ export default function DynamicCourseNav({ course, courses }: { course: null | C
                     <Box
                         fontSize="xl"
                         fontWeight="bold"
-                    ><CoursePicker courses={courses} currentCourse={course} />
-                        <Link variant="plain" href={`/course/${course.id}`}>{course.name}</Link>
+                    ><CoursePicker courses={courses} currentCourse={course.classes} />
+                        <Link variant="plain" href={`/course/${course.id}`}>{course.classes.name}</Link>
                     </Box>
                     <HStack
                         width="100%"

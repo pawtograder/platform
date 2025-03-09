@@ -13,7 +13,7 @@ import { PopConfirm } from "../popconfirm";
 import { Avatar } from "../avatar";
 import MdEditor from "../md-editor";
 import MessageInput from "../message-input";
-
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 export default function HelpRequestChat({ request, actions }: { request: HelpRequest, actions: React.ReactNode }) {
     const { messages, participants, postMessage } = useChatChannel();
     const bottomRef = useRef<HTMLDivElement>(null);
@@ -38,7 +38,7 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
         mutationMode: "optimistic",
 
     })
-    const { private_profile_id } = useAuthState();
+    const { private_profile_id } = useClassProfiles();
     const resolveRequest = useCallback(() => {
         mutate({ id: request.id, values: { resolved_by: private_profile_id, resolved_at: new Date().toISOString() } });
     }, [mutate, request.id, private_profile_id]);

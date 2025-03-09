@@ -6,11 +6,11 @@ import { ChatMessages } from './ChatMessages'
 import useUserProfiles from '@/hooks/useUserProfiles'
 import { useChatChannel, ChatMessage as ChatMessageType } from '@/lib/chat'
 import { useCallback, useRef } from 'react'
-import useAuthState from '@/hooks/useAuthState'
+import { useClassProfiles } from '@/hooks/useClassProfiles'
 export const ChatChannel = () => {
   const { messages, postMessage } = useChatChannel()
   const userProfile = useUserProfiles()
-  const { private_profile_id } = useAuthState()
+  const { private_profile_id } = useClassProfiles()
   const inputRef = useRef<HTMLTextAreaElement>(null)
   //Group messages by contiguous messages from the same user
   const groupedMessages = messages.reduce((acc, msg) => {

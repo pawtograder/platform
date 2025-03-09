@@ -3,16 +3,17 @@
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { DiscussionThread as DiscussionThreadType, DiscussionTopic, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { DiscussionThread as DiscussionThreadType, DiscussionTopic, ThreadWithChildren, DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
+import { useList, useDelete, useCreate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FaReply, FaSmile } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaReply, FaSmile } from "react-icons/fa";
 import Markdown from "react-markdown";
 import { DiscussionThread, DiscussionThreadReply, threadsToTree } from "../discussion_thread";
-
+import useAuthState from "@/hooks/useAuthState";
+import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: DiscussionTopic | undefined }) {
     const userProfile = useUserProfile(thread.author);
     return <Box>
@@ -38,6 +39,9 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: 
 function ThreadActions({ thread }: { thread: DiscussionThreadType }) {
     const [replyVisible, setReplyVisible] = useState(false);
     return <Box borderBottom="1px solid" borderColor="border.emphasized" pb="2" pt="4">
+        <Tooltip content="Watch">
+            <ThreadWatchButton thread={thread} />
+        </Tooltip>
         <Tooltip content="Reply">
             <Button aria-label="Reply" onClick={() => setReplyVisible(true)} variant="ghost" size="sm"><FaReply /></Button>
         </Tooltip>
@@ -46,6 +50,15 @@ function ThreadActions({ thread }: { thread: DiscussionThreadType }) {
         </Tooltip>
         <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
     </Box>
+}
+function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
+    const { status, setThreadWatchStatus } = useDiscussionThreadWatchStatus(thread.id);
+    return <Button variant="ghost" size="sm" onClick={() => {
+        setThreadWatchStatus(thread.id,!status);
+    }}>
+        {status ? "Unwatch" : "Watch"}
+        {status ? <FaEyeSlash /> : <FaEye />}
+    </Button>
 }
 export default function ThreadView() {
     const [thread, setThread] = useState<ThreadWithChildren>();

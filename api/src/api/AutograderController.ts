@@ -408,7 +408,7 @@ export class AutograderController extends Controller {
         const { repository, sha } = decoded;
         let class_id, assignment_id: number;
         let submission_id: number | null = null;
-        let user_id: string | null = null;
+        let profile_id: string | null = null;
         if (autograder_regression_test_id) {
             //It's a regression test run
             const { data: regressionTestRun } = await supabase.from(
@@ -443,7 +443,7 @@ export class AutograderController extends Controller {
             }
             class_id = submission.class_id;
             submission_id = submission.id;
-            user_id = submission.profile_id;
+            profile_id = submission.profile_id;
             assignment_id = submission.assignment_id;
         }
 
@@ -456,9 +456,9 @@ export class AutograderController extends Controller {
         const { error, data: resultID } = await supabase.from(
             "grader_results",
         ).insert({
-            submission_id: submission_id,
-            profile_id: user_id,
-            class_id: class_id,
+            submission_id,
+            profile_id,
+            class_id,
             ret_code: requestBody.ret_code,
             grader_sha: requestBody.grader_sha,
             score: requestBody.feedback.score ||
@@ -499,8 +499,8 @@ export class AutograderController extends Controller {
                     requestBody.feedback.output[visibility as OutputVisibility];
                 if (output) {
                     await supabase.from("grader_result_output").insert({
-                        class_id: class_id,
-                        student_id: user_id,
+                        class_id,
+                        profile_id,
                         grader_result_id: resultID.id,
                         visibility: visibility as OutputVisibility,
                         format: output.output_format || "text",
@@ -514,7 +514,7 @@ export class AutograderController extends Controller {
             .from("grader_result_tests").insert(
                 requestBody.feedback.tests.map((test) => ({
                     class_id: class_id,
-                    student_id: user_id,
+                    student_id: profile_id,
                     grader_result_id: resultID.id,
                     name: test.name,
                     output: test.output,

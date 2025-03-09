@@ -14,10 +14,12 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     const client = await createClient();
     const user = (await client.auth.getUser()).data.user;
     let assignments = await client.from("assignments")
-        .select("*, submissions(*, grader_results(*)), repositories(*)")
+        .select("*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))")
         .eq("class_id", Number(course_id))
-        .eq("repositories.user_id", user!.id)
+        .eq("repositories.user_roles.user_id", user!.id)
         .order("due_date", { ascending: false });
+    console.log(assignments)
+    console.log(assignments.data);
 
     //list identities
     const identities = await client.auth.getUserIdentities();
@@ -37,7 +39,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
                 }
             });
             assignments = await client.from("assignments")
-                .select("*, submissions(*, grader_results(*)), repositories(*)")
+                .select("*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))")
                 .eq("class_id", Number(course_id))
                 .eq("repositories.user_id", user!.id)
                 .order("due_date", { ascending: false });

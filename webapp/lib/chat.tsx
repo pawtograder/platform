@@ -5,6 +5,7 @@ import { createClient } from "@/utils/supabase/client"
 import useAuthState from "@/hooks/useAuthState"
 import { HelpRequest, HelpRequestMessage } from "@/utils/supabase/DatabaseTypes"
 import { useCreate, useList } from "@refinedev/core"
+import { useClassProfiles } from "@/hooks/useClassProfiles"
 export type ChatMessage = {
     id: number | string
     message: string
@@ -25,7 +26,7 @@ export const useChatChannel = () => {
     return ctx
 }
 export function HelpRequestChatChannelProvider({ help_request, children }: { help_request: HelpRequest, children: React.ReactNode }) {
-    const { private_profile_id } = useAuthState()
+    const { private_profile_id } = useClassProfiles()
     const [participants, setParticipants] = useState<string[]>([])
     const { data: help_request_messages } = useList<HelpRequestMessage>({
         resource: "help_request_messages",
@@ -98,7 +99,7 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
 export function EphemeralChatChannelProvider({ queue_id, class_id, children }: { queue_id: number, class_id: number, children: React.ReactNode }) {
     const [channel, setChannel] = useState<RealtimeChannel>()
     const [messages, setMessages] = useState<ChatMessage[]>([])
-    const { private_profile_id } = useAuthState()
+    const { private_profile_id } = useClassProfiles()
     const [participants, setParticipants] = useState<string[]>([])
     const postMessage = useCallback(async (message: string, profile_id: string) => {
         if (!channel || !private_profile_id) { return }

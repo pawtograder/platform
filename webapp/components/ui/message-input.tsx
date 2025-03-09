@@ -23,7 +23,7 @@ import Markdown from '@/components/ui/markdown';
 import { createClient } from '@/utils/supabase/client';
 import { useParams } from 'next/navigation';
 import { Tooltip } from './tooltip';
-import useAuthState from '@/hooks/useAuthState';
+import { useClassProfiles } from '@/hooks/useClassProfiles';
 import { useUserProfile } from '@/hooks/useUserProfiles';
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
     defaultSingleLine?: boolean;
@@ -45,7 +45,7 @@ export default function MessageInput(props: MessageInputProps) {
         setValue(value);
         props.onChange?.(value);
     }, [props.onChange]);
-    const { public_profile_id, private_profile_id } = useAuthState();
+    const { public_profile_id, private_profile_id } = useClassProfiles();
     const public_profile = useUserProfile(public_profile_id);
     const private_profile = useUserProfile(private_profile_id);
     const profile_id = anonymousMode ? public_profile_id! : private_profile_id!;

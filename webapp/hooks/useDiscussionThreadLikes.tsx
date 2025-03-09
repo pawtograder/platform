@@ -1,8 +1,8 @@
 import { useList } from "@refinedev/core";
 import { DiscussionThreadLike } from "@/utils/supabase/DatabaseTypes";
-import useAuthState from "./useAuthState";
+import { useClassProfiles } from "./useClassProfiles";
 export function useDiscussionThreadLikes(thread_id: number) {
-    const { private_profile_id } = useAuthState();
+    const { private_profile_id } = useClassProfiles();
     const { data, isLoading, error } = useList<DiscussionThreadLike>({
         resource: "discussion_thread_likes",
         pagination: {
