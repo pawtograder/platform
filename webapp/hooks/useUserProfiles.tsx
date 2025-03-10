@@ -49,7 +49,7 @@ export function useUserProfile(id: string | null): { flair?: string, flair_color
     if (isLoading) {
         return undefined;
     }
-    if (!profile || !profile.data.name) {
+    if (!profile || !profile.data?.name) {
         console.log("User profile not found", id);
         return undefined;
     }

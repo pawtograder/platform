@@ -1,14 +1,18 @@
 import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
+import { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import useAuthState from "@/hooks/useAuthState";
+import { useDiscussionThreadReadStatus } from "@/hooks/useDiscussionThreadReadStatus";
+import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useIntersection } from "@/hooks/useViewportIntersection";
 import { DiscussionThread as DiscussionThreadType, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text  } from "@chakra-ui/react";
 import { useCreate, useInvalidate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 
 export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildren {
@@ -74,6 +78,7 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
         <Button variant="ghost" onClick={() => setVisible(false)}>Cancel</Button>
     </Container>
 }
+
 export function DiscussionThread({ thread, borders, originalPoster }: {
     thread: ThreadWithChildren, borders:
     {
@@ -84,8 +89,27 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
     },
     originalPoster: string
 }) {
+    const ref = useRef<HTMLDivElement>(null);
+    const isVisible = useIntersection(ref);
+    const {threadIsUnread, setUnread} = useDiscussionThreadReadStatus(thread.id);
     const [replyVisible, setReplyVisible] = useState(false);
+    const {notifications, set_read} = useNotifications();   
     const authorProfile = useUserProfile(thread.author);
+
+    useEffect(() => {
+        if (isVisible && threadIsUnread) {
+            setUnread(thread.root!, thread.id, false);
+        }
+    }, [isVisible, threadIsUnread, setUnread, thread.id, thread.root]);
+    useEffect(() => {
+        const relevantNotifications = notifications.filter(notification => {
+            const body = notification.body as DiscussionThreadNotification;
+            return notification.viewed_at === null && body.type === "discussion_thread" && body.root_thread_id === thread.root;
+        });
+        relevantNotifications.forEach(notification => {
+            set_read(notification.id, true);
+        });
+    }, [notifications, set_read, thread.id]);
 
     const outerBorders = (present: boolean[]): JSX.Element => {
         let ret: JSX.Element[] = []
@@ -100,8 +124,6 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
         return <>{ret}</>
     }
     return <Container pl="8" pr="0" alignSelf="flex-start">
-
-
         <Box pos="relative" w="100%" pt="2">
             <Box
                 pos="absolute"
@@ -124,7 +146,7 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                     <Avatar.Image src={authorProfile!.avatar_url} />
                 </Avatar.Root> : <SkeletonCircle width="40px" height="40px" />}
                 <Stack w="100%">
-                    <Box bg="bg.muted" rounded="l3" py="2" px="3">
+                    <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref}>
                         <HStack gap="1">
                             <Text textStyle="sm" fontWeight="semibold">
                                 <Link id={`post-${thread.ordinal}`} href={`/course/${thread.class_id}/discussion/${thread.root}#post-${thread.ordinal}`}>#{thread.ordinal}</Link>

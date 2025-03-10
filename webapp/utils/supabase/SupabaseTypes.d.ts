@@ -204,11 +204,61 @@ export type Database = {
           },
         ]
       }
+      discussion_thread_read_status: {
+        Row: {
+          created_at: string
+          discussion_thread_id: number
+          discussion_thread_root_id: number
+          id: number
+          read_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          discussion_thread_id: number
+          discussion_thread_root_id: number
+          id?: number
+          read_at?: string | null
+          user_id?: string
+        }
+        Update: {
+          created_at?: string
+          discussion_thread_id?: number
+          discussion_thread_root_id?: number
+          id?: number
+          read_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "discussion_thread_read_status_discussion_thread_id_fkey"
+            columns: ["discussion_thread_id"]
+            isOneToOne: false
+            referencedRelation: "discussion_threads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "discussion_thread_read_status_discussion_thread_root_id_fkey"
+            columns: ["discussion_thread_root_id"]
+            isOneToOne: false
+            referencedRelation: "discussion_threads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "discussion_thread_read_status_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       discussion_thread_watchers: {
         Row: {
           class_id: number
           created_at: string
           discussion_thread_root_id: number
+          enabled: boolean
           id: number
           user_id: string
         }
@@ -216,6 +266,7 @@ export type Database = {
           class_id: number
           created_at?: string
           discussion_thread_root_id: number
+          enabled?: boolean
           id?: number
           user_id: string
         }
@@ -223,6 +274,7 @@ export type Database = {
           class_id?: number
           created_at?: string
           discussion_thread_root_id?: number
+          enabled?: boolean
           id?: number
           user_id?: string
         }

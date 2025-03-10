@@ -8,12 +8,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useUserProfile } from '@/hooks/useUserProfiles';
 import { DiscussionThread } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Box, Button, Flex, Heading, HStack, Icon, Separator, Spacer, Stack, Text } from "@chakra-ui/react";
+import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Icon, Separator, Spacer, Stack, Text } from "@chakra-ui/react";
 import excerpt from '@stefanprobst/remark-excerpt';
 import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
 import { Fragment, useId } from "react";
 import { FaPlus } from "react-icons/fa";
+import { useDiscussionThreadReadStatusForRoot } from "@/hooks/useDiscussionThreadReadStatus";
 interface MessageData {
     user: string
     updatedAt: string
@@ -29,17 +30,27 @@ interface Props {
 }
 
 const DiscussionThreadTeaser = (props: Props) => {
-    const { author, created_at, body, subject, children_count} = props.thread
+    const { author, created_at, body, subject, children_count } = props.thread
     const avatarTriggerId = useId()
     const { root_id } = useParams();
     const selected = root_id ? props.thread.id === Number.parseInt(root_id as string) : false;
 
+    const { threadRead } = useDiscussionThreadReadStatusForRoot(props.thread.id);
+
     const userProfile = useUserProfile(author);
-    return (<><NextLink href={`/course/${props.thread.class_id}/discussion/${props.thread.id}`}>
+    return (<Box position="relative"><NextLink href={`/course/${props.thread.class_id}/discussion/${props.thread.id}`}>
+        <Box position="absolute" left="1" top="3" transform="translateY(-50%)">
+                {threadRead?.rootIsUnread && (
+                    <Box w="8px" h="8px" bg="blue.500" rounded="full">
+                    </Box>
+                )}
+        </Box>
         <HStack align="flex-start" gap="3" px="4" py="3"
             _hover={{ bg: 'bg.muted' }} rounded="md"
             width="100%"
-            bg={selected ? 'bg.muted' : ''}
+            bg={
+                threadRead?.rootIsUnread ? 'bg.info' :
+                    selected ? 'bg.muted' : ''}
         >
             <Box pt="1">
                 <Tooltip ids={{ trigger: avatarTriggerId }} openDelay={0} showArrow content={userProfile?.name}>
@@ -85,6 +96,9 @@ const DiscussionThreadTeaser = (props: Props) => {
                     >{body}</Markdown>
                     <HStack>
                         <Text fontSize="xs" color="text.muted">{children_count} replies</Text>
+                        {(threadRead?.repliesRead !== children_count)
+                     ? <Badge size="xs"colorScheme="green">{children_count - (threadRead?.repliesRead ?? 0)} new</Badge> : <></>}
+
                         <Spacer />
                         <Text fontSize="xs" color="text.muted">{formatRelative(new Date(created_at), new Date())}</Text>
                     </HStack>
@@ -92,7 +106,7 @@ const DiscussionThreadTeaser = (props: Props) => {
             </Stack>
         </HStack>
     </NextLink>
-    </>
+    </Box>
     )
 }
 
@@ -145,7 +159,7 @@ export default function DiscussionThreadList() {
             </Button>
         </Box>
 
-        <Box width="100%" flex={1} overflow="auto" pr="4">
+        <Box width="100%" flex={1} overflowY="auto" pr="4">
             <Box role="list" aria-busy={list.isLoading} aria-live="polite" aria-label="Discussion threads">
 
                 {list.isLoading && <Skeleton height="300px" />}

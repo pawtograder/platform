@@ -28,7 +28,7 @@ export default function NotificationsBox() {
                 <Popover.Positioner>
                     <Popover.Content>
                         <Popover.Arrow />
-                        <Popover.Body>
+                        <Popover.Body overflowY="auto">
                             <Popover.Title fontWeight="medium">Notifications</Popover.Title>
                             <VStack align="stretch" spaceY={0}>
                                 {notifications?.map(n => (

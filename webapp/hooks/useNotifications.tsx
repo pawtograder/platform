@@ -25,6 +25,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         resource: "notifications",
         filters: [
             { field: "user_id", operator: "eq", value: user?.id }
+        ],
+        liveMode: "auto",
+        sorters: [
+            { field: "viewed_at", order: "desc" },
+            { field: "created_at", order: "desc" }
         ]
     });
     const { mutateAsync: update_notification } = useUpdate<Notification>({

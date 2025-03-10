@@ -48,10 +48,11 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
             { field: "class_id", operator: "eq", value: Number(course_id as string) }
         ]
     });
+    
     if (!profiles?.data || !roles?.data) {
         return <Skeleton height="100px" width="100%" />
     }
-    const myRole = myRoles?.find(r => r.user_id === user?.id);
+    const myRole = myRoles?.find(r => r.user_id === user?.id && r.class_id === Number(course_id as string));
     if (!myRole) {
         return <NotFound />
     }

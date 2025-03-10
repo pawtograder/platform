@@ -133,7 +133,7 @@ export default function DynamicCourseNav() {
                     <HStack
                         width="100%"
                     >
-                        {LinkItems(course.id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => (
+                        {LinkItems(course.class_id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => (
                             <Box key={link.name}
                                 borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
                                 borderColor="orange.600"

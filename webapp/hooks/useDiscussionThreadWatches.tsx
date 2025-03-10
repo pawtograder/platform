@@ -1,7 +1,7 @@
 'use client';
 import { createContext, useEffect } from "react";
 import { useContext, useState } from "react";
-import { useList, useCreate, useDelete } from "@refinedev/core";
+import { useList, useCreate, useDelete, useUpdate } from "@refinedev/core";
 import { DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
 import useAuthState from "./useAuthState";
 import { useParams } from "next/navigation";
@@ -9,7 +9,6 @@ type DiscussionThreadWatchContext = {
     unsubscribeFromThreadWatch(threadId: number, callback: (isWatched: boolean) => void): void;
     threadWatchStatus(threadId: number, callback: (isWatched: boolean) => void): boolean;
     setThreadWatchStatus(threadId: number, status: boolean): void;
-    data: DiscussionThreadWatcher[];
 }
 
 const DiscussionThreadWatchContext = createContext<DiscussionThreadWatchContext | undefined>(undefined);
@@ -33,7 +32,7 @@ export function useDiscussionThreadWatchStatus(threadId: number) {
         return () => {
             unsubscribeFromThreadWatch(threadId, cb);
         }
-    }, [threadId]);
+    }, [threadId, threadWatchStatus, setThreadWatchStatus, unsubscribeFromThreadWatch]);
     return {
         status,
         setThreadWatchStatus
@@ -62,45 +61,49 @@ export function DiscussionThreadWatchProvider({ children }: { children: React.Re
         pagination: {
             pageSize: 1000,
         },
-        liveMode: "manual",
+        liveMode: "auto",
         onLiveEvent: (event) => {
-            //TODO
-            console.log("Live event");
             if (event.type === "created") {
-                const newID = event.payload.id;
-                const subscriptions = subscribedComponents.get(newID.toString()) || [];
-                console.log("Subscriptions", subscriptions);
-                subscriptions.forEach(c => c.callback(true));
+                const threadID = event.payload.discussion_thread_root_id;
+                const subscriptions = subscribedComponents.get(threadID.toString()) || [];
+                subscriptions.forEach(c => c.callback(event.payload.enabled));
             }
-            console.log(event);
+            else if (event.type === "updated") {
+                const threadID = event.payload.discussion_thread_root_id;
+                const subscriptions = subscribedComponents.get(threadID.toString()) || [];
+                subscriptions.forEach(c => c.callback(event.payload.enabled));
+            }
         }
     });
     const { mutateAsync: createThreadWatcher } = useCreate({
         resource: "discussion_thread_watchers",
     });
-    const { mutateAsync: deleteThreadWatcher } = useDelete({
+    const { mutateAsync: updateWatch } = useUpdate({
+        resource: "discussion_thread_watchers",
+        values: {
+            enabled: false
+        }
     });
     return <DiscussionThreadWatchContext.Provider value={{
-        data: threadWatches?.data || [],
         threadWatchStatus: (threadId: number, callback: (isWatched: boolean) => void) => {
             const components = subscribedComponents.get(threadId.toString()) || [];
             subscribedComponents.set(threadId.toString(), [...components, { callback }]);
-            console.log("Checking watch status for thread", threadId);
-            console.log(subscribedComponents);
-            console.log(threadWatches?.data);
-            return threadWatches?.data.find(w => w.discussion_thread_root_id === threadId) !== undefined;
+            return threadWatches?.data.find(w => w.discussion_thread_root_id === threadId)?.enabled ?? false;
         },
         unsubscribeFromThreadWatch: (threadId: number, callback: (isWatched: boolean) => void) => {
-            console.log("Unsubscribing from thread watch", threadId, callback);
             const components = subscribedComponents.get(threadId.toString()) || [];
             subscribedComponents.set(threadId.toString(), components.filter(c => c.callback !== callback));
         },
         setThreadWatchStatus: (threadId: number, status: boolean) => {
             const threadWatch = threadWatches?.data.find(w => w.discussion_thread_root_id === threadId);
-            console.log("Setting thread watch status", threadId, status);
-            console.log(threadWatches?.data);
             if (status) {
                 if (threadWatch) {
+                    updateWatch({
+                        id: threadWatch.id,
+                        values: {
+                            enabled: true
+                        }
+                    })
                     return;
                 }
                 createThreadWatcher({
@@ -114,9 +117,11 @@ export function DiscussionThreadWatchProvider({ children }: { children: React.Re
                 if (!threadWatch) {
                     return;
                 }
-                deleteThreadWatcher({
+                updateWatch({
                     id: threadWatch.id,
-                    resource: "discussion_thread_watchers",
+                    values: {
+                        enabled: false
+                    }
                 })
             }
         }

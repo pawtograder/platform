@@ -107,6 +107,13 @@ export type DiscussionThreadWatcher = GetResult<
     Database["public"]["Tables"]["discussion_thread_watchers"]["Relationships"],
     "*"
 >;
+export type DiscussionThreadReadStatus = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["discussion_thread_read_status"]["Row"],
+    "discussion_thread_read_status",
+    Database["public"]["Tables"]["discussion_thread_read_status"]["Relationships"],
+    "*"
+>;
 
 export type ThreadWithChildren = DiscussionThread & {
     children: ThreadWithChildren[]

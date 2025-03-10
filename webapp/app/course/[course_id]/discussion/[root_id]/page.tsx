@@ -14,6 +14,7 @@ import Markdown from "react-markdown";
 import { DiscussionThread, DiscussionThreadReply, threadsToTree } from "../discussion_thread";
 import useAuthState from "@/hooks/useAuthState";
 import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
+import { useDiscussionThreadReadStatus } from "@/hooks/useDiscussionThreadReadStatus";
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: DiscussionTopic | undefined }) {
     const userProfile = useUserProfile(thread.author);
     return <Box>
@@ -103,6 +104,12 @@ export default function ThreadView() {
             }
         ]
     })
+    const {threadIsUnread, setUnread} = useDiscussionThreadReadStatus(Number.parseInt(root_id as string));
+    useEffect(() => {
+        if (threadIsUnread) {
+            setUnread(Number.parseInt(root_id as string), Number.parseInt(root_id as string), false);
+        }
+    }, [threadIsUnread, setUnread]);
     useEffect(() => {
         if (data) {
             setThread(threadsToTree(data.data));
