@@ -1,26 +1,13 @@
 'use client'
 
-import { useParams } from "next/navigation"
-import { MeetingProvider, VoiceFocusProvider, BackgroundBlurProvider, BackgroundReplacementProvider, useMeetingManager } from "amazon-chime-sdk-component-library-react"
-import { NavigationProvider } from "@/lib/aws-chime-sdk-meeting/providers/NavigationProvider"
-import { createContext, useCallback, useContext, useEffect, useState } from "react"
-import { DeviceSetup } from "@/lib/aws-chime-sdk-meeting/views"
-import dynamic from 'next/dynamic'
-import { MeetingSessionConfiguration } from "amazon-chime-sdk-js"
-import { fetchGetMeeting } from "@/lib/generated/pawtograderComponents"
-import { join } from "path"
-import useUserProfiles from "@/hooks/useUserProfiles"
+import { EphemeralChatChannelProvider } from "@/lib/chat"
 import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes"
+import { Box, Heading, Tabs } from "@chakra-ui/react"
 import { useList, useShow } from "@refinedev/core"
-import { Box, DataList, Heading, Text, Tabs, TabsList, TabsIndicator } from "@chakra-ui/react"
-import { createClient } from "@/utils/supabase/client"
-import { RealtimeChannel } from "@supabase/supabase-js"
-import { EphemeralChatChannelProvider, useChatChannel } from "@/lib/chat"
-import { ChatChannel } from "@/components/ui/chat/ChatChannel"
+import { useParams } from "next/navigation"
 import CurrentRequest from "./currentRequest"
-import useAuthState from "@/hooks/useAuthState"
-import HelpRequestHistory from "./resolvedRequests"
 import HelpRequestForm from "./newRequestForm"
+import HelpRequestHistory from "./resolvedRequests"
 
 export default function HelpQueuePage() {
     const { queue_id, course_id } = useParams()

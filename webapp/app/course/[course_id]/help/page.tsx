@@ -12,7 +12,7 @@ export default function HelpPage() {
         resource: 'help_queues',
         filters: [
             {
-                field: 'class',
+                field: 'class_id',
                 operator: 'eq',
                 value: course_id
             }
