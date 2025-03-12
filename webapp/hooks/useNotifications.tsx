@@ -16,7 +16,7 @@ export function useNotification(notification_id: number) {
     }, [notification_id, controller]);
     return notification;
 }
-export function useNotifications() {
+export function useNotifications(resource?: string, id?: number) {
     const controller = useCourseController();
     const { mutateAsync: update_notification } = useUpdate<Notification>({
         resource: "notifications",
@@ -45,13 +45,26 @@ export function useNotifications() {
         });
         await delete_notification({ id: notification.id, resource: "notifications" });
     }, [delete_notification, controller]);
-    const [notifications, setNotifications] = useState<Notification[]>([]);
-    useEffect(() => {
-        const { unsubscribe, data } = controller.listGenericData<Notification>("notifications", (data) => {
+    if (resource && id) {
+        const [notifications, setNotifications] = useState<Notification[]>([]);
+        useEffect(() => {
+            const { unsubscribe, data } = controller.getValueWithSubscription<Notification>(resource, id, (data) => {
+                setNotifications([data]);
+            });
+            if (data)
+                setNotifications([data]);
+            return () => unsubscribe();
+        }, [controller, resource, id]);
+        return { notifications, set_read, dismiss };
+    } else {
+        const [notifications, setNotifications] = useState<Notification[]>([]);
+        useEffect(() => {
+            const { unsubscribe, data } = controller.listGenericData<Notification>("notifications", (data) => {
+                setNotifications(data);
+            });
             setNotifications(data);
-        });
-        setNotifications(data);
-        return () => unsubscribe();
-    }, [controller]);
-    return { notifications, set_read, dismiss };
+            return () => unsubscribe();
+        }, [controller]);
+        return { notifications, set_read, dismiss };
+    }
 }

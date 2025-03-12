@@ -64,6 +64,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
                     read_at: isUnread ? null : new Date()
                 }
             }).catch((error) => {
+                console.error("error creating thread read status", error);
             });
         }
     }, [user?.id, createdThreadReadStatuses, controller]);
@@ -231,7 +232,9 @@ class CourseController {
             const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
             if (isRoot) {
                 //Calculate the number of read descendants
-                const readDescendants = this.discussionThreadReadStatuses.values().filter(status => status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
+                const readDescendants = this.discussionThreadReadStatuses.values().filter(status => 
+                    status.discussion_thread_id != status.discussion_thread_root_id &&
+                    status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
                 let numReadDescendants = 0;
                 for (const status of readDescendants) {
                     numReadDescendants += status.read_at ? 1 : 0;
@@ -254,7 +257,9 @@ class CourseController {
                 //Then root
                 const root = this.discussionThreadReadStatuses.get(updatedStatus.discussion_thread_root_id);
                 if (root) {
-                    const readDescendants = this.discussionThreadReadStatuses.values().filter(status => status.discussion_thread_root_id === updatedStatus.discussion_thread_root_id && status.read_at);
+                    const readDescendants = this.discussionThreadReadStatuses.values().filter(status =>
+                        status.discussion_thread_id != status.discussion_thread_root_id &&
+                        status.discussion_thread_root_id === updatedStatus.discussion_thread_root_id && status.read_at);
                     let numReadDescendants = 0;
                     for (const status of readDescendants) {
                         numReadDescendants += status.read_at ? 1 : 0;
@@ -298,7 +303,8 @@ class CourseController {
             for (const thread of data) {
                 this.discussionThreadReadStatuses.set(thread.discussion_thread_id, {
                     ...thread,
-                    numReadDescendants: data.filter(t => t.discussion_thread_root_id === thread.discussion_thread_id && t.read_at).length
+                    numReadDescendants: data.filter(t => t.discussion_thread_id != t.discussion_thread_root_id &&
+                        t.discussion_thread_root_id === thread.discussion_thread_id && t.read_at).length
                 });
                 this.notifyDiscussionThreadReadStatusSubscribers(thread.discussion_thread_id, this.discussionThreadReadStatuses.get(thread.discussion_thread_id)!);
             }

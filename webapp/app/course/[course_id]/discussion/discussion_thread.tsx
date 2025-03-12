@@ -13,7 +13,7 @@ import { DiscussionThread as DiscussionThreadType, ThreadWithChildren } from "@/
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 
 export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildren {
@@ -84,7 +84,7 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
 
 function NotificationAndReadStatusUpdater({ thread_id, root_thread_id }: { thread_id: number, root_thread_id: number }) {
     const { readStatus, setUnread } = useDiscussionThreadReadStatus(thread_id);
-    const { notifications, set_read } = useNotifications();
+    const { notifications, set_read } = useNotifications('discussion_thread', thread_id);
     const ref = useRef<HTMLDivElement>(null);
     const isVisible = useIntersection(ref, { delay: 1000, rootMargin: "0px" });
     const threadIsUnread = readStatus !== undefined && !readStatus?.read_at;
@@ -125,7 +125,7 @@ export function useLogIfChanged<T>(name: string, value: T) {
     }
 }
 
-export const DiscussionThread = ({ thread_id, borders }: {
+export const DiscussionThread = memo(({ thread_id, borders }: {
     thread_id: number, borders:
     {
         indent: boolean,
@@ -226,4 +226,4 @@ export const DiscussionThread = ({ thread_id, borders }: {
         }
         {/* </Box> */}
     </Container>
-}
+})
