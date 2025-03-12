@@ -2,19 +2,19 @@
 
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
+import useDiscussionThreadChildren, { DiscussionThreadsControllerProvider } from "@/hooks/useDiscussionThreadRootController";
+import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { DiscussionThread as DiscussionThreadType, DiscussionTopic, ThreadWithChildren, DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
+import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Heading, HStack, Text, VStack } from "@chakra-ui/react";
-import { useList, useDelete, useCreate } from "@refinedev/core";
+import { useList, useOne } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { FaEye, FaEyeSlash, FaReply, FaSmile } from "react-icons/fa";
 import Markdown from "react-markdown";
-import { DiscussionThread, DiscussionThreadReply, threadsToTree } from "../discussion_thread";
-import useAuthState from "@/hooks/useAuthState";
-import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
-import { useDiscussionThreadReadStatus } from "@/hooks/useDiscussionThreadReadStatus";
+import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: DiscussionTopic | undefined }) {
     const userProfile = useUserProfile(thread.author);
     return <Box>
@@ -55,15 +55,14 @@ function ThreadActions({ thread }: { thread: DiscussionThreadType }) {
 function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
     const { status, setThreadWatchStatus } = useDiscussionThreadWatchStatus(thread.id);
     return <Button variant="ghost" size="sm" onClick={() => {
-        setThreadWatchStatus(thread.id,!status);
+        setThreadWatchStatus(thread.id, !status);
     }}>
         {status ? "Unwatch" : "Watch"}
         {status ? <FaEyeSlash /> : <FaEye />}
     </Button>
 }
-export default function ThreadView() {
-    const [thread, setThread] = useState<ThreadWithChildren>();
-    const { course_id, root_id } = useParams();
+
+function DiscussionPost({ root_id, course_id }: { root_id: number, course_id: number }) {
     const { data: discussion_topics } = useList<DiscussionTopic>({
         resource: "discussion_topics",
         meta: {
@@ -77,79 +76,63 @@ export default function ThreadView() {
             }
         ]
     })
-    const { data, isLoading, error } = useList<DiscussionThreadType>({
+    const { data: rootThread, isLoading } = useOne<DiscussionThreadType>({
         resource: "discussion_threads",
+        id: root_id.toString(),
         meta: {
-            select: "*"
-        },
-        pagination: {
-            pageSize: 10000
-        },
-        liveMode: "manual",
-        onLiveEvent: (event) => {
-            console.log(event)
+            //Avoid selecting the children count so that the page is stable during replies
+            select: 'answer, author, body, class_id, created_at, draft, edited_at, id, instructors_only, is_question, ordinal, parent, root, root_class_id, subject, topic_id'
         },
         queryOptions: {
-            staleTime: Infinity, // Realtime data
+            enabled: !!root_id,
+            staleTime: Infinity,
+            cacheTime: Infinity,
         },
-        sorters: [{
-            field: "created_at",
-            order: "asc"
-        }],
-        filters: [
-            {
-                field: 'root',
-                operator: 'eq',
-                value: root_id
-            }
-        ]
     })
-    const {threadIsUnread, setUnread} = useDiscussionThreadReadStatus(Number.parseInt(root_id as string));
-    useEffect(() => {
-        if (threadIsUnread) {
-            setUnread(Number.parseInt(root_id as string), Number.parseInt(root_id as string), false);
-        }
-    }, [threadIsUnread, setUnread]);
-    useEffect(() => {
-        if (data) {
-            setThread(threadsToTree(data.data));
-        }
-    }, [data, data?.data]);
 
-    if (!data || !thread) {
+    const { readStatus, setUnread } = useDiscussionThreadReadStatus(root_id);
+
+    useEffect(() => {
+        if (!readStatus?.read_at) {
+            setUnread(root_id, root_id, false);
+        }
+    }, [readStatus, setUnread]);
+
+
+    if (isLoading || !discussion_topics?.data || !rootThread?.data) {
         return <Skeleton height="100px" />
     }
-    if (data.data.length === 0) {
-        return <Box>
-            No thread found
-        </Box>
-    }
-    const rootThread = data.data.find((t) => t.id === Number.parseInt(root_id as string));
-    if (!rootThread) {
-        return <Box>
-            Thread not found
-        </Box>
-    }
-
-    return <Box width="100%">
-        <ThreadHeader thread={rootThread} topic={discussion_topics?.data.find((t) => t.id === rootThread.topic_id)} />
+    return <>
+        <ThreadHeader thread={rootThread.data} topic={discussion_topics?.data.find((t) => t.id === rootThread.data.topic_id)} />
         <Box>
-            <Markdown>{rootThread.body}</Markdown>
+            <Markdown>{rootThread.data.body}</Markdown>
         </Box>
-        <ThreadActions thread={rootThread} />
+        <ThreadActions thread={rootThread.data} /></>
+
+}
+function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number, course_id: number }) {
+
+    const thread = useDiscussionThreadChildren(root_id);
+    return <>
+        <DiscussionPost root_id={root_id} course_id={course_id} />
         {
-            (thread as ThreadWithChildren).children && (thread as ThreadWithChildren).children.map((child, index) => (
-                <DiscussionThread key={child.id} thread={child}
+            thread && thread.children.map((child, index) => (
+                <DiscussionThread key={child.id} thread_id={child.id}
                     borders={{
                         indent: false,
-                        outerSiblings: (thread as ThreadWithChildren).children.length > 1 && index !== (thread as ThreadWithChildren).children.length - 1 ? [true] : [false],
-                        descendant: child.children_count > 0,
+                        outerSiblings: thread.children.length > 1 && index !== thread.children.length - 1 ? [true] : [false],
                         isFirstDescendantOfParent: index === 0,
                     }}
-                    originalPoster={thread.author}
                 />
             ))
         }
-    </Box >
-
+    </>
+}
+export default function ThreadView() {
+    const { course_id, root_id } = useParams();
+    return <Box width="100%">
+        <DiscussionThreadsControllerProvider root_id={Number.parseInt(root_id as string)}>
+            <DiscussionPostWithChildren root_id={Number.parseInt(root_id as string)} course_id={Number.parseInt(course_id as string)} />
+        </DiscussionThreadsControllerProvider>
+    </Box>
 }

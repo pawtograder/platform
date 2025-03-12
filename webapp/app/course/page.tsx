@@ -7,7 +7,7 @@ import Link from "@/components/ui/link";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import LinkAccount from "@/components/github/link-account";
-import { linkGitHubAction } from "../actions";
+import { linkGitHubAction, signOutAction } from "../actions";
 import UserMenu from "./UserMenu";
 import SemesterText from "@/components/ui/semesterText";
 export default async function ProtectedPage() {
@@ -49,7 +49,7 @@ export default async function ProtectedPage() {
             fontSize="2xl"
             fontWeight="bold"
           >Pawtograder</Box>
-          <UserMenu />
+          <Button onClick={signOutAction}>Sign out</Button>
         </Flex>
         {actions}
         <Heading size="xl">Your courses</Heading>

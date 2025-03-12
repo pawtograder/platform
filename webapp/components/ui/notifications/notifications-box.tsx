@@ -32,7 +32,7 @@ export default function NotificationsBox() {
                             <Popover.Title fontWeight="medium">Notifications</Popover.Title>
                             <VStack align="stretch" spaceY={0}>
                                 {notifications?.map(n => (
-                                    <NotificationTeaser key={n.id} notification={n} markAsRead={() => set_read(n.id, true)} dismiss={() => dismiss(n.id)}/>
+                                    <NotificationTeaser key={n.id} notification_id={n.id} markAsRead={() => set_read(n, true)} dismiss={() => dismiss(n)}/>
                                 ))}
                             </VStack>
                         </Popover.Body>

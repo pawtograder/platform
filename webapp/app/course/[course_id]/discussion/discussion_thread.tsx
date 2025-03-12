@@ -3,16 +3,17 @@ import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
-import useAuthState from "@/hooks/useAuthState";
-import { useDiscussionThreadReadStatus } from "@/hooks/useDiscussionThreadReadStatus";
+import { useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
+import useDiscussionThreadChildren from "@/hooks/useDiscussionThreadRootController";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
+import { createClient } from "@/utils/supabase/client";
 import { DiscussionThread as DiscussionThreadType, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text  } from "@chakra-ui/react";
-import { useCreate, useInvalidate } from "@refinedev/core";
+import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
+import { useCreate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 
 export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildren {
@@ -36,14 +37,16 @@ export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildr
     }
     return root;
 }
-export function DiscussionThreadReply({ thread, visible, setVisible }: { thread: DiscussionThreadType, visible: boolean, setVisible: (visible: boolean) => void }) {
-
-    const invalidate = useInvalidate();
+export function DiscussionThreadReply({ thread, visible, setVisible }: { thread: DiscussionThreadType | undefined, visible: boolean, setVisible: (visible: boolean) => void }) {
+    // const invalidate = useInvalidate();
     const { mutateAsync: mutate } = useCreate({
         resource: "discussion_threads",
     });
+
     const sendMessage = useCallback(async (message: string, profile_id: string, close = true) => {
-        
+        if (!thread) {
+            return;
+        }
         await mutate({
             resource: "discussion_threads",
             values: {
@@ -57,15 +60,15 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
                 body: message
             }
         });
-        invalidate({
-            resource: "discussion_threads",
-            invalidates: ['detail'],
-            id: thread.parent!
-        });
+        // invalidate({
+        //     resource: "discussion_threads",
+        //     invalidates: ['detail'],
+        //     id: thread.parent!
+        // });
         if (close) {
             setVisible(false);
         }
-    }, [mutate, thread]);
+    }, [thread?.subject, thread?.id, thread?.root, thread?.topic_id, thread?.instructors_only, thread?.class_id, thread?.author]);
     if (!visible) {
         return <></>
     }
@@ -79,37 +82,73 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
     </Container>
 }
 
-export function DiscussionThread({ thread, borders, originalPoster }: {
-    thread: ThreadWithChildren, borders:
-    {
-        indent: boolean,
-        descendant: boolean, // whether this thread has children
-        outerSiblings: boolean[], // whether this thread has siblings, at each level
-        isFirstDescendantOfParent: boolean, // whether this thread is the first child of its parent
-    },
-    originalPoster: string
-}) {
+function NotificationAndReadStatusUpdater({ thread_id, root_thread_id }: { thread_id: number, root_thread_id: number }) {
+    const { readStatus, setUnread } = useDiscussionThreadReadStatus(thread_id);
+    const { notifications, set_read } = useNotifications();
     const ref = useRef<HTMLDivElement>(null);
-    const isVisible = useIntersection(ref);
-    const {threadIsUnread, setUnread} = useDiscussionThreadReadStatus(thread.id);
-    const [replyVisible, setReplyVisible] = useState(false);
-    const {notifications, set_read} = useNotifications();   
-    const authorProfile = useUserProfile(thread.author);
-
+    const isVisible = useIntersection(ref, { delay: 1000, rootMargin: "0px" });
+    const threadIsUnread = readStatus !== undefined && !readStatus?.read_at;
     useEffect(() => {
-        if (isVisible && threadIsUnread) {
-            setUnread(thread.root!, thread.id, false);
+        if (isVisible && threadIsUnread && thread_id && root_thread_id) {
+            setUnread(root_thread_id, thread_id, false);
         }
-    }, [isVisible, threadIsUnread, setUnread, thread.id, thread.root]);
+    }, [isVisible, threadIsUnread, setUnread, thread_id, root_thread_id]);
     useEffect(() => {
         const relevantNotifications = notifications.filter(notification => {
             const body = notification.body as DiscussionThreadNotification;
-            return notification.viewed_at === null && body.type === "discussion_thread" && body.root_thread_id === thread.root;
+            return notification.viewed_at === null && body.type === "discussion_thread" && body.root_thread_id === root_thread_id;
         });
         relevantNotifications.forEach(notification => {
-            set_read(notification.id, true);
+            if (!notification.viewed_at) {
+                set_read(notification, true);
+            }
         });
-    }, [notifications, set_read, thread.id]);
+    }, [notifications, set_read, root_thread_id]);
+    return <div ref={ref}>{threadIsUnread ? <Badge colorPalette="red">New</Badge> : ""}</div>
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function print(value: any) {
+    if (typeof value === 'object') {
+        return JSON.stringify(value);
+    } else {
+        if (!value) {
+            return "falsy";
+        }
+        return value.toString();
+    }
+}
+export function useLogIfChanged<T>(name: string, value: T) {
+    const previous = useRef(value);
+    if (!Object.is(previous.current, value)) {
+        console.log(`${name} changed. Old: ${print(previous.current)}, New: ${print(value)} `);
+        previous.current = value;
+    }
+}
+
+export const DiscussionThread = ({ thread_id, borders }: {
+    thread_id: number, borders:
+    {
+        indent: boolean,
+        outerSiblings: boolean[], // whether this thread has siblings, at each level
+        isFirstDescendantOfParent: boolean, // whether this thread is the first child of its parent
+    }
+}) => {
+    const ref = useRef<HTMLDivElement>(null);
+    // const isVisible = useIntersection(ref);
+
+    const thread = useDiscussionThreadChildren(thread_id);
+    const originalPoster = thread?.author; //TODO
+    const childBorders = useMemo(() => {
+        return thread?.children.map((child, index) => ({
+            indent: index === 0,
+            outerSiblings: borders.outerSiblings.concat(thread?.children.length > 1 && index !== thread?.children.length - 1 ? [true] : [false]),
+            isFirstDescendantOfParent: index === 0
+        }));
+    }, [thread?.children, borders]);
+    const [replyVisible, setReplyVisible] = useState(false);
+
+
+    const authorProfile = useUserProfile(thread?.author);
 
     const outerBorders = (present: boolean[]): JSX.Element => {
         let ret: JSX.Element[] = []
@@ -123,6 +162,10 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
         }
         return <>{ret}</>
     }
+    if (!thread || !thread.children) {
+        return <Skeleton height="100px" />
+    }
+    const descendant = thread.children.length > 0;
     return <Container pl="8" pr="0" alignSelf="flex-start">
         <Box pos="relative" w="100%" pt="2">
             <Box
@@ -138,7 +181,7 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                 borderBottomWidth="2px"
             />
             {outerBorders(borders.outerSiblings,)}
-            {borders.descendant && <Box
+            {descendant && <Box
                 pos="absolute" width="2px" left="16" top="10" bottom="0" bg="border" />}
             <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%">
                 {authorProfile ? <Avatar.Root size="sm" variant="outline" shape="square">
@@ -157,6 +200,7 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
                                 {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
                                 {authorProfile?.flair && <Badge ml="2" colorPalette={authorProfile?.flair_color}>{authorProfile?.flair}</Badge>}
                             </Text> : <Skeleton width="100px" height="20px" />}
+                            <NotificationAndReadStatusUpdater thread_id={thread.id} root_thread_id={thread.root!} />
                         </HStack>
                         <Box textStyle="sm" color="fg.muted">
                             <Markdown>{thread.body}</Markdown>
@@ -176,14 +220,8 @@ export function DiscussionThread({ thread, borders, originalPoster }: {
         {/* <Box w="100%" pl="4em"> */}
         {
             thread.children.map((child, index) =>
-                <DiscussionThread key={child.id} thread={child}
-                    borders={{
-                        indent: index === 0,
-                        descendant: child.children.length > 0,
-                        outerSiblings: borders.outerSiblings.concat(thread.children.length > 1 && index !== thread.children.length - 1 ? [true] : [false]),
-                        isFirstDescendantOfParent: index === 0
-                    }}
-                    originalPoster={originalPoster}
+                <DiscussionThread key={child.id} thread_id={child.id}
+                    borders={childBorders?.[index] || { indent: false, outerSiblings: [], isFirstDescendantOfParent: false }}
                 />)
         }
         {/* </Box> */}

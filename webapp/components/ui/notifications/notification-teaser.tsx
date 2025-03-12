@@ -4,6 +4,7 @@ import { useOne } from "@refinedev/core";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { FaTimes } from "react-icons/fa";
 import Link from "next/link";
+import { useNotification } from "@/hooks/useNotifications";
 
 type NotificationTextProps = {
     notification: Notification;
@@ -31,6 +32,7 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
     const rootThread = useOne<DiscussionThread>({
         resource: "discussion_threads",
         id: body.root_thread_id,
+        liveMode: "auto",
         queryOptions: {
             cacheTime: Infinity,
             staleTime: Infinity, //We get live updates anyway
@@ -39,6 +41,7 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
     const reply = useOne<DiscussionThread>({
         resource: "discussion_threads",
         id: body.new_comment_id,
+        liveMode: "auto",
         queryOptions: {
             cacheTime: Infinity,
             staleTime: Infinity, //We get live updates anyway
@@ -65,9 +68,25 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
     </Link>
 }
 
-export default function NotificationTeaser({ notification, markAsRead, dismiss }: { notification: Notification, markAsRead: ()=>Promise<void>, dismiss: ()=>Promise<void> }) {
-    const body = notification.body as NotificationEnvelope;
+export default function NotificationTeaser({ notification_id, markAsRead, dismiss }: { notification_id: number, markAsRead: ()=>Promise<void>, dismiss: ()=>Promise<void> }) {
+    
+    // const { data, error} = useOne<Notification>({
+    //     resource: "notifications",
+    //     id: notification_id,
+    //     queryOptions: {
+    //         cacheTime: Infinity,
+    //         staleTime: Infinity, //We get live updates anyway
+    //     }
+    // })
+    // console.log(error)
+    // console.log(data)
+    // const notification = data?.data;
+    const notification = useNotification(notification_id);
+    const body = notification?.body as NotificationEnvelope;
     let teaser: React.ReactNode;
+    if (!notification) {
+        return <Skeleton height="40px" width="100%" />
+    }
     if (body.type === "discussion_thread") {
         teaser = <DiscussionThreadReplyNotificationTeaser notification={notification} />
     } else {

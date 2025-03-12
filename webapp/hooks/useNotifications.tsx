@@ -1,51 +1,57 @@
 'use client';
-import { useContext, createContext, useState, useCallback } from "react";
+import { useContext, createContext, useState, useCallback, useEffect } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useList, useUpdate, useDelete } from "@refinedev/core";
 import useAuthState from "./useAuthState";
-type NotificationContextType = {
-    notifications: Notification[];
-    set_read: (notification_id: number, read: boolean) => Promise<void>;
-    dismiss: (notification_id: number) => Promise<void>;
+import { useCourseController } from "./useCourseController";
+export function useNotification(notification_id: number) {
+    const controller = useCourseController();
+    const [notification, setNotification] = useState<Notification | undefined>(undefined);
+    useEffect(() => {
+        const { unsubscribe, data } = controller.getValueWithSubscription<Notification>("notifications", notification_id, (data) => {
+            setNotification(data);
+        });
+        setNotification(data);
+        return unsubscribe;
+    }, [notification_id, controller]);
+    return notification;
 }
-
-const NotificationContext = createContext<NotificationContextType>({
-    notifications: [],
-    set_read: async () => { },
-    dismiss: async () => { },
-});
-
 export function useNotifications() {
-    return useContext(NotificationContext);
-}
-
-export function NotificationProvider({ children }: { children: React.ReactNode }) {
-    const { user } = useAuthState();
-    const { data: notifications } = useList<Notification>({
-        resource: "notifications",
-        filters: [
-            { field: "user_id", operator: "eq", value: user?.id }
-        ],
-        liveMode: "auto",
-        sorters: [
-            { field: "viewed_at", order: "desc" },
-            { field: "created_at", order: "desc" }
-        ]
-    });
+    const controller = useCourseController();
     const { mutateAsync: update_notification } = useUpdate<Notification>({
         resource: "notifications",
     });
     const { mutateAsync: delete_notification } = useDelete<Notification>();
-    const set_read = useCallback(async (notification_id: number, read: boolean) => {
-        await update_notification({
-            id: notification_id, values: {
-                viewed_at: read ? new Date().toISOString() : null
-            }
-        });
+    const set_read = useCallback(async (notification: Notification, read: boolean) => {
+        notification.viewed_at = read ? new Date().toISOString() : null;
+        try {
+            await update_notification({
+                id: notification.id, values: {
+                    viewed_at: notification.viewed_at
+                }
+            });
+        } catch (error) {
+            console.error("error setting notification read", error);
+        }
     }, [update_notification]);
-    const dismiss = useCallback(async (notification_id: number) => {
-        await delete_notification({ id: notification_id, resource: "notifications" });
-    }, [delete_notification]);
-
-    return <NotificationContext.Provider value={{ notifications: notifications?.data || [], set_read, dismiss }}>{children}</NotificationContext.Provider>;
+    const dismiss = useCallback(async (notification: Notification) => {
+        controller.handleGenericDataEvent("notifications", {
+            type: "deleted",
+            payload: {
+                id: notification.id
+            },
+            channel: 'resources/notifications',
+            date: new Date()
+        });
+        await delete_notification({ id: notification.id, resource: "notifications" });
+    }, [delete_notification, controller]);
+    const [notifications, setNotifications] = useState<Notification[]>([]);
+    useEffect(() => {
+        const { unsubscribe, data } = controller.listGenericData<Notification>("notifications", (data) => {
+            setNotifications(data);
+        });
+        setNotifications(data);
+        return () => unsubscribe();
+    }, [controller]);
+    return { notifications, set_read, dismiss };
 }

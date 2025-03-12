@@ -1,7 +1,6 @@
 import { Box, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
 import DiscussionThreadList from "./DiscussionThreadList";
 import { DiscussionThreadWatchProvider } from "@/hooks/useDiscussionThreadWatches";
-import { DiscussionThreadReadStatusProvider } from "@/hooks/useDiscussionThreadReadStatus";
 const DiscussionLayout = async ({ children, params }: Readonly<{
     children: React.ReactNode;
     params: Promise<{ course_id: string }>
@@ -11,7 +10,6 @@ const DiscussionLayout = async ({ children, params }: Readonly<{
     return (
         <Box>
             <DiscussionThreadWatchProvider>
-                <DiscussionThreadReadStatusProvider>
                     <Flex flex="1">
                         <Box w="314px"
                             borderRight="1px solid"
@@ -23,7 +21,6 @@ const DiscussionLayout = async ({ children, params }: Readonly<{
                             {children}
                         </Box>
                     </Flex>
-                </DiscussionThreadReadStatusProvider>
             </DiscussionThreadWatchProvider>
         </Box>
     )

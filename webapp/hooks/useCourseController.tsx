@@ -1,0 +1,467 @@
+'use client'
+import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
+import { DiscussionThreadReadWithAllDescendants, useDiscussionThreadsController } from "./useDiscussionThreadRootController";
+import { DiscussionThread, DiscussionThreadReadStatus, UserProfile, UserRole } from "@/utils/supabase/DatabaseTypes";
+import useAuthState from "./useAuthState";
+import { useCallback, createContext, useContext, useEffect, useRef, useState } from "react";
+
+
+/**
+ * Returns a hook that returns the read status of a thread.
+ * @param threadId The id of the thread to get the read status of.
+ * @returns A tuple of the read status and a function to set the read status.
+ * Null indicates that the thread is not read
+ * Undefined indicates that the thread is not yet loaded
+ */
+export function useDiscussionThreadReadStatus(threadId: number) {
+    const controller = useCourseController();
+    const { user } = useAuthState();
+    const [readStatus, setReadStatus] = useState<DiscussionThreadReadWithAllDescendants | null | undefined>(undefined);
+    useEffect(() => {
+        const { unsubscribe, data } = controller.getDiscussionThreadReadStatus(threadId, (data) => {
+            setReadStatus(data);
+        });
+        setReadStatus(data);
+        return unsubscribe;
+    }, [controller, threadId]);
+    const createdThreadReadStatuses = useRef<Set<number>>(new Set<number>());
+    const { mutateAsync: createThreadReadStatus } = useCreate<DiscussionThreadReadStatus>({
+        resource: "discussion_thread_read_status",
+    });
+    const { mutateAsync: updateThreadReadStatus } = useUpdate<DiscussionThreadReadStatus>({
+        resource: "discussion_thread_read_status",
+        mutationMode: "optimistic",
+    });
+
+    const setUnread = useCallback((root_threadId: number, threadId: number, isUnread: boolean) => {
+        if (!controller.isLoaded) {
+            return;
+        }
+        const { data: threadReadStatus } = controller.getDiscussionThreadReadStatus(threadId);
+        if (threadReadStatus) {
+            if (isUnread && threadReadStatus.read_at) {
+                updateThreadReadStatus({
+                    id: threadReadStatus.id,
+                    values: { read_at: null }
+                });
+            } else if (!isUnread && !threadReadStatus.read_at) {
+                updateThreadReadStatus({
+                    id: threadReadStatus.id,
+                    values: { read_at: new Date() }
+                });
+            }
+        }
+        else {
+            if (createdThreadReadStatuses.current.has(threadId)) {
+                return;
+            }
+            createdThreadReadStatuses.current.add(threadId);
+            createThreadReadStatus({
+                values: {
+                    discussion_thread_id: threadId,
+                    user_id: user?.id,
+                    discussion_thread_root_id: root_threadId,
+                    read_at: isUnread ? null : new Date()
+                }
+            }).catch((error) => {
+            });
+        }
+    }, [user?.id, createdThreadReadStatuses, controller]);
+    return { readStatus, setUnread };
+}
+type DiscussionThreadTeaser = Pick<DiscussionThread, "id" | "subject" | "created_at" | "author" | "children_count" | "instructors_only" | "is_question" | "likes_count" | "topic_id" | "draft" | "class_id" | "body" | "ordinal">;
+export function useDiscussionThreadTeasers() {
+    const controller = useCourseController();
+    const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>([]);
+    useEffect(() => {
+        const { data, unsubscribe } = controller.listDiscussionThreadTeasers((data) => {
+            setTeasers(data);
+        });
+        setTeasers(data);
+        return unsubscribe;
+    }, [controller]);
+    return teasers;
+}
+export function useDiscussionThreadTeaser(id: number) {
+    const controller = useCourseController();
+    const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(undefined);
+    useEffect(() => {
+        const { unsubscribe, data } = controller.getDiscussionThreadTeaser(id, (data) => {
+            setTeaser(data);
+        });
+        setTeaser(data);
+        return unsubscribe;
+    }, [controller, id]);
+    return teaser;
+}
+type UpdateCallback<T> = (data: T) => void;
+type Unsubscribe = () => void;
+export type UserProfileWithPrivateProfile = UserProfile & {
+    private_profile?: UserProfile;
+}
+
+class CourseController {
+    private _isLoaded = false;
+    constructor(public courseId: number) {
+    }
+    private discussionThreadReadStatusesSubscribers: Map<number, UpdateCallback<DiscussionThreadReadWithAllDescendants>[]> = new Map();
+    private discussionThreadReadStatuses: Map<number, DiscussionThreadReadWithAllDescendants> = new Map();
+    private userProfiles: Map<string, UserProfileWithPrivateProfile> = new Map();
+    private userRoles: Map<string, UserRole> = new Map();
+    private userProfileSubscribers: Map<string, UpdateCallback<UserProfileWithPrivateProfile>[]> = new Map();
+
+    private discussionThreadTeasers: DiscussionThreadTeaser[] = [];
+    private discussionThreadTeaserListSubscribers: UpdateCallback<DiscussionThreadTeaser[]>[] = [];
+    private discussionThreadTeaserSubscribers: Map<number, UpdateCallback<DiscussionThreadTeaser>[]> = new Map();
+
+
+    private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<any>[]> } = {};
+    private genericData: { [key in string]: Map<number, any> } = {};
+    private genericDataListSubscribers: { [key in string]: UpdateCallback<any>[] } = {};
+
+    setGeneric(typeName: string, data: any[]) {
+        if (!this.genericData[typeName]) {
+            this.genericData[typeName] = new Map();
+        }
+        for (const item of data) {
+            this.genericData[typeName].set(item.id, item);
+            const itemSubscribers = this.genericDataSubscribers[typeName]?.get(item.id) || [];
+            itemSubscribers.forEach(cb => cb(item));
+        }
+        const listSubscribers = this.genericDataListSubscribers[typeName] || [];
+        listSubscribers.forEach(cb => cb(Array.from(this.genericData[typeName].values())));
+    }
+    listGenericData<T>(typeName: string, callback?: UpdateCallback<T[]>): { unsubscribe: Unsubscribe, data: T[] } {
+        const subscribers = this.genericDataListSubscribers[typeName] || [];
+        if (callback) {
+            subscribers.push(callback);
+            this.genericDataListSubscribers[typeName] = subscribers;
+        }
+        const currentData = this.genericData[typeName]?.values() || [];
+        return { unsubscribe: () => { }, data: Array.from(currentData) as T[] };
+    }
+    getValueWithSubscription<T>(typeName: string, id: number, callback?: UpdateCallback<T>): { unsubscribe: Unsubscribe, data: T | undefined } {
+        const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
+        if (callback) {
+            this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+        }
+        return { unsubscribe: () => { }, data: this.genericData[typeName]?.get(id) as T | undefined };
+    }
+    handleGenericDataEvent(typeName: string, event: LiveEvent) {
+        const body = event.payload;
+        if (event.type === "created") {
+            this.genericData[typeName].set(body.id, body);
+            this.genericDataSubscribers[typeName]?.get(body.id)?.forEach(cb => cb(body));
+            this.genericDataListSubscribers[typeName]?.forEach(cb => cb(Array.from(this.genericData[typeName].values())));
+        }
+        else if (event.type === "updated") {
+            this.genericData[typeName].set(body.id, body);
+            this.genericDataSubscribers[typeName]?.get(body.id)?.forEach(cb => cb(body));
+            this.genericDataListSubscribers[typeName]?.forEach(cb => cb(Array.from(this.genericData[typeName].values())));
+        }
+        else if (event.type === "deleted") {
+            this.genericData[typeName].delete(body.id);
+            this.genericDataSubscribers[typeName]?.get(body.id)?.forEach(cb => cb(undefined));
+            this.genericDataListSubscribers[typeName]?.forEach(cb => cb(Array.from(this.genericData[typeName].values())));
+        }
+    }
+
+    handleDiscussionThreadTeaserEvent(event: LiveEvent) {
+        if (event.type === "created") {
+            const body = event.payload as DiscussionThreadTeaser;
+            this.discussionThreadTeasers.push(body);
+            this.discussionThreadTeaserListSubscribers.forEach(cb => cb(this.discussionThreadTeasers));
+        }
+        else if (event.type === "updated") {
+            const body = event.payload as DiscussionThreadTeaser;
+            const existing = this.discussionThreadTeasers.find(teaser => teaser.id === body.id);
+            //Only propagate an update if there is a change that we care about
+            if (existing &&
+                existing.children_count === body.children_count &&
+                existing.likes_count === body.likes_count &&
+                existing.subject === body.subject &&
+                existing.created_at === body.created_at &&
+                existing.author === body.author &&
+                existing.topic_id === body.topic_id &&
+                existing.is_question === body.is_question &&
+                existing.instructors_only === body.instructors_only &&
+                existing.draft === body.draft) {
+                return;
+            }
+            this.discussionThreadTeasers = this.discussionThreadTeasers
+                .map(teaser => teaser.id === body.id ? body : teaser);
+            const subscribers = this.discussionThreadTeaserSubscribers.get(body.id) || [];
+            subscribers.forEach(cb => cb(body));
+        }
+    }
+    setDiscussionThreadTeasers(data: DiscussionThreadTeaser[]) {
+        if (this.discussionThreadTeasers.length == 0) {
+            this.discussionThreadTeasers = data;
+            for (const subscriber of this.discussionThreadTeaserListSubscribers) {
+                subscriber(data);
+            }
+        }
+    }
+    getDiscussionThreadTeaser(id: number, callback?: UpdateCallback<DiscussionThreadTeaser>): { unsubscribe: Unsubscribe, data: DiscussionThreadTeaser | undefined } {
+        const subscribers = this.discussionThreadTeaserSubscribers.get(id) || [];
+        if (callback) {
+            this.discussionThreadTeaserSubscribers.set(id, [...subscribers, callback]);
+        }
+        return {
+            unsubscribe: () => {
+                this.discussionThreadTeaserSubscribers.set(id, subscribers.filter(cb => cb !== callback));
+            },
+            data: this.discussionThreadTeasers.find(teaser => teaser.id === id)
+        };
+    }
+    listDiscussionThreadTeasers(callback?: UpdateCallback<DiscussionThreadTeaser[]>): { unsubscribe: Unsubscribe, data: DiscussionThreadTeaser[] } {
+        if (callback) {
+            this.discussionThreadTeaserListSubscribers.push(callback);
+        }
+        return {
+            unsubscribe: () => {
+                this.discussionThreadTeaserListSubscribers = this.discussionThreadTeaserListSubscribers.filter(cb => cb !== callback);
+            }, data: this.discussionThreadTeasers
+        };
+    }
+
+    handleReadStatusEvent(event: LiveEvent) {
+        const processUpdatedStatus = (updatedStatus: DiscussionThreadReadStatus) => {
+            //Is this a root?
+            const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
+            if (isRoot) {
+                //Calculate the number of read descendants
+                const readDescendants = this.discussionThreadReadStatuses.values().filter(status => status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
+                let numReadDescendants = 0;
+                for (const status of readDescendants) {
+                    numReadDescendants += status.read_at ? 1 : 0;
+                }
+                const newVal = {
+                    ...updatedStatus,
+                    numReadDescendants: numReadDescendants
+                };
+                this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_id, newVal);
+                this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_id, newVal);
+            } else {
+                //Need to update this one, and also its root
+                //First update this one
+                const newVal = {
+                    ...updatedStatus,
+                    numReadDescendants: 0
+                };
+                this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_id, newVal);
+                this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_id, newVal);
+                //Then root
+                const root = this.discussionThreadReadStatuses.get(updatedStatus.discussion_thread_root_id);
+                if (root) {
+                    const readDescendants = this.discussionThreadReadStatuses.values().filter(status => status.discussion_thread_root_id === updatedStatus.discussion_thread_root_id && status.read_at);
+                    let numReadDescendants = 0;
+                    for (const status of readDescendants) {
+                        numReadDescendants += status.read_at ? 1 : 0;
+                    }
+                    const newVal = {
+                        ...root,
+                        numReadDescendants: numReadDescendants
+                    };
+                    this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_root_id, newVal);
+                    this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_root_id, newVal);
+                }
+            }
+        }
+        if (event.type === "created") {
+            const body = event.payload as DiscussionThreadReadStatus;
+            processUpdatedStatus(body);
+        }
+        else if (event.type === "updated") {
+            const body = event.payload as DiscussionThreadReadStatus;
+            processUpdatedStatus(body);
+        }
+    }
+    get isLoaded() {
+        return this._isLoaded;
+    }
+    getDiscussionThreadReadStatus(threadId: number, callback?: UpdateCallback<DiscussionThreadReadWithAllDescendants>): { unsubscribe: Unsubscribe, data: DiscussionThreadReadWithAllDescendants | undefined | null } {
+        const subscribers = this.discussionThreadReadStatusesSubscribers.get(threadId) || [];
+        if (callback) {
+            this.discussionThreadReadStatusesSubscribers.set(threadId, [...subscribers, callback]);
+        }
+        return {
+            unsubscribe: () => {
+                this.discussionThreadReadStatusesSubscribers.set(threadId, subscribers.filter(cb => cb !== callback));
+            },
+            data: this.isLoaded ? (this.discussionThreadReadStatuses.get(threadId) || null) : undefined
+        }
+    }
+    setDiscussionThreadReadStatuses(data: DiscussionThreadReadStatus[]) {
+        if (!this._isLoaded) {
+            this._isLoaded = true;
+            for (const thread of data) {
+                this.discussionThreadReadStatuses.set(thread.discussion_thread_id, {
+                    ...thread,
+                    numReadDescendants: data.filter(t => t.discussion_thread_root_id === thread.discussion_thread_id && t.read_at).length
+                });
+                this.notifyDiscussionThreadReadStatusSubscribers(thread.discussion_thread_id, this.discussionThreadReadStatuses.get(thread.discussion_thread_id)!);
+            }
+        }
+    }
+    setUserProfiles(profiles: UserProfile[], roles: UserRole[]) {
+        for (const profile of profiles) {
+            this.userProfiles.set(profile.id, { ...profile });
+        }
+        for (const role of roles) {
+            this.userRoles.set(role.user_id, role);
+            const privateProfile = this.userProfiles.get(role.private_profile_id);
+            const publicProfile = this.userProfiles.get(role.public_profile_id);
+            if (privateProfile && publicProfile) {
+                publicProfile.private_profile = privateProfile;
+            }
+        }
+        //Fire all callbacks
+        for (const id of this.userProfileSubscribers.keys()) {
+            const callbacks = this.userProfileSubscribers.get(id);
+            if (callbacks) {
+                callbacks.forEach(cb => cb(this.userProfiles.get(id)!));
+            }
+        }
+    }
+    getUserProfile(id: string, callback?: UpdateCallback<UserProfileWithPrivateProfile>) {
+        const profile = this.userProfiles.get(id);
+        if (callback) {
+            this.userProfileSubscribers.set(id, [...(this.userProfileSubscribers.get(id) || []), callback]);
+        }
+        return {
+            unsubscribe: () => {
+                this.userProfileSubscribers.set(id, this.userProfileSubscribers.get(id)!.filter(cb => cb !== callback));
+            },
+            data: profile
+        };
+    }
+    private notifyDiscussionThreadReadStatusSubscribers(threadId: number, data: DiscussionThreadReadWithAllDescendants) {
+        const subscribers = this.discussionThreadReadStatusesSubscribers.get(threadId);
+        if (subscribers && subscribers.length > 0) {
+            subscribers.forEach(cb => cb(data));
+        }
+    }
+}
+
+function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController, course_id: number }) {
+    const { user } = useAuthState();
+    const threadReadStatuses = useList<DiscussionThreadReadStatus>({
+        resource: "discussion_thread_read_status",
+        queryOptions: {
+            staleTime: Infinity,
+            cacheTime: Infinity,
+        },
+        filters: [
+            { field: "user_id", operator: "eq", value: user?.id }
+        ],
+        pagination: {
+            pageSize: 1000,
+        },
+        liveMode: "auto",
+        onLiveEvent: (event) => {
+            controller.handleReadStatusEvent(event);
+        }
+    });
+    useEffect(() => {
+        if (threadReadStatuses.data) {
+            controller.setDiscussionThreadReadStatuses(threadReadStatuses.data.data);
+        }
+    }, [controller, threadReadStatuses.data]);
+    const { data: userProfiles } = useList<UserProfile>({
+        resource: "profiles",
+        queryOptions: {
+            staleTime: Infinity,
+        },
+        pagination: {
+            pageSize: 1000,
+        },
+        filters: [
+            { field: "class_id", operator: "eq", value: course_id }
+        ]
+    });
+    const { data: roles } = useList<UserRole>({
+        resource: "user_roles",
+        queryOptions: {
+            staleTime: Infinity,
+        },
+        pagination: {
+            pageSize: 1000,
+        },
+        filters: [
+            { field: "class_id", operator: "eq", value: course_id }
+        ]
+    });
+    useEffect(() => {
+        if (userProfiles?.data && roles?.data) {
+            controller.setUserProfiles(userProfiles.data, roles.data);
+        }
+    }, [controller, userProfiles?.data, roles?.data]);
+
+    const query = useList<DiscussionThread>({
+        resource: "discussion_threads",
+        queryOptions: {
+            staleTime: Infinity,
+            cacheTime: Infinity,
+        },
+        filters: [
+            { field: "root_class_id", operator: "eq", value: course_id },
+        ],
+        pagination: {
+            pageSize: 1000,
+        },
+        liveMode: "manual",
+        onLiveEvent: (event) => {
+            controller.handleDiscussionThreadTeaserEvent(event);
+        }
+    });
+    const { data: rootDiscusisonThreads } = query;
+    useEffect(() => {
+        if (rootDiscusisonThreads?.data) {
+            controller.setDiscussionThreadTeasers(rootDiscusisonThreads.data);
+        }
+    }, [controller, rootDiscusisonThreads?.data]);
+
+    const { data: notifications } = useList<Notification>({
+        resource: "notifications",
+        filters: [
+            { field: "user_id", operator: "eq", value: user?.id }
+        ],
+        liveMode: "manual",
+        queryOptions: {
+            staleTime: Infinity,
+            cacheTime: Infinity,
+        },
+        pagination: {
+            pageSize: 1000,
+        },
+        onLiveEvent: (event) => {
+            controller.handleGenericDataEvent('notifications', event);
+        },
+        sorters: [
+            { field: "viewed_at", order: "desc" },
+            { field: "created_at", order: "desc" }
+        ]
+    });
+    useEffect(() => {
+        if (notifications?.data) {
+            controller.setGeneric("notifications", notifications.data);
+        }
+    }, [controller, notifications?.data]);
+    return <></>
+}
+const CourseControllerContext = createContext<CourseController | null>(null);
+export function CourseControllerProvider({ course_id, children }: { course_id: number, children: React.ReactNode }) {
+    const controller = useRef<CourseController>(new CourseController(course_id));
+    return <CourseControllerContext.Provider value={controller.current}>
+        <CourseControllerProviderImpl controller={controller.current} course_id={course_id} />
+        {children}
+    </CourseControllerContext.Provider>
+}
+export function useCourseController() {
+    const controller = useContext(CourseControllerContext);
+    if (!controller) {
+        throw new Error("CourseController not found");
+    }
+    return controller;
+}

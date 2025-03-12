@@ -1,7 +1,7 @@
 
-import { NotificationProvider } from "@/hooks/useNotifications";
 import { createClient } from "@/utils/supabase/server";
 import { AuthStateProvider } from "@/hooks/useAuthState";
+import { ClassProfileProvider } from "@/hooks/useClassProfiles";
 export default async function AuthedLayout({ children }: { children: React.ReactNode }) {
     const supabase = await createClient();
     const { data: user } = await supabase.auth.getUser();
@@ -11,6 +11,8 @@ export default async function AuthedLayout({ children }: { children: React.React
         return <div>Not logged in (TODO redirect to login from layout)</div>
     }
     return <AuthStateProvider user={user?.user} roles={courses}>
-        <NotificationProvider>{children}</NotificationProvider>
+        <ClassProfileProvider>
+            {children}
+        </ClassProfileProvider>
     </AuthStateProvider>;
 }

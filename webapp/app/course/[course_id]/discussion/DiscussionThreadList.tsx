@@ -14,7 +14,7 @@ import { formatRelative, isThisMonth, isThisWeek, isToday } from "date-fns";
 import NextLink from "next/link";
 import { Fragment, useId } from "react";
 import { FaPlus } from "react-icons/fa";
-import { useDiscussionThreadReadStatusForRoot } from "@/hooks/useDiscussionThreadReadStatus";
+import { useDiscussionThreadReadStatus, useDiscussionThreadTeaser, useDiscussionThreadTeasers } from "@/hooks/useCourseController";
 interface MessageData {
     user: string
     updatedAt: string
@@ -25,31 +25,31 @@ interface MessageData {
 }
 
 interface Props {
-    thread: DiscussionThread
+    thread_id: number
     selected?: boolean
 }
 
 const DiscussionThreadTeaser = (props: Props) => {
-    const { author, created_at, body, subject, children_count } = props.thread
+    const thread = useDiscussionThreadTeaser(props.thread_id);
     const avatarTriggerId = useId()
     const { root_id } = useParams();
-    const selected = root_id ? props.thread.id === Number.parseInt(root_id as string) : false;
+    const selected = root_id ? props.thread_id === Number.parseInt(root_id as string) : false;
 
-    const { threadRead } = useDiscussionThreadReadStatusForRoot(props.thread.id);
+    const { readStatus } = useDiscussionThreadReadStatus(props.thread_id);
 
-    const userProfile = useUserProfile(author);
-    return (<Box position="relative"><NextLink href={`/course/${props.thread.class_id}/discussion/${props.thread.id}`}>
-        <Box position="absolute" left="1" top="3" transform="translateY(-50%)">
-                {threadRead?.rootIsUnread && (
-                    <Box w="8px" h="8px" bg="blue.500" rounded="full">
-                    </Box>
-                )}
+    const userProfile = useUserProfile(thread?.author);
+    return (<Box position="relative"><NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`}>
+        <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
+            {!readStatus?.read_at && (
+                <Box w="8px" h="8px" bg="blue.500" rounded="full">
+                </Box>
+            )}
         </Box>
         <HStack align="flex-start" gap="3" px="4" py="3"
             _hover={{ bg: 'bg.muted' }} rounded="md"
             width="100%"
             bg={
-                threadRead?.rootIsUnread ? 'bg.info' :
+                !readStatus?.read_at ? 'bg.info' :
                     selected ? 'bg.muted' : ''}
         >
             <Box pt="1">
@@ -62,7 +62,7 @@ const DiscussionThreadTeaser = (props: Props) => {
             </Box>
             <Stack spaceY="0" fontSize="sm" flex="1" truncate>
                 <Text fontWeight="medium" flex="1" css={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
-                    #{props.thread.ordinal} {subject}
+                    #{thread?.ordinal} {thread?.subject}
                 </Text>
                 <Box color="fg.subtle" truncate>
                     <Markdown
@@ -93,14 +93,11 @@ const DiscussionThreadTeaser = (props: Props) => {
                             ),
                         }}
                         remarkPlugins={[[excerpt, { maxLength: 100 }]]}
-                    >{body}</Markdown>
+                    >{thread?.body}</Markdown>
                     <HStack>
-                        <Text fontSize="xs" color="text.muted">{children_count} replies</Text>
-                        {(threadRead?.repliesRead !== children_count)
-                     ? <Badge size="xs"colorScheme="green">{children_count - (threadRead?.repliesRead ?? 0)} new</Badge> : <></>}
-
+                        <Text fontSize="xs" color="text.muted">{thread?.children_count} replies</Text>
                         <Spacer />
-                        <Text fontSize="xs" color="text.muted">{formatRelative(new Date(created_at), new Date())}</Text>
+                        <Text fontSize="xs" color="text.muted">{thread?.created_at ? formatRelative(new Date(thread?.created_at), new Date()) : ""}</Text>
                     </HStack>
                 </Box>
             </Stack>
@@ -112,26 +109,9 @@ const DiscussionThreadTeaser = (props: Props) => {
 
 export default function DiscussionThreadList() {
     const { course_id } = useParams();
-    const list = useList<DiscussionThread>({
-        resource: "discussion_threads",
-        meta: {
-            select: "*"
-        },
-        queryOptions: {
-            staleTime: Infinity, // Realtime data
-        },
-        filters: [
-            {
-                field: "root_class_id",
-                operator: "eq",
-                value: Number(course_id)
-            },
-        ], sorters:
-            [{
-                field: "created_at",
-                order: "desc"
-            }]
-    });
+    const list = useDiscussionThreadTeasers();
+    list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
     const getThreadGroup = (date: Date) => {
         if (isToday(date)) {
             return "Today";
@@ -146,7 +126,7 @@ export default function DiscussionThreadList() {
 
 
     return <Flex width="314px"
-        height="100vh"
+    bottom={0}
         direction="column"
         top={0} justify="space-between" align="center">
         <Box>
@@ -160,12 +140,12 @@ export default function DiscussionThreadList() {
         </Box>
 
         <Box width="100%" flex={1} overflowY="auto" pr="4">
-            <Box role="list" aria-busy={list.isLoading} aria-live="polite" aria-label="Discussion threads">
+            <Box role="list" aria-busy={list === undefined} aria-live="polite" aria-label="Discussion threads">
 
-                {list.isLoading && <Skeleton height="300px" />}
-                {list.data?.data.map((thread, index) => {
+                {list === undefined && <Skeleton height="300px" />}
+                {list.map((thread, index) => {
                     const header = getThreadGroup(new Date(thread.created_at));
-                    const prevThread = list.data?.data[list.data.data.indexOf(thread) - 1];
+                    const prevThread = list[index - 1];
                     const isFirstInGroup = !prevThread ||
                         getThreadGroup(new Date(prevThread.created_at)) !== header;
 
@@ -178,15 +158,12 @@ export default function DiscussionThreadList() {
                                     <Separator flex="1" />
                                 </HStack>
                             }
-                            <DiscussionThreadTeaser thread={thread} />
+                            <DiscussionThreadTeaser thread_id={thread.id} />
                         </Fragment>
                     );
                 }
                 )}
             </Box>
-        </Box>
-        <Box width="100%">
-            This is the bottom
         </Box>
     </Flex>
 }
