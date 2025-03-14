@@ -118,11 +118,10 @@ function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number, c
         {
             thread && thread.children.map((child, index) => (
                 <DiscussionThread key={child.id} thread_id={child.id}
-                    borders={{
-                        indent: false,
-                        outerSiblings: thread.children.length > 1 && index !== thread.children.length - 1 ? [true] : [false],
-                        isFirstDescendantOfParent: index === 0,
-                    }}
+                    indent={false}
+                    outerSiblings={thread.children.length > 1 && index !== thread.children.length - 1 ? "1" : "0"}
+                    isFirstDescendantOfParent={index === 0}
+                    originalPoster={thread.author}
                 />
             ))
         }

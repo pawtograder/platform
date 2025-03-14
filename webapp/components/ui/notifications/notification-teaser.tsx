@@ -5,6 +5,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { FaTimes } from "react-icons/fa";
 import Link from "next/link";
 import { useNotification } from "@/hooks/useNotifications";
+import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 
 type NotificationTextProps = {
     notification: Notification;
@@ -19,6 +20,7 @@ export type DiscussionThreadNotification = NotificationEnvelope & {
     new_comment_id: number;
     root_thread_id: number;
     reply_author_profile_id: string;
+    teaser: string;
 }
 
 function truncateString(str: string, maxLength: number) {
@@ -29,30 +31,13 @@ function truncateString(str: string, maxLength: number) {
 }
 function DiscussionThreadReplyNotificationTeaser({ notification }: { notification: Notification }) {
     const body = notification.body as DiscussionThreadNotification;
-    const rootThread = useOne<DiscussionThread>({
-        resource: "discussion_threads",
-        id: body.root_thread_id,
-        liveMode: "auto",
-        queryOptions: {
-            cacheTime: Infinity,
-            staleTime: Infinity, //We get live updates anyway
-        }
-    })
-    const reply = useOne<DiscussionThread>({
-        resource: "discussion_threads",
-        id: body.new_comment_id,
-        liveMode: "auto",
-        queryOptions: {
-            cacheTime: Infinity,
-            staleTime: Infinity, //We get live updates anyway
-        }
-    });
+    const rootThread = useDiscussionThreadTeaser(body.root_thread_id, ['ordinal','subject','class_id']);
     const author = useUserProfile(body.reply_author_profile_id);
-    if (!author || !reply.data || !rootThread.data) {
+    if (!author || !rootThread) {
         return <Skeleton boxSize="4" />
     }
-    const replyIdx = reply.data?.data.ordinal ? `#post-${reply.data?.data.ordinal}` :'';
-    return <Link href={`/course/${rootThread.data?.data.class_id}/discussion/${rootThread.data?.data.id}${replyIdx}`}>
+    const replyIdx = body.new_comment_number ? `#post-${body.new_comment_number}` :'';
+    return <Link href={`/course/${rootThread.class_id}/discussion/${rootThread.id}${replyIdx}`}>
         <HStack align="flex-start" color="text.muted">
             <Avatar.Root size="sm">
                 <Avatar.Image src={author.avatar_url} />
@@ -61,8 +46,8 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
             </Avatar.Fallback>
         </Avatar.Root>
         <VStack align="flex-start">
-            <Text>{author.name} replied to thread #{rootThread.data?.data.ordinal} {rootThread.data?.data.subject}</Text>
-                <Text>{truncateString(reply.data?.data.body, 100)}</Text>
+            <Text>{author.name} replied to thread #{rootThread.ordinal} {rootThread.subject}</Text>
+                <Text>{body.teaser}</Text>
             </VStack>
         </HStack>
     </Link>

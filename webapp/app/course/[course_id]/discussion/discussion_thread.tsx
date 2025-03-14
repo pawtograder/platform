@@ -14,6 +14,7 @@ import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "
 import { useCreate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { borders } from "styled-system";
 
 
 export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildren {
@@ -125,43 +126,49 @@ export function useLogIfChanged<T>(name: string, value: T) {
     }
 }
 
-export const DiscussionThread = memo(({ thread_id, borders }: {
-    thread_id: number, borders:
-    {
-        indent: boolean,
-        outerSiblings: boolean[], // whether this thread has siblings, at each level
-        isFirstDescendantOfParent: boolean, // whether this thread is the first child of its parent
-    }
+export const DiscussionThread = memo(({ thread_id,
+    indent,
+    outerSiblings,
+    isFirstDescendantOfParent,
+    originalPoster
+}: {
+    thread_id: number,
+    indent: boolean,
+    outerSiblings: string, // whether this thread has siblings, at each level
+    isFirstDescendantOfParent: boolean, // whether this thread is the first child of its parent
+    originalPoster: string
 }) => {
     const ref = useRef<HTMLDivElement>(null);
     // const isVisible = useIntersection(ref);
 
     const thread = useDiscussionThreadChildren(thread_id);
-    const originalPoster = thread?.author; //TODO
-    const childBorders = useMemo(() => {
-        return thread?.children.map((child, index) => ({
-            indent: index === 0,
-            outerSiblings: borders.outerSiblings.concat(thread?.children.length > 1 && index !== thread?.children.length - 1 ? [true] : [false]),
-            isFirstDescendantOfParent: index === 0
-        }));
-    }, [thread?.children, borders]);
     const [replyVisible, setReplyVisible] = useState(false);
-
-
     const authorProfile = useUserProfile(thread?.author);
 
-    const outerBorders = (present: boolean[]): JSX.Element => {
+    const outerBorders = useCallback((present: string): JSX.Element => {
         let ret: JSX.Element[] = []
         for (let i = 0; i < present.length; i++) {
-            if (present[i]) {
+            if (present[i] === '1') {
                 ret.push(<Box
                     key={i}
                     pos="absolute" width="2px" left={`${(present.length - i - 2) * -32}px`}
-                    top={i == present.length - 1 && borders.isFirstDescendantOfParent ? "0" : "0"} bottom="0" bg="border" />)
+                    top={i == present.length - 1 && isFirstDescendantOfParent ? "0" : "0"} bottom="0" bg="border" />)
             }
         }
         return <>{ret}</>
-    }
+    }, [isFirstDescendantOfParent, outerSiblings]);
+    const childOuterSiblings = useMemo(() => {
+        const ret:string[] = [];
+        if (thread?.children) {
+            for (let i = 0; i < thread?.children.length; i++) {
+                ret.push(outerSiblings + (thread?.children.length > 1 && i !== thread?.children.length - 1 ? '1' : '0'))
+            }
+        }
+        return ret;
+    }, [outerSiblings, thread?.children.length]);
+    const showReply = useCallback(() => {
+        setReplyVisible(true);
+    }, []);
     if (!thread || !thread.children) {
         return <Skeleton height="100px" />
     }
@@ -180,7 +187,7 @@ export const DiscussionThread = memo(({ thread_id, borders }: {
                 borderStartWidth="2px"
                 borderBottomWidth="2px"
             />
-            {outerBorders(borders.outerSiblings,)}
+            {outerBorders(outerSiblings)}
             {descendant && <Box
                 pos="absolute" width="2px" left="16" top="10" bottom="0" bg="border" />}
             <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%">
@@ -211,7 +218,7 @@ export const DiscussionThread = memo(({ thread_id, borders }: {
                             {formatRelative(thread.created_at, new Date())}
                         </Text>
                         <Text color="fg.muted">Like</Text>
-                        <Link onClick={() => setReplyVisible(true)} color="fg.muted">Reply</Link>
+                        <Link onClick={showReply} color="fg.muted">Reply</Link>
                     </HStack>
                     <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
                 </Stack>
@@ -221,7 +228,10 @@ export const DiscussionThread = memo(({ thread_id, borders }: {
         {
             thread.children.map((child, index) =>
                 <DiscussionThread key={child.id} thread_id={child.id}
-                    borders={childBorders?.[index] || { indent: false, outerSiblings: [], isFirstDescendantOfParent: false }}
+                    originalPoster={originalPoster}
+                    indent={index === 0}
+                    outerSiblings={childOuterSiblings[index]}
+                    isFirstDescendantOfParent={index === 0}
                 />)
         }
         {/* </Box> */}

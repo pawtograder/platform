@@ -83,12 +83,27 @@ export function useDiscussionThreadTeasers() {
     }, [controller]);
     return teasers;
 }
-export function useDiscussionThreadTeaser(id: number) {
+type DiscussionThreadFields = keyof DiscussionThreadTeaser;
+export function useDiscussionThreadTeaser(id: number, watchFields?: DiscussionThreadFields[]) {
     const controller = useCourseController();
     const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(undefined);
     useEffect(() => {
         const { unsubscribe, data } = controller.getDiscussionThreadTeaser(id, (data) => {
-            setTeaser(data);
+            if (watchFields) {
+                setTeaser((oldTeaser) => {
+                    if (!oldTeaser) {
+                        return data;
+                    }
+                    const hasAnyChanges = watchFields.some(field => oldTeaser[field] !== data[field]);
+                    if (hasAnyChanges) {
+                        return data;
+                    }
+                    return oldTeaser;
+                });
+            }
+            else {
+                setTeaser(data);
+            }
         });
         setTeaser(data);
         return unsubscribe;
