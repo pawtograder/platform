@@ -203,6 +203,8 @@ class CourseController {
                     this.genericDataSubscribers[typeName]?.set(id, subscribers.filter(cb => cb !== callback));
                 }, data: this.genericData[typeName]?.get(id) as T | undefined
             };
+        } else {
+            throw new Error(`Invalid id type ${typeof id}`);
         }
     }
     handleGenericDataEvent(typeName: string, event: LiveEvent) {
