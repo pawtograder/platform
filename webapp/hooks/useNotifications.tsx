@@ -4,6 +4,7 @@ import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useList, useUpdate, useDelete } from "@refinedev/core";
 import useAuthState from "./useAuthState";
 import { useCourseController } from "./useCourseController";
+import { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
 export function useNotification(notification_id: number) {
     const controller = useCourseController();
     const [notification, setNotification] = useState<Notification | undefined>(undefined);
@@ -48,7 +49,14 @@ export function useNotifications(resource?: string, id?: number) {
     if (resource && id) {
         const [notifications, setNotifications] = useState<Notification[]>([]);
         useEffect(() => {
-            const { unsubscribe, data } = controller.getValueWithSubscription<Notification>(resource, id, (data) => {
+            const { unsubscribe, data } = controller.getValueWithSubscription<Notification>("notifications", (notification) => {
+                const type = notification.body && typeof notification.body === 'object' ? (notification.body as any).type : undefined;
+                if (type === "discussion_thread") {
+                    const envelope = notification.body as DiscussionThreadNotification;
+                    return envelope.root_thread_id === id;
+                }
+                return false;
+            }, (data) => {
                 setNotifications([data]);
             });
             if (data)
@@ -60,9 +68,15 @@ export function useNotifications(resource?: string, id?: number) {
         const [notifications, setNotifications] = useState<Notification[]>([]);
         useEffect(() => {
             const { unsubscribe, data } = controller.listGenericData<Notification>("notifications", (data) => {
-                setNotifications(data);
+                const thisClassNotifications = data.filter((notification) => {
+                    return notification.class_id === controller.courseId;
+                });
+                setNotifications(thisClassNotifications);
             });
-            setNotifications(data);
+            const thisClassNotifications = data.filter((notification) => {
+                return notification.class_id === controller.courseId;
+            });
+            setNotifications(thisClassNotifications);
             return () => unsubscribe();
         }, [controller]);
         return { notifications, set_read, dismiss };

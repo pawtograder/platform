@@ -55,7 +55,7 @@ function ThreadActions({ thread }: { thread: DiscussionThreadType }) {
 function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
     const { status, setThreadWatchStatus } = useDiscussionThreadWatchStatus(thread.id);
     return <Button variant="ghost" size="sm" onClick={() => {
-        setThreadWatchStatus(thread.id, !status);
+        setThreadWatchStatus(!status);
     }}>
         {status ? "Unwatch" : "Watch"}
         {status ? <FaEyeSlash /> : <FaEye />}

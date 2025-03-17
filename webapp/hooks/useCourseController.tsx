@@ -1,7 +1,7 @@
 'use client'
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { DiscussionThreadReadWithAllDescendants, useDiscussionThreadsController } from "./useDiscussionThreadRootController";
-import { DiscussionThread, DiscussionThreadReadStatus, UserProfile, UserRole } from "@/utils/supabase/DatabaseTypes";
+import { DiscussionThread, DiscussionThreadReadStatus, DiscussionThreadWatcher, Notification, UserProfile, UserRole } from "@/utils/supabase/DatabaseTypes";
 import useAuthState from "./useAuthState";
 import { useCallback, createContext, useContext, useEffect, useRef, useState } from "react";
 
@@ -135,13 +135,25 @@ class CourseController {
     private genericData: { [key in string]: Map<number, any> } = {};
     private genericDataListSubscribers: { [key in string]: UpdateCallback<any>[] } = {};
 
+    private genericDataTypeToId: { [key in string]: (item: any) => number } = {};
+
+    registerGenericDataType(typeName: string, idGetter: (item: any) => number) {
+        if (!this.genericDataTypeToId[typeName]) {
+            this.genericDataTypeToId[typeName] = idGetter;
+            this.genericDataSubscribers[typeName] = new Map();
+            this.genericDataListSubscribers[typeName] = [];
+        }
+    }
+
     setGeneric(typeName: string, data: any[]) {
         if (!this.genericData[typeName]) {
             this.genericData[typeName] = new Map();
         }
+        const idGetter = this.genericDataTypeToId[typeName];
         for (const item of data) {
-            this.genericData[typeName].set(item.id, item);
-            const itemSubscribers = this.genericDataSubscribers[typeName]?.get(item.id) || [];
+            const id = idGetter(item);
+            this.genericData[typeName].set(id, item);
+            const itemSubscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
             itemSubscribers.forEach(cb => cb(item));
         }
         const listSubscribers = this.genericDataListSubscribers[typeName] || [];
@@ -156,28 +168,60 @@ class CourseController {
         const currentData = this.genericData[typeName]?.values() || [];
         return { unsubscribe: () => { }, data: Array.from(currentData) as T[] };
     }
-    getValueWithSubscription<T>(typeName: string, id: number, callback?: UpdateCallback<T>): { unsubscribe: Unsubscribe, data: T | undefined } {
-        const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-        if (callback) {
-            this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+    getValueWithSubscription<T>(typeName: string, id: number | ((item: T) => boolean), callback?: UpdateCallback<T>): { unsubscribe: Unsubscribe, data: T | undefined } {
+        if (!this.genericDataTypeToId[typeName]) {
+            throw new Error(`No id getter for type ${typeName}`);
         }
-        return { unsubscribe: () => { }, data: this.genericData[typeName]?.get(id) as T | undefined };
+        if (typeof id === "function") {
+            const relevantIds = Array.from(this.genericData[typeName]?.keys() || []).filter(_id => id(this.genericData[typeName]?.get(_id)!));
+            if (relevantIds.length == 0) {
+                return {
+                    unsubscribe: () => { },
+                    data: undefined
+                };
+            } else if (relevantIds.length == 1) {
+                const id = relevantIds[0];
+                const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
+                if (callback) {
+                    this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+                }
+                return {
+                    unsubscribe: () => {
+                        this.genericDataSubscribers[typeName]?.set(id, subscribers.filter(cb => cb !== callback));
+                    }, data: this.genericData[typeName]?.get(id) as T | undefined
+                };
+            } else {
+                throw new Error(`Multiple ids found for type ${typeName}`);
+            }
+        } else if (typeof id === "number") {
+            const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
+            if (callback) {
+                this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+            }
+            return {
+                unsubscribe: () => {
+                    this.genericDataSubscribers[typeName]?.set(id, subscribers.filter(cb => cb !== callback));
+                }, data: this.genericData[typeName]?.get(id) as T | undefined
+            };
+        }
     }
     handleGenericDataEvent(typeName: string, event: LiveEvent) {
         const body = event.payload;
+        const idGetter = this.genericDataTypeToId[typeName];
+        const id = idGetter(body);
         if (event.type === "created") {
-            this.genericData[typeName].set(body.id, body);
-            this.genericDataSubscribers[typeName]?.get(body.id)?.forEach(cb => cb(body));
+            this.genericData[typeName].set(id, body);
+            this.genericDataSubscribers[typeName]?.get(id)?.forEach(cb => cb(body));
             this.genericDataListSubscribers[typeName]?.forEach(cb => cb(Array.from(this.genericData[typeName].values())));
         }
         else if (event.type === "updated") {
-            this.genericData[typeName].set(body.id, body);
-            this.genericDataSubscribers[typeName]?.get(body.id)?.forEach(cb => cb(body));
+            this.genericData[typeName].set(id, body);
+            this.genericDataSubscribers[typeName]?.get(id)?.forEach(cb => cb(body));
             this.genericDataListSubscribers[typeName]?.forEach(cb => cb(Array.from(this.genericData[typeName].values())));
         }
         else if (event.type === "deleted") {
-            this.genericData[typeName].delete(body.id);
-            this.genericDataSubscribers[typeName]?.get(body.id)?.forEach(cb => cb(undefined));
+            this.genericData[typeName].delete(id);
+            this.genericDataSubscribers[typeName]?.get(id)?.forEach(cb => cb(undefined));
             this.genericDataListSubscribers[typeName]?.forEach(cb => cb(Array.from(this.genericData[typeName].values())));
         }
     }
@@ -247,7 +291,7 @@ class CourseController {
             const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
             if (isRoot) {
                 //Calculate the number of read descendants
-                const readDescendants = this.discussionThreadReadStatuses.values().filter(status => 
+                const readDescendants = this.discussionThreadReadStatuses.values().filter(status =>
                     status.discussion_thread_id != status.discussion_thread_root_id &&
                     status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
                 let numReadDescendants = 0;
@@ -465,10 +509,40 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
         ]
     });
     useEffect(() => {
+        controller.registerGenericDataType("notifications", (item: Notification) => item.id);
         if (notifications?.data) {
             controller.setGeneric("notifications", notifications.data);
         }
     }, [controller, notifications?.data]);
+
+    const { data: threadWatches } = useList<DiscussionThreadWatcher>({
+        resource: "discussion_thread_watchers",
+        queryOptions: {
+            staleTime: Infinity,
+            cacheTime: Infinity,
+        },
+        filters: [
+            {
+                field: "user_id",
+                operator: "eq",
+                value: user?.id
+            }
+        ],
+        pagination: {
+            pageSize: 1000,
+        },
+        liveMode: "manual",
+        onLiveEvent: (event) => {
+            controller.handleGenericDataEvent('discussion_thread_watchers', event);
+        }
+    });
+    useEffect(() => {
+        controller.registerGenericDataType("discussion_thread_watchers", (item: DiscussionThreadWatcher) => item.discussion_thread_root_id);
+        if (threadWatches?.data) {
+            controller.setGeneric("discussion_thread_watchers", threadWatches.data);
+        }
+    }, [controller, threadWatches?.data]);
+
     return <></>
 }
 const CourseControllerContext = createContext<CourseController | null>(null);

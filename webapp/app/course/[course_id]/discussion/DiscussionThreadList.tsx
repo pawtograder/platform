@@ -38,7 +38,7 @@ const DiscussionThreadTeaser = (props: Props) => {
     const { readStatus } = useDiscussionThreadReadStatus(props.thread_id);
 
     const userProfile = useUserProfile(thread?.author);
-    return (<Box position="relative"><NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`}>
+    return (<Box position="relative"><NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
         <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
             {!readStatus?.read_at && (
                 <Box w="8px" h="8px" bg="blue.500" rounded="full">
