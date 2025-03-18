@@ -291,11 +291,12 @@ class CourseController {
         const processUpdatedStatus = (updatedStatus: DiscussionThreadReadStatus) => {
             //Is this a root?
             const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
+            const existingStatuses = Array.from(this.discussionThreadReadStatuses.values());
             if (isRoot) {
                 //Calculate the number of read descendants
                 let numReadDescendants = 0;
-                if (this.discussionThreadReadStatuses) {
-                    const readDescendants = this.discussionThreadReadStatuses.values().filter(status =>
+                if (existingStatuses) {
+                    const readDescendants = existingStatuses.filter(status =>
                         status.discussion_thread_id != status.discussion_thread_root_id &&
                         status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
                     for (const status of readDescendants) {
@@ -320,7 +321,7 @@ class CourseController {
                 //Then root
                 const root = this.discussionThreadReadStatuses.get(updatedStatus.discussion_thread_root_id);
                 if (root) {
-                    const readDescendants = this.discussionThreadReadStatuses.values().filter(status =>
+                    const readDescendants = existingStatuses.filter(status =>
                         status.discussion_thread_id != status.discussion_thread_root_id &&
                         status.discussion_thread_root_id === updatedStatus.discussion_thread_root_id && status.read_at);
                     let numReadDescendants = 0;
