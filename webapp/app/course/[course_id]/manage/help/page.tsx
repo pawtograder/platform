@@ -9,7 +9,7 @@ export default function HelpManagePage() {
         resource: "help_queues",
         filters:
             [
-                { field: "class", operator: "eq", value: course_id }
+                { field: "class_id", operator: "eq", value: course_id }
             ]
     })
     if (queues.isLoading) {

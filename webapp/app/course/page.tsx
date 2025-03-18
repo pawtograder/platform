@@ -27,7 +27,7 @@ export default async function ProtectedPage() {
   const courses = await supabase.from("classes").select("*").order('semester', { ascending: false }).order('name', { ascending: true });
 
   if (courses.data?.length === 1) {
-    return redirect(`/course/${courses.data[0].id}}`);
+    return redirect(`/course/${courses.data[0].id}`);
   }
   let actions = <></>;
   if (!githubIdentity) {

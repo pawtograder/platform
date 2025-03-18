@@ -293,12 +293,14 @@ class CourseController {
             const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
             if (isRoot) {
                 //Calculate the number of read descendants
-                const readDescendants = this.discussionThreadReadStatuses.values().filter(status =>
-                    status.discussion_thread_id != status.discussion_thread_root_id &&
-                    status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
                 let numReadDescendants = 0;
-                for (const status of readDescendants) {
-                    numReadDescendants += status.read_at ? 1 : 0;
+                if (this.discussionThreadReadStatuses) {
+                    const readDescendants = this.discussionThreadReadStatuses.values().filter(status =>
+                        status.discussion_thread_id != status.discussion_thread_root_id &&
+                        status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
+                    for (const status of readDescendants) {
+                        numReadDescendants += status.read_at ? 1 : 0;
+                    }
                 }
                 const newVal = {
                     ...updatedStatus,
