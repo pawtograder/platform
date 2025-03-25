@@ -8,6 +8,7 @@ import CreateStudentReposButton from "./createStudentReposButton";
 import { fetchCreateGitHubReposForStudent } from "@/lib/generated/pawtograderComponents";
 import { revalidatePath } from "next/cache";
 import { Alert } from "@/components/ui/alert";
+import UnlinkAccount from "@/components/github/unlink-account";
 export default async function StudentPage({ params }: { params: Promise<{ course_id: string }> }) {
     const { course_id } = await params;
 

@@ -13,7 +13,8 @@ import {
     FiStar,
     FiTrendingUp,
     FiClipboard,
-    FiMenu
+    FiMenu,
+    FiUsers
 } from 'react-icons/fi'
 import NextLink from "next/link";
 import UserMenu from "../UserMenu";
@@ -46,6 +47,7 @@ const LinkItems = (courseID: number) => ([
     // {name: 'Trending', icon: FiTrendingUp },
     // {name: 'Explore', icon: FiCompass },
     // {name: 'Favourites', icon: FiStar },
+    { name: 'Enrollments', icon: FiUsers, instructor_only: true, target: `/course/${courseID}/manage/enrollments` },
     { name: 'Settings', icon: FiSettings },
 ]);
 
@@ -128,7 +130,7 @@ export default function DynamicCourseNav() {
                         fontSize="xl"
                         fontWeight="bold"
                     ><CoursePicker courses={courses} currentCourse={course.classes} />
-                        <Link variant="plain" href={`/course/${course.id}`}>{course.classes.name}</Link>
+                        <Link variant="plain" href={`/course/${course.class_id}`}>{course.classes.name}</Link>
                     </Box>
                     <HStack
                         width="100%"

@@ -5,6 +5,7 @@ import { VStack } from "@chakra-ui/react";
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { createClient } from "@/utils/supabase/server";
 import Link from "next/link";
+import { PollQuestionForm } from "@/components/ui/polls/poll-question-form";
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
     const supabase = await createClient();
     const { data: assignments, error: assignmentsError } = await supabase
@@ -36,9 +37,22 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
         .eq("status", "open")
         .order("created_at", { ascending: true });
 
+    const { data: pollQuestions, error: pollQuestionsError } = await supabase
+        .from("poll_questions")
+        .select("*, poll_question_answers(*)")
+        .eq("class_id", course_id);
+    if (pollQuestionsError) {
+        console.error(pollQuestionsError);
+    }
     return (
         <VStack spaceY={8} align="stretch" p={8}>
             <Heading size="xl">Course Dashboard</Heading>
+            <Box>
+                <Heading size="lg" mb={4}>Poll Questions</Heading>
+                {pollQuestions?.map(question => (
+                    <PollQuestionForm key={question.id} question={question} />
+                ))}
+            </Box>
             <Box>
                 <Heading size="lg" mb={4}>Upcoming Assignments</Heading>
                 <Stack spaceY={4}>

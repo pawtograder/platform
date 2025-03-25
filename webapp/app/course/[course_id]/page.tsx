@@ -10,7 +10,6 @@ export default async function CourseLanding({
   params: Promise<{ course_id: string }>
 }) {
   const course_id = Number.parseInt((await params).course_id);
-  const supabase = await createClient();
 
   const instructor = await isInstructor(course_id);
   if (instructor) {

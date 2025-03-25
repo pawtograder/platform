@@ -1,7 +1,6 @@
 // 'use client'
 
 import {
-    Alert,
     Box,
     FlexProps
 } from '@chakra-ui/react'
@@ -10,22 +9,8 @@ import {
 import React from 'react'
 import { IconType } from 'react-icons'
 
-import NotFound from '@/components/ui/not-found'
-import { AuthStateProvider } from '@/hooks/useAuthState'
-import { isInstructor } from '@/lib/ssrUtils'
-import { createClient } from '@/utils/supabase/server'
-import DynamicCourseNav from './dynamicCourseNav'
 import { CourseControllerProvider } from '@/hooks/useCourseController'
-interface LinkItemProps {
-    name: string
-    target: string
-    icon: IconType
-}
-
-interface NavItemProps extends FlexProps {
-    icon: IconType
-    children: React.ReactNode
-}
+import DynamicCourseNav from './dynamicCourseNav'
 
 const ProtectedLayout = async ({ children, params }: Readonly<{
     children: React.ReactNode;

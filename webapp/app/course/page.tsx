@@ -1,15 +1,13 @@
-import { createClient } from "@/utils/supabase/server";
-import { Box, InfoIcon } from "lucide-react";
-import { redirect } from "next/navigation";
-import { jwtDecode } from "jwt-decode";
-import { CardBody, Card, CardHeader, Flex, Heading, List, Stack, VStack } from "@chakra-ui/react";
-import Link from "@/components/ui/link";
-import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import LinkAccount from "@/components/github/link-account";
-import { linkGitHubAction, signOutAction } from "../actions";
-import UserMenu from "./UserMenu";
+import UnlinkAccount from "@/components/github/unlink-account";
+import { Button } from "@/components/ui/button";
+import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
+import { createClient } from "@/utils/supabase/server";
+import { Card, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
+import { Box } from "lucide-react";
+import { redirect } from "next/navigation";
+import { signOutAction } from "../actions";
 export default async function ProtectedPage() {
   const supabase = await createClient();
 

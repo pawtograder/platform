@@ -32,6 +32,14 @@ export type UserRole = GetResult<
     Database["public"]["Tables"]["user_roles"]["Relationships"],
     "*"
 >;
+
+export type UserRoleWithPrivateProfileAndUser = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["user_roles"]["Row"],
+    "user_roles",
+    Database["public"]["Tables"]["user_roles"]["Relationships"],
+    "*, profiles!private_profile_id(*), users(*)"
+>;
 export type UserRoleWithCourse = GetResult<
     Database["public"],
     Database["public"]["Tables"]["user_roles"]["Row"],
@@ -159,6 +167,13 @@ export type UserProfile = GetResult<
     "*"
 >;
 
+export type UserProfileWithUser = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["profiles"]["Row"],
+    "profiles",
+    Database["public"]["Tables"]["profiles"]["Relationships"],
+    "*, users(*)"
+>;
 export type HelpRequestMessage = GetResult<
     Database["public"],
     Database["public"]["Tables"]["help_request_messages"]["Row"],
@@ -205,4 +220,36 @@ export type RepositoryWithSubmissionsAndGraderResults = GetResult<
     "repositories",
     Database["public"]["Tables"]["repositories"]["Relationships"],
     "*, submissions(*, grader_results(*))"
+>;
+
+export type PollQuestionWithAnswers = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["poll_questions"]["Row"],
+    "poll_questions",
+    Database["public"]["Tables"]["poll_questions"]["Relationships"],
+    "*, poll_question_answers(*)"
+>;
+
+export type PollQuestionAnswer = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["poll_question_answers"]["Row"],
+    "poll_question_answers",
+    Database["public"]["Tables"]["poll_question_answers"]["Relationships"],
+    "*"
+>;
+
+export type PollQuestionResult = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["poll_question_results"]["Row"],
+    "poll_question_results",
+    Database["public"]["Tables"]["poll_question_results"]["Relationships"],
+    "*"
+>;
+
+export type PollResponseAnswer = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["poll_response_answers"]["Row"],
+    "poll_response_answers",
+    Database["public"]["Tables"]["poll_response_answers"]["Relationships"],
+    "*"
 >;
