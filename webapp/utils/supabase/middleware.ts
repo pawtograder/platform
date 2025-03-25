@@ -43,7 +43,10 @@ export const updateSession = async (request: NextRequest) => {
     if (request.nextUrl.pathname.startsWith("/course") && user.error) {
       return NextResponse.redirect(new URL("/sign-in", request.url));
     }
-
+    const urlError = request.nextUrl.searchParams.get("error");
+    if (urlError && request.nextUrl.pathname !== "/error") {
+      return NextResponse.redirect(new URL(`/error?${request.nextUrl.searchParams.toString()}`, request.url));
+    }
     if (request.nextUrl.pathname === "/" && !user.error) {
       return NextResponse.redirect(new URL("/course", request.url));
     }
