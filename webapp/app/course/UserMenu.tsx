@@ -70,7 +70,11 @@ function UserSettingsMenu() {
         setGitHubUsername(null);
     }, [supabase])
     const linkGitHub = useCallback(async () => {
-        const { data, error } = await supabase.auth.linkIdentity({ provider: 'github' })
+        const { data, error } = await supabase.auth.linkIdentity({
+            provider: 'github', options: {
+                redirectTo: `${window.location.href}`
+            }
+        })
         if (error) {
             throw new Error(error.message)
         }
@@ -110,7 +114,9 @@ function UserSettingsMenu() {
                                         trigger={<Button variant="ghost" colorPalette="red" size="sm" p={0}><Icon as={FaUnlink} /></Button>}
                                         confirmHeader="Unlink GitHub"
                                         confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
-                                        onConfirm={unlinkGitHub}
+                                        onConfirm={() => {
+                                            unlinkGitHub()
+                                        }}
                                         onCancel={() => {
                                         }}
 

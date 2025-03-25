@@ -412,19 +412,13 @@ ${feedback.output.visible?.output}`,
     async createRepo(
         org: string,
         repoName: string,
-        _template_repo:
-            | string
-            | number
-            | boolean
-            | { [key: string]: import("./SupabaseTypes.js").Json | undefined }
-            | import("./SupabaseTypes.js").Json[]
-            | null,
+        template_repo: string,
         github_username: string,
     ) {
+        console.log("Creating repo", org, repoName, template_repo, github_username);
         const octokit = this._installations[0].octokit;
-        const template_repo = _template_repo as ListReposResponse["data"][0];
-        const owner = template_repo.owner.login;
-        const repo = template_repo.name;
+        const owner = template_repo.split("/")[0];
+        const repo = template_repo.split("/")[1];
 
         try {
             await octokit.request(

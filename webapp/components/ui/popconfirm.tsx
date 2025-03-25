@@ -6,7 +6,9 @@ import { useState } from "react"
 
 export const PopConfirm = ({ triggerLabel, trigger, confirmHeader, confirmText, onConfirm, onCancel }: { triggerLabel: string, trigger: React.ReactNode, confirmHeader: string, confirmText: string, onConfirm: () => void, onCancel: () => void }) => {
     const [isOpen, setIsOpen] = useState(false);
-    return (<PopoverRoot open={isOpen} onOpenChange={(details)=>setIsOpen(details.open)}>
+    return (<PopoverRoot
+        closeOnInteractOutside={false}
+        open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
         <PopoverTrigger aria-label={triggerLabel} asChild
         >
             {trigger}
@@ -15,8 +17,8 @@ export const PopConfirm = ({ triggerLabel, trigger, confirmHeader, confirmText, 
             <PopoverHeader>{confirmHeader}</PopoverHeader>
             <PopoverBody>
                 <Text>{confirmText}</Text>
-                <IconButton onClick={() => { setIsOpen(false); onConfirm() }} aria-label="Confirm"><Icon as={BsCheck} /></IconButton>
-                <IconButton onClick={() => { setIsOpen(false); onCancel() }} aria-label="Cancel" variant="ghost"><Icon as={BsX} /></IconButton>
+                <IconButton onClick={() => { onConfirm(); setIsOpen(false); }} aria-label="Confirm"><Icon as={BsCheck} /></IconButton>
+                <IconButton onClick={() => { onCancel(); setIsOpen(false); }} aria-label="Cancel" variant="ghost"><Icon as={BsX} /></IconButton>
             </PopoverBody>
         </PopoverContent>
     </PopoverRoot>)

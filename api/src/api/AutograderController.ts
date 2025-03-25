@@ -122,6 +122,10 @@ export class AutograderController extends Controller {
             if (!userProfileID) {
                 throw new UserVisibleError(`User profile ID not found for class ${assignment.class_id}`);
             }
+            if (!assignment.template_repo) {
+                console.log(`No template repo for assignment ${assignment.id}`);
+                return;
+            }
             const repoName = `${
                 assignment.classes!.slug
             }-${assignment.slug}-${githubUsername}`;

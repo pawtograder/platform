@@ -34,6 +34,10 @@ export class CourseAdminController {
         const createRepo = async (uid: string, name: string, github_username: string) => {
             const repoName = `${assignment.classes?.slug}-${assignment.slug}-${github_username}`;
             console.log(`Creating repo ${repoName} for ${name}`);
+            if (!assignment.template_repo) {
+                console.log(`No template repo for assignment ${assignment.id}`);
+                return;
+            }
             await GitHubController.getInstance().createRepo('autograder-dev', repoName, assignment.template_repo, github_username);
             const {error} = await supabase.from('repositories').insert({
                 profile_id: uid,

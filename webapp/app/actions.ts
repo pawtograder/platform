@@ -37,9 +37,6 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
       emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
     }
   })
-  console.log("Signing up with email");
-  console.log(data);
-  console.log(error);
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
