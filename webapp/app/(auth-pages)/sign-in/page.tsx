@@ -1,21 +1,17 @@
-import { signInOrSignUpWithEmailAction, signInWithMicrosoftAction, signInWithEmailAction, signUpWithEmailAction } from "@/app/actions";
-import { Message, FormMessage } from "@/components/form-message";
+import { signInOrSignUpWithEmailAction, signInWithMicrosoftAction } from "@/app/actions";
+import { FormMessage, Message } from "@/components/form-message";
 import { Button } from "@/components/ui/button";
 import {
   Container,
-  Flex,
   HStack,
   Heading,
-  Icon,
   Input,
-  Link,
   Separator,
-  Span,
   Stack,
   Text,
-  VStack,
-} from '@chakra-ui/react'
-import { BsApple, BsGithub, BsGoogle, BsInfoCircle, BsMicrosoft } from 'react-icons/bs'
+  VStack
+} from '@chakra-ui/react';
+import { BsMicrosoft } from 'react-icons/bs';
 
 
 export default async function Login(props: { searchParams: Promise<Message> }) {

@@ -1191,6 +1191,7 @@ export type Database = {
           created_at: string
           ended_at: string | null
           id: number
+          poll: number
           profile_id: string
         }
         Insert: {
@@ -1198,6 +1199,7 @@ export type Database = {
           created_at?: string
           ended_at?: string | null
           id?: number
+          poll: number
           profile_id: string
         }
         Update: {
@@ -1205,6 +1207,7 @@ export type Database = {
           created_at?: string
           ended_at?: string | null
           id?: number
+          poll?: number
           profile_id?: string
         }
         Relationships: [
@@ -1213,6 +1216,13 @@ export type Database = {
             columns: ["class_id"]
             isOneToOne: false
             referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "poll_responses_poll_fkey"
+            columns: ["poll"]
+            isOneToOne: false
+            referencedRelation: "polls"
             referencedColumns: ["id"]
           },
           {
@@ -1813,6 +1823,19 @@ export type Database = {
         }
         Returns: boolean
       }
+      authorizeforinstructorofstudent:
+        | {
+            Args: {
+              _user_id: string
+            }
+            Returns: boolean
+          }
+        | {
+            Args: {
+              user_id: number
+            }
+            Returns: boolean
+          }
       authorizeforpoll:
         | {
             Args: {

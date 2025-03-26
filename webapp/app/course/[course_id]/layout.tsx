@@ -1,13 +1,11 @@
 // 'use client'
 
 import {
-    Box,
-    FlexProps
+    Box
 } from '@chakra-ui/react'
 
 
 import React from 'react'
-import { IconType } from 'react-icons'
 
 import { CourseControllerProvider } from '@/hooks/useCourseController'
 import DynamicCourseNav from './dynamicCourseNav'

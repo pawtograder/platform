@@ -406,6 +406,50 @@ export const useCreateAssignmentRepositories = (
   });
 };
 
+export type AddEnrollmentPathParams = {
+  /**
+   * @format double
+   */
+  courseId: number;
+};
+
+export type AddEnrollmentError = Fetcher.ErrorWrapper<undefined>;
+
+export type AddEnrollmentRequestBody = {
+  role: 'admin' | 'instructor' | 'grader' | 'student';
+  name: string;
+  email: string;
+};
+
+export type AddEnrollmentVariables = {
+  body: AddEnrollmentRequestBody;
+  pathParams: AddEnrollmentPathParams;
+} & PawtograderContext['fetcherOptions'];
+
+export const fetchAddEnrollment = (variables: AddEnrollmentVariables, signal?: AbortSignal) =>
+  pawtograderFetch<
+    undefined,
+    AddEnrollmentError,
+    AddEnrollmentRequestBody,
+    {},
+    {},
+    AddEnrollmentPathParams
+  >({ url: '/api/instructor/{courseId}/enrollments', method: 'post', ...variables, signal });
+
+export const useAddEnrollment = (
+  options?: Omit<
+    reactQuery.UseMutationOptions<undefined, AddEnrollmentError, AddEnrollmentVariables>,
+    'mutationFn'
+  >,
+) => {
+  const { fetcherOptions } = usePawtograderContext();
+  return reactQuery.useMutation<undefined, AddEnrollmentError, AddEnrollmentVariables>({
+    mutationFn: (variables: AddEnrollmentVariables) =>
+      fetchAddEnrollment({ ...fetcherOptions, ...variables }),
+    ...options,
+  });
+};
+
 export type SyncEnrollmentsPathParams = {
   /**
    * @format double
@@ -421,7 +465,7 @@ export type SyncEnrollmentsVariables = {
 
 export const fetchSyncEnrollments = (variables: SyncEnrollmentsVariables, signal?: AbortSignal) =>
   pawtograderFetch<undefined, SyncEnrollmentsError, undefined, {}, {}, SyncEnrollmentsPathParams>({
-    url: '/api/instructor/{courseId}/enrollments',
+    url: '/api/instructor/{courseId}/canvas/enrollments',
     method: 'post',
     ...variables,
     signal,
