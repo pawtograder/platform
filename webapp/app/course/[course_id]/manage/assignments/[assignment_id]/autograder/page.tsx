@@ -4,22 +4,27 @@ import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import RepoSelector from "@/components/ui/repo-selector";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Fieldset, Input, RadioGroup } from "@chakra-ui/react";
+import { Button, Fieldset, Input, RadioGroup } from "@chakra-ui/react";
 import { Edit } from "@refinedev/chakra-ui";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
-import { Controller } from "react-hook-form";
+import { Controller, FieldValues } from "react-hook-form";
 import { ListReposResponse } from "@/components/github/GitHubTypes";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import AutograderConfiguration from "@/components/ui/autograder-configuration";
-import { Autograder } from "@/utils/supabase/DatabaseTypes";
+import { Autograder, Assignment } from "@/utils/supabase/DatabaseTypes";
+import { createClient } from "@/utils/supabase/client";
+import { useUpdate } from "@refinedev/core";
 
 export default function AutograderPage() {
     const { assignment_id } = useParams();
     const [graderRepo, setGraderRepo] = useState<ListReposResponse[0]>();
+    const { mutateAsync: mutateAssignment } = useUpdate<Assignment>({ resource: "assignments", id: Number.parseInt(assignment_id as string) });
     const { refineCore: { formLoading, query },
         saveButtonProps,
         register,
+        handleSubmit,
+        refineCore,
         control,
         formState: { errors },
     } = useForm<Autograder>({
@@ -32,6 +37,24 @@ export default function AutograderPage() {
             }
         }
     });
+    const onSubmit = useCallback(async (values: FieldValues) => {
+        const supabase = createClient();
+        console.log(values)
+        console.log(assignment_id)
+        const ret = await supabase.functions.invoke('github-repo-configure-webhook', {
+            body: {
+                assignment_id: Number.parseInt(assignment_id as string),
+                new_repo: values.grader_repo,
+                watch_type: "grader_solution"
+            }
+        })
+        mutateAssignment({
+            values: {
+                has_autograder: values.assignments.has_autograder.value === "true"
+            }
+        });
+        // refineCore.onFinish({ grader_repo: values.grader_repo });
+    }, [refineCore, assignment_id]);
     if (!query || formLoading) {
         return <div>Loading...</div>
     }
@@ -40,7 +63,10 @@ export default function AutograderPage() {
     }
     return <div>
         Autograder
-        <form>
+        <form onSubmit={(e) => {
+            e.preventDefault();
+            handleSubmit(onSubmit)(e);
+        }}>
             <Fieldset.Root size="lg" maxW="md">
                 <Fieldset.Content>
                     <Field label="Autograder configuration for this assignment"
@@ -76,8 +102,9 @@ export default function AutograderPage() {
                     </Field>
                 </Fieldset.Content>
             </Fieldset.Root>
-            <AutograderConfiguration graderRepo={graderRepo} />
+            <Button type="submit">Save</Button>
         </form>
+        <AutograderConfiguration graderRepo={graderRepo} />
 
     </div>
 }

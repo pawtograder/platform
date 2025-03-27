@@ -1866,6 +1866,14 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: string
       }
+      get_user_id_by_email: {
+        Args: {
+          email: string
+        }
+        Returns: {
+          id: string
+        }[]
+      }
       intval: {
         Args: {
           "": string

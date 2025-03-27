@@ -138,6 +138,6 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: Li
                 ))}
             </Table.Body>
         </Table.Root>
-        <Button disabled={saveLoading} loading={saveLoading} onClick={() => saveRegressionTests()}>Save</Button>
+        <Button disabled={saveLoading} loading={saveLoading} onClick={() => saveRegressionTests()}>Save Testing Configuration</Button>
     </div>
 }
