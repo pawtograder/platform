@@ -1,0 +1,1 @@
+INSERT into public.classes(name, semester, slug, is_demo) VALUES ('Demo Class', 20281, 'demo-class', true);
