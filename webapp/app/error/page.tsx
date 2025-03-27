@@ -7,12 +7,17 @@ export default async function ErrorPage({ searchParams }: { searchParams: Promis
             <Stack gap="6">
                 <VStack gap="2" textAlign="center" mt="4">
                     <Heading size="3xl">Error</Heading>
-                    <Text color="fg.muted">
+                    {error_description ? <><Text color="fg.muted">
                         {error_description}
                     </Text>
                     <Text color="fg.muted">
                         Try using your browser's back button to go back to the previous page, and **TODO** file a bug report.
-                    </Text>
+                    </Text></> : <Text color="fg.muted">
+                        {error}
+                        <br />
+                        Try using your browser's back button to go back to the previous page.
+                    </Text>}
+
                 </VStack>
             </Stack>
         </Container>
