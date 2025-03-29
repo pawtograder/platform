@@ -59,3 +59,43 @@ export type RegressionTestRunResponse = {
     regression_test_url: string;
     regression_test_sha: string;
 };
+
+export type AddEnrollmentRequest = {
+    email: string;
+    name: string;
+    role: Database["public"]["Enums"]["app_role"];
+    courseId: number;
+};
+
+export type LiveMeetingForHelpRequestRequest = {
+    courseId: number;
+    helpRequestId: number;
+};
+
+export type AssignmentCreateAllReposRequest = {
+    courseId: number;
+    assignmentId: number;
+};
+export type ListReposRequest = {
+    courseId: number;
+    template_only?: boolean;
+}
+
+export type ListFilesRequest = {
+    courseId: number;
+    orgName: string;
+    repoName: string;
+}
+export type FileListing = {
+    name: string;
+    path: string;
+    size: number;
+    sha: string;
+};
+
+export type GetFileRequest = {
+    courseId: number;
+    orgName: string;
+    repoName: string;
+    path: string;
+  }

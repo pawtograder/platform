@@ -5,10 +5,10 @@ import { Button, Container, Heading, Table } from "@chakra-ui/react";
 import { format, formatDistanceToNowStrict, formatRelative } from "date-fns";
 import Link from "@/components/ui/link";
 import CreateStudentReposButton from "./createStudentReposButton";
-import { fetchCreateGitHubReposForStudent } from "@/lib/generated/pawtograderComponents";
 import { revalidatePath } from "next/cache";
 import { Alert } from "@/components/ui/alert";
 import UnlinkAccount from "@/components/github/unlink-account";
+import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 export default async function StudentPage({ params }: { params: Promise<{ course_id: string }> }) {
     const { course_id } = await params;
 
@@ -19,8 +19,6 @@ export default async function StudentPage({ params }: { params: Promise<{ course
         .eq("class_id", Number(course_id))
         .eq("repositories.user_roles.user_id", user!.id)
         .order("due_date", { ascending: false });
-    console.log(assignments)
-    console.log(assignments.data);
 
     //list identities
     const identities = await client.auth.getUserIdentities();
@@ -34,11 +32,8 @@ export default async function StudentPage({ params }: { params: Promise<{ course
         const session = await client.auth.getSession();
         if (assignmentsWithoutRepos?.length) {
             console.log("Creating GitHub repos for student");
-            const ret = await fetchCreateGitHubReposForStudent({
-                headers: {
-                    Authorization: `${session.data.session?.access_token}`
-                }
-            });
+            const ret = await autograderCreateReposForStudent(client);
+            console.log(ret);
             assignments = await client.from("assignments")
                 .select("*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))")
                 .eq("class_id", Number(course_id))

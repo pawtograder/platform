@@ -8,7 +8,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { UserVisibleError, SecurityError } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { validateOIDCToken, cloneRepository, getRepoTarballURL } from "../_shared/GitHubController.ts";
+import { validateOIDCToken, cloneRepository, getRepoTarballURL } from "../_shared/GitHubWrapper.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { Open as openZip } from "npm:unzipper";
 import { createHash } from "node:crypto";
@@ -23,11 +23,11 @@ async function handleRequest(req: Request) {
     // Find the corresponding student and assignment
     console.log("Creating submission for", repository, sha, workflow_ref);
     // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
-    const supabase = createClient<Database>(
+    const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL") || "",
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     );
-    const { data: repoData } = await supabase.from("repositories").select(
+    const { data: repoData } = await adminSupabase.from("repositories").select(
         "*, assignments(submission_files, class_id)",
     ).eq("repository", repository).single();
 
@@ -42,7 +42,7 @@ async function handleRequest(req: Request) {
             throw new Error(`Invalid workflow, got ${workflow_ref}`);
         }
         // Create a submission record
-        const { error, data: subID } = await supabase.from("submissions")
+        const { error, data: subID } = await adminSupabase.from("submissions")
             .insert({
                 profile_id: repoData?.profile_id,
                 assignment_id: repoData.assignment_id,
@@ -80,7 +80,7 @@ async function handleRequest(req: Request) {
             );
         }
         // Retrieve the autograder config
-        const { data: config } = await supabase.from("autograder")
+        const { data: config } = await adminSupabase.from("autograder")
             .select("*").eq("id", assignment_id).single();
         if (!config) {
             throw new UserVisibleError("Grader config not found");
@@ -114,7 +114,7 @@ async function handleRequest(req: Request) {
             }),
         );
         // Add files to supabase
-        const { error: fileError } = await supabase.from("submission_files")
+        const { error: fileError } = await adminSupabase.from("submission_files")
             .insert(
                 submittedFilesWithContents.map((file: any) => ({
                     submissions_id: submission_id,
@@ -133,8 +133,13 @@ async function handleRequest(req: Request) {
             const { download_link: grader_url, sha: grader_sha } =
                 await
                     getRepoTarballURL(config.grader_repo!);
+
+            console.log("Grader URL:", grader_url);
+
+            const patchedURL= grader_url.replace("http://kong:8000","https://khoury-classroom-dev.ngrok.pizza")
+            console.log("Patched URL:", patchedURL);
             return {
-                grader_url,
+                grader_url: patchedURL,
                 grader_sha,
             };
         } catch (err) {

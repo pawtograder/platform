@@ -3,10 +3,11 @@
 import { Icon, Button, Input, Dialog, Popover, Field, Select, NativeSelect } from "@chakra-ui/react";
 import { FaPlus } from "react-icons/fa";
 import { useForm } from "react-hook-form";
-import { fetchAddEnrollment } from "@/lib/generated/pawtograderComponents";
 import { useParams } from "next/navigation";
 import { useInvalidate } from "@refinedev/core";
 import { useCallback } from "react";
+import { enrollmentAdd } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 export default function AddSingleStudent() {
     const { course_id } = useParams();
     const { register, handleSubmit, formState: { errors },
@@ -14,16 +15,13 @@ export default function AddSingleStudent() {
     const invalidate = useInvalidate();
     const onSubmit = useCallback(async (data: any) => {
         console.log("Submitting");
-        await fetchAddEnrollment({
-            pathParams: {
-                courseId: Number(course_id),
-            },
-            body: {
-                email: data.email,
-                name: data.name,
-                role: data.role,
-            },
-        });
+        const supabase = createClient();
+        await enrollmentAdd({
+            courseId: Number(course_id),
+            email: data.email,
+            name: data.name,
+            role: data.role,
+        }, supabase);
         console.log("Invalidating user_roles");
         invalidate({
             resource: "user_roles",

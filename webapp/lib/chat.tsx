@@ -33,6 +33,7 @@ export function HelpRequestChatChannelProvider({ help_request, children }: { hel
         filters: [
             { field: "help_request_id", operator: "eq", value: help_request.id }
         ],
+        liveMode: "auto",
         pagination: {
             pageSize: 1000
         },

@@ -6,13 +6,14 @@ import useUserProfiles from "@/hooks/useUserProfiles";
 import MeetingControls from "@/lib/aws-chime-sdk-meeting/containers/MeetingControls";
 import { NavigationProvider } from "@/lib/aws-chime-sdk-meeting/providers/NavigationProvider";
 import { VideoTileGridProvider } from "@/lib/aws-chime-sdk-meeting/providers/VideoTileGridProvider";
-import { fetchGetMeeting } from "@/lib/generated/pawtograderComponents";
 import isValidProp from '@emotion/is-prop-valid';
 import { BackgroundBlurProvider, BackgroundReplacementProvider, GlobalStyles, MeetingProvider, UserActivityProvider, VoiceFocusProvider, lightTheme, useMeetingManager } from "amazon-chime-sdk-component-library-react";
 import { MeetingSessionConfiguration } from "amazon-chime-sdk-js";
 import { useEffect, useRef } from "react";
 import { StyleSheetManager, ThemeProvider } from 'styled-components';
 import { useParams } from "next/navigation";
+import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => {
     return <ThemeProvider theme={lightTheme}>
         <GlobalStyles />
@@ -41,7 +42,7 @@ const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => 
 function HelpMeeting() {
     const meetingManager = useMeetingManager()
     const { users } = useUserProfiles()
-    const { help_request_id } = useParams()
+    const { help_request_id, course_id } = useParams()
 
     useEffect(() => {
         meetingManager.getAttendee = async (chimeAttendeeId: string, externalUserId?: string) => {
@@ -62,7 +63,8 @@ function HelpMeeting() {
         const joinMeeting = async () => {
             // Fetch the meeting and attendee data from your server application
             console.log("Fetching meeting and attendee data");
-            const { Meeting, Attendee } = await fetchGetMeeting({ pathParams: { requestId: parseInt(help_request_id as string) } });
+            const supabase = createClient();
+            const { Meeting, Attendee } = await liveMeetingForHelpRequest({ courseId: parseInt(course_id as string), helpRequestId: parseInt(help_request_id as string) }, supabase);
             console.log("Meeting and attendee data fetched");
             const meetingSessionConfiguration = new MeetingSessionConfiguration(Meeting, Attendee);
             await meetingManager.join(meetingSessionConfiguration);

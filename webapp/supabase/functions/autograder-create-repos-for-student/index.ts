@@ -3,30 +3,107 @@
 // This enables autocomplete, go to definition, etc.
 
 // Setup type definitions for built-in Supabase Runtime APIs
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
+import {
+  SecurityError,
+  UserVisibleError,
+  wrapRequestHandler,
+} from "../_shared/HandlerUtils.ts";
+import { createRepo } from "../_shared/GitHubWrapper.ts";
 
-console.log("Hello from Functions!")
+async function handleRequest(req: Request) {
+  const supabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    {
+      global: {
+        headers: { Authorization: req.headers.get("Authorization")! },
+      },
+    },
+  );
+  const { data: user } = await supabase.auth.getUser();
+  if (!user) {
+    throw new UserVisibleError("User not found");
+  }
+  console.log("Creating GitHub repos for student ", user.user!.email);
+  // Get the user's Github username
+  const { data: userData } = await supabase.from("user_roles").select(
+    "users(github_username)",
+  ).eq("user_id", user.user!.id).single();
+  if (!userData) {
+    throw new SecurityError(`Invalid user: ${user.user!.id}`);
+  }
+  const githubUsername = userData.users.github_username;
+  if (!githubUsername) {
+    throw new UserVisibleError(
+      `User ${user.user!.id} has no Github username linked`,
+    );
+  }
+  const { data: classes } = await supabase.from("user_roles").select(
+    "class_id, profiles!private_profile_id(id, name, sortable_name, repositories(*))",
+  ).eq(
+    "user_id",
+    user.user!.id,
+  ).eq("role", "student");
+  if (!classes) {
+    throw new UserVisibleError("User is not a student");
+  }
+  const existingRepos = classes.flatMap((c) => c!.profiles!.repositories);
+  //Find all assignments that the student is enrolled in that have been released
+  const { data: assignments } = await supabase.from("assignments").select(
+    "*, classes(slug, github_org)",
+  ).in("class_id", classes!.map((c) => c!.class_id))
+    .lte("release_date", new Date().toISOString());
+
+  const requests = assignments!.filter((assignment) =>
+    !existingRepos.find((repo) => repo.assignment_id === assignment.id)
+  ).map(async (assignment) => {
+    const userProfileID = classes.find((c) =>
+      c && c.class_id === assignment.class_id
+    )?.profiles.id;
+    if (!userProfileID) {
+      throw new UserVisibleError(
+        `User profile ID not found for class ${assignment.class_id}`,
+      );
+    }
+    if (!assignment.template_repo) {
+      console.log(`No template repo for assignment ${assignment.id}`);
+      return;
+    }
+    const repoName = `${
+      assignment.classes!.slug
+    }-${assignment.slug}-${githubUsername}`;
+    const repo = await createRepo(
+      assignment.classes!.github_org!,
+      repoName,
+      assignment.template_repo,
+      githubUsername,
+    );
+    //Use service role key to insert the repo into the database
+    const adminSupabase = createClient<Database>( 
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const { error } = await adminSupabase.from("repositories").insert({
+      profile_id: userProfileID,
+      class_id: assignment.class_id!,
+      assignment_id: assignment.id,
+      repository: `${assignment.classes!.github_org}/${repoName}`,
+    });
+    if (error) {
+      console.error(error);
+    }
+    return repo;
+  });
+  await Promise.all(requests);
+  return {
+    is_ok: true,
+    message: `Repositories created for ${assignments!.length} assignments`,
+  };
+}
 
 Deno.serve(async (req) => {
-  const { name } = await req.json()
-  const data = {
-    message: `Hello ${name}!`,
-  }
-
-  return new Response(
-    JSON.stringify(data),
-    { headers: { "Content-Type": "application/json" } },
-  )
-})
-
-/* To invoke locally:
-
-  1. Run `supabase start` (see: https://supabase.com/docs/reference/cli/supabase-start)
-  2. Make an HTTP request:
-
-  curl -i --location --request POST 'http://127.0.0.1:54321/functions/v1/autograder-create-repos-for-student' \
-    --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0' \
-    --header 'Content-Type: application/json' \
-    --data '{"name":"Functions"}'
-
-*/
+  return wrapRequestHandler(req, handleRequest);
+});

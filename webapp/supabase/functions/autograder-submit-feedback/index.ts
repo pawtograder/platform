@@ -1,11 +1,6 @@
-// Follow this setup guide to integrate the Deno language server with your editor:
-// https://deno.land/manual/getting_started/setup_your_environment
-// This enables autocomplete, go to definition, etc.
-
-// Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { GradingScriptResult, OutputVisibility } from "../_shared/FunctionTypes.d.ts";
-import { resolveRef, validateOIDCToken } from "../_shared/GitHubController.ts";
+import { resolveRef, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
@@ -16,13 +11,18 @@ import {
 async function handleRequest(req: Request) {
   const token = req.headers.get("Authorization");
   const requestBody = await req.json() as GradingScriptResult;
-  const autograder_regression_test_id = undefined;
+  const url = new URL(req.url);
+  const autograder_regression_test_id = url.searchParams.get("autograder_regression_test_id") ? 
+    parseInt(url.searchParams.get("autograder_regression_test_id")!) : 
+    undefined;
+  console.log(req.url)
+  console.log(`autograder_regression_test_id: ${autograder_regression_test_id}`)
   if (!token) {
     throw new UserVisibleError("No token provided");
   }
   const decoded = await validateOIDCToken(token);
   // Find the corresponding submission
-  const supabase = createClient<Database>(
+  const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
   );
@@ -32,7 +32,7 @@ async function handleRequest(req: Request) {
   let profile_id: string | null = null;
   if (autograder_regression_test_id) {
     //It's a regression test run
-    const { data: regressionTestRun } = await supabase.from(
+    const { data: regressionTestRun } = await adminSupabase.from(
       "autograder_regression_test",
     ).select("*,autograder(assignments(id, class_id))").eq(
       "id",
@@ -53,7 +53,7 @@ async function handleRequest(req: Request) {
     class_id = regressionTestRun.autograder.assignments.class_id;
     assignment_id = regressionTestRun.autograder.assignments.id;
   } else {
-    const { data: submission } = await supabase.from("submissions")
+    const { data: submission } = await adminSupabase.from("submissions")
       .select("*").eq("repository", repository).eq("sha", sha)
       .eq("run_attempt", Number.parseInt(decoded.run_attempt))
       .eq("run_number", Number.parseInt(decoded.run_id)).single();
@@ -74,7 +74,7 @@ async function handleRequest(req: Request) {
     requestBody.action_ref,
   );
   console.log("Action SHA", action_sha);
-  const { error, data: resultID } = await supabase.from(
+  const { error, data: resultID } = await adminSupabase.from(
     "grader_results",
   ).insert({
     submission_id,
@@ -97,6 +97,7 @@ async function handleRequest(req: Request) {
       "text",
     lint_passed: requestBody.feedback.lint.status === "pass",
     execution_time: requestBody.execution_time,
+    autograder_regression_test: autograder_regression_test_id,
     grader_action_sha: action_sha,
   }).select("id").single();
   if (error) {
@@ -119,7 +120,7 @@ async function handleRequest(req: Request) {
       const output =
         requestBody.feedback.output[visibility as OutputVisibility];
       if (output) {
-        await supabase.from("grader_result_output").insert({
+        await adminSupabase.from("grader_result_output").insert({
           class_id,
           profile_id,
           grader_result_id: resultID.id,
@@ -131,7 +132,7 @@ async function handleRequest(req: Request) {
     }
   }
   //Insert test results
-  const { error: testResultsError } = await supabase
+  const { error: testResultsError } = await adminSupabase
     .from("grader_result_tests").insert(
       requestBody.feedback.tests.map((test) => ({
         class_id: class_id,

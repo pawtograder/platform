@@ -139,7 +139,9 @@ export type Database = {
         Row: {
           canvas_id: number | null
           created_at: string
+          github_org: string | null
           id: number
+          is_demo: boolean
           name: string | null
           semester: number | null
           slug: string | null
@@ -148,7 +150,9 @@ export type Database = {
         Insert: {
           canvas_id?: number | null
           created_at?: string
+          github_org?: string | null
           id?: number
+          is_demo?: boolean
           name?: string | null
           semester?: number | null
           slug?: string | null
@@ -157,7 +161,9 @@ export type Database = {
         Update: {
           canvas_id?: number | null
           created_at?: string
+          github_org?: string | null
           id?: number
+          is_demo?: boolean
           name?: string | null
           semester?: number | null
           slug?: string | null
