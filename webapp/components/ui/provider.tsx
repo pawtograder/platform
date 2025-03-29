@@ -1,7 +1,9 @@
 "use client"
 
 import { createClient } from "@/utils/supabase/client";
-import { ChakraProvider, createSystem, defaultConfig } from "@chakra-ui/react";
+import { ChakraProvider, createSystem, defaultConfig, defineConfig } from "@chakra-ui/react";
+import { system } from "@/components/ui/theme"
+
 import { Refine } from "@refinedev/core";
 import { dataProvider, liveProvider } from "@refinedev/supabase";
 import {
@@ -34,6 +36,7 @@ import {
 // })
 
 // const system = createSystem(defaultConfig, customConfig)
+
 const system = createSystem(defaultConfig)
 
 

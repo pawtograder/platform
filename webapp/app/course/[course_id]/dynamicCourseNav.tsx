@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/drawer"
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { ColorModeButton } from "@/components/ui/color-mode";
+import { ColorModeButton, useColorMode } from "@/components/ui/color-mode";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -73,7 +73,7 @@ function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[
     return <DrawerRoot size='xs' placement='start'>
         <DrawerBackdrop />
         <DrawerTrigger asChild>
-            <Button variant="ghost" colorPalette="gray" size="sm" aria-label="Open course picker">
+            <Button variant="ghost" colorPalette="gray" size="sm" aria-label="Open course picker" p={0}>
                 <FiMenu />
             </Button>
         </DrawerTrigger>
@@ -99,6 +99,7 @@ export default function DynamicCourseNav() {
     const courseNavRef = useRef<HTMLDivElement>(null);
     const { role: course } = useClassProfiles();
     const { roles: courses } = useAuthState();
+    const { colorMode } = useColorMode();
     const isInstructor = course.role === "instructor";
     useEffect(() => {
         if (courseNavRef.current) {
@@ -126,12 +127,19 @@ export default function DynamicCourseNav() {
                 justifyContent={{ base: 'space-between' }}
             >
                 <VStack gap="0" align="start">
-                    <Box
-                        fontSize="xl"
-                        fontWeight="bold"
-                    ><CoursePicker courses={courses} currentCourse={course.classes} />
-                        <Link variant="plain" href={`/course/${course.class_id}`}>{course.classes.name}</Link>
-                    </Box>
+                    <HStack
+                    >
+                        <CoursePicker courses={courses} currentCourse={course.classes} />
+                        {colorMode === 'dark' ? (
+                            <img src="/Logo-Dark.png" width="30px" alt="Logo" />
+                        ) : (
+                            <img src="/Logo-Light.png" width="30px" alt="Logo" />
+                        )}
+                        <Text fontSize="xl" fontWeight="medium">
+                            <Link variant="plain" href={`/course/${course.class_id}`}
+                            >{course.classes.name}</Link>
+                        </Text>
+                    </HStack>
                     <HStack
                         width="100%"
                     >
