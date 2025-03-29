@@ -44,7 +44,7 @@ export default function HelpRequestForm() {
         },
         filters:
             [
-                { field: "class", operator: "eq", value: course_id }
+                { field: "class_id", operator: "eq", value: course_id }
             ]
     });
     const { private_profile_id } = useClassProfiles();

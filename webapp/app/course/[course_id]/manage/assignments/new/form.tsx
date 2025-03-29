@@ -1,21 +1,18 @@
 'use client';
 import { Field } from "@/components/ui/field";
-import { createListCollection, Fieldset, Heading, Input, ListCollection, SelectLabel, SelectValueText, Skeleton, Stack, Table, TableCaption, TableBody, Box, VStack, Text, HStack } from "@chakra-ui/react";
+import { Box, createListCollection, Fieldset, Heading, Input, ListCollection, Stack, Table, Text, VStack } from "@chakra-ui/react";
 import { Controller, FieldValues, useForm } from 'react-hook-form';
 
-import { ListFilesResponse, ListReposResponse } from "@/components/github/GitHubTypes";
+import { ListFilesResponse } from "@/components/github/GitHubTypes";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { SelectContent, SelectItem, SelectRoot, SelectTrigger } from "@/components/ui/select";
-import { Toaster, toaster } from "@/components/ui/toaster";
-import { fetchGetTemplateRepos, fetchListFilesInRepo } from "@/lib/generated/pawtograderComponents";
+import RepoSelector from "@/components/ui/repo-selector";
+import { Toaster } from "@/components/ui/toaster";
+import { repositoryListFiles } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { SupabaseClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import RepoSelector from "@/components/ui/repo-selector";
+import { useCallback, useState } from "react";
 
 export default function CreateAssignment({ course }: { course: Database['public']['Tables']['classes']['Row'] }) {
     const router = useRouter()
@@ -39,7 +36,8 @@ export default function CreateAssignment({ course }: { course: Database['public'
     })
 
     const fetchTemplateRepoFiles = useCallback(async (org: string, repo: string) => {
-        const files = await fetchListFilesInRepo({ pathParams: { courseId: course.id, orgName: org, repoName: repo } });
+        const supabase = createClient();
+        const files = await repositoryListFiles({ courseId: course.id, orgName: org, repoName: repo }, supabase);
         setTemplateRepoFiles(createListCollection({
             items: files || [],
             itemToValue: (file) => file.path,
@@ -49,7 +47,7 @@ export default function CreateAssignment({ course }: { course: Database['public'
 
     const onSubmit = useCallback((values: FieldValues) => {
         async function create() {
-            const supabase = await createClient();
+            const supabase = createClient();
             // console.log(getValues("submission_files"));
             console.log(getValues("template_repo").full_name);
             const { data, error } = await supabase.from("assignments").insert({

@@ -33,7 +33,6 @@ export default function NewDiscussionThread() {
             resource: "discussion_threads",
             action: "create",
             onMutationSuccess: (data) => {
-                console.log(data.data.id)
                 router.push(`/course/${course_id}/discussion/${data.data.id}`)
             }
         }
@@ -59,7 +58,6 @@ export default function NewDiscussionThread() {
     const onSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         async function populate() {
-            const supabase = await createClient();
             setValue("author", private_profile_id!)
             setValue("is_question", false)
             setValue("root_class_id", Number.parseInt(course_id as string))

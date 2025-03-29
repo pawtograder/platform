@@ -304,3 +304,157 @@ entrypoint = "./functions/github-repo-configure-webhook/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/github-repo-configure-webhook/*.html" ]
+
+[functions.autograder-create-repos-for-student]
+enabled = true
+verify_jwt = true
+import_map = "./functions/autograder-create-repos-for-student/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-create-repos-for-student/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-create-repos-for-student/*.html" ]
+
+[functions.autograder-retrieve-autograder-regression-tests]
+enabled = true
+verify_jwt = false
+import_map = "./functions/autograder-retrieve-autograder-regression-tests/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-retrieve-autograder-regression-tests/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-retrieve-autograder-regression-tests/*.html" ]
+
+[functions.autograder-create-regression-test-run]
+enabled = true
+verify_jwt = false
+import_map = "./functions/autograder-create-regression-test-run/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-create-regression-test-run/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-create-regression-test-run/*.html" ]
+
+[functions.autograder-submit-feedback]
+enabled = true
+verify_jwt = false
+import_map = "./functions/autograder-submit-feedback/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-submit-feedback/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-submit-feedback/*.html" ]
+
+[functions.autograder-create-submission]
+enabled = true
+verify_jwt = false
+import_map = "./functions/autograder-create-submission/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-create-submission/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-create-submission/*.html" ]
+
+[functions.assignment-create-all-repos]
+enabled = true
+verify_jwt = true
+import_map = "./functions/assignment-create-all-repos/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-create-all-repos/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-create-all-repos/*.html" ]
+
+[functions.enrollments-add]
+enabled = true
+verify_jwt = true
+import_map = "./functions/enrollments-add/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/enrollments-add/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/enrollments-add/*.html" ]
+
+[functions.enrollments-sync-canvas]
+enabled = true
+verify_jwt = true
+import_map = "./functions/enrollments-sync-canvas/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/enrollments-sync-canvas/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/enrollments-sync-canvas/*.html" ]
+
+[functions.repositories-list]
+enabled = true
+verify_jwt = true
+import_map = "./functions/repositories-list/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/repositories-list/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/repositories-list/*.html" ]
+
+[functions.repository-get-file]
+enabled = true
+verify_jwt = true
+import_map = "./functions/repository-get-file/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/repository-get-file/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/repository-get-file/*.html" ]
+
+[functions.autograder-test-workflow]
+enabled = true
+verify_jwt = true
+import_map = "./functions/autograder-test-workflow/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-test-workflow/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-test-workflow/*.html" ]
+
+[functions.live-meeting-callback]
+enabled = true
+verify_jwt = false
+import_map = "./functions/live-meeting-callback/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/live-meeting-callback/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/live-meeting-callback/*.html" ]
+
+[functions.live-meeting-for-help-request]
+enabled = true
+verify_jwt = true
+import_map = "./functions/live-meeting-for-help-request/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/live-meeting-for-help-request/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/live-meeting-for-help-request/*.html" ]
+
+[functions.repository-list-files]
+enabled = true
+verify_jwt = true
+import_map = "./functions/repository-list-files/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/repository-list-files/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/repository-list-files/*.html" ]

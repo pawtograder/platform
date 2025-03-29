@@ -1,6 +1,0 @@
-{
-    "execMap": {
-        "ts": "tsimp"
-    },
-    "ext": "ts,js,json,mjs,cjs"
-}

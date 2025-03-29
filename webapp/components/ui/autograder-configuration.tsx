@@ -1,5 +1,4 @@
 import { ListReposResponse } from "@/components/github/GitHubTypes";
-import { fetchGetFileFromRepo } from "@/lib/generated/pawtograderComponents";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import yaml from 'yaml';
@@ -10,6 +9,8 @@ import { Checkbox } from "@/components/ui/checkbox"
 
 import { AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
+import { repositoryGetFile } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 export default function AutograderConfiguration({ graderRepo }: { graderRepo: ListReposResponse[0]|undefined }) {
     const [autograderConfig, setAutograderConfig] = useState<string>();
     const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
@@ -41,18 +42,18 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: Li
         ]
     });
     useEffect(() => {
-        if (!graderRepo) {
-            return;
-        }
-        fetchGetFileFromRepo({
-            pathParams: {
 
+        async function fetchAutograderConfig() {
+            if (!graderRepo) {
+                return;
+            }
+            const supabase = createClient();
+            repositoryGetFile({
                 courseId: Number(course_id),
                 orgName: graderRepo.owner.login,
                 repoName: graderRepo.name,
                 path: 'pawtograder.yml'
-            }
-        }).then((res) => {
+        }, supabase).then((res) => {
             if ('content' in res) {
                 const config = Buffer.from(res.content, 'base64').toString();
                 setAutograderConfig(config);
@@ -64,8 +65,10 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: Li
             } else {
                 console.log("Error fetching autograder configuration", err);
                 // throw err;
-            }
-        });
+                }
+            });
+        }
+        fetchAutograderConfig();
     }, [graderRepo]);
     const saveRegressionTests = useCallback(async () => {
         setSaveLoading(true);

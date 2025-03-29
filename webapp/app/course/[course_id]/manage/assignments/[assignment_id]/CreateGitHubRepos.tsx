@@ -1,14 +1,15 @@
 'use client';
 import { Button } from "@/components/ui/button";
-import { fetchCreateAssignmentRepositories } from "@/lib/generated/pawtograderComponents";
-
+import { autograderCreateAssignmentRepos } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 export function CreateGitHubRepos({ courseId, assignmentId }: { courseId: number, assignmentId: number }) {
     return (
         <Button onClick={() => {
-            fetchCreateAssignmentRepositories({
-                pathParams:
-                    { courseId, assignmentId }
-            });
+            const supabase = createClient();
+            autograderCreateAssignmentRepos({
+                courseId,
+                assignmentId,
+            }, supabase);
         }}>Manually create repos</Button>
 
     )

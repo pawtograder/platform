@@ -1,26 +1,18 @@
-import { createListCollection, Fieldset, Heading, Input, ListCollection, SelectLabel, SelectValueText, Skeleton, Stack, Table, TableCaption, TableBody, Box, VStack, Text, HStack } from "@chakra-ui/react";
-import { Controller, Field, FieldValues, useForm } from 'react-hook-form';
+import { createListCollection, ListCollection, SelectLabel, SelectValueText, Skeleton } from "@chakra-ui/react";
 
-import { ListFilesResponse, ListReposResponse } from "@/components/github/GitHubTypes";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { ListReposResponse } from "@/components/github/GitHubTypes";
 import { SelectContent, SelectItem, SelectRoot, SelectTrigger } from "@/components/ui/select";
-import { Toaster, toaster } from "@/components/ui/toaster";
-import { fetchGetRepos, fetchGetTemplateRepos, fetchListFilesInRepo } from "@/lib/generated/pawtograderComponents";
+import { repositoriesForClass } from "@/lib/edgeFunctions";
+import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
-
 export default function RepoSelector({ name, value, onBlur, onChange, templateReposOnly }: { name: string, value: string[], onBlur: () => void, onChange: (value: ListReposResponse[0]) => void, templateReposOnly?: boolean }) {
     const { course_id } = useParams();
     const [templateReposList, setTemplateReposList] = useState<ListCollection<ListReposResponse[0]>>();
     useEffect(() => {
         async function fetchRepos() {
-            const repos = await (templateReposOnly ? fetchGetTemplateRepos({ pathParams: { courseId: Number(course_id) } }) :
-                 fetchGetRepos({ pathParams: { courseId: Number(course_id) } }));
+            const supabase = createClient();
+            const repos = await repositoriesForClass({ courseId: Number(course_id), template_only: templateReposOnly }, supabase);
             const reposCollection = createListCollection({
                 items: repos || [],
                 itemToValue: (repo) => repo.owner.login + "/" + repo.name,
