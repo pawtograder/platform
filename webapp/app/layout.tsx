@@ -27,7 +27,7 @@ export default function RootLayout({
     <html lang="en" className={geistSans.className} suppressHydrationWarning>
       <body className="bg-background text-foreground">
             <Provider>
-              <Theme colorPalette="teal">
+              <Theme colorPalette="gray">
               {children}
               </Theme></Provider>
       </body>
