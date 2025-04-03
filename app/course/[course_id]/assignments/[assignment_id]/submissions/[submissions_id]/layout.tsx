@@ -8,7 +8,7 @@ import {
     PopoverTrigger
 } from "@/components/ui/popover";
 import { SubmissionWithFilesAndComments, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Heading, HStack, Skeleton, Text } from "@chakra-ui/react";
+import { Box, Flex, Heading, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
 
 import Link from "@/components/ui/link";
 import { Icon } from "@chakra-ui/react";
@@ -17,6 +17,7 @@ import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { FaFile, FaHistory, FaQuestionCircle, FaRobot } from "react-icons/fa";
+import { useUserProfile } from "@/hooks/useUserProfiles";
 
 
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesAndComments }) {
@@ -71,9 +72,16 @@ export default function SubmissionsLayout({ children }: { children: React.ReactN
         resource: "submissions",
         id: Number(submissions_id),
         meta: {
-            select: "*, assignments(*), submission_files(*, submission_file_comments(*))"
+            select: "*, assignments(*), submission_files(*, submission_file_comments(*)), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
         }
     });
+    const submitter = useUserProfile(query.data?.data.profile_id);
+    if (query.error) {
+        return <Box>
+            <Text>Error loading submission</Text>
+            <Text>{query.error.message}</Text>
+        </Box>
+    }
     if (query.isLoading) {
         return <Box>
             <Skeleton height="100px" />
@@ -85,9 +93,12 @@ export default function SubmissionsLayout({ children }: { children: React.ReactN
         borderRadius="md"
     >
         <HStack pl={4} pr={4} alignItems="center" justify="space-between" align="center">
-            <Box><Heading size="lg">{query.data?.data.assignments.title} - Submission #{query.data?.data.ordinal}</Heading><Link href={`https://github.com/${query.data?.data.repository}/commit/${query.data?.data.sha}`} target="_blank">
-                Commit {query.data?.data.sha.substring(0, 7)}
-            </Link></Box>
+            <Box><Heading size="lg">{query.data?.data.assignments.title} - Submission #{query.data?.data.ordinal}</Heading>
+                <VStack align="flex-start">
+                    {query.data?.data.assignment_groups ? <Text>Group {query.data?.data.assignment_groups.name} ({query.data?.data.assignment_groups.assignment_groups_members.map((member) => member.profiles!.name).join(", ")})</Text> : <Text>{submitter?.name}</Text>}
+                    <Link href={`https://github.com/${query.data?.data.repository}/commit/${query.data?.data.sha}`} target="_blank">Commit {query.data?.data.sha.substring(0, 7)}</Link>
+                </VStack>
+            </Box>
             <HStack>
                 <Button variant="surface" onClick={() => {
                     // toaster({

@@ -1,8 +1,3 @@
-// Follow this setup guide to integrate the Deno language server with your editor:
-// https://deno.land/manual/getting_started/setup_your_environment
-// This enables autocomplete, go to definition, etc.
-
-// Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -11,7 +6,7 @@ import {
   UserVisibleError,
   wrapRequestHandler,
 } from "../_shared/HandlerUtils.ts";
-import { createRepo } from "../_shared/GitHubWrapper.ts";
+import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 
 async function handleRequest(req: Request) {
   const supabase = createClient<Database>(
@@ -41,24 +36,81 @@ async function handleRequest(req: Request) {
       `User ${user.user!.id} has no Github username linked`,
     );
   }
-  const { data: classes } = await supabase.from("user_roles").select(
-    "class_id, profiles!private_profile_id(id, name, sortable_name, repositories(*))",
+
+  const { data: classes, error: classesError } = await supabase.from("user_roles").select(
+    // "*"
+    // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
+    "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
   ).eq(
     "user_id",
     user.user!.id,
   ).eq("role", "student");
+  if (classesError) {
+    console.error(classesError);
+    throw new UserVisibleError("Error fetching classes");
+  }
   if (!classes) {
     throw new UserVisibleError("User is not a student");
   }
-  const existingRepos = classes.flatMap((c) => c!.profiles!.repositories);
+
+  const existingIndividualRepos = classes.flatMap((c) => c!.profiles!.repositories);
+  const existingGroupRepos = classes.flatMap((c) => c!.profiles!.assignment_groups_members!.flatMap((g) => g.assignment_groups.repositories));
+  const existingRepos = [...existingIndividualRepos, ...existingGroupRepos];
   //Find all assignments that the student is enrolled in that have been released
   const { data: assignments } = await supabase.from("assignments").select(
-    "*, classes(slug, github_org)",
+    "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
   ).in("class_id", classes!.map((c) => c!.class_id))
     .lte("release_date", new Date().toISOString());
+  
+
+  //For each group repo, sync the permissions
+  await Promise.all(classes.flatMap((c) => c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
+    const group = groupMembership.assignment_groups;
+    const assignment = groupMembership.assignments;
+    const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
+
+    console.log(repoName);
+    console.log(groupMembership.assignment_groups);
+    // Make sure that the repo exists
+    if (groupMembership.assignment_groups.repositories.length === 0) {
+      console.log("Creating repo");
+      await createRepo(
+        c.classes!.github_org!,
+        repoName,
+        assignment.template_repo!
+      );
+
+      console.log("Repo created");
+      //Add the repo to the database
+      const adminSupabase = createClient<Database>(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      );
+      const { error } = await adminSupabase.from("repositories").insert({
+        class_id: assignment.class_id!,
+        assignment_group_id: group.id,
+        assignment_id: assignment.id,
+        repository: `${c.classes!.github_org}/${repoName}`,
+      });
+      if(error) {
+        console.error(error);
+        throw new UserVisibleError(`Error creating repo: ${error}`);
+      }
+    }
+
+
+
+    await syncRepoPermissions(
+      c.classes!.github_org!,
+      repoName,
+      c.classes!.slug!,
+      group.assignment_groups_members.map((m) => m.user_roles.users.github_username!),
+    );
+  })));
 
   const requests = assignments!.filter((assignment) =>
     !existingRepos.find((repo) => repo.assignment_id === assignment.id)
+    && assignment.group_config !== "groups"
   ).map(async (assignment) => {
     const userProfileID = classes.find((c) =>
       c && c.class_id === assignment.class_id
@@ -72,17 +124,23 @@ async function handleRequest(req: Request) {
       console.log(`No template repo for assignment ${assignment.id}`);
       return;
     }
-    const repoName = `${
-      assignment.classes!.slug
-    }-${assignment.slug}-${githubUsername}`;
+    //Is it a group assignment?
+    const courseSlug = assignment.classes!.slug;
+    const repoName = `${courseSlug}-${assignment.slug}-${githubUsername}`;
     const repo = await createRepo(
       assignment.classes!.github_org!,
       repoName,
-      assignment.template_repo,
-      githubUsername,
+      assignment.template_repo
+    );
+    console.log(`courseSlug: ${courseSlug}`);
+    await syncRepoPermissions(
+      assignment.classes!.github_org!,
+      repoName,
+      courseSlug,
+      [githubUsername],
     );
     //Use service role key to insert the repo into the database
-    const adminSupabase = createClient<Database>( 
+    const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );

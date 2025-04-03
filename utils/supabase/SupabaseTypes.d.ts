@@ -9,59 +9,335 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      assignment_group_invitations: {
+        Row: {
+          assignment_group_id: number
+          class_id: number
+          created_at: string
+          id: number
+          invitee: string
+          inviter: string
+        }
+        Insert: {
+          assignment_group_id: number
+          class_id: number
+          created_at?: string
+          id?: number
+          invitee?: string
+          inviter?: string
+        }
+        Update: {
+          assignment_group_id?: number
+          class_id?: number
+          created_at?: string
+          id?: number
+          invitee?: string
+          inviter?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_group_invitation_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_invitation_invitee_fkey"
+            columns: ["invitee"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_invitation_inviter_fkey"
+            columns: ["inviter"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_invitations_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      assignment_group_join_request: {
+        Row: {
+          assignment_group_id: number
+          assignment_id: number
+          class_id: number
+          created_at: string
+          decided_at: string | null
+          decision_maker: string | null
+          id: number
+          profile_id: string
+          status: Database["public"]["Enums"]["assignment_group_join_status"]
+        }
+        Insert: {
+          assignment_group_id: number
+          assignment_id: number
+          class_id: number
+          created_at?: string
+          decided_at?: string | null
+          decision_maker?: string | null
+          id?: number
+          profile_id: string
+          status?: Database["public"]["Enums"]["assignment_group_join_status"]
+        }
+        Update: {
+          assignment_group_id?: number
+          assignment_id?: number
+          class_id?: number
+          created_at?: string
+          decided_at?: string | null
+          decision_maker?: string | null
+          id?: number
+          profile_id?: string
+          status?: Database["public"]["Enums"]["assignment_group_join_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_group_join_request_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_join_request_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_join_request_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_join_request_decision_maker_fkey"
+            columns: ["decision_maker"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_join_request_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_group_join_request_profile_id_fkey1"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "assignment_group_join_request_profile_id_fkey1"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "user_roles"
+            referencedColumns: ["private_profile_id"]
+          },
+        ]
+      }
+      assignment_groups: {
+        Row: {
+          assignment_id: number
+          class_id: number
+          created_at: string
+          id: number
+          name: string
+        }
+        Insert: {
+          assignment_id: number
+          class_id: number
+          created_at?: string
+          id?: number
+          name: string
+        }
+        Update: {
+          assignment_id?: number
+          class_id?: number
+          created_at?: string
+          id?: number
+          name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_groups_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      assignment_groups_members: {
+        Row: {
+          added_by: string
+          assignment_group_id: number
+          assignment_id: number
+          class_id: number
+          created_at: string
+          id: number
+          profile_id: string
+        }
+        Insert: {
+          added_by: string
+          assignment_group_id: number
+          assignment_id: number
+          class_id: number
+          created_at?: string
+          id?: number
+          profile_id?: string
+        }
+        Update: {
+          added_by?: string
+          assignment_group_id?: number
+          assignment_id?: number
+          class_id?: number
+          created_at?: string
+          id?: number
+          profile_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_groups_members_added_by_fkey"
+            columns: ["added_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_members_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_members_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_members_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_members_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_members_profile_id_fkey1"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_members_profile_id_fkey1"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "user_roles"
+            referencedColumns: ["private_profile_id"]
+          },
+        ]
+      }
       assignments: {
         Row: {
           allow_late: boolean | null
-          class_id: number | null
+          allow_student_formed_groups: boolean | null
+          class_id: number
           created_at: string
           description: string | null
-          due_date: string | null
-          has_autograder: boolean | null
-          has_handgrader: boolean | null
+          due_date: string
+          group_config: Database["public"]["Enums"]["assignment_group_mode"]
+          group_formation_deadline: string | null
+          has_autograder: boolean
+          has_handgrader: boolean
           id: number
           latest_due_date: string | null
+          max_group_size: number | null
+          min_group_size: number | null
           release_date: string | null
           slug: string | null
           student_repo_prefix: string | null
           submission_files: Json
           template_repo: string | null
-          title: string | null
+          title: string
           total_points: number | null
         }
         Insert: {
           allow_late?: boolean | null
-          class_id?: number | null
+          allow_student_formed_groups?: boolean | null
+          class_id: number
           created_at?: string
           description?: string | null
-          due_date?: string | null
-          has_autograder?: boolean | null
-          has_handgrader?: boolean | null
+          due_date: string
+          group_config: Database["public"]["Enums"]["assignment_group_mode"]
+          group_formation_deadline?: string | null
+          has_autograder?: boolean
+          has_handgrader?: boolean
           id?: number
           latest_due_date?: string | null
+          max_group_size?: number | null
+          min_group_size?: number | null
           release_date?: string | null
           slug?: string | null
           student_repo_prefix?: string | null
           submission_files?: Json
           template_repo?: string | null
-          title?: string | null
+          title: string
           total_points?: number | null
         }
         Update: {
           allow_late?: boolean | null
-          class_id?: number | null
+          allow_student_formed_groups?: boolean | null
+          class_id?: number
           created_at?: string
           description?: string | null
-          due_date?: string | null
-          has_autograder?: boolean | null
-          has_handgrader?: boolean | null
+          due_date?: string
+          group_config?: Database["public"]["Enums"]["assignment_group_mode"]
+          group_formation_deadline?: string | null
+          has_autograder?: boolean
+          has_handgrader?: boolean
           id?: number
           latest_due_date?: string | null
+          max_group_size?: number | null
+          min_group_size?: number | null
           release_date?: string | null
           slug?: string | null
           student_repo_prefix?: string | null
           submission_files?: Json
           template_repo?: string | null
-          title?: string | null
+          title?: string
           total_points?: number | null
         }
         Relationships: [
@@ -486,6 +762,7 @@ export type Database = {
       }
       grader_result_output: {
         Row: {
+          assignment_group_id: number | null
           class_id: number
           created_at: string
           format: string
@@ -496,6 +773,7 @@ export type Database = {
           visibility: Database["public"]["Enums"]["feedback_visibility"]
         }
         Insert: {
+          assignment_group_id?: number | null
           class_id: number
           created_at?: string
           format: string
@@ -506,6 +784,7 @@ export type Database = {
           visibility: Database["public"]["Enums"]["feedback_visibility"]
         }
         Update: {
+          assignment_group_id?: number | null
           class_id?: number
           created_at?: string
           format?: string
@@ -516,6 +795,13 @@ export type Database = {
           visibility?: Database["public"]["Enums"]["feedback_visibility"]
         }
         Relationships: [
+          {
+            foreignKeyName: "grader_result_output_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "grader_result_output_class_id_fkey"
             columns: ["class_id"]
@@ -541,6 +827,7 @@ export type Database = {
       }
       grader_result_tests: {
         Row: {
+          assignment_group_id: number | null
           class_id: number
           created_at: string
           extra_data: Json | null
@@ -556,6 +843,7 @@ export type Database = {
           student_id: string | null
         }
         Insert: {
+          assignment_group_id?: number | null
           class_id: number
           created_at?: string
           extra_data?: Json | null
@@ -571,6 +859,7 @@ export type Database = {
           student_id?: string | null
         }
         Update: {
+          assignment_group_id?: number | null
           class_id?: number
           created_at?: string
           extra_data?: Json | null
@@ -586,6 +875,13 @@ export type Database = {
           student_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "grader_result_tests_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "grader_result_tests_grader_result_id_fkey"
             columns: ["grader_result_id"]
@@ -611,6 +907,7 @@ export type Database = {
       }
       grader_results: {
         Row: {
+          assignment_group_id: number | null
           autograder_regression_test: number | null
           class_id: number
           created_at: string
@@ -629,6 +926,7 @@ export type Database = {
           submission_id: number | null
         }
         Insert: {
+          assignment_group_id?: number | null
           autograder_regression_test?: number | null
           class_id: number
           created_at?: string
@@ -647,6 +945,7 @@ export type Database = {
           submission_id?: number | null
         }
         Update: {
+          assignment_group_id?: number | null
           autograder_regression_test?: number | null
           class_id?: number
           created_at?: string
@@ -665,6 +964,13 @@ export type Database = {
           submission_id?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "grader_results_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "grader_results_autograder_regression_test_fkey"
             columns: ["autograder_regression_test"]
@@ -1289,6 +1595,7 @@ export type Database = {
           flair: string | null
           flair_color: string | null
           id: string
+          is_private_profile: boolean
           name: string | null
           short_name: string | null
           sis_user_id: string | null
@@ -1302,6 +1609,7 @@ export type Database = {
           flair?: string | null
           flair_color?: string | null
           id?: string
+          is_private_profile: boolean
           name?: string | null
           short_name?: string | null
           sis_user_id?: string | null
@@ -1315,6 +1623,7 @@ export type Database = {
           flair?: string | null
           flair_color?: string | null
           id?: string
+          is_private_profile?: boolean
           name?: string | null
           short_name?: string | null
           sis_user_id?: string | null
@@ -1325,30 +1634,40 @@ export type Database = {
       }
       repositories: {
         Row: {
+          assignment_group_id: number | null
           assignment_id: number
           class_id: number
           created_at: string
           id: number
-          profile_id: string
+          profile_id: string | null
           repository: string
         }
         Insert: {
+          assignment_group_id?: number | null
           assignment_id: number
           class_id: number
           created_at?: string
           id?: number
-          profile_id: string
+          profile_id?: string | null
           repository: string
         }
         Update: {
+          assignment_group_id?: number | null
           assignment_id?: number
           class_id?: number
           created_at?: string
           id?: number
-          profile_id?: string
+          profile_id?: string | null
           repository?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "repositories_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "repositories_assignment_id_fkey"
             columns: ["assignment_id"]
@@ -1362,6 +1681,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "classes"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["profile_id"]
           },
           {
             foreignKeyName: "repositories_profile_id_fkey"
@@ -1488,39 +1814,56 @@ export type Database = {
       }
       submission_files: {
         Row: {
+          assignment_group_id: number | null
           class_id: number
           contents: string
           created_at: string
           id: number
           name: string
-          profile_id: string
+          profile_id: string | null
           submissions_id: number
         }
         Insert: {
+          assignment_group_id?: number | null
           class_id: number
           contents: string
           created_at?: string
           id?: number
           name: string
-          profile_id: string
+          profile_id?: string | null
           submissions_id: number
         }
         Update: {
+          assignment_group_id?: number | null
           class_id?: number
           contents?: string
           created_at?: string
           id?: number
           name?: string
-          profile_id?: string
+          profile_id?: string | null
           submissions_id?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "submission_files_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "submission_files_class_id_fkey"
             columns: ["class_id"]
             isOneToOne: false
             referencedRelation: "classes"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_files_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["profile_id"]
           },
           {
             foreignKeyName: "submission_files_profile_id_fkey"
@@ -1554,13 +1897,14 @@ export type Database = {
       }
       submissions: {
         Row: {
+          assignment_group_id: number | null
           assignment_id: number
           check_run_id: number | null
           class_id: number
           created_at: string
           id: number
           ordinal: number
-          profile_id: string
+          profile_id: string | null
           released: string | null
           repository: string
           run_attempt: number
@@ -1568,13 +1912,14 @@ export type Database = {
           sha: string
         }
         Insert: {
+          assignment_group_id?: number | null
           assignment_id: number
           check_run_id?: number | null
           class_id: number
           created_at?: string
           id?: number
           ordinal?: number
-          profile_id: string
+          profile_id?: string | null
           released?: string | null
           repository: string
           run_attempt: number
@@ -1582,13 +1927,14 @@ export type Database = {
           sha: string
         }
         Update: {
+          assignment_group_id?: number | null
           assignment_id?: number
           check_run_id?: number | null
           class_id?: number
           created_at?: string
           id?: number
           ordinal?: number
-          profile_id?: string
+          profile_id?: string | null
           released?: string | null
           repository?: string
           run_attempt?: number
@@ -1611,11 +1957,25 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "submissions_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "submissions_class_id_fkey"
             columns: ["class_id"]
             isOneToOne: false
             referencedRelation: "classes"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submissions_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["profile_id"]
           },
           {
             foreignKeyName: "submissions_profile_id_fkey"
@@ -1779,8 +2139,10 @@ export type Database = {
           assignment_id: number | null
           created_at: string | null
           execution_time: number | null
+          groupname: string | null
           id: number | null
           latestsubmissionid: number | null
+          profile_id: string | null
           released: string | null
           repository: string | null
           ret_code: number | null
@@ -1810,13 +2172,33 @@ export type Database = {
             foreignKeyName: "submissions_profile_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "submissions_profile_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
             referencedRelation: "user_roles"
             referencedColumns: ["private_profile_id"]
+          },
+          {
+            foreignKeyName: "user_roles_private_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
         ]
       }
     }
     Functions: {
+      authorizeforassignmentgroup: {
+        Args: {
+          _assignment_group_id: number
+        }
+        Returns: boolean
+      }
       authorizeforclass: {
         Args: {
           class__id: number
@@ -1926,6 +2308,12 @@ export type Database = {
     Enums: {
       allowed_modes: "private" | "public" | "question" | "note"
       app_role: "admin" | "instructor" | "grader" | "student"
+      assignment_group_join_status:
+        | "pending"
+        | "approved"
+        | "rejected"
+        | "withdrawn"
+      assignment_group_mode: "individual" | "groups" | "both"
       feedback_visibility:
         | "visible"
         | "hidden"
@@ -1938,27 +2326,29 @@ export type Database = {
   }
 }
 
-type PublicSchema = Database[Extract<keyof Database, "public">]
+type DefaultSchema = Database[Extract<keyof Database, "public">]
 
 export type Tables<
-  PublicTableNameOrOptions extends
-    | keyof (PublicSchema["Tables"] & PublicSchema["Views"])
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof Database },
-  TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
-    ? keyof (Database[PublicTableNameOrOptions["schema"]]["Tables"] &
-        Database[PublicTableNameOrOptions["schema"]]["Views"])
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof Database
+  }
+    ? keyof (Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        Database[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
     : never = never,
-> = PublicTableNameOrOptions extends { schema: keyof Database }
-  ? (Database[PublicTableNameOrOptions["schema"]]["Tables"] &
-      Database[PublicTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+> = DefaultSchemaTableNameOrOptions extends { schema: keyof Database }
+  ? (Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      Database[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
       Row: infer R
     }
     ? R
     : never
-  : PublicTableNameOrOptions extends keyof (PublicSchema["Tables"] &
-        PublicSchema["Views"])
-    ? (PublicSchema["Tables"] &
-        PublicSchema["Views"])[PublicTableNameOrOptions] extends {
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
         Row: infer R
       }
       ? R
@@ -1966,20 +2356,22 @@ export type Tables<
     : never
 
 export type TablesInsert<
-  PublicTableNameOrOptions extends
-    | keyof PublicSchema["Tables"]
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
     | { schema: keyof Database },
-  TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
-    ? keyof Database[PublicTableNameOrOptions["schema"]]["Tables"]
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof Database
+  }
+    ? keyof Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never = never,
-> = PublicTableNameOrOptions extends { schema: keyof Database }
-  ? Database[PublicTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+> = DefaultSchemaTableNameOrOptions extends { schema: keyof Database }
+  ? Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Insert: infer I
     }
     ? I
     : never
-  : PublicTableNameOrOptions extends keyof PublicSchema["Tables"]
-    ? PublicSchema["Tables"][PublicTableNameOrOptions] extends {
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
         Insert: infer I
       }
       ? I
@@ -1987,20 +2379,22 @@ export type TablesInsert<
     : never
 
 export type TablesUpdate<
-  PublicTableNameOrOptions extends
-    | keyof PublicSchema["Tables"]
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
     | { schema: keyof Database },
-  TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
-    ? keyof Database[PublicTableNameOrOptions["schema"]]["Tables"]
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof Database
+  }
+    ? keyof Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never = never,
-> = PublicTableNameOrOptions extends { schema: keyof Database }
-  ? Database[PublicTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+> = DefaultSchemaTableNameOrOptions extends { schema: keyof Database }
+  ? Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Update: infer U
     }
     ? U
     : never
-  : PublicTableNameOrOptions extends keyof PublicSchema["Tables"]
-    ? PublicSchema["Tables"][PublicTableNameOrOptions] extends {
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
         Update: infer U
       }
       ? U
@@ -2008,21 +2402,23 @@ export type TablesUpdate<
     : never
 
 export type Enums<
-  PublicEnumNameOrOptions extends
-    | keyof PublicSchema["Enums"]
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
     | { schema: keyof Database },
-  EnumName extends PublicEnumNameOrOptions extends { schema: keyof Database }
-    ? keyof Database[PublicEnumNameOrOptions["schema"]]["Enums"]
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof Database
+  }
+    ? keyof Database[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
     : never = never,
-> = PublicEnumNameOrOptions extends { schema: keyof Database }
-  ? Database[PublicEnumNameOrOptions["schema"]]["Enums"][EnumName]
-  : PublicEnumNameOrOptions extends keyof PublicSchema["Enums"]
-    ? PublicSchema["Enums"][PublicEnumNameOrOptions]
+> = DefaultSchemaEnumNameOrOptions extends { schema: keyof Database }
+  ? Database[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
     : never
 
 export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
-    | keyof PublicSchema["CompositeTypes"]
+    | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof Database },
   CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
     schema: keyof Database
@@ -2031,6 +2427,29 @@ export type CompositeTypes<
     : never = never,
 > = PublicCompositeTypeNameOrOptions extends { schema: keyof Database }
   ? Database[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
-  : PublicCompositeTypeNameOrOptions extends keyof PublicSchema["CompositeTypes"]
-    ? PublicSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
     : never
+
+export const Constants = {
+  public: {
+    Enums: {
+      allowed_modes: ["private", "public", "question", "note"],
+      app_role: ["admin", "instructor", "grader", "student"],
+      assignment_group_join_status: [
+        "pending",
+        "approved",
+        "rejected",
+        "withdrawn",
+      ],
+      assignment_group_mode: ["individual", "groups", "both"],
+      feedback_visibility: [
+        "visible",
+        "hidden",
+        "after_due_date",
+        "after_published",
+      ],
+    },
+  },
+} as const
+

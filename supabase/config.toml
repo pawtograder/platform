@@ -2,7 +2,7 @@
 # https://supabase.com/docs/guides/local-development/cli/config
 # A string used to distinguish different Supabase projects on the same host. Defaults to the
 # working directory name when running `supabase init`.
-project_id = "webapp"
+project_id = "pawtograder-platform"
 
 [api]
 enabled = true
@@ -85,6 +85,12 @@ file_size_limit = "50MiB"
 # Image transformation API is available to Supabase Pro plan.
 # [storage.image_transformation]
 # enabled = true
+
+[storage.buckets.graders]
+public = false
+
+[storage.buckets.uploads]
+public = true
 
 # Uncomment to configure local storage buckets
 # [storage.buckets.images]
@@ -458,3 +464,80 @@ entrypoint = "./functions/repository-list-files/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/repository-list-files/*.html" ]
+
+[functions.assignment-group-create]
+enabled = true
+verify_jwt = true
+import_map = "./functions/assignment-group-create/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-group-create/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-group-create/*.html" ]
+
+[functions.assignment-group-join]
+enabled = true
+verify_jwt = true
+import_map = "./functions/assignment-group-join/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-group-join/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-group-join/*.html" ]
+
+[functions.assignment-group-approve-request]
+enabled = true
+verify_jwt = true
+import_map = "./functions/assignment-group-approve-request/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-group-approve-request/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-group-approve-request/*.html" ]
+
+[functions.assignment-group-leave]
+enabled = true
+verify_jwt = true
+import_map = "./functions/assignment-group-leave/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-group-leave/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-group-leave/*.html" ]
+
+[functions.autograder-sync-staff-team]
+enabled = true
+verify_jwt = true
+import_map = "./functions/autograder-sync-staff-team/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-sync-staff-team/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-sync-staff-team/*.html" ]
+
+[functions.assignment-group-instructor-move-student]
+enabled = true
+verify_jwt = true
+import_map = "./functions/assignment-group-instructor-move-student/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-group-instructor-move-student/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-group-instructor-move-student/*.html" ]
+
+[functions.assignment-group-copy-groups-from-assignment]
+enabled = true
+verify_jwt = true
+import_map = "./functions/assignment-group-copy-groups-from-assignment/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/assignment-group-copy-groups-from-assignment/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/assignment-group-copy-groups-from-assignment/*.html" ]

@@ -10,7 +10,7 @@ import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
 async function handleRequest(req: Request) {
   const { courseId, orgName, repoName, path } = await req
     .json() as FunctionTypes.GetFileRequest;
-  const supabase = await assertUserIsInstructor(
+  const {supabase} = await assertUserIsInstructor(
     courseId,
     req.headers.get("Authorization")!,
   );

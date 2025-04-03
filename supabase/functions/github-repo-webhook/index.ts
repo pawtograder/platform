@@ -1,6 +1,6 @@
 import { createEventHandler, WebhookPayload } from "https://esm.sh/@octokit/webhooks?dts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { getFileFromRepo } from "../_shared/GitHubWrapper.ts";
+import { updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret",
 });
@@ -15,13 +15,8 @@ async function auditWorkflowYml(payload: WebhookPayload) {
     const isAdded = payload.head_commit.added.includes(GRADER_WORKFLOW_PATH);
     if(isModified || isRemoved || isAdded) {
       console.log("Grader workflow changed");
-      const file = await getFileFromRepo(
-        repoName,
-        ".github/workflows/grade.yml",
-      );
-      console.log(file);
-    } else {
-      console.log("Grader workflow not changed, skipping");
+      await updateAutograderWorkflowHash(repoName);
+      console.log("Updated autograder workflow hash");
     }
   } catch (e) {
     console.log("error in handler");
@@ -37,14 +32,11 @@ eventHandler.on("push", async ({ id, name, payload }) => {
 });
 
 Deno.serve(async (req) => {
-  console.log("Received request");
-
   await eventHandler.receive({
     id: req.headers.get("x-github-delivery") || "",
     name: req.headers.get("x-github-event") as "push",
     payload: await req.json(),
   });
-  console.log("done");
   return Response.json({
     message: "Triggered webhook",
   });

@@ -1,15 +1,71 @@
-import { getCourse } from "@/lib/ssrUtils";
+'use client'
+import { createClient } from "@/utils/supabase/client";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { useForm } from "@refinedev/react-hook-form";
+import { useRouter, useParams } from "next/navigation";
+import { useCallback } from "react";
+import { FieldValues } from "react-hook-form";
 import CreateAssignment from "./form";
-
-export default async function NewAssignmentPage({
-    params,
-}: {
-    params: Promise<{ course_id: string }>
-}) {
-    const course_id = Number.parseInt((await params).course_id);
-    const course = await getCourse(course_id);
-    if (!course) {
-        return <p>Course not found</p>
-    }
-    return <CreateAssignment course={course} />
+import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+export default function NewAssignmentPage() {
+    const {course_id} = useParams();
+    const form = useForm<Assignment>({
+        refineCoreProps: {
+            resource: "assignments",
+            action: "create"
+        }
+    });
+    const router = useRouter();
+    const { getValues, handleSubmit, setValue } = form;
+    const onSubmit = useCallback((values: FieldValues) => {
+        async function create() {
+            const supabase = createClient();
+            // console.log(getValues("submission_files"));
+            const { data, error } = await supabase.from("assignments").insert({
+                title: getValues("title"),
+                slug: getValues("slug"),
+                release_date: getValues("release_date"),
+                due_date: getValues("due_date"),
+                allow_late: getValues("allow_late"),
+                latest_due_date: getValues("latest_due_date") || null,
+                description: getValues("description"),
+                total_points: getValues("total_points"),
+                template_repo: getValues("template_repo"),
+                submission_files: getValues("submission_files"),
+                class_id: Number.parseInt(course_id as string),
+                group_config: getValues("group_config"),
+                min_group_size: getValues("min_group_size") || null,
+                max_group_size: getValues("max_group_size") || null,
+                allow_student_formed_groups: getValues("allow_student_formed_groups"),
+                group_formation_deadline: getValues("group_formation_deadline") || null,
+            }).select("id").single();
+            if (error || !data) {
+                console.error(error);
+            } else {
+                await githubRepoConfigureWebhook(
+                    {
+                        assignment_id: data.id,
+                        new_repo: getValues("template_repo"),
+                        watch_type: "template_repo"
+                    },
+                    supabase
+                )
+                //Potentially copy groups from another assignment
+                console.log(getValues("copy_groups_from_assignment"));
+                if (getValues("copy_groups_from_assignment")) {
+                    await assignmentGroupCopyGroupsFromAssignment(
+                        {
+                            source_assignment_id: getValues("copy_groups_from_assignment"),
+                            target_assignment_id: data.id,
+                            class_id: Number.parseInt(course_id as string)
+                        },
+                        supabase
+                    )
+                }
+                router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`)
+            }
+        }
+        create()
+    }, [handleSubmit, setValue, course_id]);
+    return <CreateAssignment form={form} onSubmit={onSubmit} />
 }
