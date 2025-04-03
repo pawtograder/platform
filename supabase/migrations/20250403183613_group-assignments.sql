@@ -73,7 +73,9 @@ alter table "public"."assignment_groups_members" enable row level security;
 
 alter table "public"."assignments" add column "allow_student_formed_groups" boolean;
 
-alter table "public"."assignments" add column "group_config" assignment_group_mode not null;
+alter table "public"."assignments" add column "group_config" assignment_group_mode;
+update "public"."assignments" set "group_config" = 'individual'::assignment_group_mode;
+alter table "public"."assignments" alter column "group_config" set not null;
 
 alter table "public"."assignments" add column "group_formation_deadline" timestamp without time zone;
 
@@ -87,9 +89,13 @@ alter table "public"."assignments" alter column "due_date" set not null;
 
 alter table "public"."assignments" alter column "due_date" set data type timestamp without time zone using "due_date"::timestamp without time zone;
 
+update "public"."assignments" set "has_autograder" = false where "has_autograder" is null;
+
 alter table "public"."assignments" alter column "has_autograder" set default false;
 
 alter table "public"."assignments" alter column "has_autograder" set not null;
+
+update "public"."assignments" set "has_handgrader" = true;
 
 alter table "public"."assignments" alter column "has_handgrader" set default true;
 
@@ -107,7 +113,11 @@ alter table "public"."grader_result_tests" add column "assignment_group_id" bigi
 
 alter table "public"."grader_results" add column "assignment_group_id" bigint;
 
-alter table "public"."profiles" add column "is_private_profile" boolean not null;
+alter table "public"."profiles" add column "is_private_profile" boolean;
+
+update "public"."profiles" set "is_private_profile" = false where "is_private_profile" is null;
+
+alter table "public"."profiles" alter column "is_private_profile" set not null;
 
 alter table "public"."repositories" add column "assignment_group_id" bigint;
 
@@ -485,7 +495,7 @@ END
 $function$
 ;
 
-create or replace view "public"."submissions_agg" as  SELECT c.profile_id,
+create or replace view "public"."submissions_agg" with (security = invoker) as  SELECT c.profile_id,
     groups.name AS groupname,
     c.submissioncount,
     c.latestsubmissionid,
