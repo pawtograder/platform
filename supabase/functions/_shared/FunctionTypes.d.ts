@@ -4,6 +4,8 @@ export type Autograder = Database["public"]["Tables"]["autograder"]["Row"];
 export type AutograderRegressionTest =
     Database["public"]["Tables"]["autograder_regression_test"]["Row"];
 export type OutputFormat = "text" | "markdown" | "ansi";
+
+export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
 export type OutputVisibility =
     | "hidden" // Never shown to students
     | "visible" // Always shown to students
@@ -98,4 +100,47 @@ export type GetFileRequest = {
     orgName: string;
     repoName: string;
     path: string;
-  }
+}
+export type GithubRepoConfigureWebhookRequest = {
+    assignment_id: number;
+    new_repo: string;
+    watch_type: "grader_solution" | "template_repo";
+}
+
+export type AssignmentGroupCreateRequest = {
+    name: string;
+    course_id: number;
+    assignment_id: number;
+    invitees: string[];
+}
+
+export type GenericResponse = {
+    error?: {
+        recoverable: boolean;
+        message: string;
+        details: string;
+    }
+}
+
+export type AssignmentGroupJoinRequest = {
+    assignment_group_id: number;
+}
+export type AssignmentGroupListUngroupedRequest = {
+    course_id: number;
+    assignment_id: number;
+}
+export type AssignmentGroupListUngroupedResponse = {
+    profiles: Database["public"]["Tables"]["profiles"]["Row"][];
+}
+
+export type AssignmentGroupInstructorMoveStudentRequest = {
+    new_assignment_group_id: number | null;
+    old_assignment_group_id: number | null;
+    profile_id: string;
+    class_id: number;
+}
+export type AssignmentGroupCopyGroupsFromAssignmentRequest = {
+    class_id: number;
+    source_assignment_id: number;
+    target_assignment_id: number;
+}

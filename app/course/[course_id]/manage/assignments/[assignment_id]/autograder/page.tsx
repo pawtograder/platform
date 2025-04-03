@@ -15,6 +15,7 @@ import AutograderConfiguration from "@/components/ui/autograder-configuration";
 import { Autograder, Assignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { useUpdate } from "@refinedev/core";
+import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 
 export default function AutograderPage() {
     const { assignment_id } = useParams();
@@ -39,15 +40,14 @@ export default function AutograderPage() {
     });
     const onSubmit = useCallback(async (values: FieldValues) => {
         const supabase = createClient();
-        console.log(values)
-        console.log(assignment_id)
-        const ret = await supabase.functions.invoke('github-repo-configure-webhook', {
-            body: {
+        await githubRepoConfigureWebhook(
+            {
                 assignment_id: Number.parseInt(assignment_id as string),
                 new_repo: values.grader_repo,
                 watch_type: "grader_solution"
-            }
-        })
+            },
+            supabase
+        )
         mutateAssignment({
             values: {
                 has_autograder: values.assignments.has_autograder.value === "true"

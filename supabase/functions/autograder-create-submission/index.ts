@@ -41,10 +41,10 @@ async function handleRequest(req: Request) {
         ) {
             throw new Error(`Invalid workflow, got ${workflow_ref}`);
         }
-        // Create a submission record
         const { error, data: subID } = await adminSupabase.from("submissions")
             .insert({
                 profile_id: repoData?.profile_id,
+                assignment_group_id: repoData?.assignment_group_id,
                 assignment_id: repoData.assignment_id,
                 repository,
                 sha,
@@ -120,6 +120,7 @@ async function handleRequest(req: Request) {
                     submissions_id: submission_id,
                     name: file.name,
                     profile_id: repoData.profile_id,
+                    assignment_group_id: repoData.assignment_group_id,
                     contents: file.contents.toString("utf-8"),
                     class_id: repoData.assignments.class_id!,
                 })),
@@ -130,6 +131,9 @@ async function handleRequest(req: Request) {
             );
         }
         try {
+            if(!config.grader_repo){
+                throw new UserVisibleError("This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment.");
+            }
             const { download_link: grader_url, sha: grader_sha } =
                 await
                     getRepoTarballURL(config.grader_repo!);

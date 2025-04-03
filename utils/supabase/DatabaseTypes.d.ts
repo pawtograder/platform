@@ -3,7 +3,24 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
-
+export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
+export type AssignmentGroupMember = Database["public"]["Tables"]["assignment_groups_members"]["Row"];
+export type AssignmentGroupJoinRequest = Database["public"]["Tables"]["assignment_groups_join_requests"]["Row"];
+export type AssignmentGroupInvitation = Database["public"]["Tables"]["assignment_group_invitations"]["Row"];
+export type AssignmentGroupMembersWithGroupMembersInvitationsAndJoinRequests = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["assignment_groups_members"]["Row"],
+    "assignment_groups_members",
+    Database["public"]["Tables"]["assignment_groups_members"]["Relationships"],
+    "*, assignment_groups(*, assignment_groups_members(*), assignment_group_invitations(*), assignment_group_join_request(*))"
+>;
+export type AssignmentGroupWithMembersInvitationsAndJoinRequests = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["assignment_groups"]["Row"],
+    "assignment_groups",
+    Database["public"]["Tables"]["assignment_groups"]["Relationships"],
+    "*, assignment_groups_members(*), assignment_group_invitations(*), assignment_group_join_request(*)"
+>;
 export type Notification = GetResult<
     Database["public"],
     Database["public"]["Tables"]["notifications"]["Row"],
@@ -69,7 +86,7 @@ export type SubmissionWithFilesAndComments = GetResult<
     Database["public"]["Tables"]["submissions"]["Row"],
     "submissions",
     Database["public"]["Tables"]["submissions"]["Relationships"],
-    "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*)))"
+    "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*))), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
 >;
 export type SubmissionWithGraderResults = GetResult<
     Database["public"],

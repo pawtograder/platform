@@ -6,7 +6,7 @@ import { ListReposRequest } from "../_shared/FunctionTypes.d.ts";
 
 async function handleRequest(req: Request) {
   const { courseId, template_only } = await req.json() as ListReposRequest;
-  const supabase = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+  const {supabase} = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
   const {data: course} = await supabase.from("classes").select("*").eq("id", courseId).single();
   if(!course?.github_org) {
     throw new Error("Course is not associated with a GitHub organization");

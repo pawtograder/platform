@@ -3,44 +3,44 @@
 import { useParams } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { createListCollection, Fieldset, ListCollection } from "@chakra-ui/react";
-import { useEffect, useState } from "react";
+import { Container, createListCollection, Fieldset, Heading, ListCollection } from "@chakra-ui/react";
+import { useCallback, useEffect, useState } from "react";
 import { ListReposResponse } from "@/components/github/GitHubTypes";
-import { repositoriesForClass } from "@/lib/edgeFunctions";
+import { githubRepoConfigureWebhook, repositoriesForClass } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import AssignmentForm from "../../new/form";
+import { FieldValues } from "react-hook-form";
 export default function EditAssignment() {
     const { course_id, assignment_id } = useParams();
-    const { refineCore: { query, formLoading },
-        saveButtonProps, register, control, formState: { errors } } = useForm<Assignment>({
-            refineCoreProps: {
-                resource: "assignments",
-                id: Number.parseInt(assignment_id as string)
-            }
-        });
-    const [templateReposList, setTemplateReposList] = useState<ListCollection<ListReposResponse[0]>>();
-    useEffect(() => {
+    const form = useForm<Assignment>({
+        refineCoreProps: {
+            resource: "assignments",
+            action: "edit",
+            id: Number.parseInt(assignment_id as string)
+        }
+    });
+    const onFinish = useCallback(async (values: FieldValues) => {
         const supabase = createClient();
-        repositoriesForClass({ courseId: Number.parseInt(course_id as string), template_only: true }, supabase).then(
-            (templateRepos) => {
-                const reposCollection = createListCollection({
-                    items: templateRepos || [],
-                    itemToValue: (repo) => '' + repo.id,
-                    itemToString: (repo) => repo.owner.login + "/" + repo.name
-                });
-                setTemplateReposList(reposCollection);
-            }
-        )
-    }, [course_id]);
-    if (!query || formLoading) {
+        await form.refineCore.onFinish(values);
+        if (values.template_repo) {
+            await githubRepoConfigureWebhook(
+                {
+                    assignment_id: Number.parseInt(assignment_id as string),
+                    new_repo: values.template_repo,
+                    watch_type: "template_repo"
+                },
+                supabase
+            )
+        }
+    }, [form.refineCore]);
+    if (form.refineCore.formLoading) {
         return <div>Loading...</div>
     }
-    if (query.error) {
-        return <div>Error: {query.error.message}</div>
+    if (form.refineCore.query?.error) {
+        return <div>Error: {form.refineCore.query.error.message}</div>
     }
-    return <div>
-        <form>
-            <Fieldset.Root size="lg" maxW="md">
-            </Fieldset.Root>
-        </form>
-    </div>
+    return <Container maxW="container.xl">
+        <Heading size="2xl">Edit Assignment</Heading>
+        <AssignmentForm form={form} onSubmit={onFinish} />
+    </Container>
 }

@@ -30,15 +30,15 @@ export async function assertUserIsInstructor(
     if (!user) {
         throw new SecurityError("User not found");
     }
-    const { data: instructor } = await supabase.from("user_roles").select("*")
+    const { data: enrollment } = await supabase.from("user_roles").select("*")
         .eq("user_id", user.id).eq("class_id", courseId).eq(
             "role",
             "instructor",
         ).single();
-    if (!instructor) {
+    if (!enrollment) {
         throw new SecurityError("User is not an instructor for this course");
     }
-    return supabase;
+    return { supabase, enrollment };;
 }
 export async function assertUserIsInCourse(
     courseId: number,
@@ -60,12 +60,12 @@ export async function assertUserIsInCourse(
     if (!user) {
         throw new SecurityError("User not found");
     }
-    const { data: instructor } = await supabase.from("user_roles").select("*")
+    const { data: enrollment } = await supabase.from("user_roles").select("*")
         .eq("user_id", user.id).eq("class_id", courseId).single();
-    if (!instructor) {
-        throw new SecurityError("User is not an instructor for this course");
+    if (!enrollment) {
+        throw new SecurityError("User is not enrolled in this course");
     }
-    return supabase;
+    return { supabase, enrollment };
 }
 
 export async function wrapRequestHandler(
@@ -76,24 +76,33 @@ export async function wrapRequestHandler(
         return new Response("ok", { headers: corsHeaders });
     }
     try {
-        const data = await handler(req);
+        let data = await handler(req);
+        if (!data) {
+            data = {};
+        }
         return new Response(JSON.stringify(data), {
             status: 200,
             headers: corsHeaders,
         });
     } catch (e) {
         console.error(e);
+        const genericErrorHeaders = {
+            "Content-Type": "application/json",
+            ...corsHeaders,
+        }
         if (e instanceof SecurityError) {
             return new Response(
                 JSON.stringify(
                     {
-                        message: "Security Error",
-                        details: "This request has been reported to the staff",
+                        error: {
+                            recoverable: false,
+                            message: "Security Error",
+                            details: "This request has been reported to the staff",
+                        }
                     },
                 ),
                 {
-                    status: e.status,
-                    headers: { "Content-Type": "application/json" },
+                    headers: genericErrorHeaders,
                 },
             );
         }
@@ -101,13 +110,15 @@ export async function wrapRequestHandler(
             return new Response(
                 JSON.stringify(
                     {
-                        message: "Internal Server Error",
-                        details: e.details,
+                        error: {
+                            recoverable: false,
+                            message: "Internal Server Error",
+                            details: e.details,
+                        },
                     },
                 ),
                 {
-                    status: e.status,
-                    headers: { "Content-Type": "application/json" },
+                    headers: genericErrorHeaders,
                 },
             );
         }
@@ -115,28 +126,46 @@ export async function wrapRequestHandler(
             return new Response(
                 JSON.stringify(
                     {
-                        message: "Not Found",
-                        details: "The requested resource was not found",
+                        error: {
+                            recoverable: true,
+                            message: "Not Found",
+                            details: "The requested resource was not found",
+                        }
                     },
                 ),
                 {
-                    status: 404,
-                    headers: { "Content-Type": "application/json" },
-                    ...corsHeaders,
+                    headers: genericErrorHeaders,
+                },
+            );
+        }
+        if (e instanceof IllegalArgumentError) {
+            return new Response(
+                JSON.stringify(
+                    {
+                        error: {
+                            recoverable: true,
+                            message: "Illegal Argument",
+                            details: e.details,
+                        }
+                    },
+                ),
+                {
+                    headers: genericErrorHeaders,
                 },
             );
         }
         return new Response(
             JSON.stringify(
                 {
-                    message: "Internal Server Error",
-                    details: "An unknown error occurred",
+                    error: {
+                        recoverable: false,
+                        message: "Internal Server Error",
+                        details: "An unknown error occurred",
+                    },
                 },
             ),
             {
-                status: 500,
-                headers: { "Content-Type": "application/json" },
-                ...corsHeaders,
+                headers: genericErrorHeaders,
             },
         );
     }
@@ -155,6 +184,15 @@ export class UserVisibleError extends Error {
     status: number = 500;
     constructor(details: string) {
         super("Error");
+        this.details = details;
+    }
+}
+
+export class IllegalArgumentError extends Error {
+    details: string;
+    status: number = 400;
+    constructor(details: string) {
+        super("Illegal Argument");
         this.details = details;
     }
 }

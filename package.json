@@ -12,7 +12,8 @@
     "dev": "next dev --experimental-https",
     "build": "next build",
     "start": "next start",
-    "client": "npx supabase gen types typescript --project-id 'pveyalbiqnrpvuazgyuo' --schema public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts"
+    "client": "npx supabase gen types typescript --project-id 'pveyalbiqnrpvuazgyuo' --schema public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
+    "client-local": "npx supabase gen types typescript --local --schema public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts"
   },
   "dependencies": {
     "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
@@ -47,6 +48,7 @@
     "amazon-chime-sdk-js": "^3.26.0",
     "autoprefixer": "10.4.20",
     "axios": "^1.7.9",
+    "chakra-react-select": "^6.1.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",

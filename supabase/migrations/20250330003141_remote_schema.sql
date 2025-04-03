@@ -3568,6 +3568,12 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 
 
 
-CREATE TRIGGER create_user_ensure_profiles_and_demo AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION user_register_create_demo_account();
+CREATE TRIGGER create_user_ensure_profiles_and_demo AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.user_register_create_demo_account();
+
+CREATE OR REPLACE TRIGGER update_github_profile_trigger
+AFTER INSERT ON auth.identities
+FOR EACH ROW
+EXECUTE FUNCTION public.update_github_profile();
+
 
 RESET ALL;

@@ -30,6 +30,7 @@ async function handleRequest(req: Request) {
   let class_id, assignment_id: number;
   let submission_id: number | null = null;
   let profile_id: string | null = null;
+  let assignment_group_id: number | null = null;
   if (autograder_regression_test_id) {
     //It's a regression test run
     const { data: regressionTestRun } = await adminSupabase.from(
@@ -65,6 +66,7 @@ async function handleRequest(req: Request) {
     class_id = submission.class_id;
     submission_id = submission.id;
     profile_id = submission.profile_id;
+    assignment_group_id = submission.assignment_group_id;
     assignment_id = submission.assignment_id;
   }
 
@@ -80,6 +82,7 @@ async function handleRequest(req: Request) {
     submission_id,
     profile_id,
     class_id,
+    assignment_group_id,
     ret_code: requestBody.ret_code,
     grader_sha: requestBody.grader_sha,
     score: requestBody.feedback.score ||
@@ -123,6 +126,7 @@ async function handleRequest(req: Request) {
         await adminSupabase.from("grader_result_output").insert({
           class_id,
           profile_id,
+          assignment_group_id,
           grader_result_id: resultID.id,
           visibility: visibility as OutputVisibility,
           format: output.output_format || "text",
@@ -137,6 +141,7 @@ async function handleRequest(req: Request) {
       requestBody.feedback.tests.map((test) => ({
         class_id: class_id,
         student_id: profile_id,
+        assignment_group_id,
         grader_result_id: resultID.id,
         name: test.name,
         output: test.output,

@@ -7,6 +7,7 @@ import { Database } from "./SupabaseTypes.d.ts";
 
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
+import { createHash } from "node:crypto";
 export type GitHubOIDCToken = {
     jti: string;
     sub: string;
@@ -246,14 +247,18 @@ export async function addPushWebhook(
             `Add push webhook failed: No octokit found for ${repoName}`,
         );
     }
+    let baseURL = Deno.env.get("SUPABASE_URL")!; 
+    if(baseURL.includes("kong")){
+        baseURL = "https://khoury-classroom-dev.ngrok.pizza";
+    }
     const webhook = await octokit.request("POST /repos/{owner}/{repo}/hooks", {
         owner: repoName.split("/")[0],
         repo: repoName.split("/")[1],
         name: "web",
         config: {
             url: `${
-                Deno.env.get("SUPABASE_URL")
-            }/functions/github-repo-webhook?type=${type}`,
+                baseURL
+            }/functions/v1/github-repo-webhook?type=${type}`,
             content_type: "json",
             secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret",
         },
@@ -277,6 +282,33 @@ export async function removePushWebhook(repoName: string, webhookId: number) {
         },
     );
     console.log("webhook removed", webhook.data);
+}
+
+export async function updateAutograderWorkflowHash(repoName: string){
+    const file = await getFileFromRepo(repoName, ".github/workflows/grade.yml") as {content: string};
+    const hash = createHash("sha256");
+    if(!file.content){
+        throw new Error("File not found");
+    }
+    hash.update(file.content);
+    const hashStr = hash.digest("hex");
+    const adminSupabase = createClient<Database>(
+        Deno.env.get("SUPABASE_URL") || "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    );
+    console.log("updating autograder workflow hash", hashStr, repoName);
+    const {data: assignments} = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
+    if(!assignments){
+        throw new Error("Assignment not found");
+    }
+    const {data, error} = await adminSupabase.from("autograder").update({
+        workflow_sha: hashStr,
+    }).in("id", assignments.map((a) => a.id));
+    if(error){
+        console.error(error);
+        throw new Error("Failed to update autograder workflow hash");
+    }
+    return hash;
 }
 export async function getFileFromRepo(repoName: string, path: string) {
     console.log("getting file from repo", repoName, path);
@@ -347,9 +379,8 @@ export async function createRepo(
     org: string,
     repoName: string,
     template_repo: string,
-    github_username: string,
 ) {
-    console.log("Creating repo", org, repoName, template_repo, github_username);
+    console.log("Creating repo", org, repoName, template_repo);
     const octokit = await getOctoKit(org);
     if (!octokit) {
         throw new UserVisibleError(
@@ -387,17 +418,7 @@ export async function createRepo(
         owner: org,
         repo: repoName,
         allow_squash_merge: false,
-    });
-    //Add the user as an admin
-    await octokit.request(
-        "PUT /repos/{owner}/{repo}/collaborators/{username}",
-        {
-            owner: org,
-            repo: repoName,
-            username: github_username,
-            permission: "maintain",
-        },
-    );
+    })
 }
 async function listFilesInRepoDirectory(
     octokit: Octokit,
@@ -452,4 +473,133 @@ export async function listFilesInRepo(org: string, repo: string) {
         throw new Error("No octokit found for organization " + org);
     }
     return await listFilesInRepoDirectory(octokit, org, repo, "");
+}
+
+export async function archiveRepoAndLock(org: string, repo: string) {
+    if(repo.includes("/")){
+        const [owner, repoName] = repo.split("/");
+        org = owner;
+        repo = repoName;
+    }
+    const octokit = await getOctoKit(org);
+    if (!octokit) {
+        throw new Error("No octokit found for organization " + org);
+    }
+    console.log(`archiving repo ${org}/${repo}`);
+    //Remove all direct access to the repo
+    const collaborators = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
+        owner: org,
+        repo,
+        per_page: 100,
+    });
+    for (const collaborator of collaborators.data) {
+        console.log("removing collaborator", collaborator.login);
+        await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {    
+            owner: org,
+            repo,
+            username: collaborator.login,
+        });
+    }
+
+    const newName = `archived-${new Date().toISOString()}-${repo}`;
+    console.log("renaming repo to", newName);
+    //Rename the repo
+    await octokit.request("PATCH /repos/{owner}/{repo}", {
+        owner: org,
+        repo,
+        name: newName,
+    });
+}
+
+export async function syncStaffTeam(org: string, courseSlug: string, githubUsernames: string[]) {
+    const octokit = await getOctoKit(org);
+    if (!octokit) {
+        throw new Error("No octokit found for organization " + org);
+    }
+    const team_slug = `${courseSlug}-staff`;
+    let team_id: number;
+    try {
+        const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
+            org,
+            team_slug,
+        });
+        team_id = team.data.id;
+    } catch (e) {
+        if (e.message.includes("Not Found")) {
+            // Team doesn't exist, create it
+            const newTeam = await octokit.request("POST /orgs/{org}/teams", {
+                org,
+                name: team_slug,
+            });
+            team_id = newTeam.data.id;
+        } else {
+            throw e;
+        }
+    }
+    const members = await octokit.request("GET /teams/{team_id}/members", {
+        team_id,
+        per_page: 100,
+    });
+
+    const existingMembers = new Map(members.data.map((m) => [m.login, m]));
+    const newMembers = githubUsernames.filter((u) => !existingMembers.has(u));
+    const removeMembers = existingMembers.keys().filter((u) => !githubUsernames.includes(u));
+    for (const username of newMembers) {
+        await octokit.request("PUT /teams/{team_id}/memberships/{username}", {
+            team_id,
+            username,
+            role: "member",
+        });
+    }
+    for (const username of removeMembers) {
+        await octokit.request("DELETE /teams/{team_id}/memberships/{username}", {
+            team_id,
+            username,
+        });
+    }
+}
+export async function syncRepoPermissions(org: string, repo: string, courseSlug: string, githubUsernames: string[]) {
+    console.log("syncing repo permissions", org, repo, courseSlug, githubUsernames);
+    if(repo.includes("/")){
+        const [owner, repoName] = repo.split("/");
+        org = owner;
+        repo = repoName;
+    }
+    const octokit = await getOctoKit(org);
+    if (!octokit) {
+        throw new Error("No octokit found for organization " + org);
+    }
+    const team_slug = `${courseSlug}-staff`;
+    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+        org,
+        team_slug,
+        owner: org,
+        repo,
+        permission: "maintain",
+    });
+    const existingAccess = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
+        owner: org,
+        repo,
+        per_page: 100,
+    });
+    const existingAccessMap = new Map(existingAccess.data.map((c) => [c.login, c]));
+    const newAccess = githubUsernames.filter((u) => !existingAccessMap.has(u));
+    const removeAccess = existingAccessMap.keys().filter((u) => !githubUsernames.includes(u));
+    for (const username of newAccess) {
+        console.log("adding collaborator", username);
+        await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
+            owner: org,
+            repo,
+            username,
+            permission: "write",
+        });
+    }
+    for (const username of removeAccess) {
+        console.log("removing collaborator", username);
+        await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
+            owner: org,
+            repo,
+            username,
+        });
+    }
 }

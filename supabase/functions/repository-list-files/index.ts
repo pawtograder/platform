@@ -5,7 +5,7 @@ import * as github from "../_shared/GitHubWrapper.ts";
 
 async function handleRequest(req: Request) {
   const { courseId, orgName, repoName } = await req.json() as ListFilesRequest;
-  const supabase = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+  const {supabase} = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
   const course = await supabase.from("classes").select("github_org").eq("id", courseId).single();
   if(!course.data?.github_org) {
     throw new Error("Course is not associated with a GitHub organization");
