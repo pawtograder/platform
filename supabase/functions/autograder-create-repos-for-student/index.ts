@@ -24,13 +24,17 @@ async function handleRequest(req: Request) {
   }
   console.log("Creating GitHub repos for student ", user.user!.email);
   // Get the user's Github username
-  const { data: userData } = await supabase.from("user_roles").select(
-    "users(github_username)",
+  const { data: userData, error: userDataError } = await supabase.from("users").select(
+    "github_username",
   ).eq("user_id", user.user!.id).single();
+  if(userDataError) {
+    console.error(userDataError);
+    throw new SecurityError(`Invalid user: ${user.user!.id}`);
+  }
   if (!userData) {
     throw new SecurityError(`Invalid user: ${user.user!.id}`);
   }
-  const githubUsername = userData.users.github_username;
+  const githubUsername = userData.github_username;
   if (!githubUsername) {
     throw new UserVisibleError(
       `User ${user.user!.id} has no Github username linked`,
@@ -64,7 +68,7 @@ async function handleRequest(req: Request) {
   
 
   //For each group repo, sync the permissions
-  await Promise.all(classes.flatMap((c) => c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
+  const createdAsGroupRepos = await Promise.all(classes.flatMap((c) => c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
     const group = groupMembership.assignment_groups;
     const assignment = groupMembership.assignments;
     const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
@@ -96,6 +100,7 @@ async function handleRequest(req: Request) {
         console.error(error);
         throw new UserVisibleError(`Error creating repo: ${error}`);
       }
+      return assignment;
     }
 
 
@@ -110,6 +115,7 @@ async function handleRequest(req: Request) {
 
   const requests = assignments!.filter((assignment) =>
     !existingRepos.find((repo) => repo.assignment_id === assignment.id)
+    && !createdAsGroupRepos.find((_assignment) => _assignment?.id === assignment.id)
     && assignment.group_config !== "groups"
   ).map(async (assignment) => {
     const userProfileID = classes.find((c) =>
@@ -136,7 +142,7 @@ async function handleRequest(req: Request) {
     await syncRepoPermissions(
       assignment.classes!.github_org!,
       repoName,
-      courseSlug,
+      courseSlug!,
       [githubUsername],
     );
     //Use service role key to insert the repo into the database
@@ -163,5 +169,5 @@ async function handleRequest(req: Request) {
 }
 
 Deno.serve(async (req) => {
-  return wrapRequestHandler(req, handleRequest);
+  return await wrapRequestHandler(req, handleRequest);
 });
