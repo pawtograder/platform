@@ -95,7 +95,7 @@ export default function AutograderPage() {
                                 return <RepoSelector name={field.name} value={field.value} onBlur={field.onBlur}
                                     onChange={(repo) => {
                                         setGraderRepo(repo);
-                                        field.onChange(repo.full_name);
+                                        field.onChange(repo);
                                     }}
                                 />
                             }} />

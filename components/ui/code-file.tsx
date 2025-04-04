@@ -18,7 +18,7 @@ import { FaComments, FaRegComment } from 'react-icons/fa';
 import PersonAvatar from './person-avatar';
 import { useUserProfile } from '@/hooks/useUserProfiles';
 type CodeLineCommentContextType = {
-    submission: SubmissionWithFiles;
+    submission: SubmissionWithFilesAndComments;
     comments: SubmissionFileComment[];
     file: SubmissionFileWithComments;
     expanded: number[];
