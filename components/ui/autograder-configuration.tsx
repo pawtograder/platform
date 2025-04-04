@@ -11,7 +11,7 @@ import { AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseT
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { repositoryGetFile } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-export default function AutograderConfiguration({ graderRepo }: { graderRepo: ListReposResponse[0]|undefined }) {
+export default function AutograderConfiguration({ graderRepo }: { graderRepo: string|undefined }) {
     const [autograderConfig, setAutograderConfig] = useState<string>();
     const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
 
@@ -50,8 +50,8 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: Li
             const supabase = createClient();
             repositoryGetFile({
                 courseId: Number(course_id),
-                orgName: graderRepo.owner.login,
-                repoName: graderRepo.name,
+                orgName: graderRepo.split("/")[0],
+                repoName: graderRepo.split("/")[1],
                 path: 'pawtograder.yml'
         }, supabase).then((res) => {
             if ('content' in res) {
@@ -60,7 +60,7 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: Li
             }
         }).catch((err) => {
             if (err.stack.message === 'Not Found') {
-                setError(`Autograder configuration file not found in ${graderRepo.owner.login}/${graderRepo.name}. Please create a pawtograder.yml file in the root of the repository.`);
+                setError(`Autograder configuration file not found in ${graderRepo}. Please create a pawtograder.yml file in the root of the repository.`);
                 setAutograderConfig(undefined);
             } else {
                 console.log("Error fetching autograder configuration", err);

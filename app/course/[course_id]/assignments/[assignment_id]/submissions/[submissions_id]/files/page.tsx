@@ -138,7 +138,7 @@ export default function FilesView() {
         resource: "submissions",
         id: Number.parseInt(submissions_id as string),
         meta: {
-            select: "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*)))"
+            select: "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*))), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
         }
     });
 
@@ -150,9 +150,7 @@ export default function FilesView() {
         <Flex>
             <Box>
                 <FilePicker submission={query.data.data} curFile={curFile} setCurFile={setCurFile} />
-                <Box>
-                    <CodeFile file={query.data.data.submission_files[curFile]} submission={query.data.data} />
-                </Box>
+                <CodeFile file={query.data.data.submission_files[curFile]} submission={query.data.data} />
             </Box>
             {isInstructor && <RubricView submission={query.data.data} />}
         </Flex>

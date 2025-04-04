@@ -20,7 +20,6 @@ function LineCommentForm({
             resource: "submission_file_comments",
         }
     );
-    const [isReplying, setIsReplying] = useState(false);
     const supabase = createClient();
     const invalidateQuery = useInvalidate();
     const { private_profile_id } = useClassProfiles();

@@ -5,7 +5,7 @@ import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { Skeleton } from './skeleton';
 import '@wooorm/starry-night/style/both';
 import { ElementContent, Element, RootContent, Root } from 'hast'
-import { Box, chakra, HStack } from '@chakra-ui/react';
+import { Badge, Box, Button, chakra, Flex, HStack, Icon, Tag, VStack } from '@chakra-ui/react';
 import { SubmissionWithFilesAndComments, SubmissionFileWithComments, SubmissionFileComment, SubmissionWithFiles } from '@/utils/supabase/DatabaseTypes';
 import PersonName from './person-name';
 import { Text } from '@chakra-ui/react';
@@ -13,6 +13,10 @@ import LineCommentForm from './line-comments-form';
 import Markdown from './markdown';
 import { format } from 'date-fns';
 import { useList } from '@refinedev/core';
+import { Tooltip } from '@/components/ui/tooltip';
+import { FaComments, FaRegComment } from 'react-icons/fa';
+import PersonAvatar from './person-avatar';
+import { useUserProfile } from '@/hooks/useUserProfiles';
 type CodeLineCommentContextType = {
     submission: SubmissionWithFiles;
     comments: SubmissionFileComment[];
@@ -34,12 +38,13 @@ export default function CodeFile({
     submission
 }: {
     file: SubmissionFileWithComments;
-    submission: SubmissionWithFiles;
+    submission: SubmissionWithFilesAndComments;
 }) {
     const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
     const [expanded, setExpanded] = useState<number[]>([]);
     const { data: comments } = useList<SubmissionFileComment>({
         resource: "submission_file_comments",
+        liveMode: "auto",
         filters: [
             { field: "submission_files_id", operator: "eq", value: file.id }
         ],
@@ -47,6 +52,7 @@ export default function CodeFile({
             { field: "created_at", order: "asc" }
         ]
     });
+
     useEffect(() => {
         async function highlight() {
             const highlighter = await createStarryNight(common);
@@ -65,10 +71,14 @@ export default function CodeFile({
         jsxs,
         components: {
             // @ts-ignore
-            'CodeLineComment': CodeLineComment,
+            'CodeLineComments': CodeLineComments,
+            // @ts-ignore
+            'LineNumber': LineNumber,
         }
     });
     return <Box border="1px solid" borderColor="border.emphasized" p={0}
+        m={2}
+        w="2xl"
         css={{
             "& .source-code-line": {
                 cursor: "pointer",
@@ -88,6 +98,22 @@ export default function CodeFile({
             }
         }}
     >
+        <Flex w="100%" bg="bg.subtle" p={2} borderBottom="1px solid" borderColor="border.emphasized" alignItems="center" justifyContent="space-between">
+            <Text fontSize="xs" color="text.subtle">{file.name}</Text>
+            <HStack>
+                <Text fontSize="xs" color="text.subtle">{comments?.data?.length} {comments?.data?.length === 1 ? "comment" : "comments"}</Text>
+                {comments?.data?.length && <Tooltip openDelay={300} closeDelay={100} content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}><Button variant={expanded.length > 0 ? "solid" : "outline"} size="xs" p={0} colorScheme="teal"
+                    onClick={() => {
+                        setExpanded((prev) => {
+                            if (prev.length === 0) {
+                                return comments?.data?.map((comment) => comment.line);
+                            }
+                            return [];
+                        })
+                    }}
+                ><Icon as={FaComments} m={0} /></Button></Tooltip>}
+            </HStack>
+        </Flex>
         <CodeLineCommentContext.Provider value={{
             submission,
             comments: comments?.data || [],
@@ -179,15 +205,35 @@ export function starryNightGutter(tree: Root, setExpanded: Dispatch<SetStateActi
     // @ts-ignore
     tree.children = replacement
 }
-
-function CodeLineComment({ lineNumber }: { lineNumber: number }) {
-    const { submission,comments: allCommentsForFile, file, expanded, close } = useCodeLineCommentContext();
+function CodeLineComment({ comment, submission }: { comment: SubmissionFileComment, submission: SubmissionWithFilesAndComments }) {
+    const authorProfile = useUserProfile(comment.author);
+    const isAuthor = submission.profile_id === comment.author || submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
+    return <Box key={comment.id} m={0} p={2} w="100%">
+        <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
+            <PersonAvatar size="2xs" uid={comment.author} />
+            <VStack alignItems="flex-start" spaceY={0} gap={1} w="100%">
+                <HStack w="100%" justifyContent="space-between">
+                    <HStack gap={1}>
+                        <Text>{authorProfile?.name}</Text>
+                        <Text fontSize="sm" color="fg.muted">on {format(comment.created_at, 'MMM d, yyyy')}</Text>
+                    </HStack>
+                    {isAuthor || authorProfile?.flair ? <Tag.Root size="md" colorScheme={isAuthor ? "green" : "gray"} variant="surface">
+                        <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
+                    </Tag.Root> : <></>}
+                </HStack>
+                <Markdown>{comment.comment}</Markdown>
+            </VStack>
+        </HStack>
+    </Box>
+}
+function CodeLineComments({ lineNumber }: { lineNumber: number }) {
+    const { submission, comments: allCommentsForFile, file, expanded, close } = useCodeLineCommentContext();
+    const comments = allCommentsForFile.filter((comment) => comment.line === lineNumber);
+    const [showReply, setShowReply] = useState(comments.length === 0);
     if (!submission || !file) {
         return null;
     }
-    const comments = allCommentsForFile.filter((comment) => comment.line === lineNumber);
-    const hasComments = comments && comments.length > 0;
-    if (!expanded.includes(lineNumber) && !hasComments) {
+    if (!expanded.includes(lineNumber)) {
         return <></>;
     }
     return <Box
@@ -207,24 +253,27 @@ function CodeLineComment({ lineNumber }: { lineNumber: number }) {
             borderWidth="1px"
             borderColor="border.emphasized"
             borderRadius="md"
-            p={4}
+            p={2}
             backgroundColor="bg"
             boxShadow="sm"
         >
             {comments.map((comment) => (
-                <Box key={comment.id} m={0} p={2}>
-                    <HStack spaceX={0} mb={2}>
-                        <PersonName size="xs" uid={comment.author} />
-                        <Text fontSize="xs" color="text.subtle">on {format(comment.created_at, 'MMM d, yyyy')}</Text>
-                    </HStack>
-                    <Box pl={2}>
-                        <Markdown>{comment.comment}</Markdown>
-                    </Box>
-                </Box>
+                <CodeLineComment key={comment.id} comment={comment} submission={submission} />
             ))}
-            <LineCommentForm lineNumber={lineNumber} submission={submission} file={file} />
+            {showReply ? <LineCommentForm lineNumber={lineNumber} submission={submission} file={file} /> : <Box display="flex" justifyContent="flex-end"><Button colorPalette="green" onClick={() => setShowReply(true)}>Reply</Button></Box>}
         </Box>
     </Box>
+}
+
+function LineNumber({ lineNumber }: { lineNumber: number }) {
+    const { comments } = useCodeLineCommentContext();
+    const hasComments = comments && comments.find((comment) => comment.line === lineNumber);
+    if (hasComments) {
+        return <Box className="line-number" position="relative">{lineNumber}
+            <Badge variant="solid" colorPalette="blue" position="absolute" left={-5} top={0}><Icon as={FaRegComment} /></Badge>
+        </Box>
+    }
+    return <div className="line-number">{lineNumber}</div>
 }
 /**
  * @param {Array<ElementContent>} children
@@ -242,7 +291,8 @@ function createLine(children: ElementContent[], line: number, setExpanded: Dispa
             {
                 type: 'element',
                 tagName: 'span',
-                properties: { className: 'source-code-line',
+                properties: {
+                    className: 'source-code-line',
                     onClick: () => {
                         setExpanded((prev) => {
                             if (prev.includes(line)) {
@@ -255,16 +305,16 @@ function createLine(children: ElementContent[], line: number, setExpanded: Dispa
                 children: [
                     {
                         type: 'element',
-                        tagName: 'div',
-                        properties: { className: 'line-number' },
-                        children: [{ type: 'text', value: line.toString() }]
+                        tagName: 'LineNumber',
+                        properties: { lineNumber: line },
+                        children: []
                     },
                     ...children
                 ]
             },
             {
                 type: 'element',
-                tagName: 'CodeLineComment',
+                tagName: 'CodeLineComments',
                 properties: { lineNumber: line },
                 children: []
             }

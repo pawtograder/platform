@@ -19,7 +19,7 @@ import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 
 export default function AutograderPage() {
     const { assignment_id } = useParams();
-    const [graderRepo, setGraderRepo] = useState<ListReposResponse[0]>();
+    const [graderRepo, setGraderRepo] = useState<string>();
     const { mutateAsync: mutateAssignment } = useUpdate<Assignment>({ resource: "assignments", id: Number.parseInt(assignment_id as string) });
     const { refineCore: { formLoading, query },
         saveButtonProps,
@@ -92,7 +92,7 @@ export default function AutograderPage() {
                             control={control}
                             render={({ field }) => {
                                 console.log(field.value)
-                                return <RepoSelector name={field.name} value={[field.value]} onBlur={field.onBlur}
+                                return <RepoSelector name={field.name} value={field.value} onBlur={field.onBlur}
                                     onChange={(repo) => {
                                         setGraderRepo(repo);
                                         field.onChange(repo.full_name);

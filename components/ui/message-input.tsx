@@ -200,6 +200,13 @@ export default function MessageInput(props: MessageInputProps) {
                             <Checkbox checked={enterToSend} onChange={e => setEnterToSend(!enterToSend)} />
                         </Field.Root>
                     </Box>
+                    <Button aria-label="Send message" onClick={() => {
+                        if (value?.trim() === '') {
+                            return;
+                        }
+                        props.sendMessage(value!, profile_id, true)
+                        setValue('');
+                    }} variant="solid" colorPalette="green" size="xs" ml={2}>Send</Button>
                 </HStack>
 
             </VStack>

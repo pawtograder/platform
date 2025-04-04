@@ -47,10 +47,11 @@ export default async function AssignmentHome({ params,
                 </HStack>
             </Box>
             <HStack justify="flex-start" width="100%" border="1px solid" borderColor="border.muted" borderRadius="md" p={2} m={1} bg="bg.subtle">
-                    <NextLink href={`/course/${course_id}/manage/assignments/${assignment_id}/edit`}><Button size="xs" variant="surface">Edit Assignment</Button></NextLink>
-                    {assignment.group_config !== "individual" && <NextLink href={`/course/${course_id}/manage/assignments/${assignment_id}/groups`}><Button size="xs" variant="surface">Manage Groups</Button></NextLink>}
-                    <CreateGitHubRepos courseId={Number.parseInt(course_id)} assignmentId={Number.parseInt(assignment_id)} />
-                </HStack>
+                <NextLink href={`/course/${course_id}/manage/assignments/${assignment_id}/autograder`}><Button size="xs" variant="surface">Configure Autograder</Button></NextLink>
+                <NextLink href={`/course/${course_id}/manage/assignments/${assignment_id}/edit`}><Button size="xs" variant="surface">Edit Assignment</Button></NextLink>
+                {assignment.group_config !== "individual" && <NextLink href={`/course/${course_id}/manage/assignments/${assignment_id}/groups`}><Button size="xs" variant="surface">Manage Groups</Button></NextLink>}
+                <CreateGitHubRepos courseId={Number.parseInt(course_id)} assignmentId={Number.parseInt(assignment_id)} />
+            </HStack>
             <Table.Root striped>
                 <Table.Header>
                     <Table.Row>

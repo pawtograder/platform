@@ -259,9 +259,10 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
                             render={({ field }) => {
                                 return <RepoSelector
                                     templateReposOnly
-                                    name={field.name} value={field.value ? [field.value] : []} onBlur={field.onBlur} onChange={(val) => {
-                                        fetchTemplateRepoFiles(val.owner.login, val.name);
-                                        field.onChange(val.full_name)
+                                    name={field.name} value={field.value ? field.value : ""} onBlur={field.onBlur} onChange={(val) => {
+                                        const [login, repo] = val.split("/");
+                                        fetchTemplateRepoFiles(login, repo);
+                                        field.onChange(val)
                                     }} />
                             }} />
 

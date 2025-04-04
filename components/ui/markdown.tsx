@@ -6,6 +6,7 @@ import remarkBreaks from 'remark-breaks';
 import remarkGemoji from 'remark-gemoji';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import 'katex/dist/katex.min.css'
 
 export default function Markdown(props: Parameters<typeof ReactMarkdown>[0]) {
     return <>

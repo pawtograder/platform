@@ -33,7 +33,7 @@ export type SubmissionWithFiles = GetResult<
     Database["public"]["Tables"]["submissions"]["Row"],
     "submissions",
     Database["public"]["Tables"]["submissions"]["Relationships"],
-    "*, submission_files(*)"
+    "*, submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
 >;
 export type SubmissionFileComment = GetResult<
     Database["public"],
