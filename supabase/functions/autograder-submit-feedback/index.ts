@@ -151,6 +151,7 @@ async function handleRequest(req: Request) {
         max_score: test.max_score,
         part: test.part,
         extra_data: test.extra_data,
+        released: true,
       })),
     );
   if (testResultsError) {

@@ -1,35 +1,44 @@
 'use client';
 
-import { Button } from "@/components/ui/button";
 import CodeFile from "@/components/ui/code-file";
 import { Skeleton } from "@/components/ui/skeleton";
 import useAuthState from "@/hooks/useAuthState";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { Rubric, SubmissionWithFilesAndComments } from "@/utils/supabase/DatabaseTypes";
-import { Box, Container, Editable, Flex, IconButton, Link, Table } from "@chakra-ui/react";
+import { Box, Container, Editable, Flex, Heading, IconButton, Table } from "@chakra-ui/react";
 import { useCreate, useInvalidate, useList, useShow } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
-import { useParams, usePathname } from "next/navigation";
-import { useState } from "react";
+import { Controller } from "react-hook-form";
+import { useParams, usePathname, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { LuCheck, LuPencilLine, LuX } from "react-icons/lu";
+import { Button, Field, NumberInput } from "@chakra-ui/react"
+import { useSubmission, useSubmissionFileComments, useSubmissionController } from "@/hooks/useSubmission";
+import Link from "@/components/ui/link";
 
-function FilePicker({ submission, curFile, setCurFile }: { submission: SubmissionWithFilesAndComments, curFile: number, setCurFile: (file: number) => void }) {
+function FilePicker({ curFile, setCurFile }: { curFile: number, setCurFile: (file: number) => void }) {
+    const submission = useSubmission();
+    const isGraderOrInstructor = useIsGraderOrInstructor();
+    const comments = useSubmissionFileComments({
+    });
+    const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
     return (
         <Table.Root borderWidth="1px" borderColor="border.emphasized"
-            w="2xl"
+            w="4xl"
             m={2}
             borderRadius="md">
             <Table.Header>
                 <Table.Row bg="bg.subtle">
                     <Table.ColumnHeader>File</Table.ColumnHeader>
-                    <Table.ColumnHeader>Comments</Table.ColumnHeader>
+                    {showCommentsFeature && <Table.ColumnHeader>Comments</Table.ColumnHeader>}
                 </Table.Row>
             </Table.Header>
             <Table.Body>
                 {submission.submission_files.map((file, idx) => (
                     <Table.Row key={file.id}>
-                        <Table.Cell><Link variant={curFile === idx ? "underline" : undefined} onClick={() => setCurFile(idx)}>{file.name}</Link></Table.Cell>
-                        <Table.Cell>{file.submission_file_comments?.length || 0}</Table.Cell>
+                        <Table.Cell><Link 
+                        variant={curFile === idx ? "underline" : undefined} href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?file_id=${file.id}`}>{file.name}</Link></Table.Cell>
+                        {showCommentsFeature && <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>}
                     </Table.Row>
                 ))}
             </Table.Body>
@@ -38,13 +47,17 @@ function FilePicker({ submission, curFile, setCurFile }: { submission: Submissio
 }
 function RubricItem({ rubric }: { rubric: Rubric }) {
     const invalidateQuery = useInvalidate();
-    const { register, control, getValues, handleSubmit, refineCore, formState: { errors, isSubmitting } } = useForm<Rubric>({
+    const { register, control, getValues, handleSubmit, refineCore, formState: { errors, isSubmitting, isLoading } } = useForm<Rubric>({
         refineCoreProps: {
             action: "edit",
             resource: "rubrics",
             id: rubric.id,
         }
     });
+
+    if (refineCore.query?.isLoading || refineCore.query?.isFetching) {
+        return <Skeleton height="48px" width="full" />
+    }
     return <Box>
         <form onSubmit={handleSubmit(refineCore.onFinish)}>
             <Editable.Root {...register("name")} placeholder="Click to enter a comment"
@@ -72,13 +85,33 @@ function RubricItem({ rubric }: { rubric: Rubric }) {
                         </IconButton>
                     </Editable.SubmitTrigger>
                 </Editable.Control>
-
             </Editable.Root>
+            <Field.Root invalid={!!errors.deduction} orientation="horizontal">
+                <Field.Label>Deduction</Field.Label>
+                <Controller
+                    name="deduction"
+                    control={control}
+                    render={({ field }) => (
+                        <NumberInput.Root
+                            name={field.name}
+                            value={field.value}
+                            onValueChange={({ value }) => {
+                                field.onChange(value)
+                                handleSubmit(refineCore.onFinish)()
+                            }}
+                        >
+                            <NumberInput.Control />
+                            <NumberInput.Input onBlur={field.onBlur} />
+                        </NumberInput.Root>
+                    )}
+                />
+            </Field.Root>
         </form>
     </Box>
 }
-function RubricView({ submission }: { submission: SubmissionWithFilesAndComments }) {
+function RubricView() {
     const invalidateQuery = useInvalidate();
+    const submission = useSubmission();
     const { data: rubrics } = useList<Rubric>({
         resource: "rubrics",
         filters: [
@@ -106,10 +139,20 @@ function RubricView({ submission }: { submission: SubmissionWithFilesAndComments
             }
         }
     });
-    return <Box borderLeftWidth="1px" borderColor="border.emphasized" p={4} ml={7} w="md">
-        <h2>Rubric</h2>
+    return <Box
+        position="sticky"
+        top="0"
+        borderLeftWidth="1px"
+        borderColor="border.emphasized"
+        p={4}
+        ml={7}
+        w="md"
+        height="100vh"
+        overflowY="auto"
+    >
+        <Heading size="xl">Rubric</Heading>
         <Box>
-            <h3>Criteria</h3>
+            <Heading size="lg">Criteria</Heading>
             {rubrics?.data.map((rubric) => (
                 <Box key={rubric.id}>
                     <RubricItem rubric={rubric} />
@@ -133,26 +176,25 @@ export default function FilesView() {
     const { role } = useClassProfiles();
     const isInstructor = role?.role === "instructor";
     const [curFile, setCurFile] = useState<number>(0);
-    const pathname = usePathname();
-    const { query } = useShow<SubmissionWithFilesAndComments>({
-        resource: "submissions",
-        id: Number.parseInt(submissions_id as string),
-        meta: {
-            select: "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*))), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
+    const searchParams = useSearchParams();
+    const file_id = searchParams.get("file_id");
+    const line = searchParams.get("line");
+    const submission = useSubmission();
+    const submissionController = useSubmissionController();
+    useEffect(() => {
+        if (file_id) {
+            setCurFile(submission.submission_files.findIndex((file) => file.id === Number.parseInt(file_id)));
         }
-    });
-
-    if (query.isLoading || !query.data) {
-        return <Skeleton height="100%" width="100%" />
-    }
-
+    }, [file_id]);
+    useEffect(() => {
+        submissionController.file = submission.submission_files[curFile];
+    }, [curFile]);
     return <Container pt={4}>
         <Flex>
             <Box>
-                <FilePicker submission={query.data.data} curFile={curFile} setCurFile={setCurFile} />
-                <CodeFile file={query.data.data.submission_files[curFile]} submission={query.data.data} />
+                <FilePicker curFile={curFile} setCurFile={setCurFile} />
+                <CodeFile file={submission.submission_files[curFile]} />
             </Box>
-            {isInstructor && <RubricView submission={query.data.data} />}
         </Flex>
     </Container>
 }

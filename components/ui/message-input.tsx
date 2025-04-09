@@ -25,9 +25,21 @@ import { useParams } from 'next/navigation';
 import { Tooltip } from './tooltip';
 import { useClassProfiles } from '@/hooks/useClassProfiles';
 import { useUserProfile } from '@/hooks/useUserProfiles';
+import { toaster } from './toaster';
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
     defaultSingleLine?: boolean;
     sendMessage: (message: string, profile_id: string, close?: boolean) => Promise<void>;
+    showFilePicker?: boolean;
+    showGiphyPicker?: boolean;
+    showEmojiPicker?: boolean;
+    showAnonymousModeToggle?: boolean;
+    otherButtons?: React.ReactNode | React.ReactNode[];
+    sendButtonText?: string;
+    placeholder?: string;
+    allowEmptyMessage?: boolean;
+    textAreaRef?: React.RefObject<HTMLTextAreaElement>;
+    onClose?: () => void;
+    closeButtonText?: string;
 }
 export default function MessageInput(props: MessageInputProps) {
     const { course_id } = useParams();
@@ -96,7 +108,7 @@ export default function MessageInput(props: MessageInputProps) {
     }, []);
     if (singleLine) {
         return (
-            <VStack align="stretch" spaceY="0" p="0" gap="0">
+            <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
                 {showMarkdownPreview && (<Box
                     width="100%"
                     p="2"
@@ -112,8 +124,9 @@ export default function MessageInput(props: MessageInputProps) {
                 <Textarea
                     p="2"
                     width="100%"
-                    placeholder="Reply..."
+                    placeholder={props.placeholder ?? "Reply..."}
                     m="0"
+                    ref={props.textAreaRef}
                     onDragEnter={(e) => {
                         const target = e.target as HTMLElement;
                         target.style.border = '2px dashed #999';
@@ -144,7 +157,12 @@ export default function MessageInput(props: MessageInputProps) {
                     onKeyDown={(e) => {
                         if (e.key === 'Enter' && !(e.shiftKey || e.metaKey || !enterToSend)) {
                             e.preventDefault();
-                            if (value?.trim() === '') {
+                            if ((value?.trim() === '' || !value) && !props.allowEmptyMessage) {
+                                toaster.create({
+                                    title: "Empty message",
+                                    description: "You must add a message to continue",
+                                    type: "error"
+                                })
                                 return;
                             }
                             props.sendMessage(value!, profile_id, true);
@@ -160,20 +178,21 @@ export default function MessageInput(props: MessageInputProps) {
                     }} />}
                 <HStack justify="flex-end">
                     <HStack spaceX="0" gap="0">
-                        <Text color="text.muted" fontSize="xs">
+                        {props.otherButtons}
+                        {props.showAnonymousModeToggle && <Text color="text.muted" fontSize="xs">
                             Post {anonymousMode ? `with your pseudonym, ${public_profile?.name} ` : `as ${private_profile?.name}`}
-                        </Text>
-                        <Tooltip content="Toggle anonymous mode">
+                        </Text>}
+                        {props.showAnonymousModeToggle && <Tooltip content="Toggle anonymous mode">
                             <Button aria-label="Toggle anonymous mode" onClick={toggleAnonymousMode} variant={anonymousMode ? "solid" : "ghost"} size="xs" colorScheme={anonymousMode ? "red" : "teal"} p={0}><FaUserSecret /></Button>
-                        </Tooltip>
-                        <Tooltip content="Attach a file">
+                        </Tooltip>}
+                        {props.showFilePicker && <Tooltip content="Attach a file">
                             <Button aria-label="Attach a file" onClick={() => fileInputRef.current?.click()} variant="ghost" size="xs" colorScheme="teal" p={0}><FaPaperclip /></Button>
-                        </Tooltip>
+                        </Tooltip>}
                         <Tooltip content="Toggle markdown preview (supports LaTeX)">
                             <Button aria-label="Toggle markdown preview (supports LaTeX)" onClick={() => setShowMarkdownPreview(!showMarkdownPreview)} variant="ghost" size="xs" colorScheme="teal" p={0}><TbMathFunction /></Button>
                         </Tooltip>
-                        <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={attachFile} />
-                        <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
+                        {props.showFilePicker && <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={attachFile} />}
+                        {props.showGiphyPicker && <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
                             <PopoverTrigger asChild>
                                 <Button aria-label="Toggle giphy picker" variant="ghost" size="xs" colorScheme="teal" p={0} onClick={() => setShowGiphyPicker(!showGiphyPicker)}>GIF</Button>
                             </PopoverTrigger>
@@ -186,27 +205,33 @@ export default function MessageInput(props: MessageInputProps) {
                                     }} />
                                 </PopoverBody>
                             </PopoverContent>
-                        </PopoverRoot>
-                        <Tooltip content="Toggle emoji picker">
+                        </PopoverRoot>}
+                        {props.showEmojiPicker && <Tooltip content="Toggle emoji picker">
                             <Button aria-label="Toggle emoji picker" onClick={toggleEmojiPicker} variant="ghost" size="xs" colorScheme="teal" p={0}><FaSmile /></Button>
-                        </Tooltip>
+                        </Tooltip>}
 
                     </HStack>
                     <Box>
                         <Field.Root orientation="horizontal">
                             <Field.Label fontSize="xs">
-                                Enter to send
+                                {props.sendButtonText ? `Enter to ${props.sendButtonText}` : "Enter to send"}
                             </Field.Label>
                             <Checkbox checked={enterToSend} onChange={e => setEnterToSend(!enterToSend)} />
                         </Field.Root>
                     </Box>
+                    {props.onClose && <Button aria-label="Close" onClick={props.onClose} variant="ghost" size="xs" ml={2}>{props.closeButtonText ?? "Close"}</Button>}
                     <Button aria-label="Send message" onClick={() => {
-                        if (value?.trim() === '') {
+                        if ((value?.trim() === '' || !value) && !props.allowEmptyMessage) {
+                            toaster.create({
+                                title: "Empty message",
+                                description: "You must add a message to continue",
+                                type: "error"
+                            })
                             return;
                         }
                         props.sendMessage(value!, profile_id, true)
                         setValue('');
-                    }} variant="solid" colorPalette="green" size="xs" ml={2}>Send</Button>
+                    }} variant="solid" colorPalette="green" size="xs" ml={2}>{props.sendButtonText ? props.sendButtonText : "Send"}</Button>
                 </HStack>
 
             </VStack>

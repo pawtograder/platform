@@ -274,10 +274,13 @@ export type Database = {
         Row: {
           allow_late: boolean | null
           allow_student_formed_groups: boolean | null
+          archived_at: string | null
+          autograder_points: number | null
           class_id: number
           created_at: string
           description: string | null
           due_date: string
+          grading_rubric_id: number | null
           group_config: Database["public"]["Enums"]["assignment_group_mode"]
           group_formation_deadline: string | null
           has_autograder: boolean
@@ -297,10 +300,13 @@ export type Database = {
         Insert: {
           allow_late?: boolean | null
           allow_student_formed_groups?: boolean | null
+          archived_at?: string | null
+          autograder_points?: number | null
           class_id: number
           created_at?: string
           description?: string | null
           due_date: string
+          grading_rubric_id?: number | null
           group_config: Database["public"]["Enums"]["assignment_group_mode"]
           group_formation_deadline?: string | null
           has_autograder?: boolean
@@ -320,10 +326,13 @@ export type Database = {
         Update: {
           allow_late?: boolean | null
           allow_student_formed_groups?: boolean | null
+          archived_at?: string | null
+          autograder_points?: number | null
           class_id?: number
           created_at?: string
           description?: string | null
           due_date?: string
+          grading_rubric_id?: number | null
           group_config?: Database["public"]["Enums"]["assignment_group_mode"]
           group_formation_deadline?: string | null
           has_autograder?: boolean
@@ -347,6 +356,54 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "classes"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignments_rubric_id_fkey"
+            columns: ["grading_rubric_id"]
+            isOneToOne: false
+            referencedRelation: "rubrics"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audit: {
+        Row: {
+          class_id: number
+          created_at: string
+          id: number
+          ip_addr: string
+          new: Json
+          old: Json | null
+          table: string
+          user_id: string | null
+        }
+        Insert: {
+          class_id: number
+          created_at?: string
+          id?: number
+          ip_addr: string
+          new: Json
+          old?: Json | null
+          table: string
+          user_id?: string | null
+        }
+        Update: {
+          class_id?: number
+          created_at?: string
+          id?: number
+          ip_addr?: string
+          new?: Json
+          old?: Json | null
+          table?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["user_id"]
           },
         ]
       }
@@ -410,6 +467,18 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      calculated_score: {
+        Row: {
+          sum: number | null
+        }
+        Insert: {
+          sum?: number | null
+        }
+        Update: {
+          sum?: number | null
+        }
+        Relationships: []
       }
       classes: {
         Row: {
@@ -1705,30 +1774,147 @@ export type Database = {
           },
         ]
       }
-      rubrics: {
+      rubric_checks: {
         Row: {
-          class_id: number | null
+          allow_other_points: boolean
+          class_id: number
           created_at: string
-          deduction: number
+          description: string | null
+          file: string | null
+          group: string | null
           id: number
-          name: string | null
+          is_annotation: boolean
+          is_comment_required: boolean
+          max_annotations: number | null
+          name: string
           ordinal: number
+          points: number
+          rubric_criteria_id: number
         }
         Insert: {
-          class_id?: number | null
+          allow_other_points: boolean
+          class_id: number
           created_at?: string
-          deduction: number
+          description?: string | null
+          file?: string | null
+          group?: string | null
           id?: number
-          name?: string | null
+          is_annotation: boolean
+          is_comment_required: boolean
+          max_annotations?: number | null
+          name: string
           ordinal: number
+          points: number
+          rubric_criteria_id: number
         }
         Update: {
-          class_id?: number | null
+          allow_other_points?: boolean
+          class_id?: number
           created_at?: string
-          deduction?: number
+          description?: string | null
+          file?: string | null
+          group?: string | null
           id?: number
-          name?: string | null
+          is_annotation?: boolean
+          is_comment_required?: boolean
+          max_annotations?: number | null
+          name?: string
           ordinal?: number
+          points?: number
+          rubric_criteria_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rubric_checks_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rubric_checks_rubric_criteria_id_fkey"
+            columns: ["rubric_criteria_id"]
+            isOneToOne: false
+            referencedRelation: "rubric_criteria"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rubric_criteria: {
+        Row: {
+          class_id: number
+          created_at: string
+          description: string | null
+          id: number
+          is_additive: boolean
+          max_checks_per_submission: number | null
+          min_checks_per_submission: number | null
+          name: string
+          rubric_id: number
+          total_points: number
+        }
+        Insert: {
+          class_id: number
+          created_at?: string
+          description?: string | null
+          id?: number
+          is_additive: boolean
+          max_checks_per_submission?: number | null
+          min_checks_per_submission?: number | null
+          name: string
+          rubric_id: number
+          total_points: number
+        }
+        Update: {
+          class_id?: number
+          created_at?: string
+          description?: string | null
+          id?: number
+          is_additive?: boolean
+          max_checks_per_submission?: number | null
+          min_checks_per_submission?: number | null
+          name?: string
+          rubric_id?: number
+          total_points?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rubric_criteria_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rubric_criteria_rubric_id_fkey"
+            columns: ["rubric_id"]
+            isOneToOne: false
+            referencedRelation: "rubrics"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rubrics: {
+        Row: {
+          class_id: number
+          created_at: string
+          description: string | null
+          id: number
+          name: string
+        }
+        Insert: {
+          class_id: number
+          created_at?: string
+          description?: string | null
+          id?: number
+          name: string
+        }
+        Update: {
+          class_id?: number
+          created_at?: string
+          description?: string | null
+          id?: number
+          name?: string
         }
         Relationships: [
           {
@@ -1740,39 +1926,148 @@ export type Database = {
           },
         ]
       }
-      submission_file_comments: {
+      submission_comments: {
         Row: {
           author: string
           class_id: number
           comment: string
           created_at: string
-          deduction: number | null
+          deleted_at: string | null
+          edited_at: string | null
+          edited_by: string | null
           id: number
-          line: number
-          submission_files_id: number
-          submissions_id: number
+          points: number | null
+          released: boolean
+          rubric_check_id: number | null
+          submission_id: number
+          submission_review_id: number | null
         }
         Insert: {
           author: string
           class_id: number
           comment: string
           created_at?: string
-          deduction?: number | null
+          deleted_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
           id?: number
-          line: number
-          submission_files_id: number
-          submissions_id: number
+          points?: number | null
+          released?: boolean
+          rubric_check_id?: number | null
+          submission_id: number
+          submission_review_id?: number | null
         }
         Update: {
           author?: string
           class_id?: number
           comment?: string
           created_at?: string
-          deduction?: number | null
+          deleted_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
+          id?: number
+          points?: number | null
+          released?: boolean
+          rubric_check_id?: number | null
+          submission_id?: number
+          submission_review_id?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submission_comments_author_fkey"
+            columns: ["author"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_comments_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_comments_rubric_check_id_fkey"
+            columns: ["rubric_check_id"]
+            isOneToOne: false
+            referencedRelation: "rubric_checks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_comments_submission_review_id_fkey"
+            columns: ["submission_review_id"]
+            isOneToOne: false
+            referencedRelation: "submission_reviews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_comments_submissions_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_comments_submissions_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      submission_file_comments: {
+        Row: {
+          author: string
+          class_id: number
+          comment: string
+          created_at: string
+          deleted_at: string | null
+          edited_at: string | null
+          edited_by: string | null
+          id: number
+          line: number
+          points: number | null
+          released: boolean
+          rubric_check_id: number | null
+          submission_file_id: number
+          submission_id: number
+          submission_review_id: number | null
+        }
+        Insert: {
+          author: string
+          class_id: number
+          comment: string
+          created_at?: string
+          deleted_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
+          id?: number
+          line: number
+          points?: number | null
+          released?: boolean
+          rubric_check_id?: number | null
+          submission_file_id: number
+          submission_id: number
+          submission_review_id?: number | null
+        }
+        Update: {
+          author?: string
+          class_id?: number
+          comment?: string
+          created_at?: string
+          deleted_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
           id?: number
           line?: number
-          submission_files_id?: number
-          submissions_id?: number
+          points?: number | null
+          released?: boolean
+          rubric_check_id?: number | null
+          submission_file_id?: number
+          submission_id?: number
+          submission_review_id?: number | null
         }
         Relationships: [
           {
@@ -1780,6 +2075,20 @@ export type Database = {
             columns: ["class_id"]
             isOneToOne: false
             referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_file_comments_rubric_check_id_fkey"
+            columns: ["rubric_check_id"]
+            isOneToOne: false
+            referencedRelation: "rubric_checks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_file_comments_submission_review_id_fkey"
+            columns: ["submission_review_id"]
+            isOneToOne: false
+            referencedRelation: "submission_reviews"
             referencedColumns: ["id"]
           },
           {
@@ -1791,21 +2100,21 @@ export type Database = {
           },
           {
             foreignKeyName: "submission_file_lcomments_submission_files_id_fkey"
-            columns: ["submission_files_id"]
+            columns: ["submission_file_id"]
             isOneToOne: false
             referencedRelation: "submission_files"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "submission_file_lcomments_submissions_id_fkey"
-            columns: ["submissions_id"]
+            columns: ["submission_id"]
             isOneToOne: false
             referencedRelation: "submissions"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "submission_file_lcomments_submissions_id_fkey"
-            columns: ["submissions_id"]
+            columns: ["submission_id"]
             isOneToOne: false
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
@@ -1821,7 +2130,7 @@ export type Database = {
           id: number
           name: string
           profile_id: string | null
-          submissions_id: number
+          submission_id: number
         }
         Insert: {
           assignment_group_id?: number | null
@@ -1831,7 +2140,7 @@ export type Database = {
           id?: number
           name: string
           profile_id?: string | null
-          submissions_id: number
+          submission_id: number
         }
         Update: {
           assignment_group_id?: number | null
@@ -1841,7 +2150,7 @@ export type Database = {
           id?: number
           name?: string
           profile_id?: string | null
-          submissions_id?: number
+          submission_id?: number
         }
         Relationships: [
           {
@@ -1874,14 +2183,14 @@ export type Database = {
           },
           {
             foreignKeyName: "submission_files_submissions_id_fkey"
-            columns: ["submissions_id"]
+            columns: ["submission_id"]
             isOneToOne: false
             referencedRelation: "submissions"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "submission_files_submissions_id_fkey"
-            columns: ["submissions_id"]
+            columns: ["submission_id"]
             isOneToOne: false
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
@@ -1895,6 +2204,110 @@ export type Database = {
           },
         ]
       }
+      submission_reviews: {
+        Row: {
+          checked_at: string | null
+          checked_by: string | null
+          class_id: number
+          completed_at: string | null
+          completed_by: string | null
+          created_at: string
+          grader: string | null
+          id: number
+          meta_grader: string | null
+          name: string
+          released: boolean
+          rubric_id: number
+          submission_id: number
+          total_score: number
+          tweak: number
+        }
+        Insert: {
+          checked_at?: string | null
+          checked_by?: string | null
+          class_id: number
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          grader?: string | null
+          id?: number
+          meta_grader?: string | null
+          name: string
+          released?: boolean
+          rubric_id: number
+          submission_id: number
+          total_score: number
+          tweak: number
+        }
+        Update: {
+          checked_at?: string | null
+          checked_by?: string | null
+          class_id?: number
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          grader?: string | null
+          id?: number
+          meta_grader?: string | null
+          name?: string
+          released?: boolean
+          rubric_id?: number
+          submission_id?: number
+          total_score?: number
+          tweak?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submission_reviews_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_completed_by_fkey"
+            columns: ["completed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_grader_fkey"
+            columns: ["grader"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_meta_grader_fkey"
+            columns: ["meta_grader"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_rubric_id_fkey"
+            columns: ["rubric_id"]
+            isOneToOne: false
+            referencedRelation: "rubrics"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       submissions: {
         Row: {
           assignment_group_id: number | null
@@ -1902,6 +2315,7 @@ export type Database = {
           check_run_id: number | null
           class_id: number
           created_at: string
+          grading_review_id: number | null
           id: number
           ordinal: number
           profile_id: string | null
@@ -1917,6 +2331,7 @@ export type Database = {
           check_run_id?: number | null
           class_id: number
           created_at?: string
+          grading_review_id?: number | null
           id?: number
           ordinal?: number
           profile_id?: string | null
@@ -1932,6 +2347,7 @@ export type Database = {
           check_run_id?: number | null
           class_id?: number
           created_at?: string
+          grading_review_id?: number | null
           id?: number
           ordinal?: number
           profile_id?: string | null
@@ -1968,6 +2384,13 @@ export type Database = {
             columns: ["class_id"]
             isOneToOne: false
             referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submissions_grading_review_id_fkey"
+            columns: ["grading_review_id"]
+            isOneToOne: false
+            referencedRelation: "submission_reviews"
             referencedColumns: ["id"]
           },
           {
@@ -2193,6 +2616,19 @@ export type Database = {
       }
     }
     Functions: {
+      authorize_for_submission: {
+        Args: {
+          requested_submission_id: number
+        }
+        Returns: boolean
+      }
+      authorize_for_submission_reviewable: {
+        Args: {
+          requested_submission_id: number
+          requested_submission_review_id: number
+        }
+        Returns: boolean
+      }
       authorizeforassignmentgroup: {
         Args: {
           _assignment_group_id: number
@@ -2205,25 +2641,30 @@ export type Database = {
         }
         Returns: boolean
       }
+      authorizeforclassgrader: {
+        Args: {
+          class__id: number
+        }
+        Returns: boolean
+      }
       authorizeforclassinstructor: {
         Args: {
           class__id: number
         }
         Returns: boolean
       }
-      authorizeforinstructorofstudent:
-        | {
-            Args: {
-              _user_id: string
-            }
-            Returns: boolean
-          }
-        | {
-            Args: {
-              user_id: number
-            }
-            Returns: boolean
-          }
+      authorizeforinstructorofstudent: {
+        Args: {
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      authorizeforinstructororgraderofstudent: {
+        Args: {
+          user_id: string
+        }
+        Returns: boolean
+      }
       authorizeforpoll:
         | {
             Args: {

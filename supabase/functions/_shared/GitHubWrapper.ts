@@ -290,6 +290,9 @@ export async function updateAutograderWorkflowHash(repoName: string){
     if(!file.content){
         throw new Error("File not found");
     }
+    console.log("Updating autograder workflow hash for", repoName);
+    console.log(file.content.length);
+    console.log(file.content);
     hash.update(file.content);
     const hashStr = hash.digest("hex");
     const adminSupabase = createClient<Database>(
@@ -327,8 +330,13 @@ export async function getFileFromRepo(repoName: string, path: string) {
             path,
         },
     );
-    console.log("file acquired");
-    return file.data;
+    if('content' in file.data){
+        const base64Content = file.data.content;
+        const content = Buffer.from(base64Content, 'base64').toString('utf-8');
+        return {content};
+    } else {
+        throw new Error("File is not a file");
+    }
 }
 
 async function getJwks() {

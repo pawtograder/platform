@@ -495,7 +495,7 @@ END
 $function$
 ;
 
-create or replace view "public"."submissions_agg" with (security = invoker) as  SELECT c.profile_id,
+create or replace view "public"."submissions_agg" with ("security_invoker"='true') as  SELECT c.profile_id,
     groups.name AS groupname,
     c.submissioncount,
     c.latestsubmissionid,

@@ -40,6 +40,7 @@ export default function AutograderPage() {
     });
     const onSubmit = useCallback(async (values: FieldValues) => {
         const supabase = createClient();
+
         await githubRepoConfigureWebhook(
             {
                 assignment_id: Number.parseInt(assignment_id as string),
@@ -53,7 +54,9 @@ export default function AutograderPage() {
                 has_autograder: values.assignments.has_autograder.value === "true"
             }
         });
-        // refineCore.onFinish({ grader_repo: values.grader_repo });
+        console.log("onFinish");
+        console.log(values.grader_repo);
+        refineCore.onFinish({ grader_repo: values.grader_repo });
     }, [refineCore, assignment_id]);
     if (!query || formLoading) {
         return <div>Loading...</div>
@@ -91,8 +94,7 @@ export default function AutograderPage() {
                             name="grader_repo"
                             control={control}
                             render={({ field }) => {
-                                console.log(field.value)
-                                return <RepoSelector name={field.name} value={field.value} onBlur={field.onBlur}
+                                return <RepoSelector name={field.name} value={field.value || ""} onBlur={field.onBlur}
                                     onChange={(repo) => {
                                         setGraderRepo(repo);
                                         field.onChange(repo);

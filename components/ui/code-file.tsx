@@ -1,28 +1,33 @@
-import { createContext, useContext, useEffect, useState, SetStateAction, Dispatch } from 'react';
-import { createStarryNight, common } from '@wooorm/starry-night';
-import { toJsxRuntime, Components } from 'hast-util-to-jsx-runtime'
-import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
-import { Skeleton } from './skeleton';
+import { Tooltip } from '@/components/ui/tooltip';
+import { useIsGraderOrInstructor } from '@/hooks/useClassProfiles';
+import { useRubricCheck, useSubmission, useSubmissionFileComments, useSubmissionFile, useSubmissionReview } from '@/hooks/useSubmission';
+import { useUserProfile } from '@/hooks/useUserProfiles';
+import { Rubric, RubricChecks, RubricCriteria, SubmissionFile, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from '@/utils/supabase/DatabaseTypes';
+import { Badge, Box, Button, Flex, HStack, Icon, NumberInput, Separator, Tag, Text, VStack } from '@chakra-ui/react';
+import { common, createStarryNight } from '@wooorm/starry-night';
 import '@wooorm/starry-night/style/both';
-import { ElementContent, Element, RootContent, Root } from 'hast'
-import { Badge, Box, Button, chakra, Flex, HStack, Icon, Tag, VStack } from '@chakra-ui/react';
-import { SubmissionWithFilesAndComments, SubmissionFileWithComments, SubmissionFileComment, SubmissionWithFiles } from '@/utils/supabase/DatabaseTypes';
-import PersonName from './person-name';
-import { Text } from '@chakra-ui/react';
+import { format } from 'date-fns';
+import { Element, ElementContent, Root, RootContent } from 'hast';
+import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
+import { createContext, Dispatch, SetStateAction, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } from 'react-icons/fa';
+import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import LineCommentForm from './line-comments-form';
 import Markdown from './markdown';
-import { format } from 'date-fns';
-import { useList } from '@refinedev/core';
-import { Tooltip } from '@/components/ui/tooltip';
-import { FaComments, FaRegComment } from 'react-icons/fa';
 import PersonAvatar from './person-avatar';
-import { useUserProfile } from '@/hooks/useUserProfiles';
+import { Skeleton } from './skeleton';
+import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from 'chakra-react-select';
+import MessageInput from './message-input';
+import { useCreate } from '@refinedev/core';
+import { LuArrowDown } from 'react-icons/lu';
+import { LuCircleX } from 'react-icons/lu';
 type CodeLineCommentContextType = {
-    submission: SubmissionWithFilesAndComments;
+    submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
     comments: SubmissionFileComment[];
-    file: SubmissionFileWithComments;
+    file: SubmissionFile;
     expanded: number[];
     close: (line: number) => void;
+    showCommentsFeature: boolean;
 }
 const CodeLineCommentContext = createContext<CodeLineCommentContextType | undefined>(undefined);
 function useCodeLineCommentContext() {
@@ -35,23 +40,47 @@ function useCodeLineCommentContext() {
 
 export default function CodeFile({
     file,
-    submission
 }: {
-    file: SubmissionFileWithComments;
-    submission: SubmissionWithFilesAndComments;
+    file: SubmissionFile;
 }) {
+    const isGraderOrInstructor = useIsGraderOrInstructor();
+    const submission = useSubmission();
+    const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
+
     const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
-    const [expanded, setExpanded] = useState<number[]>([]);
-    const { data: comments } = useList<SubmissionFileComment>({
-        resource: "submission_file_comments",
-        liveMode: "auto",
-        filters: [
-            { field: "submission_files_id", operator: "eq", value: file.id }
-        ],
-        sorters: [
-            { field: "created_at", order: "asc" }
-        ]
+    const [lineActionPopup, setLineActionPopup] = useState<LineActionPopupProps>({
+        lineNumber: 0,
+        top: 0,
+        left: 0,
+        visible: false,
+        close: () => { }
     });
+
+    const [expanded, setExpanded] = useState<number[]>([]);
+    const _comments = useSubmissionFileComments({
+        file_id: file.id,
+        onEnter: (comments) => {
+            if (showCommentsFeature) {
+                setExpanded(comments.map((comment) => comment.line));
+            }
+        }, onJumpTo: (comment) => {
+            setExpanded((prev) => {
+                if (prev.includes(comment.line)) {
+                    return prev;
+                }
+                return [...prev, comment.line];
+            })
+        }
+    });
+    const comments = useMemo(() => {
+        return _comments.sort((a, b) => {
+            const createdSort = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+            if (createdSort !== 0) {
+                return createdSort;
+            }
+            return a.line - b.line;
+        });
+    }, [_comments]);
 
     useEffect(() => {
         async function highlight() {
@@ -64,7 +93,7 @@ export default function CodeFile({
         return <Skeleton />
     }
     const tree = starryNight.highlight(file.contents, 'source.java');
-    starryNightGutter(tree, setExpanded)
+    starryNightGutter(tree, setExpanded, setLineActionPopup)
     const reactNode = toJsxRuntime(tree, {
         Fragment,
         jsx,
@@ -76,18 +105,25 @@ export default function CodeFile({
             'LineNumber': LineNumber,
         }
     });
-    return <Box border="1px solid" borderColor="border.emphasized" p={0}
-        m={2}
-        w="2xl"
-        css={{
+    const commentsCSS = showCommentsFeature ?
+        {
             "& .source-code-line": {
                 cursor: "pointer",
                 "&:hover": {
                     bg: "yellow.subtle",
                     width: "100%",
                     cursor: "cell",
-                }
+                },
             },
+            "& .selected": {
+                bg: "yellow.subtle",
+            }
+        } : {};
+    return <Box border="1px solid" borderColor="border.emphasized" p={0}
+        m={2}
+        w="4xl"
+        css={{
+            ...commentsCSS,
             "& .line-number": {
                 width: "40px",
                 textAlign: "right",
@@ -101,29 +137,46 @@ export default function CodeFile({
         <Flex w="100%" bg="bg.subtle" p={2} borderBottom="1px solid" borderColor="border.emphasized" alignItems="center" justifyContent="space-between">
             <Text fontSize="xs" color="text.subtle">{file.name}</Text>
             <HStack>
-                <Text fontSize="xs" color="text.subtle">{comments?.data?.length} {comments?.data?.length === 1 ? "comment" : "comments"}</Text>
-                {comments?.data?.length && <Tooltip openDelay={300} closeDelay={100} content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}><Button variant={expanded.length > 0 ? "solid" : "outline"} size="xs" p={0} colorScheme="teal"
-                    onClick={() => {
-                        setExpanded((prev) => {
-                            if (prev.length === 0) {
-                                return comments?.data?.map((comment) => comment.line);
-                            }
-                            return [];
-                        })
-                    }}
-                ><Icon as={FaComments} m={0} /></Button></Tooltip>}
+                {showCommentsFeature && comments.length > 0 && (
+                    <>
+                        <Text fontSize="xs" color="text.subtle">{comments.length} {comments.length === 1 ? "comment" : "comments"}</Text>
+
+                        <Tooltip openDelay={300} closeDelay={100} content={expanded.length > 0 ? "Hide all comments" : "Expand all comments"}><Button variant={expanded.length > 0 ? "solid" : "outline"} size="xs" p={0} colorScheme="teal"
+                            onClick={() => {
+                                setExpanded((prev) => {
+                                    if (prev.length === 0) {
+                                        return comments.map((comment) => comment.line);
+                                    }
+                                    return [];
+                                })
+                            }}
+                        ><Icon as={FaComments} m={0} /></Button></Tooltip></>)}
             </HStack>
         </Flex>
+        <LineActionPopup {...lineActionPopup} />
         <CodeLineCommentContext.Provider value={{
             submission,
-            comments: comments?.data || [],
+            comments,
             file,
             expanded,
             close: (line: number) => {
                 setExpanded((prev) =>
                     prev.filter((l) => l !== line))
-            }
-        }}><pre>{reactNode}</pre></CodeLineCommentContext.Provider></Box >
+            },
+            showCommentsFeature
+        }}><pre onClick={(ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            setLineActionPopup((prev) => {
+                prev.onClose?.();
+                return {
+                    ...prev,
+                    visible: false,
+                    onClose: undefined,
+                    close: () => { }
+                }
+            });
+        }}>{reactNode}</pre></CodeLineCommentContext.Provider></Box >
 }
 
 /**
@@ -132,7 +185,7 @@ export default function CodeFile({
  * @returns {undefined}
  *   Nothing.
  */
-export function starryNightGutter(tree: Root, setExpanded: Dispatch<SetStateAction<number[]>>) {
+export function starryNightGutter(tree: Root, setExpanded: Dispatch<SetStateAction<number[]>>, setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>) {
     /** @type {Array<RootContent>} */
     const replacement = []
     const search = /\r?\n|\r/g
@@ -171,7 +224,7 @@ export function starryNightGutter(tree: Root, setExpanded: Dispatch<SetStateActi
                 // Add a line, and the eol.
                 lineNumber += 1
                 // @ts-ignore
-                replacement.push(createLine(line, lineNumber, setExpanded), {
+                replacement.push(createLine(line, lineNumber, setExpanded, setLineActionPopup), {
                     type: 'text',
                     value: match[0]
                 })
@@ -205,7 +258,36 @@ export function starryNightGutter(tree: Root, setExpanded: Dispatch<SetStateActi
     // @ts-ignore
     tree.children = replacement
 }
-function CodeLineComment({ comment, submission }: { comment: SubmissionFileComment, submission: SubmissionWithFilesAndComments }) {
+function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
+    const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
+    if (!rubricCheck || !rubricCriteria) {
+        return <Skeleton height="100px" width="100%" />;
+    }
+    const gradingReview = useSubmissionReview(comment.submission_review_id);
+    const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
+
+    const pointsText = rubricCriteria.is_additive ? `+${rubricCheck.points}` : `-${rubricCheck.points}`;
+    const commentAuthor = useUserProfile(comment.author);
+    return <Box m={0} p={0} w="100%" border="1px solid" borderColor="border.info" borderRadius="md">
+        <Box bg="bg.info" pl={1} pr={1} borderTopRadius="md">
+            <Flex w="100%" justifyContent="space-between">
+                <HStack>
+                    {!comment.released && <Tooltip content="This comment is not released to the student yet"><Icon as={FaEyeSlash} /></Tooltip>}
+                    <Icon as={
+                        rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle} color={rubricCriteria.is_additive ? "green.500" : "red.500"} />{pointsText}
+                    <Text fontSize="sm" color="fg.muted">{rubricCriteria?.name} &gt; {rubricCheck?.name}</Text>
+                </HStack>
+                <HStack>
+                    <Text fontSize="sm" fontStyle="italic" color="fg.muted">{commentAuthor?.name} ({reviewName})</Text>
+                </HStack>
+            </Flex>
+        </Box>
+
+        <Text fontSize="sm" fontStyle="italic" color="fg.muted">{rubricCheck.description}</Text>
+        {comment.comment && <VStack alignItems="flex-start" gap={0}><Text fontSize="sm" fontStyle="italic" color="fg.muted">Comment:</Text><Markdown>{comment.comment}</Markdown></VStack>}
+    </Box >
+}
+function CodeLineComment({ comment, submission }: { comment: SubmissionFileComment, submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const authorProfile = useUserProfile(comment.author);
     const isAuthor = submission.profile_id === comment.author || submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
     return <Box key={comment.id} m={0} p={2} w="100%">
@@ -226,11 +308,172 @@ function CodeLineComment({ comment, submission }: { comment: SubmissionFileComme
         </HStack>
     </Box>
 }
+function RubricItem({ rubric }: { rubric: Rubric }) {
+    const { submission } = useCodeLineCommentContext();
+
+    return <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} w="100%">
+        <Text>{rubric.name}</Text>
+    </Box>
+}
+export type LineActionPopupProps = {
+    lineNumber: number;
+    top: number;
+    left: number;
+    visible: boolean;
+    onClose?: () => void;
+    close: () => void;
+}
+
+type GroupedRubricOptions = {
+    readonly label: string;
+    readonly value: string;
+    readonly options: readonly CheckOption[];
+    readonly criteria?: RubricCriteria;
+}
+type CheckOption = {
+    readonly label: string;
+    readonly value: string;
+    readonly check?: RubricChecks;
+    readonly criteria?: RubricCriteria;
+}
+
+function formatPoints(option: CheckOption) {
+    if (option.check && option.criteria) {
+        return `Points: ${option.criteria.is_additive ? "+" : "-"}${option.check.points}`;
+    }
+    return ``;
+}
+function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: LineActionPopupProps) {
+    const submission = useSubmission();
+    const file = useSubmissionFile();
+    const review = useSubmissionReview();
+    const [selectedOption, setSelectedOption] = useState<CheckOption | null>(null);
+    const selectRef = useRef<SelectInstance<CheckOption, false, GroupedRubricOptions>>(null);
+    const messageInputRef = useRef<HTMLTextAreaElement>(null);
+    const [points, setPoints] = useState<string>();
+
+    const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
+        resource: "submission_file_comments"
+    });
+    useEffect(() => {
+        setSelectedOption(null);
+    }, [lineNumber]);
+    useEffect(() => {
+        if (selectedOption) {
+            if (selectedOption.check) {
+                setPoints(selectedOption.check.points.toString());
+            }
+        }
+        if (messageInputRef.current) {
+            messageInputRef.current.focus();
+        }
+    }, [selectedOption, messageInputRef.current]);
+    useEffect(() => {
+        if (selectRef.current && !selectedOption) {
+            selectRef.current.focus();
+        }
+    }, [selectRef.current, selectedOption, lineNumber]);
+    if (!visible) {
+        return null;
+    }
+    const checks: GroupedRubricOptions[] = submission.assignments.rubrics?.rubric_criteria.map((criteria) => ({
+        label: criteria.name,
+        value: criteria.id.toString(),
+        criteria,
+        options: criteria.rubric_checks.map((check) => ({
+            label: check.name,
+            value: check.id.toString(),
+            check,
+            criteria
+        }))
+    })) || [];
+    checks.push({
+        label: "Leave a comment",
+        value: "comment",
+        options: [{
+            label: "Leave a comment",
+            value: "comment"
+        }]
+    })
+    const components: SelectComponentsConfig<CheckOption, false, GroupedRubricOptions> = {
+        GroupHeading: (props) => {
+            return <chakraComponents.GroupHeading {...props}>
+                {props.data.criteria ? <>
+                    Criteria: {props.data.label} ({props.data.criteria.total_points} points total)
+                </> : <>
+                    <Separator />
+                </>}
+            </chakraComponents.GroupHeading>
+        },
+        SingleValue: (props) => {
+            const points = props.data.criteria && "(" + (props.data.criteria.is_additive ? "+" : "-" + props.data.check?.points?.toString()) + ")";
+            return <chakraComponents.SingleValue {...props}>
+                {props.data.criteria && props.data.criteria.name + " > "} {props.data.label} {points}
+            </chakraComponents.SingleValue>
+        },
+        Option: (props) => {
+            const points = props.data.criteria && "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")";
+            return <chakraComponents.Option {...props}>
+                {props.data.label} {points}
+            </chakraComponents.Option>
+        }
+    };
+
+    return <Box zIndex={1000} top={top} left={left}
+        position="absolute"
+        bg="bg.subtle"
+        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md" w="100%">
+        <Text fontSize="sm" color="fg.muted">Annotate line {lineNumber} with a check:</Text>
+        <Select
+            ref={selectRef}
+            options={checks}
+            defaultMenuIsOpen={true}
+            escapeClearsValue={true}
+            components={components}
+            value={selectedOption}
+            onChange={(e: CheckOption | null) => {
+                if (e) {
+                    setSelectedOption(e);
+                }
+            }}
+        />
+        {selectedOption && <>
+
+            {selectedOption.check && <Text fontSize="sm" color="fg.muted">{formatPoints(selectedOption)}</Text>}
+            <MessageInput
+                textAreaRef={messageInputRef}
+                showGiphyPicker={true}
+                placeholder={
+                    !selectedOption.check ? "Add a comment about this line and press enter to submit..." :
+                        selectedOption.check.is_comment_required ? "Add a comment about this check and press enter to submit..." : "Optionally add a comment, or just press enter to submit..."
+                }
+                allowEmptyMessage={selectedOption.check && !selectedOption.check.is_comment_required}
+                defaultSingleLine={true} sendMessage={async (message, profile_id) => {
+                    const values = {
+                        comment: message || '',
+                        line: lineNumber,
+                        rubric_check_id: selectedOption.check?.id,
+                        class_id: file?.class_id,
+                        submission_file_id: file?.id,
+                        submission_id: submission.id,
+                        author: profile_id,
+                        released: review ? false : true,
+                        points: selectedOption.check?.points,
+                        submission_review_id: review?.id
+                    };
+                    await createComment({ values });
+                    close();
+                }} /></>}
+
+    </Box>
+}
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
-    const { submission, comments: allCommentsForFile, file, expanded, close } = useCodeLineCommentContext();
+    const { submission, showCommentsFeature, comments: allCommentsForFile, file, expanded, close } = useCodeLineCommentContext();
     const comments = allCommentsForFile.filter((comment) => comment.line === lineNumber);
-    const [showReply, setShowReply] = useState(comments.length === 0);
-    if (!submission || !file) {
+    const isGraderOrInstructor = useIsGraderOrInstructor();
+    const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
+    const [showReply, setShowReply] = useState(isReplyEnabled);
+    if (!submission || !file || !showCommentsFeature) {
         return null;
     }
     if (!expanded.includes(lineNumber)) {
@@ -238,6 +481,7 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
     }
     return <Box
         width="100%"
+        whiteSpace="normal"
         position="relative" m={0} borderTop="1px solid"
         borderBottom="1px solid"
         borderColor="border.emphasized">
@@ -258,9 +502,10 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
             boxShadow="sm"
         >
             {comments.map((comment) => (
-                <CodeLineComment key={comment.id} comment={comment} submission={submission} />
+                comment.rubric_check_id ? <LineCheckAnnotation key={comment.id} comment={comment} /> :
+                    <CodeLineComment key={comment.id} comment={comment} submission={submission} />
             ))}
-            {showReply ? <LineCommentForm lineNumber={lineNumber} submission={submission} file={file} /> : <Box display="flex" justifyContent="flex-end"><Button colorPalette="green" onClick={() => setShowReply(true)}>Reply</Button></Box>}
+            {showReply ? <LineCommentForm lineNumber={lineNumber} submission={submission} file={file} /> : <Box display="flex" justifyContent="flex-end"><Button colorPalette="green" onClick={() => setShowReply(true)}>Add Comment</Button></Box>}
         </Box>
     </Box>
 }
@@ -280,7 +525,7 @@ function LineNumber({ lineNumber }: { lineNumber: number }) {
  * @param {number} line
  * @returns {Element}
  */
-function createLine(children: ElementContent[], line: number, setExpanded: Dispatch<SetStateAction<number[]>>) {
+function createLine(children: ElementContent[], line: number, setExpanded: Dispatch<SetStateAction<number[]>>, setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>) {
     return {
         type: 'element',
         tagName: 'span',
@@ -293,13 +538,38 @@ function createLine(children: ElementContent[], line: number, setExpanded: Dispa
                 tagName: 'span',
                 properties: {
                     className: 'source-code-line',
-                    onClick: () => {
-                        setExpanded((prev) => {
-                            if (prev.includes(line)) {
-                                return prev.filter((l) => l !== line);
+                    id: `L${line}`,
+                    onClick: (ev: MouseEvent) => {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        const target = ev.currentTarget as HTMLElement;
+                        target.classList.add('selected');
+                        const onClose = () => {
+                            target.classList.remove('selected');
+                        }
+                        setLineActionPopup((prev) => {
+                            if (line !== prev.lineNumber) {
+                                prev.onClose?.();
                             }
-                            return [...prev, line];
-                        })
+                            return {
+                                lineNumber: line,
+                                top: ev.clientY + window.scrollY - 200,
+                                left: ev.clientX + window.scrollX - 40,
+                                visible: true,
+                                close: () => {
+                                    onClose();
+                                    setLineActionPopup({
+                                        lineNumber: line,
+                                        top: 0,
+                                        left: 0,
+                                        visible: false,
+                                        onClose: undefined,
+                                        close: () => { }
+                                    });
+                                },
+                                onClose
+                            }
+                        });
                     }
                 },
                 children: [
