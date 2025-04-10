@@ -135,10 +135,7 @@ create or replace view "public"."submissions_with_grades_for_assignment"  with (
                 END AS sub_id,
             r.private_profile_id,
             r.class_id,
-                CASE
-                    WHEN (isub.id IS NULL) THEN gsub.assignment_id
-                    ELSE isub.assignment_id
-                END AS assignment_id,
+                a.id as assignment_id,
             agm.id AS assignmentgroupid
            FROM ((((user_roles r
              JOIN assignments a ON ((a.class_id = r.class_id)))
@@ -155,7 +152,6 @@ create or replace view "public"."submissions_with_grades_for_assignment"  with (
      LEFT JOIN profiles graderprofile ON ((graderprofile.id = rev.grader)))
      LEFT JOIN profiles metagraderprofile ON ((metagraderprofile.id = rev.meta_grader)))
      LEFT JOIN profiles checkgraderprofile ON ((checkgraderprofile.id = rev.checked_by)));
-
 
 CREATE OR REPLACE FUNCTION public.submissionreviewrecompute()
  RETURNS trigger

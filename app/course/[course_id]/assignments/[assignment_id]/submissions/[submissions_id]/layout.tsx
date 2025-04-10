@@ -256,13 +256,16 @@ function SubmissionCommentForm({ check, criteria }: { check: RubricChecks, crite
             messageInputRef.current.focus();
         }
     }, []);
-    return <Box>
+    return <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%"
+        fontSize="sm">
+        <Box bg="bg.inverted" pl={1} borderTopRadius="md">
+            <Text color="fg.inverted">Check not yet applied. {check.is_comment_required ? "A comment is required." : "Comment is optional, enter to add."}</Text>
+        </Box>
         <MessageInput
-            textAreaRef={messageInputRef}
-            sendButtonText="Add Check"
             placeholder={
-                check.is_comment_required ? "Add a comment about this check and press enter to submit..." : "Optionally add a comment, or just press enter to submit..."
+                "Comment"
             }
+            sendButtonText="Add Check"
             sendMessage={async (message, profile_id) => {
                 const values = {
                     comment: message || '',
@@ -274,7 +277,8 @@ function SubmissionCommentForm({ check, criteria }: { check: RubricChecks, crite
                     released: false,
                     submission_review_id: review!.id
                 }
-                await createComment({ values });
+               await createComment({ values });
+
             }}
             defaultSingleLine={true}
             allowEmptyMessage={!check.is_comment_required}
@@ -300,6 +304,11 @@ function RubricCheckGlobal({ check, criteria, isSelected }: { check: RubricCheck
             {criteria.max_checks_per_submission != 1 ? <Checkbox
                 disabled={rubricCheckComments.length > 0}
                 checked={selected} onCheckedChange={(newState) => {
+                    if (newState.checked) {
+                        setIsEditing(true);
+                    } else {
+                        setIsEditing(false);
+                    }
                     setSelected(newState.checked ? true : false);
                 }}>
                 <Text>{points} {check.name}</Text>

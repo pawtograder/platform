@@ -293,19 +293,19 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
         if (liveFileComments?.data) {
             submissionController.setGeneric("submission_file_comments", liveFileComments.data);
         }
-    }, [submissionController, liveFileComments?.data]);
+    }, [submissionController, anyIsLoading]);
     submissionController.registerGenericDataType("submission_comments", (item: SubmissionComments) => item.id);
     useEffect(() => {
         if (liveComments?.data) {
             submissionController.setGeneric("submission_comments", liveComments.data);
         }
-    }, [submissionController, liveComments?.data]);
+    }, [submissionController, anyIsLoading]);
     submissionController.registerGenericDataType("submission_reviews", (item: SubmissionReviewWithRubric) => item.id);
     useEffect(() => {
         if (liveReviews?.data) {
             submissionController.setGeneric("submission_reviews", liveReviews.data);
         }
-    }, [submissionController, liveReviews?.data]);
+    }, [submissionController, anyIsLoading]);
     if (query.isLoading || !liveFileComments?.data) {
         return (
             <div style={{
@@ -350,7 +350,8 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
     return comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
 }
 export function useRubricCriteriaInstances(
-    {criteria, review_id, rubric_id}: {criteria?: RubricCriteriaWithRubricChecks,
+    { criteria, review_id, rubric_id }: {
+        criteria?: RubricCriteriaWithRubricChecks,
         review_id?: number,
         rubric_id?: number,
     }) {

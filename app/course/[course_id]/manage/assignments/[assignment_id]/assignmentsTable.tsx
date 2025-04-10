@@ -48,6 +48,9 @@ export default function AssignmentsTable() {
             accessorKey: "created_at",
             header: "Submission Date",
             cell: (props) => {
+                if (props.getValue() === null) {
+                    return <Text></Text>
+                }
                 return <Text>{new Date(props.getValue() as string).toLocaleString()}</Text>
             },
             filterFn: (row, id, filterValue) => {
@@ -89,9 +92,6 @@ export default function AssignmentsTable() {
         getPrePaginationRowModel,
     } = useTable({
         columns,
-        // state:{
-        // columnFilters,
-        // },
         initialState: {
             columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
             pagination: {
@@ -100,14 +100,8 @@ export default function AssignmentsTable() {
             },
             sorting: [{ id: "name", desc: false }]
         },
-        // onColumnFiltersChange: setColumnFilters,
         refineCoreProps: {
             resource: "submissions_with_grades_for_assignment",
-            filters: {
-                mode: 'off',
-                //     // defaultBehavior: "merge",
-                permanent: [{ field: "assignment_id", operator: "eq", value: assignment_id as string }],
-            },
             meta: {
                 select: "*"
             },
@@ -155,10 +149,15 @@ export default function AssignmentsTable() {
                 <Table.Body>
                     {getRowModel().rows//.filter(row => row.getValue("profiles.name") !== undefined)
                         .map((row) => {
-                            console.log(row.id)
                             return (
                                 <Table.Row key={row.id}>
                                     {row.getVisibleCells().filter(c => c.column.id !== "assignment_id").map((cell) => {
+                                        if (row.original.activesubmissionid === null) {
+                                            return <Table.Cell key={cell.id}>{flexRender(
+                                                cell.column.columnDef.cell,
+                                                cell.getContext(),
+                                            )}</Table.Cell>
+                                        }
                                         return (
                                             <Table.Cell key={cell.id}>
                                                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}>

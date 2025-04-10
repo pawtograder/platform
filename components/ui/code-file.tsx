@@ -27,6 +27,7 @@ type CodeLineCommentContextType = {
     file: SubmissionFile;
     expanded: number[];
     close: (line: number) => void;
+    open: (line: number) => void;
     showCommentsFeature: boolean;
 }
 const CodeLineCommentContext = createContext<CodeLineCommentContextType | undefined>(undefined);
@@ -61,7 +62,13 @@ export default function CodeFile({
         file_id: file.id,
         onEnter: (comments) => {
             if (showCommentsFeature) {
-                setExpanded(comments.map((comment) => comment.line));
+                setExpanded(
+                    (expanded) => {
+                        const newExpanded = comments.map((comment) => comment.line)
+                            .filter((line) => !expanded.includes(line));
+                        return [...expanded, ...newExpanded];
+                    }
+                );
             }
         }, onJumpTo: (comment) => {
             setExpanded((prev) => {
@@ -159,6 +166,14 @@ export default function CodeFile({
             comments,
             file,
             expanded,
+            open: (line: number) => {
+                setExpanded((prev) => {
+                    if (prev.includes(line)) {
+                        return prev;
+                    }
+                    return [...prev, line];
+                })
+            },
             close: (line: number) => {
                 setExpanded((prev) =>
                     prev.filter((l) => l !== line))
@@ -351,10 +366,28 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: Lin
     const selectRef = useRef<SelectInstance<CheckOption, false, GroupedRubricOptions>>(null);
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
     const [points, setPoints] = useState<string>();
+    const popupRef = useRef<HTMLDivElement>(null);
 
     const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
         resource: "submission_file_comments"
     });
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (popupRef.current && !popupRef.current.contains(event.target as Node)) {
+                close();
+            }
+        };
+
+        if (visible) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [visible, close]);
+
     useEffect(() => {
         setSelectedOption(null);
     }, [lineNumber]);
@@ -422,7 +455,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: Lin
     return <Box zIndex={1000} top={top} left={left}
         position="absolute"
         bg="bg.subtle"
-        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md" w="100%">
+        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md" w="100%"
+        ref={popupRef}>
         <Text fontSize="sm" color="fg.muted">Annotate line {lineNumber} with a check:</Text>
         <Select
             ref={selectRef}
@@ -511,11 +545,15 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
 }
 
 function LineNumber({ lineNumber }: { lineNumber: number }) {
-    const { comments } = useCodeLineCommentContext();
+    const { comments, open   } = useCodeLineCommentContext();
     const hasComments = comments && comments.find((comment) => comment.line === lineNumber);
     if (hasComments) {
         return <Box className="line-number" position="relative">{lineNumber}
-            <Badge variant="solid" colorPalette="blue" position="absolute" left={-5} top={0}><Icon as={FaRegComment} /></Badge>
+            <Badge 
+            onClick={() => {
+                open(lineNumber);
+            }}
+            variant="solid" colorPalette="blue" position="absolute" left={-5} top={0}><Icon as={FaRegComment} /></Badge>
         </Box>
     }
     return <div className="line-number">{lineNumber}</div>
