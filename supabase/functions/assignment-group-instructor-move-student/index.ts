@@ -60,9 +60,20 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request): Promise
   //Add student to new group
   if (new_assignment_group_id !== null) {
     const { data: newGroup } = await adminSupabase.from("assignment_groups").
-    select("*, repositories(*), classes(github_org, slug)").eq("id", new_assignment_group_id).single();
+      select("*, repositories(*), classes(github_org, slug)").eq("id", new_assignment_group_id).single();
     if (!newGroup) {
       throw new IllegalArgumentError("New group not found");
+    }
+
+    if (!old_assignment_group_id) {
+      //Deactivate any submissions for this assignment for this student
+      const { error: deactivateError } = await adminSupabase.from("submissions").update({
+        is_active: false
+      }).eq("assignment_id", newGroup.assignment_id).eq("profile_id", profile_id);
+      if (deactivateError) {
+        throw new Error("Failed to deactivate submissions");
+      }
+
     }
     const { error: add_member_error } = await adminSupabase.from("assignment_groups_members")
       .insert({
@@ -77,7 +88,7 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request): Promise
     }
     const { data: remaining_members, error: remaining_members_error } = await adminSupabase.from("assignment_groups_members")
       .select("*, profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
-      .eq("assignment_group_id", old_assignment_group_id);
+      .eq("assignment_group_id", new_assignment_group_id);
     if (remaining_members_error) {
       throw new Error("Failed to get remaining members");
     }

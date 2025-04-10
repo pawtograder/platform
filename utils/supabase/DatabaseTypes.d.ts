@@ -2,6 +2,12 @@ import { Database } from "./SupabaseTypes";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
+export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
+export type ActiveSubmissionsWithGradesForAssignment = 
+Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
+    id: number;
+};
+export type AuditEvent = Database["public"]["Tables"]["audit"]["Row"];
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
 export type AssignmentGroupMember = Database["public"]["Tables"]["assignment_groups_members"]["Row"];
@@ -67,6 +73,8 @@ export type UserRoleWithCourse = GetResult<
 
 export type Repo = Database["public"]["Tables"]["repositories"]["Row"];
 
+export type SubmissionFile = Database["public"]["Tables"]["submission_files"]["Row"];
+
 export type AssignmentWithRepositoryAndSubmissionsAndGraderResults = GetResult<
     Database["public"],
     Database["public"]["Tables"]["assignments"]["Row"],
@@ -81,12 +89,40 @@ export type SubmissionFileWithComments = GetResult<
     Database["public"]["Tables"]["submission_files"]["Relationships"],
     "*, submission_file_comments(*, profiles(*))"
 >;
+export type SubmissionComments = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submission_comments"]["Row"],
+    "submission_comments",
+    Database["public"]["Tables"]["submission_comments"]["Relationships"],
+    "*"
+>;
 export type SubmissionWithFilesAndComments = GetResult<
     Database["public"],
     Database["public"]["Tables"]["submissions"]["Row"],
     "submissions",
     Database["public"]["Tables"]["submissions"]["Relationships"],
     "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*))), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
+>;
+export type SubmissionReviewWithRubric = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submission_reviews"]["Row"],
+    "submission_reviews",
+    Database["public"]["Tables"]["submission_reviews"]["Relationships"],
+    "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
+>;
+export type SubmissionWithFilesGraderResultsOutputTestsAndRubric= GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submissions"]["Row"],
+    "submissions",
+    Database["public"]["Tables"]["submissions"]["Relationships"],
+    "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*)"
+>;
+export type SubmissionWithGraderResultsAndReview = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submissions"]["Row"],
+    "submissions",
+    Database["public"]["Tables"]["submissions"]["Relationships"],
+    "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_reviews(*)"
 >;
 export type SubmissionWithGraderResults = GetResult<
     Database["public"],
@@ -144,6 +180,27 @@ export type ThreadWithChildren = DiscussionThread & {
     children: ThreadWithChildren[]
 }
 
+export type RubricCriteriaWithRubricChecks = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["rubric_criteria"]["Row"],
+    "rubric_criteria",
+    Database["public"]["Tables"]["rubric_criteria"]["Relationships"],
+    "*, rubric_checks(*)"
+>;
+export type RubricCriteria = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["rubric_criteria"]["Row"],
+    "rubric_criteria",
+    Database["public"]["Tables"]["rubric_criteria"]["Relationships"],
+    "*"
+>;
+export type RubricChecks = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["rubric_checks"]["Row"],
+    "rubric_checks",
+    Database["public"]["Tables"]["rubric_checks"]["Relationships"],
+    "*"
+>;
 export type Rubric = GetResult<
     Database["public"],
     Database["public"]["Tables"]["rubrics"]["Row"],
@@ -205,6 +262,14 @@ export type DiscussionThreadLike = GetResult<
     "discussion_thread_likes",
     Database["public"]["Tables"]["discussion_thread_likes"]["Relationships"],
     "*"
+>;
+
+export type AutograderWithAssignment = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["autograder"]["Row"],
+    "autograder",
+    Database["public"]["Tables"]["autograder"]["Relationships"],
+    "*, assignments(*)"
 >;
 
 export type Autograder = GetResult<

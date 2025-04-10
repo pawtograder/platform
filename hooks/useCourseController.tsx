@@ -110,8 +110,8 @@ export function useDiscussionThreadTeaser(id: number, watchFields?: DiscussionTh
     }, [controller, id]);
     return teaser;
 }
-type UpdateCallback<T> = (data: T) => void;
-type Unsubscribe = () => void;
+export type UpdateCallback<T> = (data: T) => void;
+export type Unsubscribe = () => void;
 export type UserProfileWithPrivateProfile = UserProfile & {
     private_profile?: UserProfile;
 }
@@ -166,7 +166,9 @@ class CourseController {
             this.genericDataListSubscribers[typeName] = subscribers;
         }
         const currentData = this.genericData[typeName]?.values() || [];
-        return { unsubscribe: () => { }, data: Array.from(currentData) as T[] };
+        return { unsubscribe: () => {
+            this.genericDataListSubscribers[typeName] = this.genericDataListSubscribers[typeName]?.filter(cb => cb !== callback) || [];
+        }, data: Array.from(currentData) as T[] };
     }
     getValueWithSubscription<T>(typeName: string, id: number | ((item: T) => boolean), callback?: UpdateCallback<T>): { unsubscribe: Unsubscribe, data: T | undefined } {
         if (!this.genericDataTypeToId[typeName]) {
@@ -558,6 +560,7 @@ export function CourseControllerProvider({ course_id, children }: { course_id: n
         {children}
     </CourseControllerContext.Provider>
 }
+
 export function useCourseController() {
     const controller = useContext(CourseControllerContext);
     if (!controller) {

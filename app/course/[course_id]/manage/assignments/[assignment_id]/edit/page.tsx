@@ -10,6 +10,7 @@ import { githubRepoConfigureWebhook, repositoriesForClass } from "@/lib/edgeFunc
 import { createClient } from "@/utils/supabase/client";
 import AssignmentForm from "../../new/form";
 import { FieldValues } from "react-hook-form";
+import { assignmentGroupCopyGroupsFromAssignment } from "@/lib/edgeFunctions";
 export default function EditAssignment() {
     const { course_id, assignment_id } = useParams();
     const form = useForm<Assignment>({
@@ -21,6 +22,19 @@ export default function EditAssignment() {
     });
     const onFinish = useCallback(async (values: FieldValues) => {
         const supabase = createClient();
+        if (values.copy_groups_from_assignment !== undefined) {
+            if (values.copy_groups_from_assignment !== "") {
+                await assignmentGroupCopyGroupsFromAssignment(
+                    {
+                        source_assignment_id: values.copy_groups_from_assignment,
+                        target_assignment_id: Number.parseInt(assignment_id as string),
+                        class_id: Number.parseInt(course_id as string)
+                    },
+                    supabase
+                )
+            }
+            delete values.copy_groups_from_assignment;
+        }
         await form.refineCore.onFinish(values);
         if (values.template_repo) {
             await githubRepoConfigureWebhook(

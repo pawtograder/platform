@@ -24,6 +24,11 @@ export function useClassProfiles() {
     return context;
 }
 
+export function useIsGraderOrInstructor() {
+    const {role} = useClassProfiles();
+    return role.role === "grader" || role.role === "instructor";
+}
+
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
     const { course_id } = useParams();
     const { user, roles: myRoles } = useAuthState();

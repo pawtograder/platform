@@ -79,13 +79,16 @@ async function handleRequest(req: Request) {
                 "Failed to read workflow file in repository",
             );
         }
+        const contentsStr = contents.toString("utf-8");
+        console.log("Contents of workflow file", contentsStr.length);
+        console.log(contentsStr);
         // Retrieve the autograder config
         const { data: config } = await adminSupabase.from("autograder")
             .select("*").eq("id", assignment_id).single();
         if (!config) {
             throw new UserVisibleError("Grader config not found");
         }
-        hash.update(contents!);
+        hash.update(contentsStr);
         const hashStr = hash.digest("hex");
         if (hashStr !== config.workflow_sha) {
             throw new SecurityError(
@@ -117,7 +120,7 @@ async function handleRequest(req: Request) {
         const { error: fileError } = await adminSupabase.from("submission_files")
             .insert(
                 submittedFilesWithContents.map((file: any) => ({
-                    submissions_id: submission_id,
+                    submission_id: submission_id,
                     name: file.name,
                     profile_id: repoData.profile_id,
                     assignment_group_id: repoData.assignment_group_id,

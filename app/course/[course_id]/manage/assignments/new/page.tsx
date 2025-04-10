@@ -51,7 +51,6 @@ export default function NewAssignmentPage() {
                     supabase
                 )
                 //Potentially copy groups from another assignment
-                console.log(getValues("copy_groups_from_assignment"));
                 if (getValues("copy_groups_from_assignment")) {
                     await assignmentGroupCopyGroupsFromAssignment(
                         {

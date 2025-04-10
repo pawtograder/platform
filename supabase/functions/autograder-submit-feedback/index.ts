@@ -76,6 +76,7 @@ async function handleRequest(req: Request) {
     requestBody.action_ref,
   );
   console.log("Action SHA", action_sha);
+  console.log("Submission ID", submission_id);
   const { error, data: resultID } = await adminSupabase.from(
     "grader_results",
   ).insert({
@@ -151,6 +152,7 @@ async function handleRequest(req: Request) {
         max_score: test.max_score,
         part: test.part,
         extra_data: test.extra_data,
+        is_released: true,
       })),
     );
   if (testResultsError) {
