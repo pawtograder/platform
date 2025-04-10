@@ -371,7 +371,7 @@ export type Database = {
           class_id: number
           created_at: string
           id: number
-          ip_addr: string
+          ip_addr: string | null
           new: Json
           old: Json | null
           table: string
@@ -381,7 +381,7 @@ export type Database = {
           class_id: number
           created_at?: string
           id?: number
-          ip_addr: string
+          ip_addr?: string | null
           new: Json
           old?: Json | null
           table: string
@@ -391,7 +391,7 @@ export type Database = {
           class_id?: number
           created_at?: string
           id?: number
-          ip_addr?: string
+          ip_addr?: string | null
           new?: Json
           old?: Json | null
           table?: string
@@ -902,6 +902,7 @@ export type Database = {
           extra_data: Json | null
           grader_result_id: number
           id: number
+          is_released: boolean
           max_score: number | null
           name: string
           name_format: string
@@ -918,6 +919,7 @@ export type Database = {
           extra_data?: Json | null
           grader_result_id: number
           id?: number
+          is_released?: boolean
           max_score?: number | null
           name: string
           name_format?: string
@@ -934,6 +936,7 @@ export type Database = {
           extra_data?: Json | null
           grader_result_id?: number
           id?: number
+          is_released?: boolean
           max_score?: number | null
           name?: string
           name_format?: string
@@ -1074,6 +1077,13 @@ export type Database = {
             isOneToOne: true
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_results_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: true
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
           },
           {
             foreignKeyName: "grader_results_user_id_fkey"
@@ -2015,6 +2025,13 @@ export type Database = {
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "submission_comments_submissions_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
+          },
         ]
       }
       submission_file_comments: {
@@ -2119,6 +2136,13 @@ export type Database = {
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "submission_file_lcomments_submissions_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
+          },
         ]
       }
       submission_files: {
@@ -2194,6 +2218,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_files_submissions_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
           },
           {
             foreignKeyName: "submission_files_user_id_fkey"
@@ -2306,6 +2337,13 @@ export type Database = {
             referencedRelation: "submissions_agg"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "submission_reviews_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
+          },
         ]
       }
       submissions: {
@@ -2317,6 +2355,7 @@ export type Database = {
           created_at: string
           grading_review_id: number | null
           id: number
+          is_active: boolean
           ordinal: number
           profile_id: string | null
           released: string | null
@@ -2333,6 +2372,7 @@ export type Database = {
           created_at?: string
           grading_review_id?: number | null
           id?: number
+          is_active?: boolean
           ordinal?: number
           profile_id?: string | null
           released?: string | null
@@ -2349,6 +2389,7 @@ export type Database = {
           created_at?: string
           grading_review_id?: number | null
           id?: number
+          is_active?: boolean
           ordinal?: number
           profile_id?: string | null
           released?: string | null
@@ -2560,11 +2601,13 @@ export type Database = {
       submissions_agg: {
         Row: {
           assignment_id: number | null
+          avatar_url: string | null
           created_at: string | null
           execution_time: number | null
           groupname: string | null
           id: number | null
           latestsubmissionid: number | null
+          name: string | null
           profile_id: string | null
           released: string | null
           repository: string | null
@@ -2573,6 +2616,7 @@ export type Database = {
           run_number: number | null
           score: number | null
           sha: string | null
+          sortable_name: string | null
           submissioncount: number | null
           user_id: string | null
         }
@@ -2610,6 +2654,64 @@ export type Database = {
             columns: ["profile_id"]
             isOneToOne: true
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      submissions_with_grades_for_assignment: {
+        Row: {
+          activesubmissionid: number | null
+          assignedgradername: string | null
+          assignedmetagradername: string | null
+          assignment_id: number | null
+          autograder_score: number | null
+          checked_at: string | null
+          checked_by: string | null
+          checkername: string | null
+          class_id: number | null
+          completed_at: string | null
+          completed_by: string | null
+          created_at: string | null
+          grader: string | null
+          gradername: string | null
+          groupname: string | null
+          id: number | null
+          meta_grader: string | null
+          name: string | null
+          released: string | null
+          repository: string | null
+          sha: string | null
+          sortable_name: string | null
+          total_score: number | null
+          tweak: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submission_reviews_completed_by_fkey"
+            columns: ["completed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_grader_fkey"
+            columns: ["grader"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_reviews_meta_grader_fkey"
+            columns: ["meta_grader"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_roles_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
             referencedColumns: ["id"]
           },
         ]
@@ -2661,7 +2763,7 @@ export type Database = {
       }
       authorizeforinstructororgraderofstudent: {
         Args: {
-          user_id: string
+          _user_id: string
         }
         Returns: boolean
       }
@@ -2742,6 +2844,12 @@ export type Database = {
         Args: {
           _person_id: string
           _student_id: string
+        }
+        Returns: boolean
+      }
+      submission_set_active: {
+        Args: {
+          _submission_id: number
         }
         Returns: boolean
       }

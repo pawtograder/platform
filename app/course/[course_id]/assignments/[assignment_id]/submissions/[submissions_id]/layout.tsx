@@ -7,9 +7,10 @@ import {
     PopoverRoot,
     PopoverTrigger
 } from "@/components/ui/popover";
-import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { Box, Flex, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
+import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
@@ -21,11 +22,13 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { SubmissionProvider, useRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { activateSubmission } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useList, useUpdate } from "@refinedev/core";
+import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
-import { useParams, usePathname } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
@@ -33,10 +36,12 @@ import { FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } fro
 
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const pathname = usePathname();
-    const { data, isLoading } = useList<SubmissionWithGraderResults>({
+    const invalidate = useInvalidate();
+    const router = useRouter();
+    const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
         resource: "submissions",
         meta: {
-            select: "*, grader_results(*)"
+            select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
         },
         filters: [
             {
@@ -52,6 +57,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
             }
         ]
     });
+    const supabase = createClient();
     if (isLoading || !submission.assignments) {
         return <Skeleton height="20px" />
     }
@@ -62,15 +68,77 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                 Submission History
             </Button>
         </PopoverTrigger>
-        <PopoverContent>
+        <PopoverContent width="lg">
             <PopoverArrow />
             <PopoverBody>
                 <Text>Submission History</Text>
-                {data?.data.map((historical_submission) => (
-                    <Link
-                        colorPalette={pathname === `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}` ? "teal" : undefined}
-                        key={historical_submission.id} href={`/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`}>#{historical_submission.ordinal} - {historical_submission.grader_results?.score}/{historical_submission.grader_results?.max_score} ({formatRelative(historical_submission.created_at, new Date())})</Link>
-                ))}
+                <Box maxHeight="400px" overflowY="auto" css={{
+                    '&::-webkit-scrollbar': {
+                        width: '8px',
+                    },
+                    '&::-webkit-scrollbar-track': {
+                        background: '#f1f1f1',
+                        borderRadius: '4px',
+                    },
+                    '&::-webkit-scrollbar-thumb': {
+                        background: '#888',
+                        borderRadius: '4px',
+                    },
+                    '&::-webkit-scrollbar-thumb:hover': {
+                        background: '#555',
+                    }
+                }}>
+                    <Table.Root> 
+                        <Table.Header> 
+                            <Table.Row>
+                                <Table.ColumnHeader>#</Table.ColumnHeader>
+                                <Table.ColumnHeader>Date</Table.ColumnHeader>
+                                <Table.ColumnHeader>Auto Grader Score</Table.ColumnHeader>
+                                <Table.ColumnHeader>Total Score</Table.ColumnHeader>
+                                <Table.ColumnHeader>Actions</Table.ColumnHeader>
+                            </Table.Row>
+                        </Table.Header>
+                        <Table.Body> 
+                            {data?.data.map((historical_submission) => {
+                               const link = `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
+                                return (
+                                <Table.Row key={historical_submission.id} bg={pathname.startsWith(link) ? "bg.emphasized" : undefined}>
+                                    <Table.Cell>
+                                        <Link href={link}> 
+                                            {historical_submission.is_active && <ActiveSubmissionIcon />}
+                                            {historical_submission.ordinal}
+                                        </Link>
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        <Link href={link}>
+                                            {formatRelative(historical_submission.created_at, new Date())}
+                                        </Link>
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        <Link href={link}>
+                                            {historical_submission.grader_results?.score !== undefined ? historical_submission.grader_results?.score + "/" + historical_submission.grader_results?.max_score : "Error"}
+                                        </Link>
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        <Link href={link}>
+                                            {historical_submission.submission_reviews?.completed_at && historical_submission.submission_reviews?.total_score + "/" + historical_submission.assignments.total_points}
+                                        </Link>
+                                    </Table.Cell>
+                                    <Table.Cell>
+                                        {historical_submission.is_active ? <>This submission is active</> :<Button variant="outline" size="xs" onClick={async () => {
+                                            await activateSubmission({ submission_id: historical_submission.id }, supabase);
+                                            invalidate({ resource: "submissions", invalidates: ["list"] });
+                                            router.push(link);
+                                        }}>
+                                            <Icon as={FaCheckCircle} />
+                                            Activate
+                                        </Button>}
+                                    </Table.Cell>
+                                </Table.Row>
+                            )})}
+                        </Table.Body>
+                    </Table.Root>
+                </Box>
             </PopoverBody>
         </PopoverContent>
     </PopoverRoot>
@@ -419,7 +487,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         <HStack pl={4} pr={4} alignItems="center" justify="space-between" align="center">
             <Box><Heading size="lg">{submission.assignments.title} - Submission #{submission.ordinal}</Heading>
                 <VStack align="flex-start">
-                    {submission.assignment_groups ? <Text>Group {submission.assignment_groups.name} ({submission.assignment_groups.assignment_groups_members.map((member) => member.profiles!.name).join(", ")})</Text> : <Text>{submitter?.name}</Text>}
+                    <HStack gap={1}>
+                        {submission.is_active && <ActiveSubmissionIcon />}
+                        {submission.assignment_groups ? <Text>Group {submission.assignment_groups.name} ({submission.assignment_groups.assignment_groups_members.map((member) => member.profiles!.name).join(", ")})</Text> : <Text>{submitter?.name}</Text>}
+                    </HStack>
                     <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">Commit {submission.sha.substring(0, 7)}</Link>
                 </VStack>
             </Box>

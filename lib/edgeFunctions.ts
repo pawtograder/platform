@@ -124,7 +124,15 @@ export async function assignmentGroupInstructorMoveStudent(params: FunctionTypes
     }
     return data as { };
 }
-
+export async function activateSubmission(params: {submission_id: number}, supabase: SupabaseClient<Database>) {
+    const ret = await supabase.rpc("submission_set_active", {
+        _submission_id: params.submission_id,
+    });
+    if(ret.data){
+        return true;
+    }
+    throw new EdgeFunctionError({details: "Failed to activate submission", message: "Failed to activate submission", recoverable: false});
+}
 export class EdgeFunctionError extends Error {
     details: string;
     recoverable: boolean;

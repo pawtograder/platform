@@ -4,21 +4,43 @@ import { useCallback, useEffect, useState } from "react";
 import yaml from 'yaml';
 import { Alert } from "@/components/ui/alert";
 import Markdown from "react-markdown";
-import { Box, Button, Heading, Spinner, Link, Table, Text } from "@chakra-ui/react";
+import { Box, Button, Heading, Spinner, Link, Table, Text, Separator } from "@chakra-ui/react";
 import { Checkbox } from "@/components/ui/checkbox"
 
-import { AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { repositoryGetFile } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-export default function AutograderConfiguration({ graderRepo }: { graderRepo: string|undefined }) {
-    const [autograderConfig, setAutograderConfig] = useState<string>();
+import { MutationTestUnit, RegularTestUnit, GradedUnit, PawtograderConfig } from "@/utils/PawtograderYml";
+
+// Type guard to check if a unit is a mutation test unit
+export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
+    return 'locations' in unit && 'breakPoints' in unit
+}
+
+// Type guard to check if a unit is a regular test unit
+export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
+    return 'tests' in unit && 'testCount' in unit
+}
+
+function totalPoints(config: PawtograderConfig) {
+    return config.gradedParts.reduce((acc, part) => acc + part.gradedUnits.reduce((unitAcc, unit) => unitAcc + (
+        isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward :
+            isRegularTestUnit(unit) ? unit.points : 0
+    ), 0), 0);
+}
+
+export default function AutograderConfiguration({ graderRepo, assignment }: { graderRepo: string | undefined, assignment: Assignment | undefined }) {
+    const [autograderConfig, setAutograderConfig] = useState<PawtograderConfig>();
     const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
 
     const [error, setError] = useState<string>();
     const { course_id, assignment_id } = useParams();
     const { mutateAsync: createRegressionTest } = useCreate<AutograderRegressionTest>({
         resource: "autograder_regression_test",
+    });
+    const { mutateAsync: updateAssignment } = useUpdate<Assignment>({
+        resource: "assignments",
     });
     const { mutateAsync: deleteRegressionTest } = useDelete<AutograderRegressionTest>({
     });
@@ -42,7 +64,6 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
         ]
     });
     useEffect(() => {
-
         async function fetchAutograderConfig() {
             if (!graderRepo) {
                 return;
@@ -53,23 +74,34 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
                 orgName: graderRepo.split("/")[0],
                 repoName: graderRepo.split("/")[1],
                 path: 'pawtograder.yml'
-        }, supabase).then((res) => {
-            if ('content' in res) {
-                const config = Buffer.from(res.content, 'base64').toString();
-                setAutograderConfig(config);
-            }
-        }).catch((err) => {
-            if (err.stack.message === 'Not Found') {
-                setError(`Autograder configuration file not found in ${graderRepo}. Please create a pawtograder.yml file in the root of the repository.`);
-                setAutograderConfig(undefined);
-            } else {
-                console.log("Error fetching autograder configuration", err);
-                // throw err;
+            }, supabase).then(async (res) => {
+                if ('content' in res) {
+                    const parsedConfig = yaml.parse(res.content) as PawtograderConfig;
+                    setAutograderConfig(parsedConfig);
+                    // Calculate the total points for the autograder
+                    const points = totalPoints(parsedConfig);
+                    if (assignment && assignment.autograder_points !== points) {
+                        await updateAssignment({
+                            resource: "assignments",
+                            id: assignment.id,
+                            values: {
+                                autograder_points: points
+                            }
+                        });
+                    }
+                }
+            }).catch((err) => {
+                if (err.stack.message === 'Not Found') {
+                    setError(`Autograder configuration file not found in ${graderRepo}. Please create a pawtograder.yml file in the root of the repository.`);
+                    setAutograderConfig(undefined);
+                } else {
+                    console.log("Error fetching autograder configuration", err);
+                    // throw err;
                 }
             });
         }
         fetchAutograderConfig();
-    }, [graderRepo]);
+    }, [graderRepo, assignment]);
     const saveRegressionTests = useCallback(async () => {
         setSaveLoading(true);
         const additions = selectedRepos.filter((r) => !regressionTestRepos?.data.some((rt) => rt.repository === r));
@@ -118,6 +150,25 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     allReposArray.sort();
     return <div>
         {error && <Alert status="error">{error}</Alert>}
+        <Heading as="h2">Autograder Configuration</Heading>
+        This is the current configuration for the autograder:
+        <Table.Root>
+            <Table.Header>
+                <Table.Row>
+                    <Table.ColumnHeader>Name</Table.ColumnHeader>
+                    <Table.ColumnHeader>Points</Table.ColumnHeader>
+                </Table.Row>
+            </Table.Header>
+            <Table.Body>
+                {autograderConfig?.gradedParts.map((part) => (
+                    <Table.Row key={part.name}>
+                        <Table.Cell>{part.name}</Table.Cell>
+                        <Table.Cell>{part.gradedUnits.reduce((acc, unit) => acc + (isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward : unit.points), 0)}</Table.Cell>
+                    </Table.Row>
+                ))}
+            </Table.Body>
+        </Table.Root>
+
         <Heading as="h2">Regression Testing</Heading>
         <Alert status="info">
             Automatically run a smoke test of the autograder on a selection of student submissions.

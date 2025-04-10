@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, Link, Table, Text } from "@chakra-ui/react";
 import { format } from "date-fns";
 import ManageGroupWidget from "./manageGroupWidget";
+import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 
 export default async function AssignmentPage({ params }: { params: Promise<{ course_id: string, assignment_id: string }> }) {
     const { course_id, assignment_id } = await params;
@@ -18,7 +19,7 @@ export default async function AssignmentPage({ params }: { params: Promise<{ cou
         return <div>Assignment not found</div>
     }
 
-    const {data: submissions} = await client.from("submissions").select("*, grader_results(*)").eq("assignment_id", Number.parseInt(assignment_id))
+    const {data: submissions} = await client.from("submissions").select("*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)").eq("assignment_id", Number.parseInt(assignment_id))
     .order("created_at", { ascending: false });
 
     if (assignment.group_config !== 'individual') {
@@ -42,16 +43,18 @@ export default async function AssignmentPage({ params }: { params: Promise<{ cou
                         <Table.ColumnHeader>Submission #</Table.ColumnHeader>
                         <Table.ColumnHeader>Date</Table.ColumnHeader>
                         <Table.ColumnHeader>Commit</Table.ColumnHeader>
-                        <Table.ColumnHeader>Score</Table.ColumnHeader>
+                        <Table.ColumnHeader>Auto Grader Score</Table.ColumnHeader>
+                        <Table.ColumnHeader>Total Score</Table.ColumnHeader>
                     </Table.Row>
                 </Table.Header>
                 <Table.Body>
                     {submissions?.map((submission) => (
                         <Table.Row key={submission.id}>
-                            <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{submission.id}</Link></Table.Cell>
+                            <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{submission.is_active ? <ActiveSubmissionIcon /> : ""}{submission.id}</Link></Table.Cell>
                             <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{format(new Date(submission.created_at), "MMM d h:mm aaa")}</Link></Table.Cell>
                             <Table.Cell><Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>{submission.sha.slice(0, 7)}</Link></Table.Cell>
                             <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{submission.grader_results?.score}/{submission.grader_results?.max_score}</Link></Table.Cell>
+                            <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{submission.submission_reviews?.completed_at ? `${submission.submission_reviews?.total_score}/${assignment.total_points}` : submission.is_active ? "Pending" : ""}</Link></Table.Cell>
                         </Table.Row>
                     ))}
                 </Table.Body>

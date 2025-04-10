@@ -68,6 +68,14 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
         assignmentGroup.classes!.slug!,
         remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!));
     }
+    //Deactivate any submissions for this assignment for this student
+    const { error: deactivateError } = await adminSupabase.from("submissions").update({
+      is_active: false
+    }).eq("assignment_id", assignmentGroup.assignment_id).eq("profile_id", enrollment.private_profile_id);
+    if (deactivateError) {
+      console.log(deactivateError);
+      throw new Error("Failed to deactivate submissions");
+    }
     return {
       joined_group: true,
       message: `Joined group ${assignmentGroup.name}`

@@ -2,6 +2,12 @@ import { Database } from "./SupabaseTypes";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
+export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
+export type ActiveSubmissionsWithGradesForAssignment = 
+Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
+    id: number;
+};
+export type AuditEvent = Database["public"]["Tables"]["audit"]["Row"];
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
 export type AssignmentGroupMember = Database["public"]["Tables"]["assignment_groups_members"]["Row"];
@@ -110,6 +116,13 @@ export type SubmissionWithFilesGraderResultsOutputTestsAndRubric= GetResult<
     "submissions",
     Database["public"]["Tables"]["submissions"]["Relationships"],
     "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*)"
+>;
+export type SubmissionWithGraderResultsAndReview = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submissions"]["Row"],
+    "submissions",
+    Database["public"]["Tables"]["submissions"]["Relationships"],
+    "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_reviews(*)"
 >;
 export type SubmissionWithGraderResults = GetResult<
     Database["public"],
@@ -249,6 +262,14 @@ export type DiscussionThreadLike = GetResult<
     "discussion_thread_likes",
     Database["public"]["Tables"]["discussion_thread_likes"]["Relationships"],
     "*"
+>;
+
+export type AutograderWithAssignment = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["autograder"]["Row"],
+    "autograder",
+    Database["public"]["Tables"]["autograder"]["Relationships"],
+    "*, assignments(*)"
 >;
 
 export type Autograder = GetResult<

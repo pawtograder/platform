@@ -1,3 +1,4 @@
+import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { createClient } from "@/utils/supabase/server";
 
 export default async function SubmissionsListing({ params }: { params: Promise<{ course_id: string, assignment_id: string }> }) {
@@ -11,7 +12,7 @@ export default async function SubmissionsListing({ params }: { params: Promise<{
         <h1>Submissions for {submissions[0].assignments.title}</h1>
         <ul>
             {submissions.map((submission) => (
-                <li key={submission.id}>{submission.id}</li>
+                <li key={submission.id}>{submission.is_active ? <ActiveSubmissionIcon /> : ""}{submission.id}</li>
             ))}
         </ul>
     </div>

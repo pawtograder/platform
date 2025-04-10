@@ -166,9 +166,6 @@ export function SubmissionProvider({ submission_id, children }: { submission_id?
     }
     const controller = useRef<SubmissionController>(new SubmissionController());
     const [ready, setReady] = useState(false);
-    useEffect(() => {
-        // controller.current = new SubmissionController();
-    }, [submission_id]);
 
     return <SubmissionContext.Provider value={{ submissionController: controller.current }}>
         <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
@@ -238,7 +235,7 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
             select: "*, assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*))"
         }
     });
-    const { data: liveFileComments } = useList<SubmissionFileComment>({
+    const { data: liveFileComments, isLoading: liveFileCommentsLoading } = useList<SubmissionFileComment>({
         resource: "submission_file_comments",
         filters: [
             { field: "submission_id", operator: "eq", value: submission_id }
@@ -251,7 +248,7 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
             submissionController.handleGenericDataEvent("submission_file_comments", event);
         }
     });
-    const { data: liveReviews } = useList<SubmissionReviewWithRubric>({
+    const { data: liveReviews, isLoading: liveReviewsLoading } = useList<SubmissionReviewWithRubric>({
         resource: "submission_reviews",
         meta: {
             select: "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
@@ -267,7 +264,7 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
             submissionController.handleGenericDataEvent("submission_reviews", event);
         }
     });
-    const { data: liveComments } = useList<SubmissionComments>({
+    const { data: liveComments, isLoading: liveCommentsLoading } = useList<SubmissionComments>({
         resource: "submission_comments",
         filters: [
             { field: "submission_id", operator: "eq", value: submission_id }
@@ -280,12 +277,17 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
             submissionController.handleGenericDataEvent("submission_comments", event);
         }
     });
+    const anyIsLoading = liveFileCommentsLoading || liveReviewsLoading || liveCommentsLoading || query.isLoading;
     useEffect(() => {
         if (query.data?.data) {
             submissionController.submission = query.data.data;
-            setReady(true);
         }
     }, [submissionController, query.data])
+    useEffect(() => {
+        if (!anyIsLoading) {
+            setReady(true);
+        }
+    }, [anyIsLoading]);
     submissionController.registerGenericDataType("submission_file_comments", (item: SubmissionFileComment) => item.id);
     useEffect(() => {
         if (liveFileComments?.data) {
@@ -380,7 +382,10 @@ export function useSubmissionReview(reviewId?: number | null) {
     const controller = useSubmissionController();
     const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
     if (!reviewId) {
-        reviewId = controller.submission.grading_review_id!;
+        reviewId = controller.submission.grading_review_id;
+        if (!reviewId) {
+            throw new Error("No review found for this submission");
+        }
     }
     useEffect(() => {
         const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReviewWithRubric>("submission_reviews", reviewId, (data) => {

@@ -10,9 +10,9 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { Controller, FieldValues } from "react-hook-form";
 import { ListReposResponse } from "@/components/github/GitHubTypes";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import AutograderConfiguration from "@/components/ui/autograder-configuration";
-import { Autograder, Assignment } from "@/utils/supabase/DatabaseTypes";
+import { AutograderWithAssignment, Assignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { useUpdate } from "@refinedev/core";
 import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
@@ -28,7 +28,7 @@ export default function AutograderPage() {
         refineCore,
         control,
         formState: { errors },
-    } = useForm<Autograder>({
+    } = useForm<AutograderWithAssignment>({
         refineCoreProps: {
             action: "edit",
             resource: "autograder",
@@ -38,6 +38,11 @@ export default function AutograderPage() {
             }
         }
     });
+    useEffect(() => {
+        if (query?.data?.data?.grader_repo) {
+            setGraderRepo(query.data?.data?.grader_repo);
+        }
+    }, [query?.data?.data?.grader_repo]);
     const onSubmit = useCallback(async (values: FieldValues) => {
         const supabase = createClient();
 
@@ -54,8 +59,6 @@ export default function AutograderPage() {
                 has_autograder: values.assignments.has_autograder.value === "true"
             }
         });
-        console.log("onFinish");
-        console.log(values.grader_repo);
         refineCore.onFinish({ grader_repo: values.grader_repo });
     }, [refineCore, assignment_id]);
     if (!query || formLoading) {
@@ -106,7 +109,7 @@ export default function AutograderPage() {
             </Fieldset.Root>
             <Button type="submit">Save</Button>
         </form>
-        <AutograderConfiguration graderRepo={graderRepo} />
+        {(query.data?.data?.assignments && graderRepo) && <AutograderConfiguration graderRepo={graderRepo} assignment={query.data?.data?.assignments}/>}
 
     </div>
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, Flex, HStack, Skeleton, VStack, Text } from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Skeleton, VStack, Text, Menu, Portal } from "@chakra-ui/react";
 import { usePathname, useRouter } from "next/navigation";
 import {
     FiBook,
@@ -37,6 +37,7 @@ import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { ColorModeButton, useColorMode } from "@/components/ui/color-mode";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { FaScroll } from "react-icons/fa";
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
     { name: 'Manage Assignments', icon: FiCompass, instructor_only: true, target: `/course/${courseID}/manage/assignments` },
@@ -48,7 +49,14 @@ const LinkItems = (courseID: number) => ([
     // {name: 'Explore', icon: FiCompass },
     // {name: 'Favourites', icon: FiStar },
     { name: 'Enrollments', icon: FiUsers, instructor_only: true, target: `/course/${courseID}/manage/enrollments` },
-    { name: 'Settings', icon: FiSettings },
+    {
+        name: 'Course Settings', icon: FiSettings, instructor_only: true,
+        target: `/course/${courseID}/manage/course/`,
+        submenu: [
+            { name: 'Enrollments', icon: FiUsers, target: `/course/${courseID}/manage/course/enrollments` },
+            { name: 'Audit Log', icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
+        ]
+    },
 ]);
 
 function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[], currentCourse: Course }) {
@@ -143,44 +151,84 @@ export default function DynamicCourseNav() {
                     <HStack
                         width="100%"
                     >
-                        {LinkItems(course.class_id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => (
-                            <Box key={link.name}
-                                borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
-                                borderColor="orange.600"
-                            >
-                                <Button
-                                    colorPalette="gray"
-                                    _hover={{
-                                        bg: "#EBEDEF"
-                                    }}
-                                    size="xs"
-                                    fontSize="sm"
-                                    pt="0"
-                                    // href={link.target || '#'}
-                                    // style={{ textDecoration: 'none' }}
-                                    variant="ghost"
-                                    asChild
+                        {LinkItems(course.class_id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => {
+                            if (link.submenu) {
+                                return <Box key={link.name}
+                                    borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
+                                    borderColor="orange.600"
                                 >
-                                    <NextLink prefetch={true} href={link.target || '#'}>
-                                        <Flex
-                                            align="center"
-                                            role="group"
-                                        >
-                                            <HStack>
-                                                {React.createElement(link.icon)}
-                                                {/* <Icon
-                             mr="4"
-                             fontSize="16"
-                             _groupHover={{
-                                 color: 'white',
-                             }}
-                             as={icon}
-                         /> */}
-                                                {link.name}</HStack>
-                                        </Flex>
-                                    </NextLink>
-                                </Button></Box>
-                        ))}
+                                    <Menu.Root>
+                                        <Menu.Trigger asChild>
+                                            <Button
+                                                colorPalette="gray"
+                                                _hover={{
+                                                    bg: "#EBEDEF"
+                                                }}
+                                                size="xs"
+                                                fontSize="sm"
+                                                pt="0"
+                                                // href={link.target || '#'}
+                                                // style={{ textDecoration: 'none' }}
+                                                variant="ghost"
+                                                asChild
+                                            >
+                                                <Flex
+                                                    align="center"
+                                                    role="group"
+                                                >
+                                                    <HStack>
+                                                        {React.createElement(link.icon)}
+                                                        {link.name}</HStack>
+                                                </Flex>
+                                            </Button>
+                                        </Menu.Trigger>
+                                        <Portal>
+                                            <Menu.Positioner>
+                                                <Menu.Content>
+                                                    {link.submenu.map((submenu) => (
+                                                        <Menu.Item key={submenu.name} value={submenu.name} asChild>
+                                                            <NextLink prefetch={true} href={submenu.target || '#'}>
+                                                                {React.createElement(submenu.icon)}
+                                                                {submenu.name}
+                                                            </NextLink>
+                                                        </Menu.Item>
+                                                    ))}
+                                                </Menu.Content>
+                                            </Menu.Positioner>
+                                        </Portal>
+                                    </Menu.Root>
+                                </Box>
+                            } else {
+                                return <Box key={link.name}
+                                    borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
+                                    borderColor="orange.600"
+                                >
+                                    <Button
+                                        colorPalette="gray"
+                                        _hover={{
+                                            bg: "#EBEDEF"
+                                        }}
+                                        size="xs"
+                                        fontSize="sm"
+                                        pt="0"
+                                        // href={link.target || '#'}
+                                        // style={{ textDecoration: 'none' }}
+                                        variant="ghost"
+                                        asChild
+                                    >
+                                        <NextLink prefetch={true} href={link.target || '#'}>
+                                            <Flex
+                                                align="center"
+                                                role="group"
+                                            >
+                                                <HStack>
+                                                    {React.createElement(link.icon)}
+                                                    {link.name}</HStack>
+                                            </Flex>
+                                        </NextLink>
+                                    </Button></Box>
+                            }
+                        })}
                     </HStack>
                 </VStack>
                 <UserMenu />

@@ -1,11 +1,13 @@
 'use client'
 import Link from "@/components/ui/link";
 import { GraderResultOutput, GraderResultTest, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
-import { Box, CardBody, CardHeader, CardRoot, List, Skeleton, Tabs, Text, Heading, Table, HStack } from "@chakra-ui/react";
+import { Box, CardBody, CardHeader, CardRoot, List, Skeleton, Tabs, Text, Heading, Table, HStack, Container } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { Fragment } from "react";
 import Markdown from "@/components/ui/markdown";
 import { useParams } from "next/navigation";
+import { Alert } from "@/components/ui/alert";
+import { formatDistanceToNow } from "date-fns";
 function format_result_output(result: { output: string | null | undefined, output_format: string | null | undefined }) {
     if (result.output === undefined && result.output_format === undefined) {
         return <Text textStyle="sm" color="text.muted">No output</Text>;
@@ -57,6 +59,16 @@ export default function GraderResults() {
         return <Box>
             No grader results found
         </Box>
+    }
+    if (!query.data.data.grader_results) {
+        return <Container>
+            <Box w="4xl" p={4} m={4}>
+                <Alert title="Autograder has not finished running">
+                    The autograder started running {formatDistanceToNow(query.data.data.created_at, { addSuffix: true })}, and has not completed yet.
+                    Please check <Link href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}>the GitHub Actions run for this submission</Link> to see if it has completed, and share the link with your instructor.
+                </Alert>
+            </Box>
+        </Container>
     }
     const data = query.data.data;
     return (
