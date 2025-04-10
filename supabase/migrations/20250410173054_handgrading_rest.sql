@@ -4,6 +4,9 @@ drop trigger if exists "audit_submission_file_comment_insert_update" on "public"
 
 drop trigger if exists "audit_submissions_insert_update" on "public"."submissions";
 
+drop policy "view own, instructors and graders also view all that they instr"
+on "public"."users";
+
 drop function if exists "public"."authorizeforinstructororgraderofstudent"(user_id uuid);
 
 drop view if exists "public"."submissions_agg";
@@ -38,6 +41,14 @@ begin
 end;
 $function$
 ;
+
+create policy "view own, instructors and graders also view all that they instr"
+on "public"."users"
+as permissive
+for select
+to public
+using (((user_id = auth.uid()) OR authorizeforinstructororgraderofstudent(user_id)));
+
 
 CREATE OR REPLACE FUNCTION public.submission_set_active(_submission_id bigint)
  RETURNS boolean
