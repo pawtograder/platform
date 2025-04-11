@@ -155,7 +155,7 @@ function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment
     const shortFileName = path.basename(file.name);
     return <Link href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?file_id=${comment.submission_file_id}#L${comment.line}`}>@ {shortFileName}:{comment.line}</Link>
 }
-function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComment | SubmissionComments, setIsEditing: (isEditing: boolean) => void }) {
+export function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComment | SubmissionComments, setIsEditing: (isEditing: boolean) => void }) {
     const { private_profile_id } = useClassProfiles();
     const { mutateAsync: updateComment } = useUpdate({
         resource: isLineComment(comment) ? "submission_file_comments" : "submission_comments",
@@ -175,7 +175,10 @@ function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComm
         }
     }}>
         <Menu.Trigger asChild>
-            <Button colorPalette="blue" variant="ghost" size="xs"><Icon as={BsThreeDots} /></Button>
+            <Button 
+            p={0}
+            m={0}
+            colorPalette="blue" variant="ghost" size="2xs"><Icon as={BsThreeDots} /></Button>
         </Menu.Trigger>
         <Portal>
             <Menu.Positioner>
@@ -203,7 +206,6 @@ function RubricCheckComment({ comment, criteria }: { comment: SubmissionFileComm
             </HStack>
         </Box>
         <Box
-            ml={1}
             color="fg.muted">
             <HStack gap={1}>
                 {criteria.is_additive ? <><Icon as={FaCheckCircle} color="green.500" />+{comment.points}</> : <><Icon as={FaTimesCircle} color="red.500" />-{comment.points}</>} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}

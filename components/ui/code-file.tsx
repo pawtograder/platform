@@ -18,10 +18,11 @@ import PersonAvatar from './person-avatar';
 import { Skeleton } from './skeleton';
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from 'chakra-react-select';
 import MessageInput from './message-input';
-import { useCreate } from '@refinedev/core';
+import { useCreate, useUpdate } from '@refinedev/core';
 import { LuArrowDown } from 'react-icons/lu';
 import { LuCircleX } from 'react-icons/lu';
 import { RubricMarkingMenu } from './rubric-marking-menu';
+import { CommentActions } from '@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/layout';
 type CodeLineCommentContextType = {
     submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
     comments: SubmissionFileComment[];
@@ -90,6 +91,17 @@ export default function CodeFile({
             return a.line - b.line;
         });
     }, [_comments]);
+    useEffect(() => {
+        if (comments.length === 0) {
+            setExpanded([]);
+        } else {
+            if (comments[0].submission_file_id === file.id) {
+                setExpanded(comments.map((comment) => comment.line));
+            } else {
+                setExpanded([]);
+            }
+        }
+    }, [file, comments]);
 
     useEffect(() => {
         async function highlight() {
@@ -285,52 +297,92 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
 
     const pointsText = rubricCriteria.is_additive ? `+${rubricCheck.points}` : `-${rubricCheck.points}`;
     const commentAuthor = useUserProfile(comment.author);
-    return <Box m={0} p={0} w="100%" border="1px solid" borderColor="border.info" borderRadius="md">
-        <Box bg="bg.info" pl={1} pr={1} borderTopRadius="md">
-            <Flex w="100%" justifyContent="space-between">
-                <HStack>
-                    {!comment.released && <Tooltip content="This comment is not released to the student yet"><Icon as={FaEyeSlash} /></Tooltip>}
-                    <Icon as={
-                        rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle} color={rubricCriteria.is_additive ? "green.500" : "red.500"} />{pointsText}
-                    <Text fontSize="sm" color="fg.muted">{rubricCriteria?.name} &gt; {rubricCheck?.name}</Text>
-                </HStack>
-                <HStack>
-                    <Text fontSize="sm" fontStyle="italic" color="fg.muted">{commentAuthor?.name} ({reviewName})</Text>
-                </HStack>
-            </Flex>
-        </Box>
-        <Markdown style={{ fontSize: '0.8rem' }}>{rubricCheck.description}</Markdown>
-        {comment.comment && <VStack alignItems="flex-start" gap={0}><Text fontSize="sm" fontStyle="italic" color="fg.muted">Comment:</Text><Markdown>{comment.comment}</Markdown></VStack>}
+    const [isEditing, setIsEditing] = useState(false);
+    const messageInputRef = useRef<HTMLTextAreaElement>(null);
+    const { mutateAsync: updateComment } = useUpdate({
+        resource: "submission_file_comments",
+    });
+    return <Box m={0} p={0} w="100%" pb={1}>
+        <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
+            <PersonAvatar size="2xs" uid={comment.author} />
+            <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderColor="border.info" borderRadius="md" >
+                <Box bg="bg.info" pl={1} pr={1} borderRadius="md">
+                    <Flex w="100%" justifyContent="space-between">
+                        <HStack>
+                            {!comment.released && <Tooltip content="This comment is not released to the student yet"><Icon as={FaEyeSlash} /></Tooltip>}
+                            <Icon as={
+                                rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle} color={rubricCriteria.is_additive ? "green.500" : "red.500"} />{pointsText}
+                            <Text fontSize="sm" color="fg.muted">{rubricCriteria?.name} &gt; {rubricCheck?.name}</Text>
+                        </HStack>
+                        <HStack gap={0}>
+                            <Text fontSize="sm" fontStyle="italic" color="fg.muted">{commentAuthor?.name} ({reviewName})</Text>
+                            <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                        </HStack>
+                    </Flex>
+                </Box>
+                <Box pl={2}>
+                    <Markdown style={{ fontSize: '0.8rem' }}>{rubricCheck.description}</Markdown>
+                </Box>
+                <Box pl={2}>
+                    {isEditing ? <MessageInput
+                        textAreaRef={messageInputRef}
+                        defaultSingleLine={true}
+                        value={comment.comment}
+                        closeButtonText="Cancel"
+                        onClose={() => {
+                            setIsEditing(false);
+                        }}
+                        sendMessage={async (message, profile_id) => {
+                            await updateComment({ id: comment.id, values: { comment: message } });
+                            setIsEditing(false);
+                        }} /> : <Markdown>{comment.comment}</Markdown>}
+                </Box>
+            </VStack>
+        </HStack>
     </Box >
 }
 function CodeLineComment({ comment, submission }: { comment: SubmissionFileComment, submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const authorProfile = useUserProfile(comment.author);
     const isAuthor = submission.profile_id === comment.author || submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
-    return <Box key={comment.id} m={0} p={2} w="100%">
+    const [isEditing, setIsEditing] = useState(false);
+    const messageInputRef = useRef<HTMLTextAreaElement>(null);
+    const { mutateAsync: updateComment } = useUpdate({
+        resource: "submission_file_comments",
+    });
+    return <Box key={comment.id} m={0} pb={1} w="100%">
         <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
             <PersonAvatar size="2xs" uid={comment.author} />
-            <VStack alignItems="flex-start" spaceY={0} gap={1} w="100%">
-                <HStack w="100%" justifyContent="space-between">
-                    <HStack gap={1}>
-                        <Text>{authorProfile?.name}</Text>
-                        <Text fontSize="sm" color="fg.muted">on {format(comment.created_at, 'MMM d, yyyy')}</Text>
+            <VStack alignItems="flex-start" spaceY={0} gap={1} w="100%" border="1px solid" borderColor="border.emphasized" borderRadius="md" >
+                <HStack w="100%" justifyContent="space-between" bg="bg.muted" p={0} borderTopRadius="md" borderBottom="1px solid" borderColor="border.emphasized">
+                    <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
+                        <Text fontWeight="bold">{authorProfile?.name}</Text>
+                        <Text>commented on {format(comment.created_at, 'MMM d, yyyy')}</Text>
                     </HStack>
-                    {isAuthor || authorProfile?.flair ? <Tag.Root size="md" colorScheme={isAuthor ? "green" : "gray"} variant="surface">
+                    <HStack>{isAuthor || authorProfile?.flair ? <Tag.Root size="md" colorScheme={isAuthor ? "green" : "gray"} variant="surface">
                         <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
                     </Tag.Root> : <></>}
+                    <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                    </HStack>
                 </HStack>
-                <Markdown>{comment.comment}</Markdown>
+                <Box pl={2}>
+                    {isEditing ? <MessageInput
+                        textAreaRef={messageInputRef}
+                        defaultSingleLine={true}
+                        value={comment.comment}
+                        closeButtonText="Cancel"
+                        onClose={() => {
+                            setIsEditing(false);
+                        }}
+                        sendMessage={async (message, profile_id) => {
+                            await updateComment({ id: comment.id, values: { comment: message } });
+                            setIsEditing(false);
+                        }} /> : <Markdown>{comment.comment}</Markdown>}
+                </Box>
             </VStack>
         </HStack>
     </Box>
 }
-function RubricItem({ rubric }: { rubric: Rubric }) {
-    const { submission } = useCodeLineCommentContext();
 
-    return <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} w="100%">
-        <Text>{rubric.name}</Text>
-    </Box>
-}
 export type LineActionPopupProps = {
     lineNumber: number;
     top: number;
@@ -413,7 +465,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
         setCurrentMode(mode);
     }, [mode]);
     useEffect(() => {
-        if(!visible){
+        if (!visible) {
             setCurrentMode(mode);
         }
     }, [visible, mode]);
@@ -439,7 +491,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
             value: "comment"
         }]
     })
-    if(currentMode === "marking"){
+    if (currentMode === "marking") {
         return <RubricMarkingMenu top={top} left={left} checks={checks} setSelectedOption={setSelectedOption} setCurrentMode={setCurrentMode} />
     }
     const components: SelectComponentsConfig<CheckOption, false, GroupedRubricOptions> = {
@@ -470,51 +522,51 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
         position="fixed"
         bg="bg.subtle"
         w="lg"
-        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md" 
+        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md"
         ref={popupRef}>
-            <Box width="lg">
-        <Text fontSize="sm" color="fg.muted">Annotate line {lineNumber} with a check:</Text>
-        <Select
-            ref={selectRef}
-            options={checks}
-            defaultMenuIsOpen={selectedOption === null}
-            escapeClearsValue={true}
-            components={components}
-            value={selectedOption}
-            onChange={(e: CheckOption | null) => {
-                if (e) {
-                    setSelectedOption(e);
-                }
-            }}
-        />
-        {selectedOption && <>
+        <Box width="lg">
+            <Text fontSize="sm" color="fg.muted">Annotate line {lineNumber} with a check:</Text>
+            <Select
+                ref={selectRef}
+                options={checks}
+                defaultMenuIsOpen={selectedOption === null}
+                escapeClearsValue={true}
+                components={components}
+                value={selectedOption}
+                onChange={(e: CheckOption | null) => {
+                    if (e) {
+                        setSelectedOption(e);
+                    }
+                }}
+            />
+            {selectedOption && <>
 
-            {selectedOption.check && <Text fontSize="sm" color="fg.muted">{formatPoints(selectedOption)}</Text>}
-            <MessageInput
-                textAreaRef={messageInputRef}
-                showGiphyPicker={true}
-                placeholder={
-                    !selectedOption.check ? "Add a comment about this line and press enter to submit..." :
-                        selectedOption.check.is_comment_required ? "Add a comment about this check and press enter to submit..." : "Optionally add a comment, or just press enter to submit..."
-                }
-                allowEmptyMessage={selectedOption.check && !selectedOption.check.is_comment_required}
-                defaultSingleLine={true} sendMessage={async (message, profile_id) => {
-                    const values = {
-                        comment: message || '',
-                        line: lineNumber,
-                        rubric_check_id: selectedOption.check?.id,
-                        class_id: file?.class_id,
-                        submission_file_id: file?.id,
-                        submission_id: submission.id,
-                        author: profile_id,
-                        released: review ? false : true,
-                        points: selectedOption.check?.points,
-                        submission_review_id: review?.id
-                    };
-                    await createComment({ values });
-                    setCurrentMode(mode);
-                    close();
-                }} /></>}
+                {selectedOption.check && <Text fontSize="sm" color="fg.muted">{formatPoints(selectedOption)}</Text>}
+                <MessageInput
+                    textAreaRef={messageInputRef}
+                    showGiphyPicker={true}
+                    placeholder={
+                        !selectedOption.check ? "Add a comment about this line and press enter to submit..." :
+                            selectedOption.check.is_comment_required ? "Add a comment about this check and press enter to submit..." : "Optionally add a comment, or just press enter to submit..."
+                    }
+                    allowEmptyMessage={selectedOption.check && !selectedOption.check.is_comment_required}
+                    defaultSingleLine={true} sendMessage={async (message, profile_id) => {
+                        const values = {
+                            comment: message || '',
+                            line: lineNumber,
+                            rubric_check_id: selectedOption.check?.id,
+                            class_id: file?.class_id,
+                            submission_file_id: file?.id,
+                            submission_id: submission.id,
+                            author: profile_id,
+                            released: review ? false : true,
+                            points: selectedOption.check?.points,
+                            submission_review_id: review?.id
+                        };
+                        await createComment({ values });
+                        setCurrentMode(mode);
+                        close();
+                    }} /></>}
         </Box>
     </Box>
 }
@@ -562,15 +614,15 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
 }
 
 function LineNumber({ lineNumber }: { lineNumber: number }) {
-    const { comments, open   } = useCodeLineCommentContext();
+    const { comments, open } = useCodeLineCommentContext();
     const hasComments = comments && comments.find((comment) => comment.line === lineNumber);
     if (hasComments) {
         return <Box className="line-number" position="relative">{lineNumber}
-            <Badge 
-            onClick={() => {
-                open(lineNumber);
-            }}
-            variant="solid" colorPalette="blue" position="absolute" left={-5} top={0}><Icon as={FaRegComment} /></Badge>
+            <Badge
+                onClick={() => {
+                    open(lineNumber);
+                }}
+                variant="solid" colorPalette="blue" position="absolute" left={-5} top={0}><Icon as={FaRegComment} /></Badge>
         </Box>
     }
     return <div className="line-number">{lineNumber}</div>
