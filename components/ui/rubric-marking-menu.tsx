@@ -1,6 +1,6 @@
 'use client';
 import { CheckOption, GroupedRubricOptions } from "./code-file";
-import { Menu, MenuItem, SubMenu } from "@jon-bell/react-radial-menu";
+import { Menu, MenuItem, SubMenu } from "@jonbell/react-radial-menu";
 export function RubricMarkingMenu({ checks,top, left, setSelectedOption, setCurrentMode }: { checks: GroupedRubricOptions[], top: number, left: number, setSelectedOption: (option: CheckOption | null) => void, setCurrentMode: (mode: "marking" | "select") => void }) {
      // You can also use separate handler for each item
      const handleItemClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: CheckOption) => {
