@@ -21,6 +21,7 @@ import MessageInput from './message-input';
 import { useCreate } from '@refinedev/core';
 import { LuArrowDown } from 'react-icons/lu';
 import { LuCircleX } from 'react-icons/lu';
+import { RubricMarkingMenu } from './rubric-marking-menu';
 type CodeLineCommentContextType = {
     submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
     comments: SubmissionFileComment[];
@@ -54,6 +55,7 @@ export default function CodeFile({
         top: 0,
         left: 0,
         visible: false,
+        mode: "select",
         close: () => { }
     });
 
@@ -297,8 +299,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
                 </HStack>
             </Flex>
         </Box>
-
-        <Text fontSize="sm" fontStyle="italic" color="fg.muted">{rubricCheck.description}</Text>
+        <Markdown style={{ fontSize: '0.8rem' }}>{rubricCheck.description}</Markdown>
         {comment.comment && <VStack alignItems="flex-start" gap={0}><Text fontSize="sm" fontStyle="italic" color="fg.muted">Comment:</Text><Markdown>{comment.comment}</Markdown></VStack>}
     </Box >
 }
@@ -337,15 +338,16 @@ export type LineActionPopupProps = {
     visible: boolean;
     onClose?: () => void;
     close: () => void;
+    mode: "marking" | "select";
 }
 
-type GroupedRubricOptions = {
+export type GroupedRubricOptions = {
     readonly label: string;
     readonly value: string;
     readonly options: readonly CheckOption[];
     readonly criteria?: RubricCriteria;
 }
-type CheckOption = {
+export type CheckOption = {
     readonly label: string;
     readonly value: string;
     readonly check?: RubricChecks;
@@ -358,7 +360,7 @@ function formatPoints(option: CheckOption) {
     }
     return ``;
 }
-function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: LineActionPopupProps) {
+function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode }: LineActionPopupProps) {
     const submission = useSubmission();
     const file = useSubmissionFile();
     const review = useSubmissionReview();
@@ -367,6 +369,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: Lin
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
     const [points, setPoints] = useState<string>();
     const popupRef = useRef<HTMLDivElement>(null);
+    const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
 
     const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
         resource: "submission_file_comments"
@@ -406,6 +409,14 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: Lin
             selectRef.current.focus();
         }
     }, [selectRef.current, selectedOption, lineNumber]);
+    useEffect(() => {
+        setCurrentMode(mode);
+    }, [mode]);
+    useEffect(() => {
+        if(!visible){
+            setCurrentMode(mode);
+        }
+    }, [visible, mode]);
     if (!visible) {
         return null;
     }
@@ -428,6 +439,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: Lin
             value: "comment"
         }]
     })
+    if(currentMode === "marking"){
+        return <RubricMarkingMenu top={top} left={left} checks={checks} setSelectedOption={setSelectedOption} setCurrentMode={setCurrentMode} />
+    }
     const components: SelectComponentsConfig<CheckOption, false, GroupedRubricOptions> = {
         GroupHeading: (props) => {
             return <chakraComponents.GroupHeading {...props}>
@@ -453,15 +467,17 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: Lin
     };
 
     return <Box zIndex={1000} top={top} left={left}
-        position="absolute"
+        position="fixed"
         bg="bg.subtle"
-        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md" w="100%"
+        w="lg"
+        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md" 
         ref={popupRef}>
+            <Box width="lg">
         <Text fontSize="sm" color="fg.muted">Annotate line {lineNumber} with a check:</Text>
         <Select
             ref={selectRef}
             options={checks}
-            defaultMenuIsOpen={true}
+            defaultMenuIsOpen={selectedOption === null}
             escapeClearsValue={true}
             components={components}
             value={selectedOption}
@@ -496,9 +512,10 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose }: Lin
                         submission_review_id: review?.id
                     };
                     await createComment({ values });
+                    setCurrentMode(mode);
                     close();
                 }} /></>}
-
+        </Box>
     </Box>
 }
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
@@ -577,7 +594,37 @@ function createLine(children: ElementContent[], line: number, setExpanded: Dispa
                 properties: {
                     className: 'source-code-line',
                     id: `L${line}`,
-                    onClick: (ev: MouseEvent) => {
+                    onMouseDown: (ev: MouseEvent) => {
+                        if (ev.button !== 0) {
+                            return;
+                        }
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        setLineActionPopup((prev) => {
+                            if (line !== prev.lineNumber) {
+                                prev.onClose?.();
+                            }
+                            return {
+                                lineNumber: line,
+                                top: ev.clientY,
+                                left: ev.clientX,
+                                visible: true,
+                                mode: "marking",
+                                close: () => {
+                                    setLineActionPopup({
+                                        lineNumber: line,
+                                        top: 0,
+                                        left: 0,
+                                        visible: false,
+                                        onClose: undefined,
+                                        close: () => { },
+                                        mode: "marking"
+                                    });
+                                },
+                            }
+                        });
+                    },
+                    oncontextmenu: (ev: MouseEvent) => {
                         ev.preventDefault();
                         ev.stopPropagation();
                         const target = ev.currentTarget as HTMLElement;
@@ -591,9 +638,10 @@ function createLine(children: ElementContent[], line: number, setExpanded: Dispa
                             }
                             return {
                                 lineNumber: line,
-                                top: ev.clientY + window.scrollY - 200,
-                                left: ev.clientX + window.scrollX - 40,
+                                top: ev.clientY,
+                                left: ev.clientX,
                                 visible: true,
+                                mode: "select",
                                 close: () => {
                                     onClose();
                                     setLineActionPopup({
@@ -602,7 +650,8 @@ function createLine(children: ElementContent[], line: number, setExpanded: Dispa
                                         left: 0,
                                         visible: false,
                                         onClose: undefined,
-                                        close: () => { }
+                                        close: () => { },
+                                        mode: "select"
                                     });
                                 },
                                 onClose

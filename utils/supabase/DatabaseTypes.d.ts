@@ -180,6 +180,13 @@ export type ThreadWithChildren = DiscussionThread & {
     children: ThreadWithChildren[]
 }
 
+export type RubricWithCriteriaAndChecks = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["rubrics"]["Row"],
+    "rubrics",
+    Database["public"]["Tables"]["rubrics"]["Relationships"],
+    "*, rubric_criteria(*, rubric_checks(*))"
+>;  
 export type RubricCriteriaWithRubricChecks = GetResult<
     Database["public"],
     Database["public"]["Tables"]["rubric_criteria"]["Row"],
