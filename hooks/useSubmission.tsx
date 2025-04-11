@@ -62,7 +62,11 @@ class SubmissionController {
         this.genericDataListSubscribers[typeName] = subscribers;
         let currentData = this.genericData[typeName]?.values() || [];
         if (filter) {
-            currentData = currentData.filter(filter);
+            return {
+                unsubscribe: () => {
+                    this.genericDataListSubscribers[typeName] = this.genericDataListSubscribers[typeName]?.filter(cb => cb !== callback) || [];
+                }, data: (Array.from(currentData) as T[]).filter(filter)
+            };
         }
         return {
             unsubscribe: () => {
