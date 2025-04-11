@@ -20,7 +20,7 @@ function AuditEventDiff({ oldValue, newValue }: { oldValue: any, newValue: any }
         newValue = newValue ? "True" : "False";
     }
     if (!oldValue && newValue) {
-        return <Text textStyle="sm" color="text.muted">Added</Text>
+        return <Text textStyle="sm" color="text.muted">{newValue}</Text>
     }
     if (oldValue && !newValue) {
         return <Text textStyle="sm" color="text.muted">Removed</Text>
@@ -38,6 +38,15 @@ function JSONDiff({ oldValue, newValue }: { oldValue: any, newValue: any }) {
             }
             return JSON.stringify(a) !== JSON.stringify(b);
         }
+        if(!oldValue && !newValue){
+            return [];
+        }
+        if(!oldValue){
+            return Object.keys(newValue);
+        }
+        if(!newValue){
+            return Object.keys(oldValue);
+        }
         const oldProperties = Object.keys(oldValue);
         const newProperties = Object.keys(newValue);
         return oldProperties.filter(property =>
@@ -47,12 +56,12 @@ function JSONDiff({ oldValue, newValue }: { oldValue: any, newValue: any }) {
     return <DataList.Root orientation="horizontal">
         {propertiesChanged.map(property => {
             return <Tooltip key={property} content={<Box>
-                Was: <pre>{oldValue[property]}</pre>
-                Now: <pre>{newValue[property]}</pre>
+                Was: <pre>{oldValue?.[property]}</pre>
+                Now: <pre>{newValue?.[property]}</pre>
             </Box>}><DataList.Item>
                     <DataList.ItemLabel>{property}</DataList.ItemLabel>
                     <DataList.ItemValue>
-                        <AuditEventDiff oldValue={oldValue[property]} newValue={newValue[property]} />
+                        <AuditEventDiff oldValue={oldValue?.[property]} newValue={newValue?.[property]} />
                     </DataList.ItemValue>
                 </DataList.Item></Tooltip>
         })}
