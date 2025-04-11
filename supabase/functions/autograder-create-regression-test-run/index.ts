@@ -72,20 +72,27 @@ async function handleRequest(req: Request) {
           `Regression test repo has no SHA: ${regressionTestRepoData.repository}`,
         );
       }
-      const { download_link: regression_test_url } = await getRepoTarballURL(
-        regressionTestRepoData.repository!,
-        regressionTestRepoData.sha,
-      );
+      try {
+        const { download_link: regression_test_url } = await getRepoTarballURL(
+          regressionTestRepoData.repository!,
+          regressionTestRepoData.sha,
+        );
 
-      console.log("Grader URL:", regression_test_url);
+        console.log("Grader URL:", regression_test_url);
 
-      const patchedURL= regression_test_url.replace("http://kong:8000","https://khoury-classroom-dev.ngrok.pizza")
-      console.log("Patched URL:", patchedURL);
+        const patchedURL = regression_test_url.replace("http://kong:8000", "https://khoury-classroom-dev.ngrok.pizza")
+        console.log("Patched URL:", patchedURL);
 
-      return {
-        regression_test_url: patchedURL,
-        regression_test_sha: regressionTestRepoData.sha,
-      };
+        return {
+          regression_test_url: patchedURL,
+          regression_test_sha: regressionTestRepoData.sha,
+        };
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("Not Found")) {
+          throw new UserVisibleError(`Regression test repo not found: ${regressionTestRepoData.repository}`);
+        }
+        throw err;
+      }
     } catch (err) {
       console.error(err);
       // TODO update the submission status to failed, save error, etc
