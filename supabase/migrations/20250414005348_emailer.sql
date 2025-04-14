@@ -129,6 +129,6 @@ END
 $function$
 ;
 
-CREATE TRIGGER new_notification_trigger AFTER INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION notify_new_notification();
+CREATE OR REPLACE TRIGGER new_notification_trigger AFTER INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION notify_new_notification();
 
 
