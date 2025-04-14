@@ -6,6 +6,7 @@ export type AutograderRegressionTest =
 export type OutputFormat = "text" | "markdown" | "ansi";
 
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
+export type Notification = Database["public"]["Tables"]["notifications"]["Row"];
 export type OutputVisibility =
     | "hidden" // Never shown to students
     | "visible" // Always shown to students

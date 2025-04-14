@@ -38,7 +38,9 @@ function UserSettingsMenu() {
                 }
                 if (data) {
                     setProfile(data.profiles!)
-                    setGitHubUsername(data.users.github_username);
+                    if (data.users) {
+                        setGitHubUsername(data.users.github_username);
+                    }
                 }
             } else {
                 const { data, error } = await supabase.from('user_roles').select('profiles!private_profile_id(*), users(*)').
@@ -48,7 +50,9 @@ function UserSettingsMenu() {
                 }
                 if (data) {
                     setProfile(data.profiles!)
-                    setGitHubUsername(data.users.github_username);
+                    if (data.users) {
+                        setGitHubUsername(data.users.github_username);
+                    }
                 }
             }
         };

@@ -758,7 +758,7 @@ BEGIN
    WHEN 'INSERT' THEN
       SELECT EXISTS(SELECT 1 from public.users where user_id=NEW.id) INTO existing_profile;
       if not existing_profile then
-         INSERT INTO public.users (user_id) VALUES (NEW.id);
+         INSERT INTO public.users (user_id,email) VALUES (NEW.id,NEW.email);
       end if;
       SELECT id FROM public.classes WHERE is_demo LIMIT 1 INTO demo_class_id;
       if demo_class_id is not null then

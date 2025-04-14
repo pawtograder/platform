@@ -11,7 +11,7 @@ type NotificationTextProps = {
     notification: Notification;
 } & TextProps;
 
-type NotificationEnvelope = {
+export type NotificationEnvelope = {
     type: string;
 }
 export type DiscussionThreadNotification = NotificationEnvelope & {
@@ -21,6 +21,9 @@ export type DiscussionThreadNotification = NotificationEnvelope & {
     root_thread_id: number;
     reply_author_profile_id: string;
     teaser: string;
+
+    thread_name: string;
+    reply_author_name: string;
 }
 
 export type AssignmentGroupMemberNotification = NotificationEnvelope & {

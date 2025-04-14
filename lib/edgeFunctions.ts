@@ -1,8 +1,8 @@
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { createClient, FunctionsHttpError, SupabaseClient } from "@supabase/supabase-js";
+import { ListReposResponse } from "@/components/github/GitHubTypes";
 import * as FunctionTypes from "@/supabase/functions/_shared/FunctionTypes.js";
-import { CreateMeetingCommandOutput, CreateAttendeeCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
-import { ListFilesResponse, ListReposResponse } from "@/components/github/GitHubTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
+import { SupabaseClient } from "@supabase/supabase-js";
 export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>) {
     const { data, error } = await supabase.functions.invoke("autograder-create-repos-for-student");
 }
@@ -46,16 +46,16 @@ export async function githubRepoConfigureWebhook(params: FunctionTypes.GithubRep
     return JSON.parse(data) as { message: string };
 }
 export async function enrollmentAdd(params: FunctionTypes.AddEnrollmentRequest, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("enrollments-add", {
+    const { data } = await supabase.functions.invoke("enrollments-add", {
         body: params,
     });
-    const {error} = data as FunctionTypes.GenericResponse;
-    if(error){
+    const { error } = data as FunctionTypes.GenericResponse;
+    if (error) {
         throw new Error(error.message + ": " + error.details);
     }
 }
-export async function assignmentGroupLeave(params: {assignment_id: number}, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("assignment-group-leave", {
+export async function assignmentGroupLeave(params: { assignment_id: number }, supabase: SupabaseClient<Database>) {
+    const { data } = await supabase.functions.invoke("assignment-group-leave", {
         body: params,
     });
     const { error } = data as FunctionTypes.GenericResponse;
@@ -64,8 +64,8 @@ export async function assignmentGroupLeave(params: {assignment_id: number}, supa
     }
     return data as { message: string };
 }
-export async function assignmentGroupApproveRequest(params: {join_request_id: number, course_id: number}, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("assignment-group-approve-request", {
+export async function assignmentGroupApproveRequest(params: { join_request_id: number, course_id: number }, supabase: SupabaseClient<Database>) {
+    const { data } = await supabase.functions.invoke("assignment-group-approve-request", {
         body: params,
     });
     const { error } = data as FunctionTypes.GenericResponse;
@@ -75,7 +75,7 @@ export async function assignmentGroupApproveRequest(params: {join_request_id: nu
     return data as { message: string };
 }
 export async function assignmentGroupCreate(params: FunctionTypes.AssignmentGroupCreateRequest, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("assignment-group-create", {
+    const { data } = await supabase.functions.invoke("assignment-group-create", {
         body: params,
     });
     const { error } = data as FunctionTypes.GenericResponse;
@@ -84,18 +84,18 @@ export async function assignmentGroupCreate(params: FunctionTypes.AssignmentGrou
     }
 
 }
-export async function autograderSyncStaffTeam(params: {course_id: number}, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("autograder-sync-staff-team", {
+export async function autograderSyncStaffTeam(params: { course_id: number }, supabase: SupabaseClient<Database>) {
+    const { data } = await supabase.functions.invoke("autograder-sync-staff-team", {
         body: params,
     });
     const { error } = data as FunctionTypes.GenericResponse;
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return data as { };
+    return data as {};
 }
 export async function assignmentGroupJoin(params: FunctionTypes.AssignmentGroupJoinRequest, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("assignment-group-join", {
+    const { data } = await supabase.functions.invoke("assignment-group-join", {
         body: params,
     });
     const { error } = data as FunctionTypes.GenericResponse;
@@ -105,39 +105,39 @@ export async function assignmentGroupJoin(params: FunctionTypes.AssignmentGroupJ
     return data as { message: string, joined_group: boolean };
 }
 export async function assignmentGroupCopyGroupsFromAssignment(params: FunctionTypes.AssignmentGroupCopyGroupsFromAssignmentRequest, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("assignment-group-copy-groups-from-assignment", {
+    const { data } = await supabase.functions.invoke("assignment-group-copy-groups-from-assignment", {
         body: params,
     });
     const { error } = data as FunctionTypes.GenericResponse;
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return data as { };
+    return data as {};
 }
 export async function assignmentGroupInstructorMoveStudent(params: FunctionTypes.AssignmentGroupInstructorMoveStudentRequest, supabase: SupabaseClient<Database>) {
-    const { data} = await supabase.functions.invoke("assignment-group-instructor-move-student", {
+    const { data } = await supabase.functions.invoke("assignment-group-instructor-move-student", {
         body: params,
     });
     const { error } = data as FunctionTypes.GenericResponse;
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return data as { };
+    return data as {};
 }
-export async function activateSubmission(params: {submission_id: number}, supabase: SupabaseClient<Database>) {
+export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {
     const ret = await supabase.rpc("submission_set_active", {
         _submission_id: params.submission_id,
     });
-    if(ret.data){
+    if (ret.data) {
         return true;
     }
-    throw new EdgeFunctionError({details: "Failed to activate submission", message: "Failed to activate submission", recoverable: false});
+    throw new EdgeFunctionError({ details: "Failed to activate submission", message: "Failed to activate submission", recoverable: false });
 }
 export class EdgeFunctionError extends Error {
     details: string;
     recoverable: boolean;
-    
-    constructor({details, message, recoverable}: {details: string, message: string, recoverable: boolean}) {
+
+    constructor({ details, message, recoverable }: { details: string, message: string, recoverable: boolean }) {
         super(message);
         this.details = details;
         this.recoverable = recoverable;

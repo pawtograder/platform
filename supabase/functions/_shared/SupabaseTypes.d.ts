@@ -7,6 +7,66 @@ export type Json =
   | Json[]
 
 export type Database = {
+  pgmq_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      archive: {
+        Args: {
+          queue_name: string
+          message_id: number
+        }
+        Returns: boolean
+      }
+      delete: {
+        Args: {
+          queue_name: string
+          message_id: number
+        }
+        Returns: boolean
+      }
+      pop: {
+        Args: {
+          queue_name: string
+        }
+        Returns: unknown[]
+      }
+      read: {
+        Args: {
+          queue_name: string
+          sleep_seconds: number
+          n: number
+        }
+        Returns: unknown[]
+      }
+      send: {
+        Args: {
+          queue_name: string
+          message: Json
+          sleep_seconds?: number
+        }
+        Returns: number[]
+      }
+      send_batch: {
+        Args: {
+          queue_name: string
+          messages: Json[]
+          sleep_seconds?: number
+        }
+        Returns: number[]
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       assignment_group_invitations: {
@@ -115,6 +175,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "assignment_group_join_request_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
+          },
+          {
             foreignKeyName: "assignment_group_join_request_class_id_fkey"
             columns: ["class_id"]
             isOneToOne: false
@@ -182,6 +249,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "assignment_groups_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
+          },
+          {
             foreignKeyName: "assignment_groups_class_id_fkey"
             columns: ["class_id"]
             isOneToOne: false
@@ -239,6 +313,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "assignments"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_groups_members_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
           },
           {
             foreignKeyName: "assignment_groups_members_class_id_fkey"
@@ -436,6 +517,13 @@ export type Database = {
             isOneToOne: true
             referencedRelation: "assignments"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_configs_id_fkey"
+            columns: ["id"]
+            isOneToOne: true
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
           },
         ]
       }
@@ -1755,6 +1843,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "repositories_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
+          },
+          {
             foreignKeyName: "repositories_class_id_fkey"
             columns: ["class_id"]
             isOneToOne: false
@@ -2407,6 +2502,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "submissio_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
+          },
+          {
             foreignKeyName: "submissio_user_id_fkey1"
             columns: ["profile_id"]
             isOneToOne: false
@@ -2513,6 +2615,7 @@ export type Database = {
         Row: {
           avatar_url: string | null
           created_at: string
+          email: string | null
           github_username: string | null
           name: string | null
           user_id: string
@@ -2520,6 +2623,7 @@ export type Database = {
         Insert: {
           avatar_url?: string | null
           created_at?: string
+          email?: string | null
           github_username?: string | null
           name?: string | null
           user_id?: string
@@ -2527,6 +2631,7 @@ export type Database = {
         Update: {
           avatar_url?: string | null
           created_at?: string
+          email?: string | null
           github_username?: string | null
           name?: string | null
           user_id?: string
@@ -2627,6 +2732,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "assignments"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submissio_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
           },
           {
             foreignKeyName: "submissio_user_id_fkey1"
@@ -2981,6 +3093,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  pgmq_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       allowed_modes: ["private", "public", "question", "note"],
