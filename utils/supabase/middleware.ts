@@ -38,15 +38,16 @@ export const updateSession = async (request: NextRequest) => {
     // This will refresh session if expired - required for Server Components
     // https://supabase.com/docs/guides/auth/server-side/nextjs
     const user = await supabase.auth.getUser();
+    console.log(`Supabase middleware user: ${JSON.stringify(user)}`);
 
     // protected routes
     if (request.nextUrl.pathname.startsWith("/course") && user.error) {
       return NextResponse.redirect(new URL("/sign-in", request.url));
     }
-    const urlError = request.nextUrl.searchParams.get("error");
-    if (urlError && request.nextUrl.pathname !== "/error") {
-      return NextResponse.redirect(new URL(`/error?${request.nextUrl.searchParams.toString()}`, request.url));
-    }
+    // const urlError = request.nextUrl.searchParams.get("error");
+    // if (urlError && request.nextUrl.pathname !== "/error" && request.nextUrl.pathname !== "/sign-in") {
+      // return NextResponse.redirect(new URL(`/error?${request.nextUrl.searchParams.toString()}`, request.url));
+    // }
     if (request.nextUrl.pathname === "/" && !user.error) {
       return NextResponse.redirect(new URL("/course", request.url));
     }

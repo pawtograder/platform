@@ -11,6 +11,7 @@ export function encodedRedirect(
   type: "error" | "success",
   path: string,
   message: string,
+  params: Record<string, string> = {}
 ) {
-  return redirect(`${path}?${type}=${encodeURIComponent(message)}`);
+  return redirect(`${path}?${type}=${encodeURIComponent(message)}&${new URLSearchParams(params).toString()}`);
 }

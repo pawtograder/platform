@@ -1,10 +1,22 @@
 "use server";
 
-import { encodedRedirect } from "@/utils/utils";
 import { createClient } from "@/utils/supabase/server";
-import { headers } from "next/headers";
+import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
 
+export const setNewPasswordAction = async (formData: FormData) => {
+  const password = formData.get("password");
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.updateUser({
+    password: password as string,
+  });
+  if (error) {
+    return encodedRedirect("error", "/sign-in", error.message);
+  }
+  if(data.user) {
+    return encodedRedirect("success", "/course", "Password reset successfully");
+  }
+}
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
@@ -13,7 +25,19 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
     return signInWithEmailAction(email as string, password as string);
   } else if (action === "signup") {
     return signUpWithEmailAction(email as string, password as string);
+  } else if (action === "reset-password") {
+    return resetPasswordAction(email as string);
   }
+}
+export const resetPasswordAction = async (email: string) => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
+  });
+  if (error) {
+    return encodedRedirect("error", "/sign-in", error.message, { email });
+  }
+    return encodedRedirect("success", "/sign-in", "Password reset email sent", { email });
 }
 export const signInWithEmailAction = async (email: string, password: string) => {
   const supabase = await createClient();
@@ -22,7 +46,7 @@ export const signInWithEmailAction = async (email: string, password: string) => 
     password,
   })
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message);
+    return encodedRedirect("error", "/sign-in", error.message, { email });
   }
   if (data.user) {
     return redirect("/course");
@@ -39,6 +63,9 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
   })
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
+  }
+  if(!data.user?.confirmed_at) {
+    return encodedRedirect("success", "/sign-in", "Account created successfully, but must be confirmed. Please check your email for a confirmation link.");
   }
   if (data.user) {
     return redirect("/course");
