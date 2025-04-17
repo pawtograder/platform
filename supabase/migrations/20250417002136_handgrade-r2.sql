@@ -197,7 +197,7 @@ on "public"."rubric_checks"
 as permissive
 for all
 to public
-using (authorizeforclassinstructor(class_id));
+using (public.authorizeforclassinstructor(class_id));
 
 
 create policy "instructors CRUD"
@@ -205,7 +205,7 @@ on "public"."rubric_criteria"
 as permissive
 for all
 to public
-using (authorizeforclassinstructor(class_id));
+using (public.authorizeforclassinstructor(class_id));
 
 
 create policy "authorizeforclass"
@@ -213,7 +213,7 @@ on "public"."rubric_parts"
 as permissive
 for select
 to public
-using (authorizeforclass(class_id));
+using (public.authorizeforclass(class_id));
 
 
 create policy "instructors CRUD"
@@ -221,7 +221,7 @@ on "public"."rubric_parts"
 as permissive
 for all
 to public
-using (authorizeforclassinstructor(class_id));
+using (public.authorizeforclassinstructor(class_id));
 
 
 
