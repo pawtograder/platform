@@ -1,4 +1,3 @@
-import { CommentActions } from '@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/layout';
 import { Tooltip } from '@/components/ui/tooltip';
 import { useIsGraderOrInstructor } from '@/hooks/useClassProfiles';
 import { useRubricCheck, useSubmission, useSubmissionFile, useSubmissionFileComments, useSubmissionReview } from '@/hooks/useSubmission';
@@ -21,6 +20,7 @@ import MessageInput from './message-input';
 import PersonAvatar from './person-avatar';
 import { RubricMarkingMenu } from './rubric-marking-menu';
 import { Skeleton } from './skeleton';
+import { CommentActions } from './rubric-sidebar';
 type CodeLineCommentContextType = {
     submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
     comments: SubmissionFileComment[];

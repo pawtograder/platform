@@ -7,7 +7,7 @@ import {
     PopoverRoot,
     PopoverTrigger
 } from "@/components/ui/popover";
-import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { HydratedRubricCriteria, RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
@@ -224,7 +224,7 @@ function RubricView() {
     const isGraderOrInstructor = useIsGraderOrInstructor();
     const review = useSubmissionReview();
     const showHandGrading = isGraderOrInstructor || review?.released;
-    const criteria = submission.assignments.rubrics?.rubric_criteria;
+    const criteria = submission.assignments.rubrics?.rubric_criteria as HydratedRubricCriteria[];
     // rubrics.sort((a, b) => a.name.localeCompare(b.name));
     return <Box
         position="sticky"
