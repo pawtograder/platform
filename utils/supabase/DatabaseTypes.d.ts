@@ -3,10 +3,10 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
-export type ActiveSubmissionsWithGradesForAssignment = 
-Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
-    id: number;
-};
+export type ActiveSubmissionsWithGradesForAssignment =
+    Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
+        id: number;
+    };
 export type AuditEvent = Database["public"]["Tables"]["audit"]["Row"];
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
@@ -110,7 +110,7 @@ export type SubmissionReviewWithRubric = GetResult<
     Database["public"]["Tables"]["submission_reviews"]["Relationships"],
     "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
 >;
-export type SubmissionWithFilesGraderResultsOutputTestsAndRubric= GetResult<
+export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
     Database["public"],
     Database["public"]["Tables"]["submissions"]["Row"],
     "submissions",
@@ -186,7 +186,7 @@ export type RubricWithCriteriaAndChecks = GetResult<
     "rubrics",
     Database["public"]["Tables"]["rubrics"]["Relationships"],
     "*, rubric_criteria(*, rubric_checks(*))"
->;  
+>;
 export type RubricCriteriaWithRubricChecks = GetResult<
     Database["public"],
     Database["public"]["Tables"]["rubric_criteria"]["Row"],
@@ -342,3 +342,66 @@ export type PollResponseAnswer = GetResult<
     Database["public"]["Tables"]["poll_response_answers"]["Relationships"],
     "*"
 >;
+
+export type HydratedRubric = Rubric & {
+    rubric_parts: HydratedRubricPart[];
+}
+export type RubricPart = Database["public"]["Tables"]["rubric_parts"]["Row"];
+export type RubricCriteria = Database["public"]["Tables"]["rubric_criteria"]["Row"];
+export type RubricCheck = Database["public"]["Tables"]["rubric_checks"]["Row"];
+
+export type HydratedRubricPart = Omit<Database["public"]["Tables"]["rubric_parts"]["Row"], "data"> & {
+    rubric_criteria: HydratedRubricCriteria[];
+    data?: RubricPartsDataType;
+}
+export type HydratedRubricCriteria = Omit<Database["public"]["Tables"]["rubric_criteria"]["Row"], "data"> & {
+    rubric_checks: HydratedRubricCheck[];
+    data?: RubricCriteriaDataType;
+}
+export type RubricCriteriaDataType = {
+
+}
+export type HydratedRubricCheck = Omit<Database["public"]["Tables"]["rubric_checks"]["Row"], "data"> & {
+    data?: RubricChecksDataType;
+}
+export type RubricChecksDataType = {
+    options: {
+        label: string;
+        description?: string;
+        points: number;
+    }[];
+}
+export type HydratedRubricParts = Database["public"]["Tables"]["rubric_parts"]["Row"] & {
+    rubric_criteria: HydratedRubricCriteria[];
+    data: RubricPartsDataType;
+}
+export type RubricPartsDataType = {
+
+}
+
+export type YmlRubricType = Omit<HydratedRubric, "id" | "description" | "rubric_parts" | "class_id" | "created_at"> & {
+    parts: YmlRubricPartType[];
+    description?: string;
+}
+export type YmlRubricPartType = Omit<HydratedRubricPart, "id" | "rubric_criteria" | "description" | "ordinal" | "class_id" | "created_at" | "rubric_id"> & {
+    criteria: YmlRubricCriteriaType[];
+    id?: number;
+    description?: string;
+}
+export type YmlRubricCriteriaType = Omit<HydratedRubricCriteria, "id" | "class_id" | "rubric_checks" | "ordinal" | 'created_at' | "rubric_id" | "rubric_part_id" | "description" | "is_additive" | "max_checks_per_submission" | "min_checks_per_submission" | "total_points"> & {
+    checks: YmlRubricChecksType[];
+    id?: number;
+    description?: string;
+    is_additive?: boolean;
+    max_checks_per_submission?: number;
+    min_checks_per_submission?: number;
+    total_points?: number;
+}
+export type YmlRubricChecksType = Omit<HydratedRubricCheck, "id" | "class_id" | "ordinal" | 'created_at' | "group" | "rubric_criteria_id" | "rubric_parts" | "description" | "file" | "max_annotations"> & {
+    id?: number;
+    description?: string;
+    file?: string;
+    max_annotations?: number;
+}
+
+

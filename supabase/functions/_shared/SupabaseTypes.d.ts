@@ -16,47 +16,27 @@ export type Database = {
     }
     Functions: {
       archive: {
-        Args: {
-          queue_name: string
-          message_id: number
-        }
+        Args: { queue_name: string; message_id: number }
         Returns: boolean
       }
       delete: {
-        Args: {
-          queue_name: string
-          message_id: number
-        }
+        Args: { queue_name: string; message_id: number }
         Returns: boolean
       }
       pop: {
-        Args: {
-          queue_name: string
-        }
+        Args: { queue_name: string }
         Returns: unknown[]
       }
       read: {
-        Args: {
-          queue_name: string
-          sleep_seconds: number
-          n: number
-        }
+        Args: { queue_name: string; sleep_seconds: number; n: number }
         Returns: unknown[]
       }
       send: {
-        Args: {
-          queue_name: string
-          message: Json
-          sleep_seconds?: number
-        }
+        Args: { queue_name: string; message: Json; sleep_seconds?: number }
         Returns: number[]
       }
       send_batch: {
-        Args: {
-          queue_name: string
-          messages: Json[]
-          sleep_seconds?: number
-        }
+        Args: { queue_name: string; messages: Json[]; sleep_seconds?: number }
         Returns: number[]
       }
     }
@@ -555,18 +535,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
-      }
-      calculated_score: {
-        Row: {
-          sum: number | null
-        }
-        Insert: {
-          sum?: number | null
-        }
-        Update: {
-          sum?: number | null
-        }
-        Relationships: []
       }
       classes: {
         Row: {
@@ -1881,9 +1849,9 @@ export type Database = {
       }
       rubric_checks: {
         Row: {
-          allow_other_points: boolean
           class_id: number
           created_at: string
+          data: Json | null
           description: string | null
           file: string | null
           group: string | null
@@ -1897,15 +1865,15 @@ export type Database = {
           rubric_criteria_id: number
         }
         Insert: {
-          allow_other_points: boolean
           class_id: number
           created_at?: string
+          data?: Json | null
           description?: string | null
           file?: string | null
           group?: string | null
           id?: number
           is_annotation: boolean
-          is_comment_required: boolean
+          is_comment_required?: boolean
           max_annotations?: number | null
           name: string
           ordinal: number
@@ -1913,9 +1881,9 @@ export type Database = {
           rubric_criteria_id: number
         }
         Update: {
-          allow_other_points?: boolean
           class_id?: number
           created_at?: string
+          data?: Json | null
           description?: string | null
           file?: string | null
           group?: string | null
@@ -1949,37 +1917,46 @@ export type Database = {
         Row: {
           class_id: number
           created_at: string
+          data: Json | null
           description: string | null
           id: number
           is_additive: boolean
           max_checks_per_submission: number | null
           min_checks_per_submission: number | null
           name: string
+          ordinal: number
           rubric_id: number
+          rubric_part_id: number
           total_points: number
         }
         Insert: {
           class_id: number
           created_at?: string
+          data?: Json | null
           description?: string | null
           id?: number
           is_additive: boolean
           max_checks_per_submission?: number | null
           min_checks_per_submission?: number | null
           name: string
+          ordinal?: number
           rubric_id: number
+          rubric_part_id: number
           total_points: number
         }
         Update: {
           class_id?: number
           created_at?: string
+          data?: Json | null
           description?: string | null
           id?: number
           is_additive?: boolean
           max_checks_per_submission?: number | null
           min_checks_per_submission?: number | null
           name?: string
+          ordinal?: number
           rubric_id?: number
+          rubric_part_id?: number
           total_points?: number
         }
         Relationships: [
@@ -1992,6 +1969,61 @@ export type Database = {
           },
           {
             foreignKeyName: "rubric_criteria_rubric_id_fkey"
+            columns: ["rubric_id"]
+            isOneToOne: false
+            referencedRelation: "rubrics"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rubric_criteria_rubric_part_id_fkey"
+            columns: ["rubric_part_id"]
+            isOneToOne: false
+            referencedRelation: "rubric_parts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rubric_parts: {
+        Row: {
+          class_id: number
+          created_at: string
+          data: Json | null
+          description: string | null
+          id: number
+          name: string
+          ordinal: number
+          rubric_id: number
+        }
+        Insert: {
+          class_id: number
+          created_at?: string
+          data?: Json | null
+          description?: string | null
+          id?: number
+          name: string
+          ordinal: number
+          rubric_id: number
+        }
+        Update: {
+          class_id?: number
+          created_at?: string
+          data?: Json | null
+          description?: string | null
+          id?: number
+          name?: string
+          ordinal?: number
+          rubric_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rubric_parts_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rubric_parts_rubric_id_fkey"
             columns: ["rubric_id"]
             isOneToOne: false
             referencedRelation: "rubrics"
@@ -2831,9 +2863,7 @@ export type Database = {
     }
     Functions: {
       authorize_for_submission: {
-        Args: {
-          requested_submission_id: number
-        }
+        Args: { requested_submission_id: number }
         Returns: boolean
       }
       authorize_for_submission_reviewable: {
@@ -2844,65 +2874,39 @@ export type Database = {
         Returns: boolean
       }
       authorizeforassignmentgroup: {
-        Args: {
-          _assignment_group_id: number
-        }
+        Args: { _assignment_group_id: number }
         Returns: boolean
       }
       authorizeforclass: {
-        Args: {
-          class__id: number
-        }
+        Args: { class__id: number }
         Returns: boolean
       }
       authorizeforclassgrader: {
-        Args: {
-          class__id: number
-        }
+        Args: { class__id: number }
         Returns: boolean
       }
       authorizeforclassinstructor: {
-        Args: {
-          class__id: number
-        }
+        Args: { class__id: number }
         Returns: boolean
       }
       authorizeforinstructorofstudent: {
-        Args: {
-          _user_id: string
-        }
+        Args: { _user_id: string }
         Returns: boolean
       }
       authorizeforinstructororgraderofstudent: {
-        Args: {
-          _user_id: string
-        }
+        Args: { _user_id: string }
         Returns: boolean
       }
-      authorizeforpoll:
-        | {
-            Args: {
-              poll__id: number
-            }
-            Returns: boolean
-          }
-        | {
-            Args: {
-              poll__id: number
-              class__id: number
-            }
-            Returns: boolean
-          }
+      authorizeforpoll: {
+        Args: { poll__id: number } | { poll__id: number; class__id: number }
+        Returns: boolean
+      }
       authorizeforprofile: {
-        Args: {
-          profile_id: string
-        }
+        Args: { profile_id: string }
         Returns: boolean
       }
       custom_access_token_hook: {
-        Args: {
-          event: Json
-        }
+        Args: { event: Json }
         Returns: Json
       }
       generate_anon_name: {
@@ -2910,59 +2914,35 @@ export type Database = {
         Returns: string
       }
       get_user_id_by_email: {
-        Args: {
-          email: string
-        }
+        Args: { email: string }
         Returns: {
           id: string
         }[]
       }
       intval: {
-        Args: {
-          "": string
-        }
+        Args: { "": string }
         Returns: number
       }
       is_allowed_grader_key: {
-        Args: {
-          graderkey: string
-          class: number
-        }
+        Args: { graderkey: string; class: number }
         Returns: boolean
       }
       is_in_class: {
-        Args: {
-          userid: string
-          classid: number
-        }
+        Args: { userid: string; classid: number }
         Returns: boolean
       }
-      is_instructor_for_class:
-        | {
-            Args: {
-              _person_id: string
-              _class_id: number
-            }
-            Returns: boolean
-          }
-        | {
-            Args: {
-              _person_id: string
-              classid: number
-            }
-            Returns: boolean
-          }
+      is_instructor_for_class: {
+        Args:
+          | { _person_id: string; _class_id: number }
+          | { _person_id: string; classid: number }
+        Returns: boolean
+      }
       is_instructor_for_student: {
-        Args: {
-          _person_id: string
-          _student_id: string
-        }
+        Args: { _person_id: string; _student_id: string }
         Returns: boolean
       }
       submission_set_active: {
-        Args: {
-          _submission_id: number
-        }
+        Args: { _submission_id: number }
         Returns: boolean
       }
     }
