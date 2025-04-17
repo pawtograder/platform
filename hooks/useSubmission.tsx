@@ -177,7 +177,11 @@ export function SubmissionProvider({ submission_id, children }: { submission_id?
     </SubmissionContext.Provider>
 }
 export function useSubmissionFileComments({ file_id, onEnter, onLeave, onUpdate, onJumpTo }: { file_id?: number, onEnter?: (comment: SubmissionFileComment[]) => void, onLeave?: (comment: SubmissionFileComment[]) => void, onUpdate?: (comment: SubmissionFileComment[]) => void, onJumpTo?: (comment: SubmissionFileComment) => void }) {
-    const submissionController = useSubmissionController();
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
+    const submissionController = ctx.submissionController;
     const [comments, setComments] = useState<SubmissionFileComment[]>([]);
     useEffect(() => {
         const { unsubscribe, data } = submissionController.listGenericData<SubmissionFileComment>("submission_file_comments", (data, { entered, left, updated }) => {
@@ -202,7 +206,11 @@ export function useSubmissionFileComments({ file_id, onEnter, onLeave, onUpdate,
 }
 
 export function useSubmissionComments({ onEnter, onLeave, onUpdate, onJumpTo }: { onEnter?: (comment: SubmissionComments[]) => void, onLeave?: (comment: SubmissionComments[]) => void, onUpdate?: (comment: SubmissionComments[]) => void, onJumpTo?: (comment: SubmissionComments) => void }) {
-    const submissionController = useSubmissionController();
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
+    const submissionController = ctx.submissionController;
     const [comments, setComments] = useState<SubmissionComments[]>([]);
     useEffect(() => {
         const { unsubscribe, data } = submissionController.listGenericData<SubmissionComments>("submission_comments", (data, { entered, left, updated }) => {
@@ -345,6 +353,10 @@ export function useSubmission() {
     return controller.submission;
 }
 export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
     const fileComments = useSubmissionFileComments({});
     const submissionComments = useSubmissionComments({});
     if (!review_id) {
@@ -384,7 +396,11 @@ export function useRubricCriteriaInstances(
     throw new Error("Either criteria or rubric_id must be provided");
 }
 export function useSubmissionReview(reviewId?: number | null) {
-    const controller = useSubmissionController();
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return undefined;
+    }
+    const controller = ctx.submissionController;
     const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
     if (!reviewId) {
         reviewId = controller.submission.grading_review_id;

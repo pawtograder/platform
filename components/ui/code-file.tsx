@@ -1,11 +1,13 @@
 import { Tooltip } from '@/components/ui/tooltip';
 import { useIsGraderOrInstructor } from '@/hooks/useClassProfiles';
-import { useRubricCheck, useSubmission, useSubmissionFileComments, useSubmissionFile, useSubmissionReview } from '@/hooks/useSubmission';
+import { useRubricCheck, useSubmission, useSubmissionFile, useSubmissionFileComments, useSubmissionReview } from '@/hooks/useSubmission';
 import { useUserProfile } from '@/hooks/useUserProfiles';
-import { Rubric, RubricChecks, RubricCriteria, SubmissionFile, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from '@/utils/supabase/DatabaseTypes';
-import { Badge, Box, Button, Flex, HStack, Icon, NumberInput, Separator, Tag, Text, VStack } from '@chakra-ui/react';
+import { RubricChecks, RubricCriteria, SubmissionFile, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from '@/utils/supabase/DatabaseTypes';
+import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from '@chakra-ui/react';
+import { useCreate, useUpdate } from '@refinedev/core';
 import { common, createStarryNight } from '@wooorm/starry-night';
 import '@wooorm/starry-night/style/both';
+import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from 'chakra-react-select';
 import { format } from 'date-fns';
 import { Element, ElementContent, Root, RootContent } from 'hast';
 import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
@@ -14,15 +16,11 @@ import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } fr
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import LineCommentForm from './line-comments-form';
 import Markdown from './markdown';
-import PersonAvatar from './person-avatar';
-import { Skeleton } from './skeleton';
-import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from 'chakra-react-select';
 import MessageInput from './message-input';
-import { useCreate, useUpdate } from '@refinedev/core';
-import { LuArrowDown } from 'react-icons/lu';
-import { LuCircleX } from 'react-icons/lu';
+import PersonAvatar from './person-avatar';
 import { RubricMarkingMenu } from './rubric-marking-menu';
-import { CommentActions } from '@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/layout';
+import { Skeleton } from './skeleton';
+import { CommentActions } from './rubric-sidebar';
 type CodeLineCommentContextType = {
     submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
     comments: SubmissionFileComment[];
