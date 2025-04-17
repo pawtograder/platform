@@ -120,15 +120,15 @@ CREATE UNIQUE INDEX rubric_parts_pkey ON public.rubric_parts USING btree (id);
 
 alter table "public"."rubric_parts" add constraint "rubric_parts_pkey" PRIMARY KEY using index "rubric_parts_pkey";
 
-alter table "public"."rubric_criteria" add constraint "rubric_criteria_rubric_part_id_fkey" FOREIGN KEY (rubric_part_id) REFERENCES rubric_parts(id) not valid;
+alter table "public"."rubric_criteria" add constraint "rubric_criteria_rubric_part_id_fkey" FOREIGN KEY (rubric_part_id) REFERENCES "public".rubric_parts(id) not valid;
 
 alter table "public"."rubric_criteria" validate constraint "rubric_criteria_rubric_part_id_fkey";
 
-alter table "public"."rubric_parts" add constraint "rubric_parts_class_id_fkey" FOREIGN KEY (class_id) REFERENCES classes(id) not valid;
+alter table "public"."rubric_parts" add constraint "rubric_parts_class_id_fkey" FOREIGN KEY (class_id) REFERENCES public.classes(id) not valid;
 
 alter table "public"."rubric_parts" validate constraint "rubric_parts_class_id_fkey";
 
-alter table "public"."rubric_parts" add constraint "rubric_parts_rubric_id_fkey" FOREIGN KEY (rubric_id) REFERENCES rubrics(id) not valid;
+alter table "public"."rubric_parts" add constraint "rubric_parts_rubric_id_fkey" FOREIGN KEY (rubric_id) REFERENCES public.rubrics(id) not valid;
 
 alter table "public"."rubric_parts" validate constraint "rubric_parts_rubric_id_fkey";
 
