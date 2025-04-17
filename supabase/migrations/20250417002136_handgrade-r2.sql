@@ -1,4 +1,5 @@
 create schema if not exists "pgmq_public";
+create extension if not exists pgmq;
 
 set check_function_bodies = off;
 
