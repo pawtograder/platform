@@ -103,6 +103,13 @@ export type SubmissionWithFilesAndComments = GetResult<
     Database["public"]["Tables"]["submissions"]["Relationships"],
     "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*))), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
 >;
+export type SubmissionReview = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submission_reviews"]["Row"],
+    "submission_reviews",
+    Database["public"]["Tables"]["submission_reviews"]["Relationships"],
+    "*"
+>;
 export type SubmissionReviewWithRubric = GetResult<
     Database["public"],
     Database["public"]["Tables"]["submission_reviews"]["Row"],
@@ -343,6 +350,13 @@ export type PollResponseAnswer = GetResult<
     "*"
 >;
 
+export type LegacyRubricWithCriteriaAndChecks = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["rubrics"]["Row"],
+    "rubrics",
+    Database["public"]["Tables"]["rubrics"]["Relationships"],
+    "*, rubric_criteria(*, rubric_checks(*))"
+>;
 export type HydratedRubric = Rubric & {
     rubric_parts: HydratedRubricPart[];
 }

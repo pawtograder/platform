@@ -1858,6 +1858,7 @@ export type Database = {
           id: number
           is_annotation: boolean
           is_comment_required: boolean
+          is_required: boolean
           max_annotations: number | null
           name: string
           ordinal: number
@@ -1874,6 +1875,7 @@ export type Database = {
           id?: number
           is_annotation: boolean
           is_comment_required?: boolean
+          is_required?: boolean
           max_annotations?: number | null
           name: string
           ordinal: number
@@ -1890,6 +1892,7 @@ export type Database = {
           id?: number
           is_annotation?: boolean
           is_comment_required?: boolean
+          is_required?: boolean
           max_annotations?: number | null
           name?: string
           ordinal?: number

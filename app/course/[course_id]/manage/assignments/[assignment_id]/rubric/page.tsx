@@ -1,4 +1,5 @@
 'use client'
+import { Alert } from '@/components/ui/alert';
 import { useColorMode } from '@/components/ui/color-mode';
 import RubricSidebar from '@/components/ui/rubric-sidebar';
 import { toaster, Toaster } from "@/components/ui/toaster";
@@ -8,15 +9,18 @@ import Editor, { Monaco } from '@monaco-editor/react';
 import { useCreate, useDelete, useShow, useUpdate } from '@refinedev/core';
 import { configureMonacoYaml } from 'monaco-yaml';
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import * as YAML from 'yaml';
 
 function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataType | undefined {
     if (!check.data) {
         return undefined;
     }
+    if(check.data.options?.length === 1) {
+        throw new Error('Checks may not have only one option - they must have at least two options, or can have none');
+    }
     for (const option of check.data.options) {
-        if (!option.points) {
+        if (option.points === undefined || option.points === null) {
             throw new Error('Option points are required');
         }
         if (!option.label) {
@@ -33,6 +37,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
         file: valOrUndefined(check.file),
         group: valOrUndefined(check.group),
         is_annotation: check.is_annotation,
+        is_required: check.is_required,
         is_comment_required: check.is_comment_required,
         max_annotations: valOrUndefined(check.max_annotations),
         points: check.points,
@@ -77,6 +82,9 @@ function valOrNull<T>(value: T | null | undefined): T | null {
     return value === undefined ? null : value;
 }
 function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubricCheck[] {
+    if(checks.length === 0) {
+        throw new Error('Criteria must have at least one check');
+    }
     return checks.map((check, index) => ({
         id: check.id || -1,
         name: check.name,
@@ -92,7 +100,8 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
         is_annotation: check.is_annotation,
         is_comment_required: check.is_comment_required,
         max_annotations: valOrNull(check.max_annotations),
-        points: check.points
+        points: check.points,
+        is_required: check.is_required,
     }));
 }
 function YamlCriteriaToHydratedCriteria(part_id: number, criteria: YmlRubricCriteriaType[]): HydratedRubricCriteria[] {
@@ -114,6 +123,21 @@ function YamlCriteriaToHydratedCriteria(part_id: number, criteria: YmlRubricCrit
     }));
 }
 function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPart[] {
+    const partsWithIds = parts.filter(part => part.id);
+    const partIds = new Set(partsWithIds.map(part => part.id));
+    if (partIds.size !== partsWithIds.length) {
+        throw new Error('Duplicate part ids in YAML. If you intend to copy a part, simply remove the ID on the copy, and a new ID will be generated for the new part upon saving.');
+    }
+    const criteriaWithIds = parts.flatMap(part => part.criteria.filter(criteria => criteria.id));
+    const criteriaIds = new Set(criteriaWithIds.map(criteria => criteria.id));
+    if (criteriaIds.size !== criteriaWithIds.length) {
+        throw new Error('Duplicate criteria ids in YAML. If you intend to copy a criteria, simply remove the ID on the copy, and a new ID will be generated for the new criteria upon saving.');
+    }
+    const checksWithIds = parts.flatMap(part => part.criteria.flatMap(criteria => criteria.checks.filter(check => check.id)));
+    const checkIds = new Set(checksWithIds.map(check => check.id));
+    if (checkIds.size !== checksWithIds.length) {
+        throw new Error('Duplicate check ids in YAML. If you intend to copy a check, simply remove the ID on the copy, and a new ID will be generated for the new check upon saving.');
+    }
     return parts.map((part, index) => ({
         id: part.id || -1,
         name: part.name,
@@ -197,16 +221,53 @@ export default function RubricPage() {
     const existingRubric = assignment.data?.data.rubrics;
     const [value, setValue] = useState(existingRubric ? YAML.stringify(HydratedRubricToYamlRubric(existingRubric)) : '');
     const [rubric, setRubric] = useState<HydratedRubric | undefined>(existingRubric);
-    const [error, setError] = useState<boolean>(false);
+    const [error, setError] = useState<string | undefined>(undefined);
     const [errorMarkers, setErrorMarkers] = useState<{ message: string, startLineNumber: number }[]>([]);
     const { colorMode } = useColorMode();
     const { mutateAsync: updateResource } = useUpdate({});
     const { mutateAsync: deleteResource } = useDelete({});
     const { mutateAsync: createResource } = useCreate({})
+    const debounceTimeoutRef = useRef<NodeJS.Timeout>();
+    const [ updatePaused, setUpdatePaused ] = useState<boolean>(false);
+    const [canLoadDemo, setCanLoadDemo] = useState<boolean>(false);
+
+    const debouncedParseYaml = useCallback((value: string) => {
+        if (errorMarkers.length === 0) {
+            try {
+                setRubric(YamlRubricToHydratedRubric(YAML.parse(value)));
+                setError(undefined);
+            } catch (error) {
+                console.log(error);
+                setError(error instanceof Error ? error.message : 'Unknown error');
+            }
+        }
+    }, [errorMarkers.length]);
+
+    const handleEditorChange = useCallback((value: string | undefined, event: any) => {
+        if (value) {
+            setValue(value);
+            if (debounceTimeoutRef.current) {
+                clearTimeout(debounceTimeoutRef.current);
+            }
+            setUpdatePaused(true);
+            debounceTimeoutRef.current = setTimeout(() => {
+                debouncedParseYaml(value);
+                setUpdatePaused(false);
+            }, 2000);
+        }
+    }, [debouncedParseYaml]);
+
     useEffect(() => {
         setValue(existingRubric ? YAML.stringify(HydratedRubricToYamlRubric(existingRubric)) : '');
         setRubric(existingRubric);
     }, [existingRubric]);
+    useEffect(() => {
+        if(rubric && rubric.rubric_parts.length === 0) {
+            setCanLoadDemo(true);
+        } else {
+            setCanLoadDemo(false);
+        }
+    }, [rubric]);
 
     const updatePartIfChanged = useCallback(async (part: HydratedRubricPart, existingPart: HydratedRubricPart) => {
         if (part.id !== existingPart.id) {
@@ -313,12 +374,15 @@ export default function RubricPage() {
             resource: 'rubric_parts'
         })));
         await Promise.all(partChanges.toCreate.map(async part => {
-            part.class_id = assignment.data?.data.class_id || 0;
-            part.rubric_id = assignment.data?.data.rubrics.id || 0;
-
+            const partCopy = { ...part };
+            partCopy.class_id = assignment.data?.data.class_id || 0;
+            partCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
+            (partCopy as any).rubric_criteria = undefined;
+            (partCopy as any).id = undefined;
+            (partCopy as any).created_at = undefined;
             const createdPart = await createResource({
                 resource: 'rubric_parts',
-                values: part
+                values: partCopy
             })
             if (!createdPart.data.id) {
                 throw new Error('Failed to create part');
@@ -337,9 +401,15 @@ export default function RubricPage() {
 
         await Promise.all(criteriaChanges.toUpdate.map(criteria => updateCriteriaIfChanged(criteria, existingRubric.rubric_parts.find(p => p.id === criteria.rubric_part_id)?.rubric_criteria.find(c => c.id === criteria.id) as HydratedRubricCriteria)));
         await Promise.all(criteriaChanges.toCreate.map(async criteria => {
+            const criteriaCopy = { ...criteria };
+            criteriaCopy.class_id = assignment.data?.data.class_id || 0;
+            criteriaCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
+            (criteriaCopy as any).id = undefined;
+            (criteriaCopy as any).created_at = undefined;
+            (criteriaCopy as any).rubric_checks = undefined;
             const createdCriteria = await createResource({
                 resource: 'rubric_criteria',
-                values: criteria
+                values: criteriaCopy
             })
             if (!createdCriteria.data.id) {
                 throw new Error('Failed to create criteria');
@@ -351,15 +421,25 @@ export default function RubricPage() {
         allNewCriteria.forEach(criteria => {
             criteria.rubric_checks.forEach(check => {
                 check.rubric_criteria_id = criteria.id;
-                check.class_id = criteria.class_id;
+                check.class_id = assignment.data?.data.class_id || -1;
             });
         });
 
 
         await Promise.all(checkChanges.toUpdate.map(check => updateCheckIfChanged(check, allExistingChecks.find(c => c.id === check.id) as HydratedRubricCheck)));
         await Promise.all(checkChanges.toCreate.map(async check => {
-            check.class_id = assignment.data?.data.class_id || 0;
-            check.rubric_criteria_id = assignment.data?.data.rubrics.id || 0;
+            const checkCopy = { ...check };
+            (checkCopy as any).id = undefined;
+            (checkCopy as any).created_at = undefined;
+            (checkCopy as any).rubric_id = undefined;
+            const createdCheck = await createResource({
+                resource: 'rubric_checks',
+                values: checkCopy
+            })
+            if (!createdCheck.data.id) {
+                throw new Error('Failed to create check');
+            }
+            check.id = createdCheck.data.id as number;
         }));
     }, [rubric, existingRubric, assignment.data?.data.class_id, assignment.data?.data.rubrics.id]);
 
@@ -368,7 +448,13 @@ export default function RubricPage() {
             <VStack w="100%">
                 <HStack w="100%" mt={2} mb={2} justifyContent="space-between">
                     <Toaster />
-                    <Heading size="xl">{assignment.data?.data.title} Rubric</Heading>
+                    <HStack>
+                        <Heading size="xl">{assignment.data?.data.title} Rubric</Heading>
+                        {canLoadDemo && <Button variant="ghost" colorScheme="gray" onClick={() => {
+                            setValue(defaultRubric);
+                            setRubric(YamlRubricToHydratedRubric(YAML.parse(defaultRubric)));
+                        }}>Load Demo Rubric</Button>}
+                    </HStack>
                     <HStack pr={2}>
                         <Button variant="ghost" colorScheme="gray"
                             onClick={() => {
@@ -401,33 +487,20 @@ export default function RubricPage() {
                     value={value}
                     theme={colorMode === 'dark' ? 'vs-dark' : 'vs'}
                     onValidate={(markers) => {
-                        console.log(markers);
                         if (markers.length > 0) {
-                            setError(true);
+                            setError("YAML syntax error. Please fix the errors in the editor.");
                             setErrorMarkers(markers);
                         } else {
-                            setError(false);
+                            setError(undefined);
                             setErrorMarkers([]);
                         }
                     }}
-                    onChange={(value, event) => {
-                        if (value) {
-                            setValue(value);
-                            if (errorMarkers.length == 0) {
-                                try {
-                                    setRubric(YamlRubricToHydratedRubric(YAML.parse(value)));
-                                    setError(false);
-                                } catch (error) {
-                                    console.log(error);
-                                    setError(true);
-                                }
-                            }
-                        }
-                    }}
+                    onChange={handleEditorChange}
                 />
             </VStack>
         </Box>
         <Box w="lg" position="relative">
+            {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
             {!error && rubric && <RubricSidebar rubric={rubric} />}
             {error && (
                 <Box
@@ -443,7 +516,7 @@ export default function RubricPage() {
                     zIndex="1"
                 >
                     <VStack>
-                        <Text color="fg.error">Error in YAML syntax. Please fix the errors in the editor.</Text>
+                        <Text color="fg.error">{error}</Text>
                         <List.Root>
                             {errorMarkers.map((marker, index) => (
                                 <List.Item key={index}>
@@ -459,3 +532,186 @@ export default function RubricPage() {
     );
 
 }
+const defaultRubric = `
+name: Demo Rubric
+description: Edit or delete this rubric to create your own.
+parts:
+  - description: >
+      We might even include a complete description of the part of the assignment
+      here, you get markdown, you even get $\LaTeX$ basically everywhere!
+    name: Question 1
+    criteria:
+      - description: Overall conformance to our course [style
+          guide](https://neu-se.github.io/CS4530-Spring-2024/policies/style/).
+          All of these checks happen to be "annotations," which means they are
+          applied directly to line(s) of code. Scoring is **negative** which
+          means each check deducts points from the total points for this
+          criteria.
+        is_additive: false
+        name: Design rules
+        total_points: 15
+        checks:
+          - name: Non-compliant name
+            description: All new names (e.g. for local variables, methods, and properties)
+              follow the naming conventions defined in our style guide (Max 6
+              annotations per-submission, comment required)
+            is_annotation: true
+            is_required: false
+            is_comment_required: true
+            max_annotations: 6
+            points: 2
+          - name: Missing documentation
+            description: Max 10 annotations per-submission. Comment optional.
+            is_annotation: true
+            is_required: false
+            is_comment_required: false
+            max_annotations: 10
+            points: 2
+      - description: This is an example of a criteria that has multiple checks, and only
+          one can be selected.
+        is_additive: true
+        name: Overall design quality
+        total_points: 10
+        max_checks_per_submission: 1
+        min_checks_per_submission: 1
+        checks:
+          - name: It's the best
+            description: This is *great* and has low coupling and high cohesion, something
+              something objects.
+            is_annotation: false
+            is_required: false
+            is_comment_required: false
+            max_annotations: 1
+            points: 10
+          - name: It's mediocre
+            description: Something's not quite right, the grader has added comments to
+              explain
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            max_annotations: 1
+            points: 5
+      - description: This is additive scoring with multiple checks. Each check has
+          multiple options. Graders must select one option for each check.
+        is_additive: true
+        name: Test case quality
+        total_points: 10
+        checks:
+          - name: Submission-level check, select one option
+            description: This check demonstrates having an "option". The grader selects the
+              option from this sidebar. This check is required.
+            file: src/test/java/com/pawtograder/example/java/EntrypointTest.java
+            is_annotation: false
+            is_required: true
+            is_comment_required: false
+            points: 4
+            data:
+              options:
+                - label: Satisfactory
+                  points: 10
+                - label: Marginal
+                  points: 5
+                - label: Unacceptable
+                  points: 0
+          - name: File-level check, select one option
+            description: This check demonstrates having an "option". The grader selects the
+              option by marking a line. This check is required.
+            file: src/test/java/com/pawtograder/example/java/EntrypointTest.java
+            is_annotation: true
+            is_required: true
+            is_comment_required: false
+            max_annotations: 1
+            points: 4
+            data:
+              options:
+                - label: Satisfactory
+                  points: 10
+                - label: Marginal
+                  points: 5
+                - label: Unacceptable
+                  points: 0
+  - name: Part 2
+    description: This is another part/question. You might assign grading per-part,
+      and we'll track what's been done and what hasn't.
+    criteria:
+      - name: A big criteria with checkboxes, positive scoring
+        description: Some use-cases might call for having graders tick boxes to add
+          points. This will require at least 2 and at most 4 boxes to be ticked.
+        is_additive: true
+        total_points: 10
+        max_checks_per_submission: 4
+        min_checks_per_submission: 2
+        checks:
+          - name: Some option 1
+            description: This might be useful for $O(n^2)$ having more details describing
+              the attribute
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 2
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 3
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 4
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 5
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 6
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+      - description: Some use-cases might call for having graders tick boxes to deduct
+          points. This will require at least 2 and at most 4 boxes to be ticked.
+        is_additive: false
+        name: A big criteria with checkboxes, NEGATIVE scoring
+        total_points: 10
+        max_checks_per_submission: 4
+        min_checks_per_submission: 2
+        checks:
+          - name: Some option 1
+            description: This might be useful for $O(n^2)$ having more details describing
+              the attribute
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 2
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 3
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 4
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 5
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+          - name: Some option 6
+            is_annotation: false
+            is_required: false
+            is_comment_required: true
+            points: 2
+`

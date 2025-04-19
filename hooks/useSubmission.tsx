@@ -1,11 +1,12 @@
 'use client';
 import { toaster } from "@/components/ui/toaster";
-import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFile, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
+import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFile, SubmissionFileComment, SubmissionReview, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
+import { check } from "prettier";
 
 type ListUpdateCallback<T> = (data: T[], { entered, left, updated }: {
     entered: T[],
@@ -352,6 +353,19 @@ export function useSubmission() {
     const controller = useSubmissionController();
     return controller.submission;
 }
+export function useAllRubricCheckInstances(review_id: number | undefined) {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
+    const fileComments = useSubmissionFileComments({});
+    const submissionComments = useSubmissionComments({});
+    if (!review_id) {
+        return [];
+    }
+    const comments = [...fileComments, ...submissionComments];
+    return comments.filter((c) => c.submission_review_id === review_id);
+}
 export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
     const ctx = useContext(SubmissionContext);
     if (!ctx) {
@@ -365,6 +379,13 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
     const comments = [...fileComments, ...submissionComments];
     return comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
 }
+export function useSubmissionRubric() {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return undefined;
+    }
+    return ctx.submissionController.submission.assignments.rubrics;
+}
 export function useRubricCriteriaInstances(
     { criteria, review_id, rubric_id }: {
         criteria?: RubricCriteriaWithRubricChecks,
@@ -374,6 +395,7 @@ export function useRubricCriteriaInstances(
     const fileComments = useSubmissionFileComments({});
     const submissionComments = useSubmissionComments({});
     const review = useSubmissionReview(review_id);
+    const rubric = useSubmissionRubric();
     if (!review_id) {
         return [];
     }
@@ -385,7 +407,7 @@ export function useRubricCriteriaInstances(
             criteria.rubric_checks.find((eachCheck) => eachCheck.id === eachComment.rubric_check_id));
     }
     if (rubric_id) {
-        const allCriteria = review?.rubrics?.rubric_criteria || [];
+        const allCriteria = rubric?.rubric_criteria || [];
         const allChecks = allCriteria.flatMap((eachCriteria) => eachCriteria.rubric_checks || []);
         return comments.filter((eachComment) =>
             eachComment.submission_review_id === review_id
@@ -401,7 +423,7 @@ export function useSubmissionReview(reviewId?: number | null) {
         return undefined;
     }
     const controller = ctx.submissionController;
-    const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
+    const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
     if (!reviewId) {
         reviewId = controller.submission.grading_review_id;
         if (!reviewId) {
@@ -409,7 +431,7 @@ export function useSubmissionReview(reviewId?: number | null) {
         }
     }
     useEffect(() => {
-        const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReviewWithRubric>("submission_reviews", reviewId, (data) => {
+        const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReview>("submission_reviews", reviewId, (data) => {
             setReview(data);
         });
         setReview(data);

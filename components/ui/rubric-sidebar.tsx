@@ -1,38 +1,24 @@
 'use client'
 import { Button } from "@/components/ui/button";
-import {
-    PopoverArrow,
-    PopoverBody,
-    PopoverContent,
-    PopoverRoot,
-    PopoverTrigger
-} from "@/components/ui/popover";
-import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria, HydratedRubricPart, RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria, HydratedRubricPart, RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
+import { Box, Heading, HStack, Menu, Portal, RadioGroup, Text, VStack } from "@chakra-ui/react";
 
-import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { Checkbox } from "@/components/ui/checkbox";
-import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
-import PersonName from "@/components/ui/person-name";
 import { Radio } from "@/components/ui/radio";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { SubmissionProvider, useRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview } from "@/hooks/useSubmission";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { activateSubmission } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
-import NextLink from "next/link";
-import { useParams, usePathname, useRouter } from "next/navigation";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
-import { FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
 export function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComment | SubmissionComments, setIsEditing: (isEditing: boolean) => void }) {
     const { private_profile_id } = useClassProfiles();
     const { mutateAsync: updateComment } = useUpdate({
@@ -53,10 +39,10 @@ export function CommentActions({ comment, setIsEditing }: { comment: SubmissionF
         }
     }}>
         <Menu.Trigger asChild>
-            <Button 
-            p={0}
-            m={0}
-            colorPalette="blue" variant="ghost" size="2xs"><Icon as={BsThreeDots} /></Button>
+            <Button
+                p={0}
+                m={0}
+                colorPalette="blue" variant="ghost" size="2xs"><Icon as={BsThreeDots} /></Button>
         </Menu.Trigger>
         <Portal>
             <Menu.Positioner>
@@ -97,6 +83,8 @@ export function RubricCheckComment({ comment, criteria }: { comment: SubmissionF
             </HStack>
         </Box>
         <Box
+            pl={1}
+            pr={1}
             color="fg.muted">
             <HStack gap={1}>
                 {criteria.is_additive ? <><Icon as={FaCheckCircle} color="green.500" />+{comment.points}</> : <><Icon as={FaTimesCircle} color="red.500" />-{comment.points}</>} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}
@@ -125,7 +113,8 @@ export function RubricCheckComment({ comment, criteria }: { comment: SubmissionF
 export function RubricCheckAnnotation({ check, criteria }: { check: HydratedRubricCheck, criteria: HydratedRubricCriteria }) {
     const review = useSubmissionReview();
     const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, review?.id);
-    return <>
+    const gradingIsRequired = review && check.is_required && rubricCheckComments.length == 0;
+    return <Box border="1px solid" borderColor={gradingIsRequired ? "border.error" : "border.emphasized"} borderRadius="md" p={1} w="100%">
         <HStack>
             <Tooltip content="This check is an annotation, it can only be applied by clicking on a specific line of code.">
                 <Icon as={BsFileEarmarkCodeFill} size="xs" />
@@ -135,13 +124,8 @@ export function RubricCheckAnnotation({ check, criteria }: { check: HydratedRubr
         <Markdown style={{
             fontSize: "0.8rem",
         }}>{check.description}</Markdown>
-        {check.data?.options && <VStack align="flex-start" w="100%" gap={0}>
-            {check.data.options.map((option, index) => <Radio
-                disabled={rubricCheckComments.length > 0 || !review}
-                key={option.label+"-"+index} value={option.points.toString()}>{option.label} ({criteria.is_additive ? "+" : "-"}{option.points})</Radio>)}
-        </VStack>}
         {rubricCheckComments.map((comment) => <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} />)}
-    </>
+    </Box>
 }
 
 export function RubricCheckGlobal({ check, criteria, isSelected }: { check: HydratedRubricCheck, criteria: HydratedRubricCriteria, isSelected: boolean }) {
@@ -157,11 +141,40 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
         setIsEditing(isSelected && rubricCheckComments.length === 0 && criteria.max_checks_per_submission != criteriaCheckComments.length);
     }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
 
+
     const points = criteria.is_additive ? `+${check.points}` : `-${check.points}`;
+    const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
+    const hasOptions = check.data?.options && check.data.options.length > 0; // If we have options, we will always show the options for this check as radios.
+    const _selectedOptionIndex = hasOptions && rubricCheckComments.length == 1 ? check.data!.options.findIndex((option) => option.points === rubricCheckComments[0].points) : undefined;
+    const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
+    const gradingIsRequired = review && check.is_required && rubricCheckComments.length == 0;
+    const gradingIsPermitted = review && criteria.max_checks_per_submission !== null && criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000);
     return <>
         <HStack>
-            {criteria.max_checks_per_submission != 1 ? <Checkbox
-                disabled={rubricCheckComments.length > 0 || !review}
+            {hasOptions && <VStack align="flex-start" w="100%" gap={0}
+            borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+            borderWidth={gradingIsRequired ? "1px" : "0px"}
+            borderRadius="md"
+            p={1}
+            >
+                <Text fontSize="sm">{check.name}</Text>
+                {gradingIsRequired && <Text fontSize="xs" color="fg.error">Select one:</Text>}
+                <RadioGroup.Root
+                    value={selectedOptionIndex?.toString()}
+                    onValueChange={(value) => {
+                        const selectedOption = check.data!.options[parseInt(value.value)];
+                        if (selectedOption) {
+                            setSelectedOptionIndex(parseInt(value.value));
+                            setIsEditing(true);
+                        }
+                    }}>
+                    {check.data!.options.map((option, index) => <Radio
+                        disabled={rubricCheckComments.length > 0 || !review}
+                        key={option.label + "-" + index} value={index.toString()}>{criteria.is_additive ? "+" : "-"}{option.points} {option.label}</Radio>)}
+                </RadioGroup.Root>
+            </VStack>}
+            {(!hasOptions && format == 'checkbox') && <Checkbox
+                disabled={rubricCheckComments.length > 0 || !review || !gradingIsPermitted}
                 checked={selected} onCheckedChange={(newState) => {
                     if (newState.checked) {
                         setIsEditing(true);
@@ -171,18 +184,19 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
                     setSelected(newState.checked ? true : false);
                 }}>
                 <Text>{points} {check.name}</Text>
-            </Checkbox> : <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !review}>
+            </Checkbox>}
+            {(!hasOptions && format == 'radio') && <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !review}>
                 <Text>{points} {check.name}</Text>
             </Radio>}
         </HStack>
         <Markdown style={{
             fontSize: "0.8rem",
         }}>{check.description}</Markdown>
-        {isEditing && <SubmissionCommentForm check={check} criteria={criteria} />}
+        {isEditing && <SubmissionCommentForm check={check} criteria={criteria} selectedOptionIndex={selectedOptionIndex} />}
         {rubricCheckComments.map((comment) => <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} />)}
     </>
 }
-function SubmissionCommentForm({ check, criteria }: { check: HydratedRubricCheck, criteria: HydratedRubricCriteria }) {
+function SubmissionCommentForm({ check, criteria, selectedOptionIndex }: { check: HydratedRubricCheck, criteria: HydratedRubricCriteria, selectedOptionIndex?: number }) {
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
     const review = useSubmissionReview();
     const submission = useSubmission();
@@ -194,6 +208,7 @@ function SubmissionCommentForm({ check, criteria }: { check: HydratedRubricCheck
             messageInputRef.current.focus();
         }
     }, []);
+    const selectedOption = selectedOptionIndex !== undefined ? check.data!.options[selectedOptionIndex] : undefined;
     return <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%"
         fontSize="sm">
         <Box bg="bg.inverted" pl={1} borderTopRadius="md">
@@ -205,17 +220,21 @@ function SubmissionCommentForm({ check, criteria }: { check: HydratedRubricCheck
             }
             sendButtonText="Add Check"
             sendMessage={async (message, profile_id) => {
+                let comment = message || '';
+                if (selectedOptionIndex !== undefined) {
+                    comment = selectedOption?.label + "\n" + comment;
+                }
                 const values = {
-                    comment: message || '',
+                    comment,
                     rubric_check_id: check.id,
                     class_id: submission.class_id,
                     submission_id: submission.id,
                     author: profile_id,
-                    points: check.points,
+                    points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
                     released: false,
                     submission_review_id: review!.id
                 }
-               await createComment({ values });
+                await createComment({ values });
 
             }}
             defaultSingleLine={true}
@@ -224,8 +243,10 @@ function SubmissionCommentForm({ check, criteria }: { check: HydratedRubricCheck
     </Box>
 }
 function RubricCheck({ criteria, check, isSelected }: { criteria: HydratedRubricCriteria, check: HydratedRubricCheck, isSelected: boolean }) {
-    return <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
-        {check.is_annotation ? <RubricCheckAnnotation check={check} criteria={criteria} /> : <RubricCheckGlobal check={check} criteria={criteria} isSelected={isSelected} />}
+    return <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%"
+    >
+        {check.is_annotation ? <RubricCheckAnnotation check={check} criteria={criteria} /> :
+                                <RubricCheckGlobal check={check} criteria={criteria} isSelected={isSelected} />}
     </Box>
 }
 
@@ -241,7 +262,7 @@ export function RubricCriteria({ criteria }: { criteria: HydratedRubricCriteria 
     } else {
         pointsText = `${criteria.total_points - totalPoints}/${criteria.total_points}`;
     }
-    const gradingIsRequired = comments.length < (criteria.min_checks_per_submission || 0);
+    const gradingIsRequired = review && comments.length < (criteria.min_checks_per_submission || 0);
     let instructions = "";
     if (criteria.min_checks_per_submission) {
         if (criteria.max_checks_per_submission) {
@@ -271,7 +292,7 @@ export function RubricCriteria({ criteria }: { criteria: HydratedRubricCriteria 
                 onValueChange={(value) => {
                     setSelectedCheck(criteria.rubric_checks.find((check) => check.id.toString() === value.value));
                 }}>
-                {criteria.rubric_checks.map((check) => <RubricCheck key={check.id} criteria={criteria} check={check} isSelected={selectedCheck?.id === check.id} />)}
+                {criteria.rubric_checks.map((check, index) => <RubricCheck key={`check-${check.id}-${index}`} criteria={criteria} check={check} isSelected={selectedCheck?.id === check.id} />)}
             </RadioGroup.Root>
         </VStack>
     </Box>
@@ -282,7 +303,7 @@ export function RubricPart({ part }: { part: HydratedRubricPart }) {
         <Heading size="md">{part.name}</Heading>
         <Markdown>{part.description}</Markdown>
         <VStack align="start" w="md">
-            {part.rubric_criteria.sort((a, b) => a.ordinal - b.ordinal).map((criteria) => <RubricCriteria key={criteria.id} criteria={criteria} />)}
+            {part.rubric_criteria.sort((a, b) => a.ordinal - b.ordinal).map((criteria, index) => <RubricCriteria key={`criteria-${criteria.id}-${index}`} criteria={criteria} />)}
         </VStack>
     </Box>
 }
@@ -299,7 +320,7 @@ export function RubricSidebar({ rubric, }: { rubric: HydratedRubric }) {
     >
         <VStack align="start" w="md">
             <Heading size="xl">Grading Summary</Heading>
-            {rubric.rubric_parts.sort((a, b) => a.ordinal - b.ordinal).map((part) => <RubricPart key={part.id} part={part} />)}
+            {rubric.rubric_parts.sort((a, b) => a.ordinal - b.ordinal).map((part) => <RubricPart key={part.name + "-" + part.id} part={part} />)}
         </VStack>
     </Box>
 }

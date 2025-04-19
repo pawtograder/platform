@@ -2,7 +2,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { useIsGraderOrInstructor } from '@/hooks/useClassProfiles';
 import { useRubricCheck, useSubmission, useSubmissionFile, useSubmissionFileComments, useSubmissionReview } from '@/hooks/useSubmission';
 import { useUserProfile } from '@/hooks/useUserProfiles';
-import { RubricChecks, RubricCriteria, SubmissionFile, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from '@/utils/supabase/DatabaseTypes';
+import { HydratedRubricCriteria, HydratedRubricCheck, RubricChecks, RubricCriteria, SubmissionFile, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from '@/utils/supabase/DatabaseTypes';
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from '@chakra-ui/react';
 import { useCreate, useUpdate } from '@refinedev/core';
 import { common, createStarryNight } from '@wooorm/starry-night';
@@ -293,7 +293,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     const gradingReview = useSubmissionReview(comment.submission_review_id);
     const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
 
-    const pointsText = rubricCriteria.is_additive ? `+${rubricCheck.points}` : `-${rubricCheck.points}`;
+    const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
     const commentAuthor = useUserProfile(comment.author);
     const [isEditing, setIsEditing] = useState(false);
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -359,7 +359,7 @@ function CodeLineComment({ comment, submission }: { comment: SubmissionFileComme
                     <HStack>{isAuthor || authorProfile?.flair ? <Tag.Root size="md" colorScheme={isAuthor ? "green" : "gray"} variant="surface">
                         <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
                     </Tag.Root> : <></>}
-                    <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                        <CommentActions comment={comment} setIsEditing={setIsEditing} />
                     </HStack>
                 </HStack>
                 <Box pl={2}>
@@ -391,20 +391,27 @@ export type LineActionPopupProps = {
     mode: "marking" | "select";
 }
 
-export type GroupedRubricOptions = {
+export type RubricCriteriaSelectGroupOption = {
     readonly label: string;
     readonly value: string;
-    readonly options: readonly CheckOption[];
-    readonly criteria?: RubricCriteria;
+    readonly options: readonly RubricCheckSelectOption[];
+    readonly criteria?: HydratedRubricCriteria;
 }
-export type CheckOption = {
+export type RubricCheckSelectOption = {
     readonly label: string;
     readonly value: string;
-    readonly check?: RubricChecks;
-    readonly criteria?: RubricCriteria;
+    readonly check?: HydratedRubricCheck;
+    readonly criteria?: HydratedRubricCriteria;
+    options?: RubricCheckSubOptions[];
 }
-
-function formatPoints(option: CheckOption) {
+export type RubricCheckSubOptions = {
+    readonly label: string;
+    readonly index: string;
+    readonly comment: string;
+    readonly points: number;
+    readonly check: RubricCheckSelectOption;
+}
+function formatPoints(option: { check?: HydratedRubricCheck, criteria?: HydratedRubricCriteria, points: number }) {
     if (option.check && option.criteria) {
         return `Points: ${option.criteria.is_additive ? "+" : "-"}${option.check.points}`;
     }
@@ -414,8 +421,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
     const submission = useSubmission();
     const file = useSubmissionFile();
     const review = useSubmissionReview();
-    const [selectedOption, setSelectedOption] = useState<CheckOption | null>(null);
-    const selectRef = useRef<SelectInstance<CheckOption, false, GroupedRubricOptions>>(null);
+    const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
+    const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
+    const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
     const [points, setPoints] = useState<string>();
     const popupRef = useRef<HTMLDivElement>(null);
@@ -431,34 +439,32 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
                 close();
             }
         };
-
         if (visible) {
             document.addEventListener('mousedown', handleClickOutside);
         }
-
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [visible, close]);
 
     useEffect(() => {
-        setSelectedOption(null);
+        setSelectedCheckOption(null);
     }, [lineNumber]);
     useEffect(() => {
-        if (selectedOption) {
-            if (selectedOption.check) {
-                setPoints(selectedOption.check.points.toString());
+        if (selectedCheckOption) {
+            if (selectedCheckOption.check) {
+                setPoints(selectedCheckOption.check.points.toString());
             }
         }
         if (messageInputRef.current) {
             messageInputRef.current.focus();
         }
-    }, [selectedOption, messageInputRef.current]);
+    }, [selectedCheckOption, messageInputRef.current]);
     useEffect(() => {
-        if (selectRef.current && !selectedOption) {
+        if (selectRef.current && !selectedCheckOption) {
             selectRef.current.focus();
         }
-    }, [selectRef.current, selectedOption, lineNumber]);
+    }, [selectRef.current, selectedCheckOption, lineNumber]);
     useEffect(() => {
         setCurrentMode(mode);
     }, [mode]);
@@ -470,103 +476,142 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
     if (!visible) {
         return null;
     }
-    const checks: GroupedRubricOptions[] = submission.assignments.rubrics?.rubric_criteria.map((criteria) => ({
+    //Only show criteria that have annotation checks
+    const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) => criteria.rubric_checks.some((check) => check.is_annotation));
+    const criteria: RubricCriteriaSelectGroupOption[] = criteriaWithAnnotationChecks?.map((criteria) => ({
         label: criteria.name,
         value: criteria.id.toString(),
-        criteria,
-        options: criteria.rubric_checks.map((check) => ({
-            label: check.name,
-            value: check.id.toString(),
-            check,
-            criteria
-        }))
-    })) || [];
-    checks.push({
+        criteria: criteria as HydratedRubricCriteria,
+        options: (criteria.rubric_checks.filter((check) => check.is_annotation) as HydratedRubricCheck[]).map((check) => {
+            const option: RubricCheckSelectOption = {
+                label: check.name,
+                value: check.id.toString(),
+                check,
+                criteria: criteria as HydratedRubricCriteria,
+                options: []
+            }
+            if (check.data?.options) {
+                option.options = check.data.options.map((subOption, index) => ({
+                    label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
+                    comment: subOption.label,
+                    index: index.toString(),
+                    points: subOption.points,
+                    check: option
+                }));
+            }
+            return option;
+        })
+    })) as RubricCriteriaSelectGroupOption[] || [];
+criteria.push({
+    label: "Leave a comment",
+    value: "comment",
+    options: [{
         label: "Leave a comment",
-        value: "comment",
-        options: [{
-            label: "Leave a comment",
-            value: "comment"
-        }]
-    })
-    if (currentMode === "marking") {
-        return <RubricMarkingMenu top={top} left={left} checks={checks} setSelectedOption={setSelectedOption} setCurrentMode={setCurrentMode} />
+        value: "comment"
+    }]
+})
+if (currentMode === "marking") {
+    return <RubricMarkingMenu top={top} left={left} criteria={criteria}
+        setSelectedSubOption={setSelectedSubOption}
+        setSelectedCheckOption={setSelectedCheckOption}
+        setCurrentMode={setCurrentMode} />
+}
+const components: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
+    GroupHeading: (props) => {
+        return <chakraComponents.GroupHeading {...props}>
+            {props.data.criteria ? <>
+                Criteria: {props.data.label} ({props.data.criteria.total_points} points total)
+            </> : <>
+                <Separator />
+            </>}
+        </chakraComponents.GroupHeading>
+    },
+    SingleValue: (props) => {
+        const points = props.data.criteria && "(" + (props.data.criteria.is_additive ? "+" : "-" + props.data.check?.points?.toString()) + ")";
+        return <chakraComponents.SingleValue {...props}>
+            {props.data.criteria && props.data.criteria.name + " > "} {props.data.label} {props.data.check?.data?.options ? `(Select an option)` : `${points} points`}
+        </chakraComponents.SingleValue>
+    },
+    Option: (props) => {
+        const points = props.data.criteria && "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")";
+        return <chakraComponents.Option {...props}>
+            {props.data.label} {points}
+        </chakraComponents.Option>
     }
-    const components: SelectComponentsConfig<CheckOption, false, GroupedRubricOptions> = {
-        GroupHeading: (props) => {
-            return <chakraComponents.GroupHeading {...props}>
-                {props.data.criteria ? <>
-                    Criteria: {props.data.label} ({props.data.criteria.total_points} points total)
-                </> : <>
-                    <Separator />
-                </>}
-            </chakraComponents.GroupHeading>
-        },
-        SingleValue: (props) => {
-            const points = props.data.criteria && "(" + (props.data.criteria.is_additive ? "+" : "-" + props.data.check?.points?.toString()) + ")";
-            return <chakraComponents.SingleValue {...props}>
-                {props.data.criteria && props.data.criteria.name + " > "} {props.data.label} {points}
-            </chakraComponents.SingleValue>
-        },
-        Option: (props) => {
-            const points = props.data.criteria && "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")";
-            return <chakraComponents.Option {...props}>
-                {props.data.label} {points}
-            </chakraComponents.Option>
-        }
-    };
+};
 
-    return <Box zIndex={1000} top={top} left={left}
-        position="fixed"
-        bg="bg.subtle"
-        w="lg"
-        p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md"
-        ref={popupRef}>
-        <Box width="lg">
-            <Text fontSize="sm" color="fg.muted">Annotate line {lineNumber} with a check:</Text>
-            <Select
-                ref={selectRef}
-                options={checks}
-                defaultMenuIsOpen={selectedOption === null}
-                escapeClearsValue={true}
-                components={components}
-                value={selectedOption}
-                onChange={(e: CheckOption | null) => {
-                    if (e) {
-                        setSelectedOption(e);
-                    }
+return <Box zIndex={1000} top={top} left={left}
+    position="fixed"
+    bg="bg.subtle"
+    w="lg"
+    p={2} border="1px solid" borderColor="border.emphasized" borderRadius="md"
+    ref={popupRef}>
+    <Box width="lg">
+        <Text fontSize="sm" color="fg.muted">Annotate line {lineNumber} with a check:</Text>
+        <Select
+            ref={selectRef}
+            options={criteria}
+            defaultMenuIsOpen={selectedCheckOption === null}
+            escapeClearsValue={true}
+            components={components}
+            value={selectedCheckOption}
+            onChange={(e: RubricCheckSelectOption | null) => {
+                if (e) {
+                    setSelectedCheckOption(e);
+                }
+            }}
+        />
+        {selectedCheckOption && <>
+            {selectedCheckOption.check?.data?.options && <Select
+                options={selectedCheckOption.check.data.options.map((option, index) => ({
+                    label: option.label,
+                    comment: option.label,
+                    value: index.toString(),
+                    index: index.toString(),
+                    points: option.points,
+                    check: selectedCheckOption
+                } as RubricCheckSubOptions))}
+                value={selectedSubOption}
+                onChange={(e: RubricCheckSubOptions | null) => {
+                    setSelectedSubOption(e);
                 }}
-            />
-            {selectedOption && <>
-
-                {selectedOption.check && <Text fontSize="sm" color="fg.muted">{formatPoints(selectedOption)}</Text>}
-                <MessageInput
-                    textAreaRef={messageInputRef}
-                    showGiphyPicker={true}
-                    placeholder={
-                        !selectedOption.check ? "Add a comment about this line and press enter to submit..." :
-                            selectedOption.check.is_comment_required ? "Add a comment about this check and press enter to submit..." : "Optionally add a comment, or just press enter to submit..."
+            />}
+            {(!selectedSubOption && selectedCheckOption.check) && <Text fontSize="sm" color="fg.muted">{formatPoints(selectedCheckOption.check)}</Text>}
+            <MessageInput
+                textAreaRef={messageInputRef}
+                showGiphyPicker={true}
+                placeholder={
+                    !selectedCheckOption.check ? "Add a comment about this line and press enter to submit..." :
+                        selectedCheckOption.check.is_comment_required ? "Add a comment about this check and press enter to submit..." : "Optionally add a comment, or just press enter to submit..."
+                }
+                allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
+                defaultSingleLine={true} sendMessage={async (message, profile_id) => {
+                    let points = selectedCheckOption.check?.points;
+                    if (selectedSubOption !== null) {
+                        points = selectedSubOption.points;
                     }
-                    allowEmptyMessage={selectedOption.check && !selectedOption.check.is_comment_required}
-                    defaultSingleLine={true} sendMessage={async (message, profile_id) => {
-                        const values = {
-                            comment: message || '',
-                            line: lineNumber,
-                            rubric_check_id: selectedOption.check?.id,
-                            class_id: file?.class_id,
-                            submission_file_id: file?.id,
-                            submission_id: submission.id,
-                            author: profile_id,
-                            released: review ? false : true,
-                            points: selectedOption.check?.points,
-                            submission_review_id: review?.id
-                        };
-                        await createComment({ values });
-                        setCurrentMode(mode);
-                        close();
-                    }} /></>}
-        </Box>
+                    let comment = message || '';
+                    if (selectedSubOption) {
+                        comment = selectedSubOption.comment + "\n" + comment;
+                    }
+                    const values = {
+                        comment,
+                        line: lineNumber,
+                        rubric_check_id: selectedCheckOption.check?.id,
+                        class_id: file?.class_id,
+                        submission_file_id: file?.id,
+                        submission_id: submission.id,
+                        author: profile_id,
+                        released: review ? false : true,
+                        points,
+                        submission_review_id: review?.id
+                    };
+                    await createComment({ values });
+                    setCurrentMode(mode);
+                    close();
+                }} /></>}
     </Box>
+</Box>
 }
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
     const { submission, showCommentsFeature, comments: allCommentsForFile, file, expanded, close } = useCodeLineCommentContext();
