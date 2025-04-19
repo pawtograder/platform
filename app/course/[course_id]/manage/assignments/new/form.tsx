@@ -153,6 +153,7 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
         control,
         setValue,
         getValues,
+        refineCore,
         // refineCore: {
         //     onFinish
         // },
@@ -181,6 +182,13 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
             fetchTemplateRepoFiles(login, repo);
         }
     }, [getValues, fetchTemplateRepoFiles]);
+    useEffect(() => {
+        const templateRepo = refineCore.query?.data?.data.template_repo;
+        if (templateRepo) {
+            const [login, repo] = templateRepo.split("/");
+            fetchTemplateRepoFiles(login, repo);
+        }
+    }, [refineCore.query?.data?.data.template_repo, fetchTemplateRepoFiles]);
 
     return (<div>
         <Toaster />
