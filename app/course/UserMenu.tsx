@@ -1,24 +1,20 @@
 'use client'
 
-import { Flex, HStack, IconButton, Link, MenuContent, MenuItem, MenuRoot, MenuTrigger, Text, VStack, Badge, Drawer, Portal, CloseButton, Button, Icon } from "@chakra-ui/react";
-import { signOutAction } from "../actions";
-import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton"
+import { SkeletonCircle } from "@/components/ui/skeleton";
+import { Button, CloseButton, Drawer, HStack, Icon, Portal, Text, VStack } from "@chakra-ui/react";
 import { PiSignOut } from "react-icons/pi";
+import { signOutAction } from "../actions";
 
-import { Box } from "lucide-react";
-import { FiBell, FiChevronDown } from "react-icons/fi";
-import { useCallback, useEffect, useState } from "react";
-import { UserProfile, UserProfileWithUser } from "@/utils/supabase/DatabaseTypes";
-import { User } from "@supabase/supabase-js";
-import { createClient } from "@/utils/supabase/client";
-import { Avatar, AvatarGroup } from "@/components/ui/avatar"
+import { Avatar } from "@/components/ui/avatar";
 import { ColorModeButton } from "@/components/ui/color-mode";
-import { useParams } from "next/navigation";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
-import useAuthState from "@/hooks/useAuthState";
-import { useUserProfile } from "@/hooks/useUserProfiles";
-import { FaGithub, FaUnlink, FaXbox } from "react-icons/fa";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import useAuthState from "@/hooks/useAuthState";
+import { createClient } from "@/utils/supabase/client";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { FaGithub, FaUnlink } from "react-icons/fa";
 
 function UserSettingsMenu() {
     const [open, setOpen] = useState(false)

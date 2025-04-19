@@ -1,11 +1,12 @@
 'use client';
 import { toaster } from "@/components/ui/toaster";
-import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFile, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
+import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFile, SubmissionFileComment, SubmissionReview, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
+import { check } from "prettier";
 
 type ListUpdateCallback<T> = (data: T[], { entered, left, updated }: {
     entered: T[],
@@ -177,7 +178,11 @@ export function SubmissionProvider({ submission_id, children }: { submission_id?
     </SubmissionContext.Provider>
 }
 export function useSubmissionFileComments({ file_id, onEnter, onLeave, onUpdate, onJumpTo }: { file_id?: number, onEnter?: (comment: SubmissionFileComment[]) => void, onLeave?: (comment: SubmissionFileComment[]) => void, onUpdate?: (comment: SubmissionFileComment[]) => void, onJumpTo?: (comment: SubmissionFileComment) => void }) {
-    const submissionController = useSubmissionController();
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
+    const submissionController = ctx.submissionController;
     const [comments, setComments] = useState<SubmissionFileComment[]>([]);
     useEffect(() => {
         const { unsubscribe, data } = submissionController.listGenericData<SubmissionFileComment>("submission_file_comments", (data, { entered, left, updated }) => {
@@ -202,7 +207,11 @@ export function useSubmissionFileComments({ file_id, onEnter, onLeave, onUpdate,
 }
 
 export function useSubmissionComments({ onEnter, onLeave, onUpdate, onJumpTo }: { onEnter?: (comment: SubmissionComments[]) => void, onLeave?: (comment: SubmissionComments[]) => void, onUpdate?: (comment: SubmissionComments[]) => void, onJumpTo?: (comment: SubmissionComments) => void }) {
-    const submissionController = useSubmissionController();
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
+    const submissionController = ctx.submissionController;
     const [comments, setComments] = useState<SubmissionComments[]>([]);
     useEffect(() => {
         const { unsubscribe, data } = submissionController.listGenericData<SubmissionComments>("submission_comments", (data, { entered, left, updated }) => {
@@ -344,7 +353,24 @@ export function useSubmission() {
     const controller = useSubmissionController();
     return controller.submission;
 }
+export function useAllRubricCheckInstances(review_id: number | undefined) {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
+    const fileComments = useSubmissionFileComments({});
+    const submissionComments = useSubmissionComments({});
+    if (!review_id) {
+        return [];
+    }
+    const comments = [...fileComments, ...submissionComments];
+    return comments.filter((c) => c.submission_review_id === review_id);
+}
 export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
     const fileComments = useSubmissionFileComments({});
     const submissionComments = useSubmissionComments({});
     if (!review_id) {
@@ -352,6 +378,13 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
     }
     const comments = [...fileComments, ...submissionComments];
     return comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
+}
+export function useSubmissionRubric() {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return undefined;
+    }
+    return ctx.submissionController.submission.assignments.rubrics;
 }
 export function useRubricCriteriaInstances(
     { criteria, review_id, rubric_id }: {
@@ -362,6 +395,7 @@ export function useRubricCriteriaInstances(
     const fileComments = useSubmissionFileComments({});
     const submissionComments = useSubmissionComments({});
     const review = useSubmissionReview(review_id);
+    const rubric = useSubmissionRubric();
     if (!review_id) {
         return [];
     }
@@ -373,7 +407,7 @@ export function useRubricCriteriaInstances(
             criteria.rubric_checks.find((eachCheck) => eachCheck.id === eachComment.rubric_check_id));
     }
     if (rubric_id) {
-        const allCriteria = review?.rubrics?.rubric_criteria || [];
+        const allCriteria = rubric?.rubric_criteria || [];
         const allChecks = allCriteria.flatMap((eachCriteria) => eachCriteria.rubric_checks || []);
         return comments.filter((eachComment) =>
             eachComment.submission_review_id === review_id
@@ -384,8 +418,12 @@ export function useRubricCriteriaInstances(
     throw new Error("Either criteria or rubric_id must be provided");
 }
 export function useSubmissionReview(reviewId?: number | null) {
-    const controller = useSubmissionController();
-    const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return undefined;
+    }
+    const controller = ctx.submissionController;
+    const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
     if (!reviewId) {
         reviewId = controller.submission.grading_review_id;
         if (!reviewId) {
@@ -393,7 +431,7 @@ export function useSubmissionReview(reviewId?: number | null) {
         }
     }
     useEffect(() => {
-        const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReviewWithRubric>("submission_reviews", reviewId, (data) => {
+        const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReview>("submission_reviews", reviewId, (data) => {
             setReview(data);
         });
         setReview(data);

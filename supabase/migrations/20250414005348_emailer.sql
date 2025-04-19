@@ -108,11 +108,11 @@ BEGIN
       end if;
       SELECT id FROM public.classes WHERE is_demo LIMIT 1 INTO demo_class_id;
       if demo_class_id is not null then
-        INSERT INTO public.profiles (name, avatar_url, class_id) VALUES
-            (NEW.email, 'https://api.dicebear.com/9.x/identicon/svg?seed=' || NEW.email, demo_class_id) RETURNING id into new_private_profile_id;
+        INSERT INTO public.profiles (name, avatar_url, class_id, is_private_profile) VALUES
+            (NEW.email, 'https://api.dicebear.com/9.x/identicon/svg?seed=' || NEW.email, demo_class_id, true) RETURNING id into new_private_profile_id;
 
-        INSERT INTO public.profiles (name, avatar_url, class_id) VALUES
-            (public.generate_anon_name(),'https://api.dicebear.com/9.x/identicon/svg?seed='||public.generate_anon_name(), demo_class_id) RETURNING id into new_public_profile_id; 
+        INSERT INTO public.profiles (name, avatar_url, class_id, is_private_profile) VALUES
+            (public.generate_anon_name(),'https://api.dicebear.com/9.x/identicon/svg?seed='||public.generate_anon_name(), demo_class_id, false) RETURNING id into new_public_profile_id; 
 
         IF NEW.email LIKE '%instructor%' THEN
             INSERT INTO public.user_roles (user_id, class_id, role, public_profile_id, private_profile_id) VALUES (NEW.id, demo_class_id, 'instructor', new_public_profile_id, new_private_profile_id);

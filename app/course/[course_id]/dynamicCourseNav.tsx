@@ -1,43 +1,36 @@
 'use client'
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, Flex, HStack, Skeleton, VStack, Text, Menu, Portal } from "@chakra-ui/react";
-import { usePathname, useRouter } from "next/navigation";
+import { useColorMode } from "@/components/ui/color-mode";
 import {
-    FiBook,
-    FiCalendar,
-    FiCompass,
-    FiHome,
-    FiMessageSquare,
-    FiSettings,
-    FiStar,
-    FiTrendingUp,
-    FiClipboard,
-    FiMenu,
-    FiUsers
-} from 'react-icons/fi'
-import NextLink from "next/link";
-import UserMenu from "../UserMenu";
-import React, { Fragment, useEffect, useRef } from "react";
-import useAuthState from "@/hooks/useAuthState";
-import { Course, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
-import {
-    DrawerActionTrigger,
     DrawerBackdrop,
     DrawerBody,
     DrawerCloseTrigger,
     DrawerContent,
-    DrawerFooter,
     DrawerHeader,
     DrawerRoot,
     DrawerTitle,
-    DrawerTrigger,
-} from "@/components/ui/drawer"
+    DrawerTrigger
+} from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import { ColorModeButton, useColorMode } from "@/components/ui/color-mode";
+import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Course, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
+import NextLink from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import React, { Fragment, useEffect, useRef } from "react";
 import { FaScroll } from "react-icons/fa";
+import {
+    FiClipboard,
+    FiCompass,
+    FiMenu,
+    FiMessageSquare,
+    FiSettings,
+    FiStar,
+    FiUsers
+} from 'react-icons/fi';
+import UserMenu from "../UserMenu";
 const LinkItems = (courseID: number) => ([
     { name: 'Assignments', icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
     { name: 'Manage Assignments', icon: FiCompass, instructor_only: true, target: `/course/${courseID}/manage/assignments` },
@@ -48,7 +41,6 @@ const LinkItems = (courseID: number) => ([
     // {name: 'Trending', icon: FiTrendingUp },
     // {name: 'Explore', icon: FiCompass },
     // {name: 'Favourites', icon: FiStar },
-    { name: 'Enrollments', icon: FiUsers, instructor_only: true, target: `/course/${courseID}/manage/enrollments` },
     {
         name: 'Course Settings', icon: FiSettings, instructor_only: true,
         target: `/course/${courseID}/manage/course/`,

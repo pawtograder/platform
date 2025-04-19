@@ -1,10 +1,62 @@
 'use client';
-import { CheckOption, GroupedRubricOptions } from "./code-file";
+import { ClientMetricReportDirection } from "amazon-chime-sdk-js";
+import { RubricCheckSelectOption, RubricCriteriaSelectGroupOption, RubricCheckSubOptions } from "./code-file";
 import { Menu, MenuItem, SubMenu } from "@jonbell/react-radial-menu";
-export function RubricMarkingMenu({ checks,top, left, setSelectedOption, setCurrentMode }: { checks: GroupedRubricOptions[], top: number, left: number, setSelectedOption: (option: CheckOption | null) => void, setCurrentMode: (mode: "marking" | "select") => void }) {
-     // You can also use separate handler for each item
-     const handleItemClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: CheckOption) => {
-        setSelectedOption(data!);
+
+
+function RubricCheckSubMenuOrItem({ criterion, option, handleItemClick, handleSubItemClick, handleDisplayClick }: { criterion: RubricCriteriaSelectGroupOption, option: RubricCheckSelectOption, handleItemClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSelectOption) => void, handleSubItemClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSubOptions) => void, handleDisplayClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, position: string) => void }) {
+    if (option.options?.length) {
+        return <SubMenu key={option.value}
+            onItemClick={handleItemClick} onDisplayClick={handleDisplayClick} itemView={option.label} data={option} displayPosition="bottom">
+            {option.options.map((subOption) => (
+                <MenuItem key={subOption.index} onItemClick={handleSubItemClick} data={subOption}>
+                    {subOption.label}
+                </MenuItem>
+            ))}
+        </SubMenu>
+    }
+    return <MenuItem key={option.value} onItemClick={handleItemClick} data={option}>
+        {option.label}
+    </MenuItem>
+}
+function RubricCriteriaSubMenuOrItem({ criterion, handleItemClick, handleSubItemClick, handleDisplayClick }: { criterion: RubricCriteriaSelectGroupOption, handleItemClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSelectOption) => void, handleSubItemClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSubOptions) => void, handleDisplayClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, position: string) => void }) {
+    if (criterion.options.length > 1) {
+        const children = criterion.options.map((option) => RubricCheckSubMenuOrItem({
+            criterion,
+            option,
+            handleItemClick,
+            handleSubItemClick,
+            handleDisplayClick
+        }));
+        return <SubMenu key={criterion.value}
+            onItemClick={handleItemClick} onDisplayClick={handleDisplayClick} itemView={criterion.label} data={criterion} displayPosition="bottom">
+            {children}
+        </SubMenu>
+    }
+    else if(criterion.options.length === 1) {
+        return RubricCheckSubMenuOrItem({
+            criterion,
+            option: criterion.options[0],
+            handleItemClick,
+            handleSubItemClick,
+            handleDisplayClick
+        });
+    }
+    else {
+        throw new Error("RubricCriteriaSubMenuOrItem: Expected at least 1 option, got " + criterion.options.length);
+    }
+}
+export function RubricMarkingMenu({ criteria, top, left, setSelectedCheckOption, setSelectedSubOption, setCurrentMode }: { criteria: RubricCriteriaSelectGroupOption[], top: number, left: number, setSelectedCheckOption: (option: RubricCheckSelectOption | null) => void, setSelectedSubOption: (option: RubricCheckSubOptions | null) => void, setCurrentMode: (mode: "marking" | "select") => void }) {
+    // You can also use separate handler for each item
+    const handleItemClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSelectOption) => {
+        setSelectedCheckOption(data!);
+        setSelectedSubOption(null);
+        setCurrentMode("select");
+    };
+    const handleSubItemClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSubOptions) => {
+        //This is not very nice, but it works...
+        setSelectedCheckOption(data!.check!);
+        setSelectedSubOption(data!);
         setCurrentMode("select");
     };
     const handleSubMenuClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: string) => {
@@ -14,6 +66,12 @@ export function RubricMarkingMenu({ checks,top, left, setSelectedOption, setCurr
         console.log(`[Display] ${position} clicked`);
     };
 
+    const children = criteria.map((criterion) => RubricCriteriaSubMenuOrItem({
+        criterion,
+        handleItemClick,
+        handleSubItemClick,
+        handleDisplayClick
+    }));
     return <Menu
         centerX={left}
         centerY={top}
@@ -25,20 +83,6 @@ export function RubricMarkingMenu({ checks,top, left, setSelectedOption, setCurr
         animation={["fade", "scale"]}
         animationTimeout={150}
         drawBackground>
-        {checks.filter(check => check.options.length > 1).map((check) => (
-            <SubMenu key={check.value}
-            onItemClick={handleItemClick} onDisplayClick={handleDisplayClick} itemView={check.label} data={check} displayPosition="bottom">
-                {check.options.map((option) => (
-                    <MenuItem key={option.value} onItemClick={handleItemClick} data={option}>
-                        {option.label}
-                    </MenuItem>
-                ))}
-            </SubMenu>
-        ))}
-        {checks.filter(check => check.options.length === 1).map((check) => (
-            <MenuItem key={check.value} onItemClick={handleItemClick} data={check.options[0]}>
-                {check.label}
-            </MenuItem>
-        ))}
+        {children}
     </Menu>
 }

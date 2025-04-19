@@ -7,31 +7,25 @@ import {
     PopoverRoot,
     PopoverTrigger
 } from "@/components/ui/popover";
-import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { HydratedRubricCheck, HydratedRubricCriteria, LegacyRubricWithCriteriaAndChecks, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { Box, Flex, Heading, HStack, List, ListItem, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
-import { Checkbox } from "@/components/ui/checkbox";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
-import Markdown from "@/components/ui/markdown";
-import MessageInput from "@/components/ui/message-input";
 import PersonName from "@/components/ui/person-name";
-import { Radio } from "@/components/ui/radio";
-import { Tooltip } from "@/components/ui/tooltip";
+import { RubricCriteria } from "@/components/ui/rubric-sidebar";
+import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { SubmissionProvider, useRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview } from "@/hooks/useSubmission";
+import { SubmissionProvider, useAllRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview, useSubmissionRubric } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import path from "path";
-import { useEffect, useRef, useState } from "react";
-import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
@@ -88,8 +82,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         background: '#555',
                     }
                 }}>
-                    <Table.Root> 
-                        <Table.Header> 
+                    <Table.Root>
+                        <Table.Header>
                             <Table.Row>
                                 <Table.ColumnHeader>#</Table.ColumnHeader>
                                 <Table.ColumnHeader>Date</Table.ColumnHeader>
@@ -98,44 +92,45 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                                 <Table.ColumnHeader>Actions</Table.ColumnHeader>
                             </Table.Row>
                         </Table.Header>
-                        <Table.Body> 
+                        <Table.Body>
                             {data?.data.map((historical_submission) => {
-                               const link = `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
+                                const link = `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
                                 return (
-                                <Table.Row key={historical_submission.id} bg={pathname.startsWith(link) ? "bg.emphasized" : undefined}>
-                                    <Table.Cell>
-                                        <Link href={link}> 
-                                            {historical_submission.is_active && <ActiveSubmissionIcon />}
-                                            {historical_submission.ordinal}
-                                        </Link>
-                                    </Table.Cell>
-                                    <Table.Cell>
-                                        <Link href={link}>
-                                            {formatRelative(historical_submission.created_at, new Date())}
-                                        </Link>
-                                    </Table.Cell>
-                                    <Table.Cell>
-                                        <Link href={link}>
-                                            {historical_submission.grader_results?.score !== undefined ? historical_submission.grader_results?.score + "/" + historical_submission.grader_results?.max_score : "Error"}
-                                        </Link>
-                                    </Table.Cell>
-                                    <Table.Cell>
-                                        <Link href={link}>
-                                            {historical_submission.submission_reviews?.completed_at && historical_submission.submission_reviews?.total_score + "/" + historical_submission.assignments.total_points}
-                                        </Link>
-                                    </Table.Cell>
-                                    <Table.Cell>
-                                        {historical_submission.is_active ? <>This submission is active</> :<Button variant="outline" size="xs" onClick={async () => {
-                                            await activateSubmission({ submission_id: historical_submission.id }, supabase);
-                                            invalidate({ resource: "submissions", invalidates: ["list"] });
-                                            router.push(link);
-                                        }}>
-                                            <Icon as={FaCheckCircle} />
-                                            Activate
-                                        </Button>}
-                                    </Table.Cell>
-                                </Table.Row>
-                            )})}
+                                    <Table.Row key={historical_submission.id} bg={pathname.startsWith(link) ? "bg.emphasized" : undefined}>
+                                        <Table.Cell>
+                                            <Link href={link}>
+                                                {historical_submission.is_active && <ActiveSubmissionIcon />}
+                                                {historical_submission.ordinal}
+                                            </Link>
+                                        </Table.Cell>
+                                        <Table.Cell>
+                                            <Link href={link}>
+                                                {formatRelative(historical_submission.created_at, new Date())}
+                                            </Link>
+                                        </Table.Cell>
+                                        <Table.Cell>
+                                            <Link href={link}>
+                                                {historical_submission.grader_results?.score !== undefined ? historical_submission.grader_results?.score + "/" + historical_submission.grader_results?.max_score : "Error"}
+                                            </Link>
+                                        </Table.Cell>
+                                        <Table.Cell>
+                                            <Link href={link}>
+                                                {historical_submission.submission_reviews?.completed_at && historical_submission.submission_reviews?.total_score + "/" + historical_submission.assignments.total_points}
+                                            </Link>
+                                        </Table.Cell>
+                                        <Table.Cell>
+                                            {historical_submission.is_active ? <>This submission is active</> : <Button variant="outline" size="xs" onClick={async () => {
+                                                await activateSubmission({ submission_id: historical_submission.id }, supabase);
+                                                invalidate({ resource: "submissions", invalidates: ["list"] });
+                                                router.push(link);
+                                            }}>
+                                                <Icon as={FaCheckCircle} />
+                                                Activate
+                                            </Button>}
+                                        </Table.Cell>
+                                    </Table.Row>
+                                )
+                            })}
                         </Table.Body>
                     </Table.Root>
                 </Box>
@@ -143,242 +138,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
         </PopoverContent>
     </PopoverRoot>
 }
-function isLineComment(comment: SubmissionFileComment | SubmissionComments): comment is SubmissionFileComment {
-    return 'line' in comment;
-}
-function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
-    const submission = useSubmission();
-    const file = submission.submission_files.find((file) => file.id === comment.submission_file_id);
-    if (!file) {
-        return <></>;
-    }
-    const shortFileName = path.basename(file.name);
-    return <Link href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?file_id=${comment.submission_file_id}#L${comment.line}`}>@ {shortFileName}:{comment.line}</Link>
-}
-export function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComment | SubmissionComments, setIsEditing: (isEditing: boolean) => void }) {
-    const { private_profile_id } = useClassProfiles();
-    const { mutateAsync: updateComment } = useUpdate({
-        resource: isLineComment(comment) ? "submission_file_comments" : "submission_comments",
-    });
-    return <Menu.Root onSelect={async (value) => {
-        if (value.value === "edit") {
-            setIsEditing(true);
-        }
-        else if (value.value === "delete") {
-            await updateComment({
-                id: comment.id,
-                values: {
-                    edited_by: private_profile_id,
-                    deleted_at: new Date()
-                }
-            });
-        }
-    }}>
-        <Menu.Trigger asChild>
-            <Button 
-            p={0}
-            m={0}
-            colorPalette="blue" variant="ghost" size="2xs"><Icon as={BsThreeDots} /></Button>
-        </Menu.Trigger>
-        <Portal>
-            <Menu.Positioner>
-                <Menu.Content>
-                    <Menu.Item value="edit">Edit</Menu.Item>
-                    <Menu.Item value="delete">Delete</Menu.Item>
-                </Menu.Content>
-            </Menu.Positioner>
-        </Portal>
-    </Menu.Root>
-}
-function RubricCheckComment({ comment, criteria }: { comment: SubmissionFileComment | SubmissionComments, criteria: RubricCriteriaWithRubricChecks }) {
-    const author = useUserProfile(comment.author);
-    const [isEditing, setIsEditing] = useState(false);
-    const messageInputRef = useRef<HTMLTextAreaElement>(null);
-    const { mutateAsync: updateComment } = useUpdate({
-        resource: isLineComment(comment) ? "submission_file_comments" : "submission_comments",
-    });
-    return <Box border="1px solid" borderColor="border.info" borderRadius="md" p={0} w="100%"
-        fontSize="sm">
-        <Box bg="bg.info" pl={1} borderTopRadius="md">
-            <HStack justify="space-between">
-                <Text fontSize="sm" color="fg.muted">{author?.name} applied {formatRelative(comment.created_at, new Date())}</Text>
-                <CommentActions comment={comment} setIsEditing={setIsEditing} />
-            </HStack>
-        </Box>
-        <Box
-            color="fg.muted">
-            <HStack gap={1}>
-                {criteria.is_additive ? <><Icon as={FaCheckCircle} color="green.500" />+{comment.points}</> : <><Icon as={FaTimesCircle} color="red.500" />-{comment.points}</>} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}
-            </HStack>
-            {isEditing ? <MessageInput
-                textAreaRef={messageInputRef}
-                defaultSingleLine={true}
-                value={comment.comment}
-                closeButtonText="Cancel"
-                onClose={() => {
-                    setIsEditing(false);
-                }}
-                sendButtonText="Save"
-                sendMessage={async (message, profile_id) => {
-                    await updateComment({
-                        id: comment.id,
-                        values: { comment: message }
-                    });
-                    setIsEditing(false);
-                }}
-            /> : <Markdown>{comment.comment}</Markdown>}
-        </Box>
-    </Box>
-}
-function RubricCheckAnnotation({ check, criteria }: { check: RubricChecks, criteria: RubricCriteriaWithRubricChecks }) {
-    const review = useSubmissionReview();
-    const rubricCheckComments = useRubricCheckInstances(check, review?.id);
-    return <>
-        <HStack>
-            <Tooltip content="This check is an annotation, it can only be applied by clicking on a specific line of code.">
-                <Icon as={BsFileEarmarkCodeFill} size="xs" />
-            </Tooltip>
-            <Text>{check.name}</Text>
-        </HStack>
-        <Markdown style={{
-            fontSize: "0.8rem",
-        }}>{check.description}</Markdown>
-        {rubricCheckComments.map((comment) => <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} />)}
-    </>
-}
-function SubmissionCommentForm({ check, criteria }: { check: RubricChecks, criteria: RubricCriteriaWithRubricChecks }) {
-    const messageInputRef = useRef<HTMLTextAreaElement>(null);
-    const review = useSubmissionReview();
-    const submission = useSubmission();
-    const { mutateAsync: createComment } = useCreate({
-        resource: "submission_comments",
-    })
-    useEffect(() => {
-        if (messageInputRef.current) {
-            messageInputRef.current.focus();
-        }
-    }, []);
-    return <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%"
-        fontSize="sm">
-        <Box bg="bg.inverted" pl={1} borderTopRadius="md">
-            <Text color="fg.inverted">Check not yet applied. {check.is_comment_required ? "A comment is required." : "Comment is optional, enter to add."}</Text>
-        </Box>
-        <MessageInput
-            placeholder={
-                "Comment"
-            }
-            sendButtonText="Add Check"
-            sendMessage={async (message, profile_id) => {
-                const values = {
-                    comment: message || '',
-                    rubric_check_id: check.id,
-                    class_id: submission.class_id,
-                    submission_id: submission.id,
-                    author: profile_id,
-                    points: check.points,
-                    released: false,
-                    submission_review_id: review!.id
-                }
-               await createComment({ values });
 
-            }}
-            defaultSingleLine={true}
-            allowEmptyMessage={!check.is_comment_required}
-        />
-    </Box>
-}
-function RubricCheckGlobal({ check, criteria, isSelected }: { check: RubricChecks, criteria: RubricCriteriaWithRubricChecks, isSelected: boolean }) {
-    const review = useSubmissionReview();
-    const rubricCheckComments = useRubricCheckInstances(check, review?.id);
-    const criteriaCheckComments = useRubricCriteriaInstances({ criteria, review_id: review?.id });
-    const [selected, setSelected] = useState<boolean>(rubricCheckComments.length > 0);
-    const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
-    useEffect(() => {
-        setSelected(rubricCheckComments.length > 0);
-    }, [rubricCheckComments.length]);
-    useEffect(() => {
-        setIsEditing(isSelected && rubricCheckComments.length === 0 && criteria.max_checks_per_submission != criteriaCheckComments.length);
-    }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
-
-    const points = criteria.is_additive ? `+${check.points}` : `-${check.points}`;
-    return <>
-        <HStack>
-            {criteria.max_checks_per_submission != 1 ? <Checkbox
-                disabled={rubricCheckComments.length > 0}
-                checked={selected} onCheckedChange={(newState) => {
-                    if (newState.checked) {
-                        setIsEditing(true);
-                    } else {
-                        setIsEditing(false);
-                    }
-                    setSelected(newState.checked ? true : false);
-                }}>
-                <Text>{points} {check.name}</Text>
-            </Checkbox> : <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0}>
-                <Text>{points} {check.name}</Text>
-            </Radio>}
-        </HStack>
-        <Markdown style={{
-            fontSize: "0.8rem",
-        }}>{check.description}</Markdown>
-        {isEditing && <SubmissionCommentForm check={check} criteria={criteria} />}
-        {rubricCheckComments.map((comment) => <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} />)}
-    </>
-}
-function RubricCheck({ criteria, check, isSelected }: { criteria: RubricCriteriaWithRubricChecks, check: RubricChecks, isSelected: boolean }) {
-    return <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
-        {check.is_annotation ? <RubricCheckAnnotation check={check} criteria={criteria} /> : <RubricCheckGlobal check={check} criteria={criteria} isSelected={isSelected} />}
-    </Box>
-}
-
-function RubricCriteria({ criteria }: { criteria: RubricCriteriaWithRubricChecks }) {
-    const submission = useSubmission();
-    const review = useSubmissionReview();
-    const comments = useRubricCriteriaInstances({ criteria, review_id: review?.id });
-    const totalPoints = comments.reduce((acc, comment) => acc + (comment.points || 0), 0);
-    const isAdditive = criteria.is_additive;
-    const [selectedCheck, setSelectedCheck] = useState<RubricChecks>();
-    let pointsText = '';
-    if (isAdditive) {
-        pointsText = `${totalPoints}/${criteria.total_points}`;
-    } else {
-        pointsText = `${criteria.total_points - totalPoints}/${criteria.total_points}`;
-    }
-    const gradingIsRequired = comments.length < (criteria.min_checks_per_submission || 0);
-    let instructions = "";
-    if (criteria.min_checks_per_submission) {
-        if (criteria.max_checks_per_submission) {
-            if (criteria.min_checks_per_submission === criteria.max_checks_per_submission) {
-                instructions = `Select ${criteria.min_checks_per_submission} check${criteria.min_checks_per_submission === 1 ? "" : "s"}`;
-            } else {
-                instructions = `Select ${criteria.min_checks_per_submission} - ${criteria.max_checks_per_submission} checks`;
-            }
-        } else {
-            instructions = `Select at least ${criteria.min_checks_per_submission} checks`;
-        }
-    } else if (criteria.max_checks_per_submission) {
-        instructions = `Select at most ${criteria.max_checks_per_submission} checks`;
-    }
-    const singleCheck = criteria.max_checks_per_submission === 1 && comments.length === 1 ? comments[0].rubric_check_id?.toString() : undefined;
-    return <Box border="1px solid" borderColor={gradingIsRequired ? "border.error" : "border.emphasized"} borderRadius="md" p={2} w="100%"
-    >
-        <Heading size="md">{criteria.name} {pointsText}</Heading>
-        <Markdown style={{
-            fontSize: "0.8rem",
-        }}>{criteria.description}</Markdown>
-        <VStack align="flex-start" w="100%" gap={0}>
-            <Heading size="sm">Checks</Heading>
-            <Text fontSize="sm" color={gradingIsRequired ? "fg.error" : "fg.muted"}>{instructions}</Text>
-            <RadioGroup.Root
-                value={singleCheck}
-                onValueChange={(value) => {
-                    setSelectedCheck(criteria.rubric_checks.find((check) => check.id.toString() === value.value));
-                }}>
-                {criteria.rubric_checks.map((check) => <RubricCheck key={check.id} criteria={criteria} check={check} isSelected={selectedCheck?.id === check.id} />)}
-            </RadioGroup.Root>
-        </VStack>
-    </Box>
-}
 function TestResults() {
     const submission = useSubmission();
     const testResults = submission.grader_results?.grader_result_tests;
@@ -427,6 +187,114 @@ function ReviewStats() {
         {allGraders.size > 0 && <DataListItem label="Other graders" value={Array.from(allGraders).map((grader) => <PersonName size="2xs" key={grader} uid={grader} />)} />}
     </DataListRoot>
 }
+
+function incompleteRubricChecks(rubric: LegacyRubricWithCriteriaAndChecks, comments: { rubric_check_id: number | null, submission_review_id: number | null }[]): {
+    required_checks: HydratedRubricCheck[]
+    optional_checks: HydratedRubricCheck[]
+    required_criteria: {
+        criteria: HydratedRubricCriteria,
+        check_count_applied: number
+    }[]
+    optional_criteria: {
+        criteria: HydratedRubricCriteria,
+        check_count_applied: number
+    }[]
+} {
+    const required_checks = rubric.rubric_criteria.flatMap((criteria) => criteria.rubric_checks.filter((check) =>
+        check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
+    )) as HydratedRubricCheck[];
+    const optional_checks = rubric.rubric_criteria.filter(criteria => criteria.min_checks_per_submission === null).flatMap((criteria) => criteria.rubric_checks.filter((check) =>
+        !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
+    )) as HydratedRubricCheck[];
+    const criteria = rubric.rubric_criteria.map((criteria) => ({
+        criteria: criteria as HydratedRubricCriteria,
+        check_count_applied: criteria.rubric_checks.filter(
+            (check) => comments.some((comment) => comment.rubric_check_id === check.id)).length
+    }));
+    const required_criteria = criteria.filter((criteria) => criteria.criteria.min_checks_per_submission !== null
+        && criteria.check_count_applied < criteria.criteria.min_checks_per_submission);
+    const optional_criteria = criteria.filter((criteria) => criteria.criteria.min_checks_per_submission === null
+        && criteria.check_count_applied === 0);
+    return {
+        required_checks,
+        optional_checks,
+        required_criteria,
+        optional_criteria
+    }
+}
+function CompleteRubricButton() {
+    const submission = useSubmission();
+    const review = useSubmissionReview();
+    const rubric = useSubmissionRubric();
+    const comments = useAllRubricCheckInstances(review?.id);
+    const { required_checks, optional_checks, required_criteria, optional_criteria } = incompleteRubricChecks(rubric!, comments);
+    //   //TODO: Check if all required parts are graded, and show an error if not. 
+    //             // If non-required parts are not graded, show a warning that the grader must click-through.
+    //             if(required_checks.length > 0 || required_criteria.length > 0) {
+    //                 toaster.create({
+    //                     title: "Incomplete Rubric Checks",
+    //                     description: "Please grade all required checks before marking the submission as graded.\n\nMissing checks: " + required_checks.map((check) => check.name).join(", ") + " and " + required_criteria.map((criteria) => criteria.criteria.name).join(", "),
+    //                     type: "error"
+    //                 });
+    //                 console.log("Incomplete checks", required_checks, required_criteria);
+    //             } else if (optional_checks.length > 0 || optional_criteria.length > 0) {
+    //                 toaster.create({
+    //                     title: "Incomplete Rubric Checks",
+    //                     description: "Please grade all optional checks before marking the submission as graded.\n\nMissing checks: " + optional_checks.map((check) => check.name).join(", ") + " and " + optional_criteria.map((criteria) => criteria.criteria.name).join(", "),
+    //                     type: "warning"
+    //                 });
+    //             } else {
+    //                 // updateReview({ id: review.id, values: { completed_at: new Date(), completed_by: private_profile_id } });
+    //                 console.log("Marking as graded");
+    //             }
+    const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
+    const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
+    const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
+        resource: "submission_reviews",
+    });
+    const review_id = review?.id;
+    const { private_profile_id } = useClassProfiles();
+    return <Popover.Root>
+        <Popover.Trigger asChild>
+            <Button variant="surface">
+                Mark as Graded
+            </Button>
+        </Popover.Trigger>
+        <Popover.Positioner>
+            <Popover.Content>
+                <Popover.Arrow>
+                    <Popover.ArrowTip />
+                </Popover.Arrow>
+                <Popover.Body bg={missingRequiredChecks ? "bg.error" : missingOptionalChecks ? "bg.warning" : "bg.success"} borderRadius="md">
+                    <VStack align="start">
+                        <Box w="100%">
+                            <Heading size="md">
+                                {missingRequiredChecks ? "Required Checks Missing" : missingOptionalChecks ? "Confirm that you have carefully reviewed the submission" : "Complete Grading"}
+                            </Heading>
+                        </Box>
+                        {missingRequiredChecks && <Box>
+                            <Heading size="sm">These checks are required. Please grade them before marking the submission as graded.</Heading>
+                            <List.Root as="ol">
+                                {required_checks.map((check) => <List.Item key={check.id}>{check.name}</List.Item>)}
+                                {required_criteria.map((criteria) => <List.Item key={criteria.criteria.id}>{criteria.criteria.name} (select at least {criteria.criteria.min_checks_per_submission} checks)</List.Item>)}
+                            </List.Root></Box>}
+                        {missingOptionalChecks && <Box>
+                            <Heading size="sm">These checks were not applied, but not required. Please take a quick look to make sure that you did not miss anything:</Heading>
+                            <List.Root as="ol">
+                                {optional_checks.map((check) => <List.Item key={check.id}>{check.name}</List.Item>)}
+                                {optional_criteria.map((criteria) => <List.Item key={criteria.criteria.id}>{criteria.criteria.name} (select at least {criteria.criteria.min_checks_per_submission} checks)</List.Item>)}
+                            </List.Root>
+                        </Box>}
+                        {(!missingRequiredChecks && !missingOptionalChecks) && <Text>All checks have been graded. Click the button below to mark the submission as graded.</Text>}
+                        {!missingRequiredChecks && <Button variant="solid" colorPalette="green" onClick={() => {
+                            updateReview({ id: review!.id, values: { completed_at: new Date(), completed_by: private_profile_id } });
+                        }}>Mark as Graded</Button>}
+                    </VStack>
+                </Popover.Body>
+            </Popover.Content>
+        </Popover.Positioner>
+    </Popover.Root>
+}
 function ReviewActions() {
     const review = useSubmissionReview();
     const { private_profile_id } = useClassProfiles();
@@ -437,11 +305,10 @@ function ReviewActions() {
         return <Skeleton height="20px" />
     }
     return <VStack>
+        <Toaster />
         <ReviewStats />
         <HStack>
-            {!review.completed_at && <Button variant="surface" onClick={() => {
-                updateReview({ id: review.id, values: { completed_at: new Date(), completed_by: private_profile_id } });
-            }}>Mark as Graded</Button>}
+            {!review.completed_at && <CompleteRubricButton />}
             {(review.completed_at && !review.checked_at && private_profile_id !== review.completed_by) && <Button variant="surface" onClick={() => {
                 updateReview({ id: review.id, values: { checked_at: new Date(), checked_by: private_profile_id } });
             }}>Mark as Checked</Button>}
@@ -458,7 +325,8 @@ function RubricView() {
     const isGraderOrInstructor = useIsGraderOrInstructor();
     const review = useSubmissionReview();
     const showHandGrading = isGraderOrInstructor || review?.released;
-    const criteria = submission.assignments.rubrics?.rubric_criteria;
+    const criteria = submission.assignments.rubrics?.rubric_criteria as HydratedRubricCriteria[];
+    const comments = useAllRubricCheckInstances(review?.id);
     // rubrics.sort((a, b) => a.name.localeCompare(b.name));
     return <Box
         position="sticky"
