@@ -18,7 +18,6 @@ export async function GET(request: Request) {
         redirectTo: `${origin}${next}`
       }
     })
-    console.log(data);
     if (error) {
       return NextResponse.redirect(`${origin}/auth/auth-code-error?error=${error.message}`);
     }
