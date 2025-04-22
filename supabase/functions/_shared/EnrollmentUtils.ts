@@ -71,12 +71,16 @@ export async function createUserInClass(supabase: SupabaseClient<Database>, cour
 
     console.log("Creating private profile in class ", courseId, "for user", user.name);
 
+    let avatar_url = user.avatar_url;
+    if(!avatar_url || avatar_url === 'https://northeastern.instructure.com/images/messages/avatar-50.png') {
+        avatar_url = `https://api.dicebear.com/9.x/identicon/svg?seed=${user.name}`;
+    }
     // Create the private profile
     const { data: privateProfile } = await supabase.from('profiles').insert({
         name: user.name,
         sortable_name: user.sortable_name,
         short_name: user.short_name,
-        avatar_url: user.avatar_url,
+        avatar_url: avatar_url,
         class_id: courseId,
         is_private_profile: true,
     }).select('id').single();
