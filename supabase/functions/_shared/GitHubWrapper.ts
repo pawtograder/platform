@@ -1,13 +1,15 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { App, Octokit, RequestError } from "https://esm.sh/octokit?dts";
+import { App, Octokit, RequestError, Endpoints } from "https://esm.sh/octokit?dts";
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
 
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { createHash } from "node:crypto";
+
+export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GitHubOIDCToken = {
     jti: string;
     sub: string;
@@ -88,8 +90,7 @@ async function getOctoKit(repoName: string) {
         return ret;
     }
     console.warn(
-        `No octokit found for ${repoName}, using default: ${
-            installations[0].orgName
+        `No octokit found for ${repoName}, using default: ${installations[0].orgName
         }`,
     );
     return installations[0].octokit;
@@ -247,8 +248,8 @@ export async function addPushWebhook(
             `Add push webhook failed: No octokit found for ${repoName}`,
         );
     }
-    let baseURL = Deno.env.get("SUPABASE_URL")!; 
-    if(baseURL.includes("kong")){
+    let baseURL = Deno.env.get("SUPABASE_URL")!;
+    if (baseURL.includes("kong")) {
         baseURL = "https://khoury-classroom-dev.ngrok.pizza";
     }
     const webhook = await octokit.request("POST /repos/{owner}/{repo}/hooks", {
@@ -256,9 +257,8 @@ export async function addPushWebhook(
         repo: repoName.split("/")[1],
         name: "web",
         config: {
-            url: `${
-                baseURL
-            }/functions/v1/github-repo-webhook?type=${type}`,
+            url: `${baseURL
+                }/functions/v1/github-repo-webhook?type=${type}`,
             content_type: "json",
             secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret",
         },
@@ -284,15 +284,13 @@ export async function removePushWebhook(repoName: string, webhookId: number) {
     console.log("webhook removed", webhook.data);
 }
 
-export async function updateAutograderWorkflowHash(repoName: string){
-    const file = await getFileFromRepo(repoName, ".github/workflows/grade.yml") as {content: string};
+export async function updateAutograderWorkflowHash(repoName: string) {
+    const file = await getFileFromRepo(repoName, ".github/workflows/grade.yml") as { content: string };
     const hash = createHash("sha256");
-    if(!file.content){
+    if (!file.content) {
         throw new Error("File not found");
     }
     console.log("Updating autograder workflow hash for", repoName);
-    console.log(file.content.length);
-    console.log(file.content);
     hash.update(file.content);
     const hashStr = hash.digest("hex");
     const adminSupabase = createClient<Database>(
@@ -300,14 +298,14 @@ export async function updateAutograderWorkflowHash(repoName: string){
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     );
     console.log("updating autograder workflow hash", hashStr, repoName);
-    const {data: assignments} = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
-    if(!assignments){
+    const { data: assignments } = await adminSupabase.from("assignments").select("id").eq("template_repo", repoName);
+    if (!assignments) {
         throw new Error("Assignment not found");
     }
-    const {data, error} = await adminSupabase.from("autograder").update({
+    const { data, error } = await adminSupabase.from("autograder").update({
         workflow_sha: hashStr,
     }).in("id", assignments.map((a) => a.id));
-    if(error){
+    if (error) {
         console.error(error);
         throw new Error("Failed to update autograder workflow hash");
     }
@@ -330,10 +328,10 @@ export async function getFileFromRepo(repoName: string, path: string) {
             path,
         },
     );
-    if('content' in file.data){
+    if ('content' in file.data) {
         const base64Content = file.data.content;
         const content = Buffer.from(base64Content, 'base64').toString('utf-8');
-        return {content};
+        return { content };
     } else {
         throw new Error("File is not a file");
     }
@@ -484,7 +482,7 @@ export async function listFilesInRepo(org: string, repo: string) {
 }
 
 export async function archiveRepoAndLock(org: string, repo: string) {
-    if(repo.includes("/")){
+    if (repo.includes("/")) {
         const [owner, repoName] = repo.split("/");
         org = owner;
         repo = repoName;
@@ -502,7 +500,7 @@ export async function archiveRepoAndLock(org: string, repo: string) {
     });
     for (const collaborator of collaborators.data) {
         console.log("removing collaborator", collaborator.login);
-        await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {    
+        await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
             owner: org,
             repo,
             username: collaborator.login,
@@ -533,7 +531,7 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
         });
         team_id = team.data.id;
     } catch (e) {
-        if (e.message.includes("Not Found")) {
+        if (e instanceof RequestError && e.message.includes("Not Found")) {
             // Team doesn't exist, create it
             const newTeam = await octokit.request("POST /orgs/{org}/teams", {
                 org,
@@ -568,7 +566,7 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
 }
 export async function syncRepoPermissions(org: string, repo: string, courseSlug: string, githubUsernames: string[]) {
     console.log("syncing repo permissions", org, repo, courseSlug, githubUsernames);
-    if(repo.includes("/")){
+    if (repo.includes("/")) {
         const [owner, repoName] = repo.split("/");
         org = owner;
         repo = repoName;
@@ -610,4 +608,119 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
             username,
         });
     }
+}
+
+export async function listCommits(repo_full_name: string, page: number):
+    Promise<{
+        commits: ListCommitsResponse["data"];
+        has_more: boolean;
+    }> {
+    const [org, repo] = repo_full_name.split("/");
+    const octokit = await getOctoKit(org);
+    if (!octokit) {
+        throw new Error("No octokit found for organization " + org);
+    }
+    const commits = await octokit.request("GET /repos/{owner}/{repo}/commits", {
+        owner: org,
+        repo,
+        per_page: 100,
+        page,
+    });
+    const page_links = commits.headers["link"];
+    const next_page = page_links?.split(",").find((l) => l.includes("next"))?.split(";")[0].split("=")[1];
+    return {
+        commits: commits.data,
+        has_more: next_page !== null,
+    };
+}
+
+export async function triggerWorkflow(repo_full_name: string, sha: string, workflow_name: string) {
+    const [org, repo] = repo_full_name.split("/");
+    const octokit = await getOctoKit(org);
+    if (!octokit) {
+        throw new Error("No octokit found for organization " + org);
+    }
+    const ref = `pawtograder-submit/${sha}`;
+    //Create a tag for this sha to use to trigger the workflow
+    try {
+        
+        // console.log("created ref", res.data);
+        await octokit.request("POST /repos/{owner}/{repo}/git/tags",
+            {
+                owner: org,
+                repo,
+                tag: `pawtograder-submit/${sha}`,
+                message: "pawtograder submission",
+                object: sha,
+                type: "commit",
+                tagger: {
+                    name: "pawtograder",
+                    email: "khoury-pawtograder-app@ccs.neu.edu",
+                    date: new Date().toISOString(),
+                }
+            }
+        )
+        await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+            owner: org,
+            repo,
+            ref: `refs/tags/${ref}`,
+            sha,
+        });
+    } catch (err) {
+        //If the ref already exists, don't worry about it
+        if (err instanceof RequestError && err.message.includes("Reference already exists")) {
+            console.log("Reference already exists, skipping");
+        } else {
+            throw err;
+        }
+    }
+    console.log(`triggering workflow ${workflow_name} on ${repo_full_name} at ${ref}`);
+    await octokit.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
+        owner: org,
+        repo,
+        workflow_id: workflow_name,
+        ref,
+    });
+    return "Workflow triggered";
+}
+
+export type CheckRunUpdateProps = Endpoints["PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}"]["parameters"];
+export async function updateCheckRun(
+props : CheckRunUpdateProps
+){
+    const octokit = await getOctoKit(props.owner);
+    if (!octokit) {
+        throw new Error("No octokit found for organization " + props.owner);
+    }
+    await octokit.request("PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}", props);
+}
+
+export async function createCheckRun(repo_full_name: string, sha: string, details_url: string) {
+    const [org, repo] = repo_full_name.split("/");
+    const octokit = await getOctoKit(org);
+    if (!octokit) {
+        throw new Error("No octokit found for organization " + org);
+    }
+    
+    const res = await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
+        owner: org,
+        repo,
+        name: "pawtograder",
+        head_sha: sha,
+        details_url,
+        status: "queued",
+        output:{
+            title: "Submission Status",
+            summary: "Submission not created",
+            text: "Code was received by GitHub, but has not been automatically submitted to Pawtograder.",
+        },
+        actions: [
+            {
+                label: "Submit",
+                description: "Creates a submission for this commit",
+                identifier: "submit",
+            }
+        ]
+    });
+    return res.data.id;
 }

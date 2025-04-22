@@ -197,14 +197,9 @@ export default function DynamicCourseNav() {
                                 >
                                     <Button
                                         colorPalette="gray"
-                                        _hover={{
-                                            bg: "#EBEDEF"
-                                        }}
                                         size="xs"
                                         fontSize="sm"
                                         pt="0"
-                                        // href={link.target || '#'}
-                                        // style={{ textDecoration: 'none' }}
                                         variant="ghost"
                                         asChild
                                     >

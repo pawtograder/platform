@@ -244,10 +244,12 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
                         /></Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
-                    <Field label="Allow Late Submissions"><Checkbox name="allow_late" /></Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label={`Late Due Date (${course.classes.time_zone})`} helperText="Assignments submitted after the due date but before the late due date are accepted as 'Late', and not accepted later unless a student has an extension."><Input name="late_due_date" type="datetime-local" /></Field>
+                    <Field label="Max Late Tokens"
+                       helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
+                    ><Input type="number" defaultValue={0} {...register('max_late_tokens', {
+                        required: false,
+                        min: { value: 0, message: 'Max late tokens must be at least 0' }
+                    })} /></Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
                     <Field label="Description URL" helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"><Input name="description" /></Field>

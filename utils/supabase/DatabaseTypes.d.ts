@@ -11,6 +11,13 @@ export type AuditEvent = Database["public"]["Tables"]["audit"]["Row"];
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
 export type AssignmentGroupMember = Database["public"]["Tables"]["assignment_groups_members"]["Row"];
+export type AssignmentGroupMembersWithGroup = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["assignment_groups_members"]["Row"],
+    "assignment_groups_members",
+    Database["public"]["Tables"]["assignment_groups_members"]["Relationships"],
+    "*, assignment_groups(*)"
+>;
 export type AssignmentGroupJoinRequest = Database["public"]["Tables"]["assignment_groups_join_requests"]["Row"];
 export type AssignmentGroupInvitation = Database["public"]["Tables"]["assignment_group_invitations"]["Row"];
 export type AssignmentGroupMembersWithGroupMembersInvitationsAndJoinRequests = GetResult<
@@ -418,4 +425,10 @@ export type YmlRubricChecksType = Omit<HydratedRubricCheck, "id" | "class_id" | 
     max_annotations?: number;
 }
 
-
+export type AssignmentDueDateException = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["assignment_due_date_exceptions"]["Row"],
+    "assignment_due_date_exceptions",
+    Database["public"]["Tables"]["assignment_due_date_exceptions"]["Relationships"],
+    "*"
+>;

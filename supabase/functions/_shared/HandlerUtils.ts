@@ -1,5 +1,7 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "./SupabaseTypes.d.ts";
+import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
+import { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -68,6 +70,38 @@ export async function assertUserIsInCourse(
     return { supabase, enrollment };
 }
 
+type RepositoryWithAssignmentAndAutograder = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["repositories"]["Row"],
+    "repositories",
+    Database["public"]["Tables"]["repositories"]["Relationships"],
+    "*, assignments(submission_files, class_id, autograders(*))"
+>;
+export async function userCanCreateSubmission({checkRun,
+    repoData,
+    adminSupabase}:{checkRun: RepositoryCheckRun, repoData: RepositoryWithAssignmentAndAutograder, adminSupabase: SupabaseClient<Database>}){
+    //If the check run was created by a grader or instructor, then we can always create a submission
+    if(checkRun.status.created_by && checkRun.status.created_by !== 'github'){
+        const {data: profile, error: profileError} = await adminSupabase.from("user_roles")
+            .select("*")
+            .eq("private_profile_id", checkRun.status.created_by)
+            .eq("class_id", checkRun.class_id)
+            .maybeSingle();
+        if(profileError){
+            throw new UserVisibleError(`Failed to find profile: ${profileError.message}`);
+        }
+        if(profile?.role === 'instructor' || profile?.role === 'grader'){
+            return true;
+        }
+    }
+    //Check due date vs late date
+
+    const {data: submission, error: submissionError} = await adminSupabase.from("submissions").select("*").eq("repository_id", checkRun.repository_id).eq("sha", checkRun.sha).maybeSingle();
+    if(submissionError){
+        throw new UserVisibleError(`Failed to find submission: ${submissionError.message}`);
+    }
+    
+}
 export async function wrapRequestHandler(
     req: Request,
     handler: (req: Request) => Promise<any>,

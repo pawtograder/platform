@@ -49,6 +49,88 @@ export type Database = {
   }
   public: {
     Tables: {
+      assignment_due_date_exceptions: {
+        Row: {
+          assignment_group_id: number | null
+          assignment_id: number
+          class_id: number | null
+          created_at: string
+          creator_id: string
+          hours: number
+          id: number
+          note: string | null
+          student_id: string | null
+          tokens_consumed: number
+        }
+        Insert: {
+          assignment_group_id?: number | null
+          assignment_id: number
+          class_id?: number | null
+          created_at?: string
+          creator_id: string
+          hours: number
+          id?: number
+          note?: string | null
+          student_id?: string | null
+          tokens_consumed?: number
+        }
+        Update: {
+          assignment_group_id?: number | null
+          assignment_id?: number
+          class_id?: number | null
+          created_at?: string
+          creator_id?: string
+          hours?: number
+          id?: number
+          note?: string | null
+          student_id?: string | null
+          tokens_consumed?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_late_exception_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_late_exception_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_late_exception_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["assignment_id"]
+          },
+          {
+            foreignKeyName: "assignment_late_exception_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_late_exception_instructor_id_fkey"
+            columns: ["creator_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignment_late_exception_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assignment_group_invitations: {
         Row: {
           assignment_group_id: number
@@ -333,7 +415,6 @@ export type Database = {
       }
       assignments: {
         Row: {
-          allow_late: boolean | null
           allow_student_formed_groups: boolean | null
           archived_at: string | null
           autograder_points: number | null
@@ -347,8 +428,8 @@ export type Database = {
           has_autograder: boolean
           has_handgrader: boolean
           id: number
-          latest_due_date: string | null
           max_group_size: number | null
+          max_late_tokens: number
           min_group_size: number | null
           release_date: string | null
           slug: string | null
@@ -359,7 +440,6 @@ export type Database = {
           total_points: number | null
         }
         Insert: {
-          allow_late?: boolean | null
           allow_student_formed_groups?: boolean | null
           archived_at?: string | null
           autograder_points?: number | null
@@ -373,8 +453,8 @@ export type Database = {
           has_autograder?: boolean
           has_handgrader?: boolean
           id?: number
-          latest_due_date?: string | null
           max_group_size?: number | null
+          max_late_tokens?: number
           min_group_size?: number | null
           release_date?: string | null
           slug?: string | null
@@ -385,7 +465,6 @@ export type Database = {
           total_points?: number | null
         }
         Update: {
-          allow_late?: boolean | null
           allow_student_formed_groups?: boolean | null
           archived_at?: string | null
           autograder_points?: number | null
@@ -399,8 +478,8 @@ export type Database = {
           has_autograder?: boolean
           has_handgrader?: boolean
           id?: number
-          latest_due_date?: string | null
           max_group_size?: number | null
+          max_late_tokens?: number
           min_group_size?: number | null
           release_date?: string | null
           slug?: string | null
@@ -433,7 +512,7 @@ export type Database = {
           created_at: string
           id: number
           ip_addr: string | null
-          new: Json
+          new: Json | null
           old: Json | null
           table: string
           user_id: string | null
@@ -443,7 +522,7 @@ export type Database = {
           created_at?: string
           id?: number
           ip_addr?: string | null
-          new: Json
+          new?: Json | null
           old?: Json | null
           table: string
           user_id?: string | null
@@ -453,7 +532,7 @@ export type Database = {
           created_at?: string
           id?: number
           ip_addr?: string | null
-          new?: Json
+          new?: Json | null
           old?: Json | null
           table?: string
           user_id?: string | null
@@ -474,6 +553,8 @@ export type Database = {
           grader_commit_sha: string | null
           grader_repo: string | null
           id: number
+          max_submissions_count: number | null
+          max_submissions_period_secs: number | null
           workflow_sha: string | null
         }
         Insert: {
@@ -481,6 +562,8 @@ export type Database = {
           grader_commit_sha?: string | null
           grader_repo?: string | null
           id: number
+          max_submissions_count?: number | null
+          max_submissions_period_secs?: number | null
           workflow_sha?: string | null
         }
         Update: {
@@ -488,6 +571,8 @@ export type Database = {
           grader_commit_sha?: string | null
           grader_repo?: string | null
           id?: number
+          max_submissions_count?: number | null
+          max_submissions_period_secs?: number | null
           workflow_sha?: string | null
         }
         Relationships: [
@@ -543,6 +628,7 @@ export type Database = {
           github_org: string | null
           id: number
           is_demo: boolean
+          late_tokens_per_student: number
           name: string | null
           semester: number | null
           slug: string | null
@@ -554,6 +640,7 @@ export type Database = {
           github_org?: string | null
           id?: number
           is_demo?: boolean
+          late_tokens_per_student?: number
           name?: string | null
           semester?: number | null
           slug?: string | null
@@ -565,6 +652,7 @@ export type Database = {
           github_org?: string | null
           id?: number
           is_demo?: boolean
+          late_tokens_per_student?: number
           name?: string | null
           semester?: number | null
           slug?: string | null
@@ -1847,6 +1935,98 @@ export type Database = {
           },
         ]
       }
+      repository_check_runs: {
+        Row: {
+          assignment_group_id: number | null
+          check_run_id: number
+          class_id: number
+          commit_message: string
+          created_at: string
+          id: number
+          profile_id: string | null
+          repository_id: number
+          sha: string
+          status: Json
+          triggered_by: string | null
+        }
+        Insert: {
+          assignment_group_id?: number | null
+          check_run_id: number
+          class_id: number
+          commit_message: string
+          created_at?: string
+          id?: number
+          profile_id?: string | null
+          repository_id: number
+          sha: string
+          status: Json
+          triggered_by?: string | null
+        }
+        Update: {
+          assignment_group_id?: number | null
+          check_run_id?: number
+          class_id?: number
+          commit_message?: string
+          created_at?: string
+          id?: number
+          profile_id?: string | null
+          repository_id?: number
+          sha?: string
+          status?: Json
+          triggered_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "repository_check_run_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repository_check_run_repository_id_fkey"
+            columns: ["repository_id"]
+            isOneToOne: false
+            referencedRelation: "repositories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repository_check_runs_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repository_check_runs_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repository_check_runs_triggered_by_fkey"
+            columns: ["triggered_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repository_check_runs_triggered_by_fkey1"
+            columns: ["triggered_by"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "repository_check_runs_triggered_by_fkey1"
+            columns: ["triggered_by"]
+            isOneToOne: false
+            referencedRelation: "user_roles"
+            referencedColumns: ["private_profile_id"]
+          },
+        ]
+      }
       rubric_checks: {
         Row: {
           class_id: number
@@ -2480,7 +2660,6 @@ export type Database = {
         Row: {
           assignment_group_id: number | null
           assignment_id: number
-          check_run_id: number | null
           class_id: number
           created_at: string
           grading_review_id: number | null
@@ -2490,6 +2669,8 @@ export type Database = {
           profile_id: string | null
           released: string | null
           repository: string
+          repository_check_run_id: number | null
+          repository_id: number | null
           run_attempt: number
           run_number: number
           sha: string
@@ -2497,7 +2678,6 @@ export type Database = {
         Insert: {
           assignment_group_id?: number | null
           assignment_id: number
-          check_run_id?: number | null
           class_id: number
           created_at?: string
           grading_review_id?: number | null
@@ -2507,6 +2687,8 @@ export type Database = {
           profile_id?: string | null
           released?: string | null
           repository: string
+          repository_check_run_id?: number | null
+          repository_id?: number | null
           run_attempt: number
           run_number: number
           sha: string
@@ -2514,7 +2696,6 @@ export type Database = {
         Update: {
           assignment_group_id?: number | null
           assignment_id?: number
-          check_run_id?: number | null
           class_id?: number
           created_at?: string
           grading_review_id?: number | null
@@ -2524,6 +2705,8 @@ export type Database = {
           profile_id?: string | null
           released?: string | null
           repository?: string
+          repository_check_run_id?: number | null
+          repository_id?: number | null
           run_attempt?: number
           run_number?: number
           sha?: string
@@ -2584,6 +2767,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "user_roles"
             referencedColumns: ["private_profile_id"]
+          },
+          {
+            foreignKeyName: "submissions_repository_check_run_id_fkey"
+            columns: ["repository_check_run_id"]
+            isOneToOne: false
+            referencedRelation: "repository_check_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submissions_repository_id_fkey"
+            columns: ["repository_id"]
+            isOneToOne: false
+            referencedRelation: "repositories"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -2819,16 +3016,20 @@ export type Database = {
           completed_at: string | null
           completed_by: string | null
           created_at: string | null
+          due_date: string | null
           grader: string | null
           gradername: string | null
           groupname: string | null
+          hours: number | null
           id: number | null
+          late_due_date: string | null
           meta_grader: string | null
           name: string | null
           released: string | null
           repository: string | null
           sha: string | null
           sortable_name: string | null
+          tokens_consumed: number | null
           total_score: number | null
           tweak: number | null
         }
@@ -2873,6 +3074,18 @@ export type Database = {
         Args: {
           requested_submission_id: number
           requested_submission_review_id: number
+        }
+        Returns: boolean
+      }
+      authorize_to_create_own_due_date_extension: {
+        Args: {
+          _student_id: string
+          _assignment_group_id: number
+          _assignment_id: number
+          _class_id: number
+          _creator_id: string
+          _hours_to_extend: number
+          _tokens_consumed: number
         }
         Returns: boolean
       }

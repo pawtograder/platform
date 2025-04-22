@@ -552,3 +552,25 @@ entrypoint = "./functions/notification-queue-processor/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/notification-queue-processor/*.html" ]
+
+[functions.repository-list-commits]
+enabled = true
+verify_jwt = true
+import_map = "./functions/repository-list-commits/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/repository-list-commits/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/repository-list-commits/*.html" ]
+
+[functions.autograder-trigger-grading-workflow]
+enabled = true
+verify_jwt = true
+import_map = "./functions/autograder-trigger-grading-workflow/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/autograder-trigger-grading-workflow/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/autograder-trigger-grading-workflow/*.html" ]

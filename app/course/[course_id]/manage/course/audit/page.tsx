@@ -350,10 +350,22 @@ export default function AuditPage() {
                 Assignments
             </List.Item>
             <List.Item>
+                Assignment Due Date Exceptions
+            </List.Item>
+            <List.Item>
                 Assignment Groups
             </List.Item>
             <List.Item>
                 Discussion Threads
+            </List.Item>
+            <List.Item>
+                Rubric Checks
+            </List.Item>
+            <List.Item>
+                Rubric Criteria
+            </List.Item>
+            <List.Item>
+                Rubric Parts
             </List.Item>
             <List.Item>
                 Submissions

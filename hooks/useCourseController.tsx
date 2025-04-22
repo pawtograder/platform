@@ -1,10 +1,14 @@
 'use client'
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { DiscussionThreadReadWithAllDescendants, useDiscussionThreadsController } from "./useDiscussionThreadRootController";
-import { DiscussionThread, DiscussionThreadReadStatus, DiscussionThreadWatcher, Notification, UserProfile, UserRole } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentDueDateException, DiscussionThread, DiscussionThreadReadStatus, DiscussionThreadWatcher, Notification, UserProfile, UserRole } from "@/utils/supabase/DatabaseTypes";
 import useAuthState from "./useAuthState";
 import { useCallback, createContext, useContext, useEffect, useRef, useState } from "react";
-
+import { assign } from "nodemailer/lib/shared";
+import { useClassProfiles } from "./useClassProfiles";
+import { Skeleton } from "@/components/ui/skeleton";
+import { addHours } from "date-fns";
+import { TZDate } from "@date-fns/tz";
 
 /**
  * Returns a hook that returns the read status of a thread.
@@ -166,9 +170,11 @@ class CourseController {
             this.genericDataListSubscribers[typeName] = subscribers;
         }
         const currentData = this.genericData[typeName]?.values() || [];
-        return { unsubscribe: () => {
-            this.genericDataListSubscribers[typeName] = this.genericDataListSubscribers[typeName]?.filter(cb => cb !== callback) || [];
-        }, data: Array.from(currentData) as T[] };
+        return {
+            unsubscribe: () => {
+                this.genericDataListSubscribers[typeName] = this.genericDataListSubscribers[typeName]?.filter(cb => cb !== callback) || [];
+            }, data: Array.from(currentData) as T[]
+        };
     }
     getValueWithSubscription<T>(typeName: string, id: number | ((item: T) => boolean), callback?: UpdateCallback<T>): { unsubscribe: Unsubscribe, data: T | undefined } {
         if (!this.genericDataTypeToId[typeName]) {
@@ -549,7 +555,25 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
             controller.setGeneric("discussion_thread_watchers", threadWatches.data);
         }
     }, [controller, threadWatches?.data]);
-
+    const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
+        resource: "assignment_due_date_exceptions",
+        queryOptions: {
+            staleTime: Infinity,
+            cacheTime: Infinity,
+        },
+        filters: [
+            { field: "class_id", operator: "eq", value: course_id }
+        ],
+        pagination: {
+            pageSize: 1000,
+        },
+    });
+    useEffect(() => {
+        controller.registerGenericDataType("assignment_due_date_exceptions", (item: AssignmentDueDateException) => item.id);
+        if (dueDateExceptions?.data) {
+            controller.setGeneric("assignment_due_date_exceptions", dueDateExceptions.data);
+        }
+    }, [controller, dueDateExceptions?.data]);
     return <></>
 }
 const CourseControllerContext = createContext<CourseController | null>(null);
@@ -561,6 +585,55 @@ export function CourseControllerProvider({ course_id, children }: { course_id: n
     </CourseControllerContext.Provider>
 }
 
+export function useAssignmentDueDate(assignment: Assignment) {
+    const controller = useCourseController();
+    const course = useCourse();
+    const time_zone = course.time_zone || "America/New_York";
+    const [dueDateExceptions, setDueDateExceptions] = useState<AssignmentDueDateException[]>();
+    useEffect(() => {
+        if (assignment.due_date) {
+            const { data: dueDateExceptions, unsubscribe } = controller.listGenericData<AssignmentDueDateException>("assignment_due_date_exceptions",
+                data => setDueDateExceptions(data.filter(e => e.assignment_id === assignment.id))
+            );
+            setDueDateExceptions(dueDateExceptions.filter(e => e.assignment_id === assignment.id));
+            return () => unsubscribe();
+        }
+    }, [assignment, controller]);
+    if (!dueDateExceptions) {
+        return {
+            originalDueDate: undefined,
+            dueDate: undefined,
+            hoursExtended: undefined
+        };
+    }
+    const hoursExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.hours, 0);
+    const originalDueDate = new TZDate(assignment.due_date, time_zone);
+    const dueDate = addHours(originalDueDate, hoursExtended);
+    const lateTokensConsumed = dueDateExceptions.reduce((acc, curr) => acc + curr.tokens_consumed, 0);
+    return {
+        originalDueDate,
+        dueDate,
+        hoursExtended,
+        lateTokensConsumed
+    };
+}
+
+export function useLateTokens() {
+    const controller = useCourseController();
+    const [lateTokens, setLateTokens] = useState<AssignmentDueDateException[]>();
+    useEffect(() => {
+        const { data: lateTokens, unsubscribe } = controller.listGenericData<AssignmentDueDateException>("assignment_due_date_exceptions",
+            data => setLateTokens(data)
+        );
+        setLateTokens(lateTokens);
+        return () => unsubscribe();
+    }, [controller]);
+    return lateTokens;
+}
+export function useCourse() {
+    const { role } = useClassProfiles();
+    return role.classes;
+}
 export function useCourseController() {
     const controller = useContext(CourseControllerContext);
     if (!controller) {

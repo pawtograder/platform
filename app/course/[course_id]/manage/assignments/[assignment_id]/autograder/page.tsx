@@ -4,7 +4,7 @@ import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import RepoSelector from "@/components/ui/repo-selector";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Button, Fieldset, Input, RadioGroup } from "@chakra-ui/react";
+import { Button, Fieldset, Input, NativeSelect, NativeSelectField, NativeSelectRoot, RadioGroup } from "@chakra-ui/react";
 import { Edit } from "@refinedev/chakra-ui";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -56,10 +56,13 @@ export default function AutograderPage() {
         )
         mutateAssignment({
             values: {
-                has_autograder: values.assignments.has_autograder.value === "true"
+                has_autograder: values.assignments.has_autograder.value === "true",
             }
         });
-        refineCore.onFinish({ grader_repo: values.grader_repo });
+        refineCore.onFinish({ grader_repo: values.grader_repo,
+            max_submissions_count: values.max_submissions_count,
+            max_submissions_period_secs: values.max_submissions_period_secs
+         });
     }, [refineCore, assignment_id]);
     if (!query || formLoading) {
         return <div>Loading...</div>
@@ -89,6 +92,24 @@ export default function AutograderPage() {
                                 </RadioGroup.Root>
                             )} />
 
+                    </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                    <Field label="Maximum number of submissions per student (count)" helperText="The grader can be configured to allow each student to submit up to a certain number of times within a given time period. This is the count of submissions that will be graded.">
+                        <Input type="number" {...register("max_submissions_count")} />
+                    </Field>
+                </Fieldset.Content>
+                <Fieldset.Content>
+                    <Field label="Maximum number of submissions per student (time period)" helperText="The grader can be configured to allow each student to submit up to a certain number of times within a given time period. This is that time period.">
+                        <NativeSelectRoot {...register("max_submissions_period_secs")}>
+                            <NativeSelectField name="max_submissions_period_secs">
+                                <option value="">No limit</option>
+                                <option value="600">10 minutes</option>
+                                <option value="3600">1 hour</option>
+                            <option value="86400">24 hours</option>
+                                <option value="172800">48 hours</option>
+                            </NativeSelectField>
+                        </NativeSelectRoot>
                     </Field>
                 </Fieldset.Content>
                 <Fieldset.Content>

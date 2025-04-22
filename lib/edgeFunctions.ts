@@ -1,7 +1,9 @@
 import { ListReposResponse } from "@/components/github/GitHubTypes";
 import * as FunctionTypes from "@/supabase/functions/_shared/FunctionTypes.js";
+import { SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
+import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
 export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>) {
     const { data, error } = await supabase.functions.invoke("autograder-create-repos-for-student");
@@ -132,6 +134,30 @@ export async function activateSubmission(params: { submission_id: number }, supa
         return true;
     }
     throw new EdgeFunctionError({ details: "Failed to activate submission", message: "Failed to activate submission", recoverable: false });
+}
+export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
+export async function repositoryListCommits(params: FunctionTypes.RepositoryListCommitsRequest, supabase: SupabaseClient<Database>) {
+    const { data } = await supabase.functions.invoke("repository-list-commits", {
+        body: params,
+    });
+    const { error } = data as FunctionTypes.GenericResponse;
+    if (error) {
+        throw new EdgeFunctionError(error);
+    }
+    return JSON.parse(data) as {
+            commits: ListCommitsResponse["data"];
+            has_more: boolean;
+    };
+}
+export async function triggerWorkflow(params: FunctionTypes.AutograderTriggerGradingWorkflowRequest, supabase: SupabaseClient<Database>) {
+    const { data } = await supabase.functions.invoke("autograder-trigger-grading-workflow", {
+        body: params,
+    });
+    const { error } = data as FunctionTypes.GenericResponse;
+    if (error) {
+        throw new EdgeFunctionError(error);
+    }
+    return JSON.parse(data) as { message: string };
 }
 export class EdgeFunctionError extends Error {
     details: string;

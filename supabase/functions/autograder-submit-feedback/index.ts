@@ -1,6 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { GradingScriptResult, OutputVisibility } from "../_shared/FunctionTypes.d.ts";
-import { resolveRef, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
+import { CheckRunStatus, GradingScriptResult, OutputVisibility, RepositoryCheckRun } from "../_shared/FunctionTypes.d.ts";
+import { resolveRef, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
@@ -31,6 +31,7 @@ async function handleRequest(req: Request) {
   let submission_id: number | null = null;
   let profile_id: string | null = null;
   let assignment_group_id: number | null = null;
+  let checkRun: RepositoryCheckRun | null = null;
   if (autograder_regression_test_id) {
     //It's a regression test run
     const { data: regressionTestRun } = await adminSupabase.from(
@@ -55,7 +56,7 @@ async function handleRequest(req: Request) {
     assignment_id = regressionTestRun.autograder.assignments.id;
   } else {
     const { data: submission } = await adminSupabase.from("submissions")
-      .select("*").eq("repository", repository).eq("sha", sha)
+      .select("*, repository_check_runs(*)").eq("repository", repository).eq("sha", sha)
       .eq("run_attempt", Number.parseInt(decoded.run_attempt))
       .eq("run_number", Number.parseInt(decoded.run_id)).single();
     if (!submission) {
@@ -68,6 +69,7 @@ async function handleRequest(req: Request) {
     profile_id = submission.profile_id;
     assignment_group_id = submission.assignment_group_id;
     assignment_id = submission.assignment_id;
+    checkRun = submission.repository_check_runs;
   }
 
   //Resolve the action SHA
@@ -77,6 +79,16 @@ async function handleRequest(req: Request) {
   );
   console.log("Action SHA", action_sha);
   console.log("Submission ID", submission_id);
+  const score = requestBody.feedback.score ||
+  requestBody.feedback.tests.reduce(
+    (acc, test) => acc + (test.score || 0),
+    0,
+  );
+  const max_score = requestBody.feedback.max_score ||
+  requestBody.feedback.tests.reduce(
+    (acc, test) => acc + (test.max_score || 0),
+    0,
+  );
   const { error, data: resultID } = await adminSupabase.from(
     "grader_results",
   ).insert({
@@ -86,16 +98,8 @@ async function handleRequest(req: Request) {
     assignment_group_id,
     ret_code: requestBody.ret_code,
     grader_sha: requestBody.grader_sha,
-    score: requestBody.feedback.score ||
-      requestBody.feedback.tests.reduce(
-        (acc, test) => acc + (test.score || 0),
-        0,
-      ),
-    max_score: requestBody.feedback.max_score ||
-      requestBody.feedback.tests.reduce(
-        (acc, test) => acc + (test.max_score || 0),
-        0,
-      ),
+    score,
+    max_score,
     lint_output: requestBody.feedback.lint.output,
     lint_output_format: requestBody.feedback.lint.output_format ||
       "text",
@@ -163,6 +167,28 @@ async function handleRequest(req: Request) {
   // Update the check run status to completed
   // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
   if (submission_id) {
+    if(checkRun){
+      const newStatus: CheckRunStatus = {
+        ...((checkRun.status) as CheckRunStatus),
+        completed_at: new Date().toISOString(),
+      }
+      await adminSupabase.from("repository_check_runs").update({
+        status: newStatus,
+      }).eq("id", checkRun.id);
+      await updateCheckRun({
+        owner: repository.split("/")[0],
+        repo: repository.split("/")[1],
+        check_run_id: checkRun.check_run_id,
+        status: "completed",
+        conclusion: "success",
+        details_url: `https://${Deno.env.get("APP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
+        output: { 
+          title: "Grading complete",
+          summary: "Pawtograder has finished grading the submission",
+          text: `Autograder score: ${score} / ${max_score}. See more details in Pawtograder.`
+        }
+      });
+    }
     return {
       is_ok: true,
       message: `Submission ${submission_id} registered`,

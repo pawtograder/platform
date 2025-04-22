@@ -10,6 +10,7 @@ import { revalidatePath } from "next/cache";
 import { Alert } from "@/components/ui/alert";
 import UnlinkAccount from "@/components/github/unlink-account";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
+import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 export default async function StudentPage({ params }: { params: Promise<{ course_id: string }> }) {
     const { course_id } = await params;
 
@@ -106,7 +107,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
                             }
                         }
                         return <Table.Row key={assignment.id}>
-                            <Table.Cell><Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}`}>{format(new Date(assignment.due_date!), "MMM d h:mm aaa")}</Link></Table.Cell>
+                            <Table.Cell><Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}`}><AssignmentDueDate assignment={assignment} /></Link></Table.Cell>
                             <Table.Cell><Link
                                 prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}`}>{assignment.title}</Link></Table.Cell>
                             <Table.Cell>

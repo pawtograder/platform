@@ -16,6 +16,11 @@ type ClassProfileContextType = {
 
 const ClassProfileContext = createContext<ClassProfileContextType | undefined>(undefined)
 
+export function useStudentRoster(){
+    const profiles = useClassProfiles();
+    const users = profiles.allVisibleRoles.filter(r => r.role === "student").map(r => r.private_profile_id);
+    return profiles.profiles.filter(p => users.includes(p.id));
+}
 export function useClassProfiles() {
     const context = useContext(ClassProfileContext);
     if (!context) {

@@ -1,8 +1,12 @@
+import { ListCommitsResponse } from "./GitHubWrapper.ts";
 import { Database } from "./SupabaseTypes.d.ts";
 
 export type Autograder = Database["public"]["Tables"]["autograder"]["Row"];
 export type AutograderRegressionTest =
     Database["public"]["Tables"]["autograder_regression_test"]["Row"];
+export type AutograderWithAssignments = Autograder & {
+    assignments: Database["public"]["Tables"]["assignments"]["Row"];
+};
 export type OutputFormat = "text" | "markdown" | "ansi";
 
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
@@ -145,3 +149,32 @@ export type AssignmentGroupCopyGroupsFromAssignmentRequest = {
     source_assignment_id: number;
     target_assignment_id: number;
 }
+export type RepositoryListCommitsRequest = {
+    course_id: number;
+    repo_name: string;
+    page: number;
+}
+export type RepositoryListCommitsResponse = {
+    commits: ListCommitsResponse["data"];
+    has_more: boolean;
+}
+export type AutograderTriggerGradingWorkflowRequest = {
+    repository: string;
+    sha: string;
+    class_id: number;
+}
+
+export type CheckRunStatus = {
+    commit_author?: string;
+    commit_date?: string;
+    created_at?: string;
+    created_by?: string;
+    started_at?: string;
+    completed_at?: string;
+    conclusion?: string;
+    submission_id?: number;
+    requested_at?: string;
+}
+export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_check_runs"]["Row"],'status'> & {
+    status: CheckRunStatus
+};

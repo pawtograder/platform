@@ -1,7 +1,9 @@
 'use client';
 import Link from "@/components/ui/link";
+import { useCourse } from "@/hooks/useAuthState";
 import { ActiveSubmissionsWithGradesForAssignment, AggregatedSubmissions, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { HStack, Box, Text, VStack, NativeSelect, Button, Icon, Table, Input, Checkbox } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
@@ -11,6 +13,8 @@ import { FaSort, FaSortUp, FaSortDown, FaCheck, FaTimes } from "react-icons/fa";
 
 export default function AssignmentsTable() {
     const { assignment_id, course_id } = useParams();
+    const course = useCourse();
+    const timeZone = course.classes.time_zone || "America/New_York";
     const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(() => [
         {
             id: "assignment_id",
@@ -27,7 +31,18 @@ export default function AssignmentsTable() {
             accessorKey: "groupname",
             header: "Group",
         },
-
+        {
+            id: "late_due_date",
+            accessorKey: "late_due_date",
+            header: "Late Due Date",
+            cell: (props) => {
+                if (props.getValue() === null) {
+                    return <Text></Text>
+                }
+                return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>
+            }
+        },
+        
         {
             id: "autograder_score",
             accessorKey: "autograder_score",
@@ -51,10 +66,10 @@ export default function AssignmentsTable() {
                 if (props.getValue() === null) {
                     return <Text></Text>
                 }
-                return <Text>{new Date(props.getValue() as string).toLocaleString()}</Text>
+                return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>
             },
             filterFn: (row, id, filterValue) => {
-                const date = new Date(row.original.created_at!);
+                const date = new TZDate(row.original.created_at!, timeZone);
                 return date.toLocaleString().includes(filterValue);
             }
         },
@@ -77,7 +92,7 @@ export default function AssignmentsTable() {
             }
         }
 
-    ], []);
+    ], [timeZone]);
     const {
         getHeaderGroups,
         getRowModel,

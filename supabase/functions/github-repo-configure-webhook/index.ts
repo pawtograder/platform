@@ -1,6 +1,9 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { addPushWebhook, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+/**
+ * TODO: Get rid of this: refactor it so that we don't manually create webhooks and just use the app-levelhook that gets delivered.
+ */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
 import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
@@ -56,27 +59,6 @@ async function handleRequest(req: Request) {
         throw e;
       }
     }
-    try {
-      await addPushWebhook(new_repo, watch_type);
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("already exists")) {
-      } else {
-        throw e;
-      }
-    }
-  }
-  else if (autograder?.grader_repo !== new_repo) {
-    try {
-      await addPushWebhook(new_repo, watch_type);
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("already exists")) {
-      } else {
-        throw e;
-      }
-    }
-    return {
-      message: "Webhook configured",
-    };
   } else {
     return {
       message: "Webhook already configured",
