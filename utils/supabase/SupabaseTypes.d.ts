@@ -621,9 +621,43 @@ export type Database = {
           },
         ]
       }
+      class_sections: {
+        Row: {
+          canvas_course_id: number | null
+          canvas_course_section_id: number | null
+          class_id: number
+          created_at: string
+          id: number
+          name: string
+        }
+        Insert: {
+          canvas_course_id?: number | null
+          canvas_course_section_id?: number | null
+          class_id: number
+          created_at?: string
+          id?: number
+          name: string
+        }
+        Update: {
+          canvas_course_id?: number | null
+          canvas_course_section_id?: number | null
+          class_id?: number
+          created_at?: string
+          id?: number
+          name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "class_sections_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       classes: {
         Row: {
-          canvas_id: number | null
           created_at: string
           github_org: string | null
           id: number
@@ -635,7 +669,6 @@ export type Database = {
           time_zone: string | null
         }
         Insert: {
-          canvas_id?: number | null
           created_at?: string
           github_org?: string | null
           id?: number
@@ -647,7 +680,6 @@ export type Database = {
           time_zone?: string | null
         }
         Update: {
-          canvas_id?: number | null
           created_at?: string
           github_org?: string | null
           id?: number
@@ -2788,6 +2820,7 @@ export type Database = {
         Row: {
           canvas_id: number | null
           class_id: number
+          class_section_id: number | null
           id: number
           private_profile_id: string
           public_profile_id: string
@@ -2797,6 +2830,7 @@ export type Database = {
         Insert: {
           canvas_id?: number | null
           class_id: number
+          class_section_id?: number | null
           id?: number
           private_profile_id: string
           public_profile_id: string
@@ -2806,6 +2840,7 @@ export type Database = {
         Update: {
           canvas_id?: number | null
           class_id?: number
+          class_section_id?: number | null
           id?: number
           private_profile_id?: string
           public_profile_id?: string
@@ -2818,6 +2853,13 @@ export type Database = {
             columns: ["class_id"]
             isOneToOne: false
             referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_roles_class_section_id_fkey"
+            columns: ["class_section_id"]
+            isOneToOne: false
+            referencedRelation: "class_sections"
             referencedColumns: ["id"]
           },
           {

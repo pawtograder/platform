@@ -56,6 +56,12 @@ export async function enrollmentAdd(params: FunctionTypes.AddEnrollmentRequest, 
         throw new Error(error.message + ": " + error.details);
     }
 }
+export async function enrollmentSyncCanvas(params: { course_id: number }, supabase: SupabaseClient<Database>) {
+    const { data } = await supabase.functions.invoke("enrollments-sync-canvas", {
+        body: params,
+    });
+    return JSON.parse(data) as { message: string };
+}
 export async function assignmentGroupLeave(params: { assignment_id: number }, supabase: SupabaseClient<Database>) {
     const { data } = await supabase.functions.invoke("assignment-group-leave", {
         body: params,

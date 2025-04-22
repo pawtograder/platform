@@ -432,3 +432,11 @@ export type AssignmentDueDateException = GetResult<
     Database["public"]["Tables"]["assignment_due_date_exceptions"]["Relationships"],
     "*"
 >;
+
+export type ClassSection = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["class_sections"]["Row"],
+    "class_sections",
+    Database["public"]["Tables"]["class_sections"]["Relationships"],
+    "*"
+>;

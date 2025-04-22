@@ -1,15 +1,30 @@
 import { CanvasApi } from "npm:@kth/canvas-api";
-import { Course, Enrollment, User, UserProfile } from "../_shared/CanvasTypes.d.ts";
+import { Course, Enrollment, UserProfile } from "../_shared/CanvasTypes.d.ts";
 
+console.log("CANVAS_API_URL", Deno.env.get("CANVAS_API_URL"));
+console.log("CANVAS_API_KEY", Deno.env.get("CANVAS_API_KEY"));
 const canvas = new CanvasApi(Deno.env.get("CANVAS_API_URL")!, Deno.env.get("CANVAS_API_KEY")!);
 
-export async function getEnrollments(courseId: number): Promise<Enrollment[]> {
-    const pages = await canvas.listPages(`courses/${courseId}/enrollments`);
-    const ret = [];
-    for await (const page of pages) {
-      ret.push(...page.json);
+export async function getEnrollments({ canvas_course_id, canvas_course_section_id }: { canvas_course_id: number | null, canvas_course_section_id: number | null }): Promise<Enrollment[]> {
+    if (canvas_course_id) {
+        console.log("Getting enrollments for course", canvas_course_id);
+        const pages = await canvas.listPages(`courses/${canvas_course_id}/enrollments`);
+        const ret = [];
+        for await (const page of pages) {
+            ret.push(...page.json);
+        }
+        return ret;
     }
-    return ret;
+    else if (canvas_course_section_id) {
+        console.log("Getting enrollments for section", canvas_course_section_id);
+        const pages = await canvas.listPages(`sections/${canvas_course_section_id}/enrollments`);
+        const ret = [];
+        for await (const page of pages) {
+            ret.push(...page.json);
+        }
+        return ret;
+    }
+    throw new Error("Either canvas_course_id or canvas_section_id must be provided");
 }
 export async function getUser(userId: number): Promise<UserProfile> {
     const { json } = await canvas.get(`users/${userId}/profile`);
