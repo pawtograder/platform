@@ -177,7 +177,7 @@ export function CommitHistoryDialog({ assignment, assignment_group_id, profile_i
                     </Flex>
                 </Dialog.Header>
                 <Dialog.Body p={0}>
-                    {repository && <CommitHistory repository_id={repository.data[0].id} repository_full_name={repository.data[0].repository} />}
+                    {(repository && repository.data.length > 0) && <CommitHistory repository_id={repository.data[0].id} repository_full_name={repository.data[0].repository} />}
                 </Dialog.Body>
             </Dialog.Content>
         </Dialog.Positioner>

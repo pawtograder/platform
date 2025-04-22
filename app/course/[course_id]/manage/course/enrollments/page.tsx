@@ -12,6 +12,7 @@ import Link from "next/link";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { FaExternalLinkAlt, FaLink } from "react-icons/fa";
+import { toaster, Toaster } from "@/components/ui/toaster";
 function EnrollmentsTable() {
     const { course_id } = useParams();
     const supabase = createClient();
@@ -87,7 +88,7 @@ function EnrollmentsTable() {
             columnFilters: [{ id: "class_id", value: course_id as string }],
             pagination: {
                 pageIndex: 0,
-                pageSize: 50,
+                pageSize: 500,
             }
         },
         // onColumnFiltersChange: setColumnFilters,
@@ -103,7 +104,6 @@ function EnrollmentsTable() {
             },
         },
     });
-    console.log(refineCore.tableQuery.data)
     return (<VStack align="start" w="100%">
         <VStack paddingBottom="55px" align="start" w="100%">
             <Table.Root>
@@ -249,7 +249,7 @@ function EnrollmentsTable() {
 }
 export default function EnrollmentsPage() {
     const { course_id } = useParams();
-
+    const [isSyncing, setIsSyncing] = useState(false);
     const invalidate = useInvalidate();
     const { data: sections } = useList<ClassSection>({
         resource: "class_sections",
@@ -268,14 +268,33 @@ export default function EnrollmentsPage() {
                         </List.Item>
                     ))}
                 </List.Root>
-                <Button colorPalette="green" size="sm" variant="surface"
+                <Toaster />
+                <Button
+                    loading={isSyncing}
+                    colorPalette="green" size="sm" variant="surface"
                     onClick={async () => {
+                        setIsSyncing(true);
                         const supabase = createClient();
-                        await enrollmentSyncCanvas({ course_id: Number(course_id) }, supabase);
-                        invalidate({
-                            resource: "user_roles",
-                            invalidates: ["all"],
-                        });
+                        try {
+                            await enrollmentSyncCanvas({ course_id: Number(course_id) }, supabase);
+                            toaster.create({
+                                title: "Synced Canvas Enrollments",
+                                description: "Canvas enrollments have been synced",
+                                type: "success",
+                            })
+
+                            invalidate({
+                                resource: "user_roles",
+                                invalidates: ["all"],
+                            });
+                        } catch (error) {
+                            toaster.create({
+                                title: "Error syncing Canvas Enrollments",
+                                description: "Canvas enrollments have not been synced",
+                                type: "error",
+                            })
+                        }
+                        setIsSyncing(false);
                     }}
                 >Sync Canvas Enrollments</Button>
             </Box>

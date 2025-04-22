@@ -39,9 +39,14 @@ export async function createUserInClass(supabase: SupabaseClient<Database>, cour
     }, role: Database['public']['Enums']['app_role']) {
     let userId = user.existing_user_id;
     if (!userId) {
+        console.log("Creating user", user.primary_email);
         const newUser = await supabase.auth.admin.createUser({
             email: user.primary_email,
         });
+        if (newUser.error) {
+            console.error(newUser.error);
+            throw new Error('Error creating user');
+        }
         console.log("Created user", newUser);
         userId = newUser.data.user!.id;
     }
@@ -63,6 +68,8 @@ export async function createUserInClass(supabase: SupabaseClient<Database>, cour
             return;
         }
     }
+
+    console.log("Creating private profile in class ", courseId, "for user", user.name);
 
     // Create the private profile
     const { data: privateProfile } = await supabase.from('profiles').insert({

@@ -1,8 +1,6 @@
 import { CanvasApi } from "npm:@kth/canvas-api";
 import { Course, Enrollment, UserProfile } from "../_shared/CanvasTypes.d.ts";
 
-console.log("CANVAS_API_URL", Deno.env.get("CANVAS_API_URL"));
-console.log("CANVAS_API_KEY", Deno.env.get("CANVAS_API_KEY"));
 const canvas = new CanvasApi(Deno.env.get("CANVAS_API_URL")!, Deno.env.get("CANVAS_API_KEY")!);
 
 export async function getEnrollments({ canvas_course_id, canvas_course_section_id }: { canvas_course_id: number | null, canvas_course_section_id: number | null }): Promise<Enrollment[]> {

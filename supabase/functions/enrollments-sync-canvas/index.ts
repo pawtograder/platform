@@ -34,6 +34,7 @@ async function handleRequest(req: Request) {
   const allUsers = await adminSupabase.auth.admin.listUsers();
   await Promise.all(
     newEnrollments.map(async (enrollment) => {
+      console.log("Creating user for enrollment", enrollment);
       const user = await canvas.getUser(enrollment.user.id);
       // Does the user already exist in supabase?
       const existingUser = allUsers.data!.users.find((dbUser) =>
