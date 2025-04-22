@@ -188,8 +188,8 @@ export default function DueDateExceptions() {
     }
 
     return <Box>
-        <Heading size="lg">Due Date Exceptions for {assignment?.data.title}</Heading>
-        <Heading size="md">Normal Due Date: {new TZDate(assignment?.data.due_date!, course.classes.time_zone || "America/New_York").toLocaleString()}</Heading>
+        <Heading size="md">Due Date Exceptions</Heading>
+        <Heading size="sm">Normal Due Date: {new TZDate(assignment?.data.due_date!, course.classes.time_zone || "America/New_York").toLocaleString()}</Heading>
         <Text fontSize="sm" color="fg.muted">This assignment allows students to use up to {assignment?.data.max_late_tokens} late tokens to extend the due date. Each late token extends the due date by 24 hours. Students in the course are given a total of {course.classes.late_tokens_per_student} late tokens.
             You can view and edit the due date exceptions for each student below.
             Changing the due date exceptions for a group of students will override the due date for all students in the group.</Text>

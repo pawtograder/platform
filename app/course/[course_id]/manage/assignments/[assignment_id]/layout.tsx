@@ -46,9 +46,6 @@ const LinkItems = (courseId: number, assignmentId: number) => ([
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
     const { course_id, assignment_id } = useParams();
     const { data: assignment } = useOne<Assignment>({ resource: "assignments", id: Number.parseInt(assignment_id as string) });
-    if (!assignment) {
-        return <div>Assignment not found</div>;
-    }
     const pathname = usePathname();
     return <Flex pt={4}>
         <Box w="xs" pr={2} flex={0}>
@@ -76,7 +73,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
             p={4}
             flexGrow={1}
         >
-            <Heading size="lg">Assignment: {assignment.data.title}</Heading>
+            <Heading size="lg">Assignment: {assignment ? assignment.data?.title : "Loading..."}</Heading>
             <Box>
                 {children}
             </Box>

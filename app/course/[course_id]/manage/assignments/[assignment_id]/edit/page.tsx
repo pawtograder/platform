@@ -1,16 +1,14 @@
 'use client';
 
-import { useParams } from "next/navigation";
-import { useForm } from "@refinedev/react-hook-form";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { Container, createListCollection, Fieldset, Heading, ListCollection } from "@chakra-ui/react";
-import { useCallback, useEffect, useState } from "react";
-import { ListReposResponse } from "@/components/github/GitHubTypes";
-import { githubRepoConfigureWebhook, repositoriesForClass } from "@/lib/edgeFunctions";
+import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import AssignmentForm from "../../new/form";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { Box, Heading } from "@chakra-ui/react";
+import { useForm } from "@refinedev/react-hook-form";
+import { useParams } from "next/navigation";
+import { useCallback } from "react";
 import { FieldValues } from "react-hook-form";
-import { assignmentGroupCopyGroupsFromAssignment } from "@/lib/edgeFunctions";
+import AssignmentForm from "../../new/form";
 export default function EditAssignment() {
     const { course_id, assignment_id } = useParams();
     const form = useForm<Assignment>({
@@ -53,8 +51,8 @@ export default function EditAssignment() {
     if (form.refineCore.query?.error) {
         return <div>Error: {form.refineCore.query.error.message}</div>
     }
-    return <Container maxW="container.xl">
-        <Heading size="2xl">Edit Assignment</Heading>
+    return <Box>
+        <Heading size="md">Edit Assignment</Heading>
         <AssignmentForm form={form} onSubmit={onFinish} />
-    </Container>
+    </Box>
 }

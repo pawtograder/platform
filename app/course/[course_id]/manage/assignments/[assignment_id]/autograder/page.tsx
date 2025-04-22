@@ -4,7 +4,7 @@ import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import RepoSelector from "@/components/ui/repo-selector";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Button, Fieldset, Input, NativeSelect, NativeSelectField, NativeSelectRoot, RadioGroup } from "@chakra-ui/react";
+import { Button, Fieldset, Heading, Input, NativeSelect, NativeSelectField, NativeSelectRoot, RadioGroup } from "@chakra-ui/react";
 import { Edit } from "@refinedev/chakra-ui";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -71,7 +71,7 @@ export default function AutograderPage() {
         return <div>Error: {query.error.message}</div>
     }
     return <div>
-        Autograder
+        <Heading size="md">Autograder Configuration</Heading>
         <form onSubmit={(e) => {
             e.preventDefault();
             handleSubmit(onSubmit)(e);

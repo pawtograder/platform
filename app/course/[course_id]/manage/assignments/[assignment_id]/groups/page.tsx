@@ -73,7 +73,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
             setLoading(true);
             await assignmentGroupInstructorMoveStudent({
                 new_assignment_group_id: group?.id || null,
-                old_assignment_group_id: student.profiles.assignment_groups_members[0].assignment_group_id ?? null,
+                old_assignment_group_id: student.profiles.assignment_groups_members.length > 0 ? student.profiles.assignment_groups_members[0].assignment_group_id : null,
                 profile_id: student.private_profile_id,
                 class_id: course_id,
             }, supabase);
@@ -103,6 +103,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         </Box>
     }
     return <Box>
+        <Text fontSize="sm" color="text.muted">
+            Minimum group size: {assignment.data.min_group_size}, Maximum group size: {assignment.data.max_group_size} (<Link href={`/course/${course_id}/manage/assignments/${assignment_id}/edit`}>Edit</Link>)
+        </Text>
         {loading && <Box position="fixed" top="0" left="0" width="100vw" height="100vh" backgroundColor="rgba(0, 0, 0, 0.5)" display="flex" alignItems="center" justifyContent="center">
             <Box textAlign="center">
                 <Text fontSize="sm" color="text.muted">Moving students and updating GitHub permissions...</Text>
@@ -120,7 +123,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
             </Table.Header>
             <Table.Body>
                 {profiles?.data?.map((profile) => {
-                    const groupID = profile.profiles.assignment_groups_members[0].assignment_group_id;
+                    const groupID = profile.profiles.assignment_groups_members.length > 0 ? profile.profiles.assignment_groups_members[0].assignment_group_id : undefined;
                     const group = groupsData?.find((group) => group.id === groupID);
                     let errorMessage;
                     let error = false;
@@ -176,10 +179,9 @@ export default function AssignmentGroupsPage() {
         </Box>
     }
     return <Box>
-        <Heading>Assignment Groups for {assignment.data.title}</Heading>
-        <Text fontSize="sm" color="text.muted">
-            Minimum group size: {assignment.data.min_group_size}, Maximum group size: {assignment.data.max_group_size} (<Link href={`/course/${course_id}/manage/assignments/${assignment_id}/edit`}>Edit</Link>)
-        </Text>
-        <AssignmentGroupsTable assignment={assignment.data} course_id={Number(course_id)} />
+        <Heading size="md">Configure Groups</Heading>
+
+        {(assignment.data.group_config === 'groups' || assignment.data.group_config === 'both') && <AssignmentGroupsTable assignment={assignment.data} course_id={Number(course_id)} />}
+        {assignment.data.group_config === 'individual' && <Text size="sm" color="text.muted">This is an individual assignment, so group configuration is not applicable</Text>}
     </Box>
 }

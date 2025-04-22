@@ -449,7 +449,7 @@ export default function RubricPage() {
                 <HStack w="100%" mt={2} mb={2} justifyContent="space-between">
                     <Toaster />
                     <HStack>
-                        <Heading size="xl">{assignment.data?.data.title} Rubric</Heading>
+                        <Heading size="md">Handgrading Rubric</Heading>
                         {canLoadDemo && <Button variant="ghost" colorScheme="gray" onClick={() => {
                             setValue(defaultRubric);
                             setRubric(YamlRubricToHydratedRubric(YAML.parse(defaultRubric)));
