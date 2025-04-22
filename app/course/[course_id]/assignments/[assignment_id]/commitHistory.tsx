@@ -1,33 +1,18 @@
 'use client'
 import { Button } from "@/components/ui/button";
-import {
-    PopoverArrow,
-    PopoverBody,
-    PopoverContent,
-    PopoverRoot,
-    PopoverTrigger
-} from "@/components/ui/popover";
-import { Assignment, HydratedRubricCheck, HydratedRubricCriteria, LegacyRubricWithCriteriaAndChecks, Repository, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResults, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { Box, CloseButton, Dialog, Flex, Heading, HStack, List, ListItem, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { Box, CloseButton, Dialog, Flex, Heading, Skeleton, Table, Text } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
-import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
-import PersonName from "@/components/ui/person-name";
-import { RubricCriteria } from "@/components/ui/rubric-sidebar";
-import { Toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { SubmissionProvider, useAllRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview, useSubmissionRubric } from "@/hooks/useSubmission";
-import { useUserProfile } from "@/hooks/useUserProfiles";
-import { activateSubmission, ListCommitsResponse, repositoryListCommits, triggerWorkflow } from "@/lib/edgeFunctions";
+import { triggerWorkflow } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { CrudFilter, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
-import NextLink from "next/link";
-import { useParams, usePathname, useRouter } from "next/navigation";
-import { FaCalendar, FaCheckCircle, FaFile, FaGit, FaGitAlt, FaHistory, FaQuestionCircle, FaTimesCircle, FaUser, FaX } from "react-icons/fa";
-import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { useState } from "react";
+import { FaGitAlt } from "react-icons/fa";
 import { RepositoryCheckRun } from "@/supabase/functions/_shared/FunctionTypes";
 
 function TriggerWorkflowButton({ repository, sha }: { repository: string, sha: string }) {

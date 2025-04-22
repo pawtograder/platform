@@ -7,8 +7,8 @@ import {
     PopoverRoot,
     PopoverTrigger
 } from "@/components/ui/popover";
-import { HydratedRubricCheck, HydratedRubricCriteria, LegacyRubricWithCriteriaAndChecks, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResults, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { Box, CloseButton, Dialog, Flex, Heading, HStack, List, ListItem, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { HydratedRubricCheck, HydratedRubricCriteria, LegacyRubricWithCriteriaAndChecks, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { Box, Flex, Heading, HStack, List, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
@@ -19,16 +19,14 @@ import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { SubmissionProvider, useAllRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview, useSubmissionRubric } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { activateSubmission, ListCommitsResponse, repositoryListCommits, triggerWorkflow } from "@/lib/edgeFunctions";
+import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { FaCalendar, FaCheckCircle, FaFile, FaGit, FaGitAlt, FaHistory, FaQuestionCircle, FaTimesCircle, FaUser, FaX } from "react-icons/fa";
-import { useEffect, useState } from "react";
-import { RepositoryCheckRun } from "@/supabase/functions/_shared/FunctionTypes";
+import { FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const pathname = usePathname();

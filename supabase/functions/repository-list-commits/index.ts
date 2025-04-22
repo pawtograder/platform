@@ -1,8 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { RepositoryListCommitsRequest, RepositoryListCommitsResponse } from "../_shared/FunctionTypes.d.ts";
+import { RepositoryListCommitsRequest} from "../_shared/FunctionTypes.d.ts";
 import { listCommits } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInCourse, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-
+import { ListCommitsResponse } from "../_shared/GitHubWrapper.ts";
+export type RepositoryListCommitsResponse = {
+  commits: ListCommitsResponse["data"];
+  has_more: boolean;
+}
 async function handleRequest(req: Request) : Promise<RepositoryListCommitsResponse> {
   const { course_id, repo_name, page } = await req.json() as RepositoryListCommitsRequest;
   const { supabase, enrollment } = await assertUserIsInCourse(course_id, req.headers.get("Authorization")!);

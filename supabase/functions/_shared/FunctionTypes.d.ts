@@ -1,4 +1,3 @@
-import { ListCommitsResponse } from "./GitHubWrapper.ts";
 import { Database } from "./SupabaseTypes.d.ts";
 
 export type Autograder = Database["public"]["Tables"]["autograder"]["Row"];
@@ -153,10 +152,6 @@ export type RepositoryListCommitsRequest = {
     course_id: number;
     repo_name: string;
     page: number;
-}
-export type RepositoryListCommitsResponse = {
-    commits: ListCommitsResponse["data"];
-    has_more: boolean;
 }
 export type AutograderTriggerGradingWorkflowRequest = {
     repository: string;
