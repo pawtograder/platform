@@ -97,14 +97,14 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
             invalidates: ["all"],
         });
     }, [supabase, invalidate]);
-    if (!groupsData) {
+    if (!groupsData || !assignment) {
         return <Box>
             <Skeleton height="100px" />
         </Box>
     }
     return <Box>
         <Text fontSize="sm" color="text.muted">
-            Minimum group size: {assignment.data.min_group_size}, Maximum group size: {assignment.data.max_group_size} (<Link href={`/course/${course_id}/manage/assignments/${assignment_id}/edit`}>Edit</Link>)
+            Minimum group size: {assignment.min_group_size}, Maximum group size: {assignment.max_group_size} (<Link href={`/course/${course_id}/manage/assignments/${assignment.id}/edit`}>Edit</Link>)
         </Text>
         {loading && <Box position="fixed" top="0" left="0" width="100vw" height="100vh" backgroundColor="rgba(0, 0, 0, 0.5)" display="flex" alignItems="center" justifyContent="center">
             <Box textAlign="center">
@@ -182,6 +182,6 @@ export default function AssignmentGroupsPage() {
         <Heading size="md">Configure Groups</Heading>
 
         {(assignment.data.group_config === 'groups' || assignment.data.group_config === 'both') && <AssignmentGroupsTable assignment={assignment.data} course_id={Number(course_id)} />}
-        {assignment.data.group_config === 'individual' && <Text size="sm" color="text.muted">This is an individual assignment, so group configuration is not applicable</Text>}
+        {assignment.data.group_config === 'individual' && <Text fontSize="sm" color="text.muted">This is an individual assignment, so group configuration is not applicable</Text>}
     </Box>
 }
