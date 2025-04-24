@@ -398,7 +398,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                     </HStack>
                     <HStack gap={1}>
                         <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">Commit {submission.sha.substring(0, 7)}</Link>
-                        <Link style={{ fontSize: "0.8em" }} href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">(Download)</Link>
+                        <Link href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">(Download)</Link>
                     </HStack>
                 </VStack>
             </Box>
