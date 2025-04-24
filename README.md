@@ -10,6 +10,8 @@ Documentation is also a work in progress, and is maintained in the [pawtograder/
 - [Course Staff](https://docs.pawtograder.com/staff/intro/)
 - [Students](https://docs.pawtograder.com/students/intro/)
 
+See also: [pawtograder/assignment-action](https://github.com/pawtograder/assignment-action), the GitHub Action that grades student assignments in CI and also runs regression testing for grader development.
+
  ## Quick start for local development
 
 The quickest way to get started with development is to use our staging environment as a backend, and run the frontend locally.
@@ -20,3 +22,5 @@ In order to develop new features that require changing the data model, you will 
  3. Run `npm install` to install the dependencies. You can ignore the warnings from `amazon-chime-sdk-component-library-react` complaining about Node versions, along with the wall of "deprecated" warnings.
  4. Copy the `.env.local.staging` file to `.env.local` and fill in your own values.
  5. Run `npm run dev` to start the development server. Follow the instructions in the terminal to view the application. The application will automatically reload if you make changes to the code. The frontend will be available at `https://localhost:3000`. It will set up a self-signed certificate to host the page (HTTPS is required to access camera/microphone for the help queue), so you'll need to click through a browser warning.
+
+In a clean development environment, it is possible to register an account with any email address without confirmation. To get started, simply create a new account. By default, it will be added to the "demo class" as a student. To create a new account in the demo class as an instructor, include the word "instructor" in your email address.
