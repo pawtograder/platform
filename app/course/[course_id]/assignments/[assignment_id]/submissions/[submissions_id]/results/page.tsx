@@ -1,13 +1,13 @@
 'use client'
-import Link from "@/components/ui/link";
-import { GraderResultOutput, GraderResultTest, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
-import { Box, CardBody, CardHeader, CardRoot, List, Skeleton, Tabs, Text, Heading, Table, HStack, Container } from "@chakra-ui/react";
-import { useShow } from "@refinedev/core";
-import { Fragment } from "react";
-import Markdown from "@/components/ui/markdown";
-import { useParams } from "next/navigation";
 import { Alert } from "@/components/ui/alert";
+import Link from "@/components/ui/link";
+import Markdown from "@/components/ui/markdown";
+import { GraderResultOutput, GraderResultTest, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
+import { Box, CardBody, CardHeader, CardRoot, Container, Heading, Skeleton, Table, Tabs, Text } from "@chakra-ui/react";
+import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
+import { useParams } from "next/navigation";
+import { Fragment } from "react";
 function format_result_output(result: { output: string | null | undefined, output_format: string | null | undefined }) {
     if (result.output === undefined && result.output_format === undefined) {
         return <Text textStyle="sm" color="text.muted">No output</Text>;
@@ -71,6 +71,7 @@ export default function GraderResults() {
         </Container>
     }
     const data = query.data.data;
+    console.log(data.grader_results)
     return (
         <Tabs.Root m={3} defaultValue="tests">
             <Tabs.List>
@@ -90,7 +91,9 @@ export default function GraderResults() {
                 <Heading size="md">Lint Results: {data.grader_results?.lint_passed ? "Passed" : "Failed"}</Heading>
                 {data.grader_results?.lint_output && <Box borderWidth="1px" borderRadius="md" p={2}>
                     <Heading size="sm">Lint Output</Heading>
-                    {format_result_output({ output: data.grader_results?.lint_output, output_format: data.grader_results?.lint_output_format })}
+                    <Box maxH="400px" overflow="auto">
+                        {format_result_output({ output: data.grader_results?.lint_output, output_format: data.grader_results?.lint_output_format })}
+                    </Box>
                 </Box>}
                 <Heading size="md">Test Results</Heading>
                 <Table.Root maxW="2xl">
@@ -102,7 +105,7 @@ export default function GraderResults() {
                         </Table.Row>
                     </Table.Header>
                     <Table.Body>
-                        {data.grader_results?.grader_result_tests[0]?.part &&
+                        {data.grader_results?.grader_result_tests && data.grader_results?.grader_result_tests.length > 0 && data.grader_results?.grader_result_tests[0]?.part &&
                             <Table.Row>
                                 <Table.Cell
                                     bg="bg.muted" colSpan={3} fontWeight="bold" textAlign="center">

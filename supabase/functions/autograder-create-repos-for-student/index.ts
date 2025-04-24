@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
   SecurityError,
@@ -48,7 +48,7 @@ async function handleRequest(req: Request) {
   ).eq(
     "user_id",
     user.user!.id,
-  ).eq("role", "student");
+  ); //.eq("role", "student");
   if (classesError) {
     console.error(classesError);
     throw new UserVisibleError("Error fetching classes");

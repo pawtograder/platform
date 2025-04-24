@@ -167,7 +167,7 @@ export async function getRepoTarballURL(repo: string, sha?: string) {
     const { data, error: firstError } = await adminSupabase.storage.from(
         "graders",
     ).createSignedUrl(
-        `${repo}/${sha}/archive.tgz`,
+        `${repo}/${resolved_sha}/archive.tgz`,
         60,
     );
     if (firstError) {
@@ -185,7 +185,7 @@ export async function getRepoTarballURL(repo: string, sha?: string) {
         const { error: saveGraderError } = await adminSupabase.storage.from(
             "graders",
         ).upload(
-            `${repo}/${sha}/archive.tgz`,
+            `${repo}/${resolved_sha}/archive.tgz`,
             grader.data as ArrayBuffer,
         );
         if (saveGraderError) {
@@ -196,7 +196,7 @@ export async function getRepoTarballURL(repo: string, sha?: string) {
         //Return the grader
         const { data: secondAttempt, error: secondError } = await adminSupabase
             .storage.from("graders").createSignedUrl(
-                `${repo}/${sha}/archive.tgz`,
+                `${repo}/${resolved_sha}/archive.tgz`,
                 60,
             );
         if (secondError || !secondAttempt) {

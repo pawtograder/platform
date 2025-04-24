@@ -3,9 +3,10 @@ import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, Menu, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
 import { useParams, usePathname } from "next/navigation";
-import { FaCalendar, FaCode, FaEdit, FaGithub, FaHome, FaPen, FaUsers } from "react-icons/fa";
+import { FaCalendar, FaCode, FaEdit, FaGithub, FaHome, FaPen, FaPlay, FaUsers } from "react-icons/fa";
 import NextLink from "next/link";
 import React from "react";
+import { CreateGitHubRepos } from "./CreateGitHubRepos";
 const LinkItems = (courseId: number, assignmentId: number) => ([
     {
         label: "Assignment Home",
@@ -38,9 +39,9 @@ const LinkItems = (courseId: number, assignmentId: number) => ([
         icon: FaUsers
     },
     {
-        label: "Sync GitHub Repos",
-        href: `/course/${courseId}/manage/assignments/${assignmentId}/create-github-repos`,
-        icon: FaGithub
+        label: "Test Assignment",
+        href: `/course/${courseId}/manage/assignments/${assignmentId}/test`,
+        icon: FaPlay
     }
 ])
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
@@ -65,6 +66,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
                         </NextLink>
                     </Button>
                 ))}
+                <CreateGitHubRepos courseId={Number.parseInt(course_id as string)} assignmentId={Number.parseInt(assignment_id as string)} />
             </VStack>
         </Box>
         <Box borderColor="border.muted"

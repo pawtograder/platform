@@ -41,6 +41,13 @@ export type Notification = GetResult<
     Database["public"]["Tables"]["notifications"]["Relationships"],
     "*"
 >;
+export type Submission = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submissions"]["Row"],
+    "submissions",
+    Database["public"]["Tables"]["submissions"]["Relationships"],
+    "*"
+>;
 export type SubmissionWithFiles = GetResult<
     Database["public"],
     Database["public"]["Tables"]["submissions"]["Row"],

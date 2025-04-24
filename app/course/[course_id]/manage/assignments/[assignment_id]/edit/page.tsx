@@ -3,7 +3,7 @@
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading } from "@chakra-ui/react";
+import { Box, Heading, Skeleton } from "@chakra-ui/react";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback } from "react";
@@ -45,8 +45,8 @@ export default function EditAssignment() {
             )
         }
     }, [form.refineCore]);
-    if (form.refineCore.formLoading) {
-        return <div>Loading...</div>
+    if (form.refineCore.formLoading || form.refineCore.query?.isLoading) {
+        return <Skeleton height="100vh" />
     }
     if (form.refineCore.query?.error) {
         return <div>Error: {form.refineCore.query.error.message}</div>

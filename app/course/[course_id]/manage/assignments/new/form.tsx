@@ -255,7 +255,10 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
                     <Field label="Description URL" helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"><Input name="description" /></Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
-                    <Field label="Points Possible"><Input name="points" type="number" /></Field>
+                    <Field label="Points Possible"><Input type="number" {...register('total_points', {
+                        required: true,
+                        min: { value: 0, message: 'Points possible must be at least 0' }
+                    })} /></Field>
                 </Fieldset.Content>
                 <GroupConfigurationSubform form={form} />
                 <Fieldset.Content>

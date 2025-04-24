@@ -69,7 +69,7 @@ async function handleRequest(req: Request) {
         // Validate that the submission can be created
         if (!checkRun.user_roles || (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader")) {
             // Check if it's too late to submit. Get extensions
-            const ownershipFilter = repoData.assignment_group_id ? `assignment_group_id.eq.${repoData.assignment_group_id}` : `profile_id.eq.${repoData.profile_id}`;
+            const ownershipFilter = repoData.assignment_group_id ? `assignment_group_id.eq.${repoData.assignment_group_id}` : `student_id.eq.${repoData.profile_id}`;
             const { data: extensions, error: extensionsError } = await adminSupabase.from("assignment_due_date_exceptions")
                 .select("*").or(ownershipFilter)
                 .eq("assignment_id", repoData.assignment_id);

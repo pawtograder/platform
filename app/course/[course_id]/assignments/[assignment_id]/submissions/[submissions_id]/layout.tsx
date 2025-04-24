@@ -7,7 +7,7 @@ import {
     PopoverRoot,
     PopoverTrigger
 } from "@/components/ui/popover";
-import { HydratedRubricCheck, HydratedRubricCriteria, LegacyRubricWithCriteriaAndChecks, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { HydratedRubricCheck, HydratedRubricCriteria, LegacyRubricWithCriteriaAndChecks, Submission, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Heading, HStack, List, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
@@ -22,16 +22,19 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { useInvalidate, useList, useSubscription, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import { FaBell, FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import { useState } from "react";
+import { Tooltip } from "@/components/ui/tooltip";
 
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const pathname = usePathname();
     const invalidate = useInvalidate();
     const router = useRouter();
+    const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
     const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
         resource: "submissions",
         meta: {
@@ -51,15 +54,37 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
             }
         ]
     });
+    useList<Submission>({
+        resource: "submissions",
+        meta: {
+            select: "*"
+        },
+        filters: [
+            {
+                field: "assignment_id",
+                operator: "eq",
+                value: submission.assignments.id
+            }
+        ],
+        liveMode: "manual",
+        onLiveEvent: (event) => {
+            const newSubmission = event.payload as Submission;
+            if (newSubmission.assignment_group_id === submission.assignment_group_id && newSubmission.profile_id === submission.profile_id) {
+                setHasNewSubmission(true);
+            }
+            invalidate({ resource: "submissions", invalidates: ["list"] });
+        }
+    })
     const supabase = createClient();
     if (isLoading || !submission.assignments) {
         return <Skeleton height="20px" />
     }
     return <PopoverRoot>
         <PopoverTrigger asChild>
-            <Button variant="outline">
+            <Button variant={hasNewSubmission ? "solid" : "outline"} colorPalette={hasNewSubmission ? "yellow" : "default"}>
                 <Icon as={FaHistory} />
                 Submission History
+                {hasNewSubmission && <Icon as={FaBell} />}
             </Button>
         </PopoverTrigger>
         <PopoverContent width="lg">
@@ -415,7 +440,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                     {children}
                 </Box>
                 <Box flex={0}>
-                <RubricView />
+                    <RubricView />
                 </Box>
             </Flex>
         </Box>

@@ -85,6 +85,11 @@ async function handlePushToTemplateRepo(adminSupabase: SupabaseClient<Database>,
   const isAdded = payload.head_commit.added.includes(GRADER_WORKFLOW_PATH);
   if (isModified || isRemoved || isAdded) {
     console.log("Grader workflow changed");
+    console.log(assignments);
+    if(!assignments[0].template_repo) {
+      console.log("No matching assignment found");
+      return;
+    }
     const file = await getFileFromRepo(assignments[0].template_repo!, GRADER_WORKFLOW_PATH) as { content: string };
     const hash = createHash("sha256");
     if (!file.content) {
@@ -137,7 +142,7 @@ eventHandler.on("push", async ({ id, name, payload }) => {
       console.error(templateRepoError);
       throw new Error("Error getting template repo");
     }
-    if (templateRepo) {
+    if (templateRepo.length > 0) {
       await handlePushToTemplateRepo(adminSupabase, payload, templateRepo);
       return;
     }

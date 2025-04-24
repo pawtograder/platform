@@ -69,7 +69,7 @@ async function handleRequest(req: Request) {
     profile_id = submission.profile_id;
     assignment_group_id = submission.assignment_group_id;
     assignment_id = submission.assignment_id;
-    checkRun = submission.repository_check_runs;
+    checkRun = submission.repository_check_runs as RepositoryCheckRun;
   }
 
   //Resolve the action SHA
@@ -80,7 +80,7 @@ async function handleRequest(req: Request) {
   console.log("Action SHA", action_sha);
   console.log("Submission ID", submission_id);
   const score = requestBody.feedback.score ||
-  requestBody.feedback.tests.reduce(
+  requestBody.feedback.tests.filter((test) => !test.hide_until_released).reduce(
     (acc, test) => acc + (test.score || 0),
     0,
   );
@@ -124,19 +124,29 @@ async function handleRequest(req: Request) {
     ]
   ) {
     //Insert output if it exists
+    console.log(`Received this output:`);
+    console.log(`Grader result ID: ${resultID.id}`);
     if (requestBody.feedback.output[visibility as OutputVisibility]) {
       const output =
         requestBody.feedback.output[visibility as OutputVisibility];
       if (output) {
-        await adminSupabase.from("grader_result_output").insert({
+        console.log(`${visibility}: ${output?.output_format} ${output?.output.substring(0, 100)}...`);
+        const { error: outputError } = await adminSupabase.from("grader_result_output").insert({
           class_id,
-          profile_id,
+          student_id: profile_id,
           assignment_group_id,
           grader_result_id: resultID.id,
           visibility: visibility as OutputVisibility,
           format: output.output_format || "text",
           output: output.output,
         });
+        console.log(`Inserted output: ${outputError}`);
+        if (outputError) {
+          console.error(outputError);
+          throw new UserVisibleError(
+            `Failed to insert output: ${outputError.message}`,
+          );
+        }
       }
     }
   }
@@ -156,7 +166,7 @@ async function handleRequest(req: Request) {
         max_score: test.max_score,
         part: test.part,
         extra_data: test.extra_data,
-        is_released: true,
+        is_released: !test.hide_until_released,
       })),
     );
   if (testResultsError) {

@@ -9,7 +9,7 @@ const defaultUrl = process.env.VERCEL_URL
 
 export const metadata = {
   metadataBase: new URL(defaultUrl),
-  title: "PawtoGrader",
+  title: "Pawtograder",
   description: "Pawtograder is an application for managing student assignments",
 };
 

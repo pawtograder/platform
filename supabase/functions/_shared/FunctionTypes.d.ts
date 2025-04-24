@@ -38,6 +38,7 @@ export type AutograderFeedback = {
         output: string;
         output_format?: OutputFormat;
         part?: string;
+        hide_until_released?: boolean;
         extra_data?: { [key: string]: string };
     }[];
 };
