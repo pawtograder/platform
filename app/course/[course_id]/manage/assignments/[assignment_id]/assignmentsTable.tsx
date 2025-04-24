@@ -25,6 +25,13 @@ export default function AssignmentsTable() {
             id: "name",
             accessorKey: "name",
             header: "Student",
+            enableColumnFilter: true,
+            filterFn: (row, id, filterValue) => {
+                console.log(row.original.name, filterValue);
+                if (!row.original.name) 
+                    return false;
+                return row.original.name.toLowerCase().includes(filterValue.toLowerCase());
+            }
         },
         {
             id: "groupname",
@@ -119,7 +126,7 @@ export default function AssignmentsTable() {
             resource: "submissions_with_grades_for_assignment",
             meta: {
                 select: "*"
-            },
+            }
         },
     });
     return (<VStack>

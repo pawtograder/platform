@@ -659,6 +659,7 @@ export type Database = {
       classes: {
         Row: {
           created_at: string
+          features: Json | null
           github_org: string | null
           id: number
           is_demo: boolean
@@ -670,6 +671,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          features?: Json | null
           github_org?: string | null
           id?: number
           is_demo?: boolean
@@ -681,6 +683,7 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          features?: Json | null
           github_org?: string | null
           id?: number
           is_demo?: boolean
@@ -3354,4 +3357,3 @@ export const Constants = {
     },
   },
 } as const
-

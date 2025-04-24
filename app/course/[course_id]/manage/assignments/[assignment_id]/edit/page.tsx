@@ -45,7 +45,7 @@ export default function EditAssignment() {
             )
         }
     }, [form.refineCore]);
-    if (form.refineCore.formLoading || form.refineCore.query?.isLoading) {
+    if (form.refineCore.formLoading || form.refineCore.query?.isLoading || !form.refineCore.query?.data?.data) {
         return <Skeleton height="100vh" />
     }
     if (form.refineCore.query?.error) {

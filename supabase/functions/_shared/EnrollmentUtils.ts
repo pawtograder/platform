@@ -38,6 +38,11 @@ export async function createUserInClass(supabase: SupabaseClient<Database>, cour
         avatar_url?: string,
     }, role: Database['public']['Enums']['app_role']) {
     let userId = user.existing_user_id;
+    if(!user.primary_email) {
+        console.error(`No email found for user ${user.name}`);
+        console.error(JSON.stringify(user, null, 2));
+        throw new Error('No email found for user ' + user.name);
+    }
     if (!userId) {
         console.log("Creating user", user.primary_email);
         const newUser = await supabase.auth.admin.createUser({

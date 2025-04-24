@@ -9,6 +9,9 @@ export type ActiveSubmissionsWithGradesForAssignment =
     };
 export type AuditEvent = Database["public"]["Tables"]["audit"]["Row"];
 export type Course = Database["public"]["Tables"]["classes"]["Row"];
+export type CourseWithFeatures = Omit<Course, "features"> & {
+    features: { name: string, enabled: boolean }[];
+}
 export type AssignmentGroup = Database["public"]["Tables"]["assignment_groups"]["Row"];
 export type AssignmentGroupMember = Database["public"]["Tables"]["assignment_groups_members"]["Row"];
 export type AssignmentGroupMembersWithGroup = GetResult<

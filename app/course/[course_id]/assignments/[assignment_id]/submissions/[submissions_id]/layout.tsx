@@ -29,6 +29,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import { FaBell, FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 import { useState } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
+import AskForHelpButton from "@/components/ui/ask-for-help-button";
 
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const pathname = usePathname();
@@ -395,20 +396,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
                         {submission.is_active && <ActiveSubmissionIcon />}
                         {submission.assignment_groups ? <Text>Group {submission.assignment_groups.name} ({submission.assignment_groups.assignment_groups_members.map((member) => member.profiles!.name).join(", ")})</Text> : <Text>{submitter?.name}</Text>}
                     </HStack>
-                    <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">Commit {submission.sha.substring(0, 7)}</Link>
+                    <HStack gap={1}>
+                        <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">Commit {submission.sha.substring(0, 7)}</Link>
+                        <Link style={{ fontSize: "0.8em" }} href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">(Download)</Link>
+                    </HStack>
                 </VStack>
             </Box>
             <HStack>
-                <Button variant="surface" onClick={() => {
-                    // toaster({
-                    //     title: "Ask For Help",
-                    //     description: "This feature is not yet implemented.",
-                    //     status: "info"
-                    // });
-                }}>
-                    <Icon as={FaQuestionCircle} />
-                    Ask For Help
-                </Button>
+                <AskForHelpButton />
                 <SubmissionHistory submission={submission} />
             </HStack>
         </HStack>

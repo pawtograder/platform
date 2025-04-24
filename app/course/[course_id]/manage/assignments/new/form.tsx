@@ -143,7 +143,6 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
 }
 
 export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturnType<Assignment>, onSubmit: (values: FieldValues) => void }) {
-    const router = useRouter()
     const { course_id } = useParams();
 
     const [templateRepoFiles, setTemplateRepoFiles] = useState<ListCollection<ListFilesResponse[0]>>();
@@ -245,7 +244,7 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
                 </Fieldset.Content>
                 <Fieldset.Content>
                     <Field label="Max Late Tokens"
-                       helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
+                        helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
                     ><Input type="number" defaultValue={0} {...register('max_late_tokens', {
                         required: false,
                         min: { value: 0, message: 'Max late tokens must be at least 0' }

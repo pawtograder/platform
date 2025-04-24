@@ -6,8 +6,11 @@ import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sd
 import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
 export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>) {
-    const { data, error } = await supabase.functions.invoke("autograder-create-repos-for-student");
-}
+    const { data } = await supabase.functions.invoke("autograder-create-repos-for-student");
+    const { error } = data as FunctionTypes.GenericResponse;
+    if (error) {
+        throw new Error(error.message + ": " + error.details);
+    }}
 
 export async function autograderCreateAssignmentRepos(params: FunctionTypes.AssignmentCreateAllReposRequest, supabase: SupabaseClient<Database>) {
     const { data, error } = await supabase.functions.invoke("assignment-create-all-repos", {

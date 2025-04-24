@@ -15,7 +15,7 @@ import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Course, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { Course, CourseWithFeatures, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -36,8 +36,8 @@ const LinkItems = (courseID: number) => ([
     { name: 'Manage Assignments', icon: FiCompass, instructor_only: true, target: `/course/${courseID}/manage/assignments` },
     { name: 'Discussion', icon: FiStar, target: `/course/${courseID}/discussion` },
     // { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
-    { name: 'Get Help Now', student_only: true, icon: FiMessageSquare, target: `/course/${courseID}/help` },
-    { name: 'Give Help Now', instructor_only: true, icon: FiClipboard, target: `/course/${courseID}/manage/help` },
+    { name: 'Get Help Now', student_only: true, icon: FiMessageSquare, target: `/course/${courseID}/help`, feature_flag: "office-hours" },
+    { name: 'Give Help Now', instructor_only: true, icon: FiClipboard, target: `/course/${courseID}/manage/help`, feature_flag: "office-hours" },
     // {name: 'Trending', icon: FiTrendingUp },
     // {name: 'Explore', icon: FiCompass },
     // {name: 'Favourites', icon: FiStar },
@@ -97,19 +97,20 @@ export default function DynamicCourseNav() {
     const router = useRouter();
     const pathname = usePathname();
     const courseNavRef = useRef<HTMLDivElement>(null);
-    const { role: course } = useClassProfiles();
+    const { role: enrollment } = useClassProfiles();
     const { roles: courses } = useAuthState();
     const { colorMode } = useColorMode();
-    const isInstructor = course.role === "instructor";
+    const isInstructor = enrollment.role === "instructor";
     useEffect(() => {
         if (courseNavRef.current) {
             const height = courseNavRef.current.offsetHeight;
             document.documentElement.style.setProperty('--nav-height', `${height + 10}px`);
         }
     }, [courseNavRef?.current]);
-    if (!course || !courses) {
+    if (!enrollment || !courses) {
         return <Skeleton height="40" width="100%" />;
     }
+    const course = enrollment.classes as CourseWithFeatures;
     return (
         <Box px={{ base: 4, md: 4 }}
             ref={courseNavRef}
@@ -129,21 +130,23 @@ export default function DynamicCourseNav() {
                 <VStack gap="0" align="start">
                     <HStack
                     >
-                        <CoursePicker courses={courses} currentCourse={course.classes} />
+                        <CoursePicker courses={courses} currentCourse={enrollment.classes} />
                         {colorMode === 'dark' ? (
                             <img src="/Logo-Dark.png" width="30px" alt="Logo" />
                         ) : (
                             <img src="/Logo-Light.png" width="30px" alt="Logo" />
                         )}
                         <Text fontSize="xl" fontWeight="medium">
-                            <Link variant="plain" href={`/course/${course.class_id}`}
-                            >{course.classes.name}</Link>
+                            <Link variant="plain" href={`/course/${enrollment.class_id}`}
+                            >{enrollment.classes.name}</Link>
                         </Text>
                     </HStack>
                     <HStack
                         width="100%"
                     >
-                        {LinkItems(course.class_id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor)).map((link) => {
+                        {LinkItems(enrollment.class_id).filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor))
+                            .filter((link) => !link.feature_flag || course.features?.find((f) => f.name === link.feature_flag)?.enabled)
+                        .map((link) => {
                             if (link.submenu) {
                                 return <Box key={link.name}
                                     borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}

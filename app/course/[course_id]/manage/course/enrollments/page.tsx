@@ -290,7 +290,7 @@ export default function EnrollmentsPage() {
                         } catch (error) {
                             toaster.create({
                                 title: "Error syncing Canvas Enrollments",
-                                description: "Canvas enrollments have not been synced",
+                                description: error instanceof Error ? error.message : "An unknown error occurred",
                                 type: "error",
                             })
                         }

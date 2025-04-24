@@ -1,5 +1,5 @@
 'use client'
-import { UserRole, UserProfile, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { UserRole, UserProfile, UserRoleWithCourse, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { createContext, useContext } from "react";
 import { useList, CrudFilter } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -27,6 +27,12 @@ export function useClassProfiles() {
         throw new Error("useClassProfiles must be used within a ClassProfileProvider");
     }
     return context;
+}
+
+export function useFeatureEnabled(feature: string) {
+    const { role } = useClassProfiles();
+    const course = role.classes as CourseWithFeatures;
+    return course.features?.find((f) => f.name === feature)?.enabled;
 }
 
 export function useIsGraderOrInstructor() {

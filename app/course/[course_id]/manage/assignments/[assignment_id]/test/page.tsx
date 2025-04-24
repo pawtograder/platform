@@ -4,13 +4,15 @@ import { CommitHistoryDialog } from "@/app/course/[course_id]/assignments/[assig
 import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useOne, useList } from "@refinedev/core";
-import { Assignment, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { format } from "date-fns";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
+import CreateStudentReposButton from "@/app/course/[course_id]/assignments/createStudentReposButton";
 export default function TestAssignmentPage() {
     const { course_id, assignment_id } = useParams();
     const { data: assignment } = useOne<Assignment>({ resource: "assignments", id: Number.parseInt(assignment_id as string) });
+    const { private_profile_id } = useClassProfiles();
     const { data: submissions } = useList<SubmissionWithGraderResultsAndReview>({ resource: "submissions",
         meta: {
             select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
@@ -21,8 +23,18 @@ export default function TestAssignmentPage() {
                 order: "desc"
             }
         ],
-        filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }] });
-    const { private_profile_id } = useClassProfiles();
+        filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) },
+            { field: "profile_id", operator: "eq", value: private_profile_id }
+        ] });
+    const { data: repository } = useList<Repository>(
+        { resource: "repositories",
+            meta: {
+                select: "*"
+            },
+            filters: [{ field: "profile_id", operator: "eq", value: private_profile_id },
+                { field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }
+            ] });
+    console.log(repository?.data);
     if (!assignment?.data || !submissions?.data) {
         return <Skeleton height="100px" />
     }
@@ -31,6 +43,12 @@ export default function TestAssignmentPage() {
         <Text fontSize="sm" color="fg.muted">
             You can create your own repository to test the assignment. The view below is similar to what students will see. However, when you view the details of your submission, you will see the autograder results and the rubric (students may not see the rubric or hidden autograder results).
         </Text>
+        {repository?.data.length ? <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
+            <Heading size="md">Repository</Heading>
+            <Text fontSize="sm" color="fg.muted">
+                <Link href={`https://github.com/${repository.data[0].repository}`}>{repository.data[0].repository}</Link>
+            </Text>
+        </Box> : <CreateStudentReposButton />}
         <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
         <Heading size="md">Submission History</Heading>
         <CommitHistoryDialog assignment={assignment.data} assignment_group_id={undefined} profile_id={private_profile_id} />
