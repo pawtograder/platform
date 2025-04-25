@@ -27,7 +27,7 @@ async function handleRequest(req: Request) {
   const { data: userData, error: userDataError } = await supabase.from("users").select(
     "github_username",
   ).eq("user_id", user.user!.id).single();
-  if(userDataError) {
+  if (userDataError) {
     console.error(userDataError);
     throw new SecurityError(`Invalid user: ${user.user!.id}`);
   }
@@ -61,11 +61,16 @@ async function handleRequest(req: Request) {
   const existingGroupRepos = classes.flatMap((c) => c!.profiles!.assignment_groups_members!.flatMap((g) => g.assignment_groups.repositories));
   const existingRepos = [...existingIndividualRepos, ...existingGroupRepos];
   //Find all assignments that the student is enrolled in that have been released
-  const { data: assignments } = await supabase.from("assignments").select(
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+  const { data: assignments } = await adminSupabase.from("assignments").select(
     "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
   ).in("class_id", classes!.map((c) => c!.class_id))
+    .in("assignment_groups.assignment_groups_members.profile_id", classes!.map(c => c.profiles.id))
     .lte("release_date", new Date().toISOString());
-  
+
 
   //For each group repo, sync the permissions
   const createdAsGroupRepos = await Promise.all(classes.flatMap((c) => c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
@@ -73,8 +78,7 @@ async function handleRequest(req: Request) {
     const assignment = groupMembership.assignments;
     const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
 
-    console.log(repoName);
-    console.log(groupMembership.assignment_groups);
+    console.log(`repoName: ${repoName}, groupMembership: ${JSON.stringify(groupMembership, null, 2)}`);
     // Make sure that the repo exists
     if (groupMembership.assignment_groups.repositories.length === 0) {
       console.log("Creating repo");
@@ -96,7 +100,7 @@ async function handleRequest(req: Request) {
         assignment_id: assignment.id,
         repository: `${c.classes!.github_org}/${repoName}`,
       });
-      if(error) {
+      if (error) {
         console.error(error);
         throw new UserVisibleError(`Error creating repo: ${error}`);
       }
@@ -109,7 +113,8 @@ async function handleRequest(req: Request) {
       c.classes!.github_org!,
       repoName,
       c.classes!.slug!,
-      group.assignment_groups_members.map((m) => m.user_roles.users.github_username!),
+      group.assignment_groups_members.filter(m => m.user_roles) // Needed to not barf when a student is removed from the class
+        .map((m) => m.user_roles.users.github_username!),
     );
   })));
 
@@ -133,33 +138,46 @@ async function handleRequest(req: Request) {
     //Is it a group assignment?
     const courseSlug = assignment.classes!.slug;
     const repoName = `${courseSlug}-${assignment.slug}-${githubUsername}`;
-    const repo = await createRepo(
-      assignment.classes!.github_org!,
-      repoName,
-      assignment.template_repo
-    );
-    console.log(`courseSlug: ${courseSlug}`);
-    await syncRepoPermissions(
-      assignment.classes!.github_org!,
-      repoName,
-      courseSlug!,
-      [githubUsername],
-    );
+    if (existingRepos.find((repo) => repo.repository === `${assignment.classes!.github_org}/${repoName}`)) {
+      console.log(`Repo ${repoName} already exists...`);
+      return;
+    }
     //Use service role key to insert the repo into the database
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
-    const { error } = await adminSupabase.from("repositories").insert({
+    const { error, data: dbRepo } = await adminSupabase.from("repositories").insert({
       profile_id: userProfileID,
       class_id: assignment.class_id!,
       assignment_id: assignment.id,
       repository: `${assignment.classes!.github_org}/${repoName}`,
-    });
+    }).select("id").single();
     if (error) {
       console.error(error);
     }
-    return repo;
+
+    try {
+      const repo = await createRepo(
+        assignment.classes!.github_org!,
+        repoName,
+        assignment.template_repo
+      );
+      console.log(`courseSlug: ${courseSlug}`);
+      await syncRepoPermissions(
+        assignment.classes!.github_org!,
+        repoName,
+        courseSlug!,
+        [githubUsername],
+      );
+
+      return repo;
+    } catch (e) {
+      console.log(`Error creating repo: ${repoName}`);
+      console.error(e);
+      await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+      throw new UserVisibleError(`Error creating repo: ${e}`);
+    }
   });
   await Promise.all(requests);
   return {

@@ -63,7 +63,6 @@ const installations: {
     octokit: Octokit;
 }[] = [];
 async function getOctoKit(repoName: string) {
-    console.log("getting octokit for", repoName);
     if (installations.length === 0) {
         const _installations = await app.octokit.request(
             "GET /app/installations",
@@ -542,7 +541,8 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
             throw e;
         }
     }
-    const members = await octokit.request("GET /teams/{team_id}/members", {
+    const members = await octokit.request("GET /orgs/{org}/teams/{team_id}/members", {
+        org,
         team_id,
         per_page: 100,
     });
@@ -551,14 +551,16 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
     const newMembers = githubUsernames.filter((u) => !existingMembers.has(u));
     const removeMembers = existingMembers.keys().filter((u) => !githubUsernames.includes(u));
     for (const username of newMembers) {
-        await octokit.request("PUT /teams/{team_id}/memberships/{username}", {
+        await octokit.request("PUT /orgs/{org}/teams/{team_id}/memberships/{username}", {
+            org,
             team_id,
             username,
             role: "member",
         });
     }
     for (const username of removeMembers) {
-        await octokit.request("DELETE /teams/{team_id}/memberships/{username}", {
+        await octokit.request("DELETE /orgs/{org}/teams/{team_id}/memberships/{username}", {
+            org,
             team_id,
             username,
         });

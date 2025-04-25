@@ -158,8 +158,9 @@ async function handleRequest(req: Request) {
                 repository_check_run_id: checkRun?.id,
             }).select("id").single();
         if (error) {
+            console.error(error);
             throw new UserVisibleError(
-                `Failed to create submission: ${error.message}`,
+                `Failed to create submission for repository ${repository}: ${error.message}`,
             );
         }
         const submission_id = subID?.id;

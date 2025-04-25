@@ -124,8 +124,6 @@ async function handleRequest(req: Request) {
     ]
   ) {
     //Insert output if it exists
-    console.log(`Received this output:`);
-    console.log(`Grader result ID: ${resultID.id}`);
     if (requestBody.feedback.output[visibility as OutputVisibility]) {
       const output =
         requestBody.feedback.output[visibility as OutputVisibility];

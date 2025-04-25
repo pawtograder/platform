@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import {
   assertUserIsInstructor,
+  UserVisibleError,
   wrapRequestHandler,
 } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -81,26 +82,34 @@ async function handleRequest(req: Request) {
       console.log(`No template repo for assignment ${assignment.id}`);
       return;
     }
-    await github.createRepo(
-      assignment.classes!.github_org!,
-      repoName,
-      assignment.template_repo,
-    );
-    await github.syncRepoPermissions(
-      assignment.classes!.github_org!,
-      repoName,
-      assignment.classes!.slug!,
-      github_username,
-    );
-    const { error } = await adminSupabase.from("repositories").insert({
+    const { error, data: dbRepo } = await adminSupabase.from("repositories").insert({
       profile_id: profile_id,
       assignment_group: assignmentGroup?.id,
       assignment_id: assignmentId,
       repository: assignment.classes!.github_org! + "/" + repoName,
       class_id: courseId,
-    });
+    }).select("id").single();
     if (error) {
       console.error(error);
+    }
+
+    try {
+      await github.createRepo(
+        assignment.classes!.github_org!,
+        repoName,
+        assignment.template_repo,
+      );
+    await github.syncRepoPermissions(
+        assignment.classes!.github_org!,
+        repoName,
+        assignment.classes!.slug!,
+        github_username,
+      );
+    } catch (e) {
+      console.log(`Error creating repo: ${repoName}`);
+      console.error(e);
+      await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+      throw new UserVisibleError(`Error creating repo: ${e}`);
     }
   };
   await Promise.all(

@@ -111,9 +111,9 @@ async function handlePushToTemplateRepo(adminSupabase: SupabaseClient<Database>,
 }
 
 eventHandler.on("push", async ({ id, name, payload }) => {
-  console.log(name, "event received: ", name);
   if (name === "push") {
     const repoName = payload.repository.full_name;
+    console.log(`Received push event for ${repoName}`);
     const adminSupabase = createClient<Database>(
       Deno.env.get("SUPABASE_URL") || "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
@@ -151,6 +151,7 @@ eventHandler.on("push", async ({ id, name, payload }) => {
   }
 });
 eventHandler.on("check_run", async ({ id, name, payload }) => {
+  console.log(`Received check_run event for ${payload.repository.full_name}, action: ${payload.action}`);
   if (payload.action === "requested_action") {
     if (payload.requested_action?.identifier === "submit") {
       const adminSupabase = createClient<Database>(
@@ -198,6 +199,7 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
 
 
 Deno.serve(async (req) => {
+  console.log(`Received webhook for ${req.headers.get("x-github-event")} delivery ${req.headers.get("x-github-delivery")}`);
   await eventHandler.receive({
     id: req.headers.get("x-github-delivery") || "",
     name: req.headers.get("x-github-event") as "push",
