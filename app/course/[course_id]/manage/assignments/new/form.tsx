@@ -145,7 +145,6 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
 export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturnType<Assignment>, onSubmit: (values: FieldValues) => void }) {
     const { course_id } = useParams();
 
-    const [templateRepoFiles, setTemplateRepoFiles] = useState<ListCollection<ListFilesResponse[0]>>();
     const {
         handleSubmit,
         register,
@@ -161,33 +160,6 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
 
     const course = useCourse();
 
-    const [isLoadingTemplateRepoFiles, setIsLoadingTemplateRepoFiles] = useState(false);
-    const fetchTemplateRepoFiles = useCallback(async (org: string, repo: string) => {
-        const supabase = createClient();
-        setIsLoadingTemplateRepoFiles(true);
-        const files = await repositoryListFiles({ courseId: Number.parseInt(course_id as string), orgName: org, repoName: repo }, supabase);
-        setTemplateRepoFiles(createListCollection({
-            items: files || [],
-            itemToValue: (file) => file.path,
-            itemToString: (file) => file.name
-        }));
-        setIsLoadingTemplateRepoFiles(false);
-    }, [course_id]);
-
-    useEffect(() => {
-        const templateRepo = getValues("template_repo");
-        if (templateRepo) {
-            const [login, repo] = templateRepo.split("/");
-            fetchTemplateRepoFiles(login, repo);
-        }
-    }, [getValues, fetchTemplateRepoFiles]);
-    useEffect(() => {
-        const templateRepo = refineCore.query?.data?.data.template_repo;
-        if (templateRepo) {
-            const [login, repo] = templateRepo.split("/");
-            fetchTemplateRepoFiles(login, repo);
-        }
-    }, [refineCore.query?.data?.data.template_repo, fetchTemplateRepoFiles]);
 
     return (<div>
         <Toaster />
@@ -272,76 +244,11 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
                                 return <RepoSelector
                                     templateReposOnly
                                     name={field.name} value={field.value ? field.value : ""} onBlur={field.onBlur} onChange={(val) => {
-                                        const [login, repo] = val.split("/");
-                                        fetchTemplateRepoFiles(login, repo);
                                         field.onChange(val)
                                     }} />
                             }} />
 
 
-                    </Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label="Submission files"
-                        helperText="Files from the template repository that students will submit"
-                        errorText={errors.submission_files?.message?.toString()}
-                        invalid={errors.submission_files ? true : false}
-                    >
-                        <Text fontSize="sm" color="fg.muted">Click on the name of file or path to toggle select</Text>
-                        <Controller
-                            control={control}
-                            name="submission_files"
-                            render={({ field }) => {
-                                const selectedFiles = !field.value ? [] :
-                                    (Array.isArray(field.value) ? field.value as string[] :
-                                        JSON.parse(field.value as string) as string[]
-                                    )
-                                return (
-                                    <VStack>
-                                        <Text fontSize="sm" color="fg.muted">Selected files: {selectedFiles.join(', ')}</Text>
-                                        <Box height="300px" overflowY="auto">
-                                            {isLoadingTemplateRepoFiles ? <Spinner /> :
-                                                <Table.Root striped size="sm">
-                                                    <Table.Caption>Template repository files</Table.Caption>
-                                                    <Table.Header>
-                                                        <Table.Row >
-                                                            <Table.ColumnHeader>Select</Table.ColumnHeader>
-                                                            <Table.ColumnHeader>File</Table.ColumnHeader>
-                                                            <Table.ColumnHeader>Path</Table.ColumnHeader>
-                                                        </Table.Row>
-                                                    </Table.Header>
-                                                    <Table.Body>
-                                                        {templateRepoFiles?.items.map((file) => {
-                                                            return (
-                                                                <Table.Row key={file.path}>
-                                                                    <Table.Cell><Checkbox
-                                                                        checked={field.value ? (field.value as string[]).includes(file.path) : false} name={file.path} /></Table.Cell>
-                                                                    <Table.Cell onClick={() => {
-                                                                        const value: string[] = field.value as string[] || [];
-                                                                        if (value.includes(file.path)) {
-                                                                            field.onChange(value.filter((f) => f !== file.path));
-                                                                        } else {
-                                                                            field.onChange([...value, file.path]);
-                                                                        }
-                                                                    }}>{file.name}</Table.Cell>
-                                                                    <Table.Cell onClick={() => {
-                                                                        const value: string[] = field.value as string[] || [];
-                                                                        if (value.includes(file.path)) {
-                                                                            field.onChange(value.filter((f) => f !== file.path));
-                                                                        } else {
-                                                                            field.onChange([...value, file.path]);
-                                                                        }
-                                                                    }}>{file.path}</Table.Cell>
-                                                                </Table.Row>
-                                                            )
-                                                        })}
-                                                    </Table.Body>
-                                                </Table.Root>
-                                            }
-                                        </Box>
-                                    </VStack>
-                                )
-                            }} />
                     </Field>
                 </Fieldset.Content>
                 <Fieldset.Content>

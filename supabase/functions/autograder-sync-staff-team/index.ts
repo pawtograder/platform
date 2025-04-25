@@ -13,7 +13,6 @@ async function handleRequest(req: Request) {
   ).eq("class_id", course_id).
     or("role.eq.instructor,role.eq.grader");
   console.log(staff);
-  console.log(staffError);
   if (staffError) {
     throw new UserVisibleError("Error fetching staff");
   }

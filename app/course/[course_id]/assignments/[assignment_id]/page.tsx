@@ -57,7 +57,7 @@ export default async function AssignmentPage({ params }: { params: Promise<{ cou
                 <Table.Body>
                     {submissions?.map((submission) => (
                         <Table.Row key={submission.id}>
-                            <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{submission.is_active ? <ActiveSubmissionIcon /> : ""}{submission.id}</Link></Table.Cell>
+                            <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{submission.is_active ? <ActiveSubmissionIcon /> : ""}{submission.ordinal}</Link></Table.Cell>
                             <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{format(new Date(submission.created_at), "MMM d h:mm aaa")}</Link></Table.Cell>
                             <Table.Cell><Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`}>{submission.sha.slice(0, 7)}</Link></Table.Cell>
                             <Table.Cell><Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>{submission.grader_results?.score}/{submission.grader_results?.max_score}</Link></Table.Cell>

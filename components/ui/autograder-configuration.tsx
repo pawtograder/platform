@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import yaml from 'yaml';
 import { Alert } from "@/components/ui/alert";
 import Markdown from "react-markdown";
-import { Box, Button, Heading, Spinner, Link, Table, Text, Separator } from "@chakra-ui/react";
+import { Box, Button, Heading, Spinner, Link, Table, Text, Separator, List } from "@chakra-ui/react";
 import { Checkbox } from "@/components/ui/checkbox"
 
 import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
@@ -151,7 +151,24 @@ export default function AutograderConfiguration({ graderRepo, assignment }: { gr
     return <div>
         {error && <Alert status="error">{error}</Alert>}
         <Heading as="h2">Autograder Configuration</Heading>
-        This is the current configuration for the autograder:
+        This is the current configuration for the autograder, as defined in the autograder repository:
+        <Box>
+            <Heading size="sm">Submission source files</Heading>
+            <Text fontSize="sm" color="fg.muted">These files will be submitted to the autograder for grading, and will be graded against the instructor's tests.</Text>
+            <List.Root as="ul" pl={4}>
+                {autograderConfig?.submissionFiles.files.map((file) => (
+                    <List.Item fontSize="sm" color="fg.muted" key={file}>{file}</List.Item>
+                ))}
+            </List.Root>
+            <Heading size="sm">Submission test files</Heading>
+            <Text fontSize="sm" color="fg.muted">These tests will be submitted to the autograder for grading.</Text>
+            <List.Root as="ul" pl={4}>
+                {autograderConfig?.submissionFiles.testFiles.map((file) => (
+                    <List.Item fontSize="sm" color="fg.muted" key={file}>{file}</List.Item>
+                ))}
+            </List.Root>
+        </Box>
+        <Heading size="sm">Graded parts</Heading>
         <Table.Root>
             <Table.Header>
                 <Table.Row>

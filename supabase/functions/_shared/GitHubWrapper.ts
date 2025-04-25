@@ -529,6 +529,7 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
             team_slug,
         });
         team_id = team.data.id;
+        console.log(`Found team ${team_slug} with id ${team_id}`);
     } catch (e) {
         if (e instanceof RequestError && e.message.includes("Not Found")) {
             // Team doesn't exist, create it
@@ -537,31 +538,45 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
                 name: team_slug,
             });
             team_id = newTeam.data.id;
+            console.log(`Created team ${team_slug} with id ${team_id}`);
         } else {
             throw e;
         }
     }
-    const members = await octokit.request("GET /orgs/{org}/teams/{team_id}/members", {
-        org,
-        team_id,
-        per_page: 100,
-    });
-
-    const existingMembers = new Map(members.data.map((m) => [m.login, m]));
-    const newMembers = githubUsernames.filter((u) => !existingMembers.has(u));
-    const removeMembers = existingMembers.keys().filter((u) => !githubUsernames.includes(u));
-    for (const username of newMembers) {
-        await octokit.request("PUT /orgs/{org}/teams/{team_id}/memberships/{username}", {
+    let members: Endpoints["GET /orgs/{org}/teams/{team_id}/members"]["response"]["data"][] = [];
+    try {
+        const { data } = await octokit.request("GET /orgs/{org}/teams/{team_id}/members", {
             org,
             team_id,
+            per_page: 100,
+        });
+        members = data;
+    } catch (e) {
+        if (e instanceof RequestError && e.message.includes("Not Found")) {
+            //This seems to happen when there are no members in the team?
+            members = [];
+        } else {
+            throw e;
+        }
+    }
+
+    const existingMembers = new Map(members.map((m) => [m.login, m]));
+    const newMembers = githubUsernames.filter((u) => u && !existingMembers.has(u));
+    const removeMembers = existingMembers.keys().filter((u) => u && !githubUsernames.includes(u));
+    console.log(`Staff team: ${team_slug} intended members:`);
+    console.log(githubUsernames.join(", "));
+    for (const username of newMembers) {
+        await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
+            org,
+            team_slug,
             username,
             role: "member",
         });
     }
     for (const username of removeMembers) {
-        await octokit.request("DELETE /orgs/{org}/teams/{team_id}/memberships/{username}", {
+        await octokit.request("DELETE /orgs/{org}/teams/{team_slug}/memberships/{username}", {
             org,
-            team_id,
+            team_slug,
             username,
         });
     }
@@ -645,7 +660,7 @@ export async function triggerWorkflow(repo_full_name: string, sha: string, workf
     const ref = `pawtograder-submit/${sha}`;
     //Create a tag for this sha to use to trigger the workflow
     try {
-        
+
         // console.log("created ref", res.data);
         await octokit.request("POST /repos/{owner}/{repo}/git/tags",
             {
@@ -688,8 +703,8 @@ export async function triggerWorkflow(repo_full_name: string, sha: string, workf
 
 export type CheckRunUpdateProps = Endpoints["PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}"]["parameters"];
 export async function updateCheckRun(
-props : CheckRunUpdateProps
-){
+    props: CheckRunUpdateProps
+) {
     const octokit = await getOctoKit(props.owner);
     if (!octokit) {
         throw new Error("No octokit found for organization " + props.owner);
@@ -703,7 +718,7 @@ export async function createCheckRun(repo_full_name: string, sha: string, detail
     if (!octokit) {
         throw new Error("No octokit found for organization " + org);
     }
-    
+
     const res = await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
         owner: org,
         repo,
@@ -711,7 +726,7 @@ export async function createCheckRun(repo_full_name: string, sha: string, detail
         head_sha: sha,
         details_url,
         status: "queued",
-        output:{
+        output: {
             title: "Submission Status",
             summary: "Submission not created",
             text: "Code was received by GitHub, but has not been automatically submitted to Pawtograder.",

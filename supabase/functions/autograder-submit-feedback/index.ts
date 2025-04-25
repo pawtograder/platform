@@ -165,6 +165,7 @@ async function handleRequest(req: Request) {
         part: test.part,
         extra_data: test.extra_data,
         is_released: !test.hide_until_released,
+        submission_id,
       })),
     );
   if (testResultsError) {

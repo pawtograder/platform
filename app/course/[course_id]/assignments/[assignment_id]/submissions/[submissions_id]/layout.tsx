@@ -30,12 +30,21 @@ import { FaBell, FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCirc
 import { useState } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
-
+import { CrudFilter } from "@refinedev/core";
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const pathname = usePathname();
     const invalidate = useInvalidate();
     const router = useRouter();
     const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
+    const groupOrProfileFilter : CrudFilter = submission.assignment_group_id ? {
+        field: "assignment_group_id",
+        operator: "eq",
+        value: submission.assignment_group_id
+    } : {
+        field: "profile_id",
+        operator: "eq",
+        value: submission.profile_id
+    }
     const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
         resource: "submissions",
         meta: {
@@ -46,7 +55,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                 field: "assignment_id",
                 operator: "eq",
                 value: submission.assignments.id
-            }
+            },
+            groupOrProfileFilter
         ],
         sorters: [
             {
@@ -170,8 +180,11 @@ function TestResults() {
     const testResults = submission.grader_results?.grader_result_tests;
     const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
     const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
+    const graderResultsMaxScore = submission.grader_results?.max_score;
     return <Box>
         <Heading size="md">Automated Check Results ({totalScore}/{totalMaxScore})</Heading>
+        {(graderResultsMaxScore && totalMaxScore && graderResultsMaxScore > totalMaxScore) &&
+            <Text color="text.muted" fontSize="sm">{graderResultsMaxScore - totalMaxScore} additional points are awarded by automated tests that are not shown until after grading is complete.</Text>}
         {testResults?.map((test) => <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
             {test.score == test.max_score ? <Icon as={FaCheckCircle} color="green.500" /> : <Icon as={FaTimesCircle} color="red.500" />}
             <Link href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results#test-${test.id}`}><Heading size="sm">{test.name} {test.score}/{test.max_score}</Heading></Link>

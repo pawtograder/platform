@@ -16,6 +16,8 @@ import { createHash } from "node:crypto";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import { addHours, addSeconds, format } from "npm:date-fns@4";
 import { TZDate } from "npm:@date-fns/tz";
+import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
+import micromatch from "npm:micromatch";
 
 function formatSeconds(seconds: number) {
     const days = Math.floor(seconds / 86400);
@@ -44,7 +46,7 @@ async function handleRequest(req: Request) {
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
     );
     const { data: repoData, error: repoError } = await adminSupabase.from("repositories").select(
-        "*, assignments(submission_files, class_id, due_date, autograder(*))",
+        "*, assignments(class_id, due_date, autograder(*))",
     ).eq("repository", repository).single();
     if (repoError) {
         throw new UserVisibleError(`Failed to find repository: ${repoError.message}`);
@@ -220,21 +222,30 @@ async function handleRequest(req: Request) {
                 `Workflow file SHA does not match expected value: ${hashStr} !== ${config.workflow_sha}`,
             );
         }
-        const expectedFiles = repoData.assignments
-            .submission_files as string[];
+        const pawtograderConfig = config.config as unknown as PawtograderConfig;
+        const expectedFiles = [
+            ...pawtograderConfig.submissionFiles.files,
+            ...pawtograderConfig.submissionFiles.testFiles,
+        ];
+
         if (expectedFiles.length === 0) {
             throw new UserVisibleError(
                 "Incorrect instructor setup for assignment: no submission files set",
             );
         }
         const submittedFiles = zip.files.filter((file: any) =>
-            expectedFiles.includes(stripTopDir(file.path))
+            file.type === "File" && // Do not submit directories
+            expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
         );
-        if (submittedFiles.length !== expectedFiles.length) {
-            throw new UserVisibleError(
-                `Incorrect number of files submitted: ${submittedFiles.length} !== ${expectedFiles.length}`,
-            );
+        // Make sure that all files that are NOT glob patterns are present
+        const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
+        const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
+            submittedFiles.some((submittedFile: any) => stripTopDir(submittedFile.path) === file)
+        );
+        if (!allNonGlobFilesPresent) {
+            throw new UserVisibleError(`Missing required files: ${nonGlobFiles.join(", ")}`);
         }
+
         const submittedFilesWithContents = await Promise.all(
             submittedFiles.map(async (file: any) => {
                 const contents = await file.buffer();

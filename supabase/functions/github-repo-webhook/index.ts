@@ -7,6 +7,7 @@ import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import { createCheckRun, getFileFromRepo, triggerWorkflow, updateCheckRun } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret",
 });
@@ -60,7 +61,6 @@ async function handlePushToGraderSolution(adminSupabase: SupabaseClient<Database
     console.log("Pawtograder yml changed");
     const file = await getFileFromRepo(repoName, PAWTOGRADER_YML_PATH);
     const parsedYml = parse(file.content) as PawtograderConfig;
-    console.log(parsedYml);
     const totalAutograderPoints = parsedYml.gradedParts.reduce((acc, part) => acc + part.gradedUnits.reduce((unitAcc, unit) => unitAcc + (
       isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward :
         isRegularTestUnit(unit) ? unit.points : 0
@@ -75,6 +75,14 @@ async function handlePushToGraderSolution(adminSupabase: SupabaseClient<Database
         console.error(updateError);
       }
     }
+    await Promise.all(autograders.map(async (autograder) => {
+      const { error } = await adminSupabase.from("autograder").update({
+        config: parsedYml as unknown as Json,
+      }).eq("id", autograder.id).single();
+      if (error) {
+        console.error(error);
+      }
+    }));
     console.log("Updated pawtograder yml");
   }
 }

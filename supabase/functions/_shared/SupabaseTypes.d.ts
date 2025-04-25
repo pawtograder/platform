@@ -434,7 +434,6 @@ export type Database = {
           release_date: string | null
           slug: string | null
           student_repo_prefix: string | null
-          submission_files: Json
           template_repo: string | null
           title: string
           total_points: number | null
@@ -459,7 +458,6 @@ export type Database = {
           release_date?: string | null
           slug?: string | null
           student_repo_prefix?: string | null
-          submission_files?: Json
           template_repo?: string | null
           title: string
           total_points?: number | null
@@ -484,7 +482,6 @@ export type Database = {
           release_date?: string | null
           slug?: string | null
           student_repo_prefix?: string | null
-          submission_files?: Json
           template_repo?: string | null
           title?: string
           total_points?: number | null
@@ -549,6 +546,7 @@ export type Database = {
       }
       autograder: {
         Row: {
+          config: Json | null
           created_at: string
           grader_commit_sha: string | null
           grader_repo: string | null
@@ -558,6 +556,7 @@ export type Database = {
           workflow_sha: string | null
         }
         Insert: {
+          config?: Json | null
           created_at?: string
           grader_commit_sha?: string | null
           grader_repo?: string | null
@@ -567,6 +566,7 @@ export type Database = {
           workflow_sha?: string | null
         }
         Update: {
+          config?: Json | null
           created_at?: string
           grader_commit_sha?: string | null
           grader_repo?: string | null
@@ -1090,6 +1090,7 @@ export type Database = {
           part: string | null
           score: number | null
           student_id: string | null
+          submission_id: number | null
         }
         Insert: {
           assignment_group_id?: number | null
@@ -1107,6 +1108,7 @@ export type Database = {
           part?: string | null
           score?: number | null
           student_id?: string | null
+          submission_id?: number | null
         }
         Update: {
           assignment_group_id?: number | null
@@ -1124,6 +1126,7 @@ export type Database = {
           part?: string | null
           score?: number | null
           student_id?: string | null
+          submission_id?: number | null
         }
         Relationships: [
           {
@@ -1146,6 +1149,27 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_result_tests_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_result_tests_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "grader_result_tests_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
           },
           {
             foreignKeyName: "grader_test_results_class_id_fkey"
