@@ -3,41 +3,18 @@ import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
-import { useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useDiscussionThreadReadStatus, useDiscussionThreadTeaser, useUpdateThreadTeaser } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren from "@/hooks/useDiscussionThreadRootController";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
-import { createClient } from "@/utils/supabase/client";
-import { DiscussionThread as DiscussionThreadType, ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
-import { useCreate } from "@refinedev/core";
+import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { borders } from "styled-system";
 
-
-export function threadsToTree(threads: DiscussionThreadType[]): ThreadWithChildren {
-    const threadMap = new Map<number, ThreadWithChildren>();
-    let root: ThreadWithChildren | undefined;
-    for (const thread of threads) {
-        threadMap.set(thread.id, { ...thread, children: [] });
-    }
-    for (const thread of threads) {
-        if (thread.parent && thread.parent !== thread.id) {
-            const parent = threadMap.get(thread.parent);
-            if (parent) {
-                parent.children.push(threadMap.get(thread.id)!);
-            }
-        } else {
-            root = threadMap.get(thread.id);
-        }
-    }
-    if (!root) {
-        throw new Error("No root thread found");
-    }
-    return root;
-}
 export function DiscussionThreadReply({ thread, visible, setVisible }: { thread: DiscussionThreadType | undefined, visible: boolean, setVisible: (visible: boolean) => void }) {
     // const invalidate = useInvalidate();
     const { mutateAsync: mutate } = useCreate({
@@ -77,6 +54,10 @@ export function DiscussionThreadReply({ thread, visible, setVisible }: { thread:
         rounded="l3" py="2" px="3"
     >
         <MessageInput defaultSingleLine={true}
+            enableAnonymousModeToggle={true}
+            enableEmojiPicker={true}
+            enableGiphyPicker={true}
+            enableFilePicker={true}
             sendMessage={sendMessage}
         />
         <Button variant="ghost" onClick={() => setVisible(false)}>Cancel</Button>
@@ -142,9 +123,20 @@ export const DiscussionThread = memo(({ thread_id,
     // const isVisible = useIntersection(ref);
 
     const thread = useDiscussionThreadChildren(thread_id);
+    const root_thread = useDiscussionThreadTeaser(thread?.root!);
+    const is_answer = root_thread?.answer === thread?.id;
+    const { mutateAsync } = useUpdate<DiscussionThreadType>({
+        resource: "discussion_threads",
+        mutationMode: 'optimistic',
+    });
+
     const [replyVisible, setReplyVisible] = useState(false);
     const authorProfile = useUserProfile(thread?.author);
-
+    const { role } = useClassProfiles();
+    const [isEditing, setIsEditing] = useState(false);
+    const canEdit = useMemo(() => {
+        return authorProfile?.id === originalPoster || role.role === "instructor" || role.role === "grader";
+    }, [authorProfile, originalPoster, role.role]);
     const outerBorders = useCallback((present: string): JSX.Element => {
         let ret: JSX.Element[] = []
         for (let i = 0; i < present.length; i++) {
@@ -158,7 +150,7 @@ export const DiscussionThread = memo(({ thread_id,
         return <>{ret}</>
     }, [isFirstDescendantOfParent, outerSiblings]);
     const childOuterSiblings = useMemo(() => {
-        const ret:string[] = [];
+        const ret: string[] = [];
         if (thread?.children) {
             for (let i = 0; i < thread?.children.length; i++) {
                 ret.push(outerSiblings + (thread?.children.length > 1 && i !== thread?.children.length - 1 ? '1' : '0'))
@@ -166,74 +158,118 @@ export const DiscussionThread = memo(({ thread_id,
         }
         return ret;
     }, [outerSiblings, thread?.children.length]);
+    const updateThread = useUpdateThreadTeaser();
     const showReply = useCallback(() => {
         setReplyVisible(true);
     }, []);
+    const toggleAnswered = useCallback(async () => {
+        if (is_answer) {
+            await updateThread({
+                id: thread!.root!,
+                old: root_thread!,
+                values: { answer: null },
+            })
+        } else {
+            await updateThread({
+                id: thread!.root!,
+                old: root_thread!,
+                values: { answer: thread!.id }
+            })
+        }
+    }, [is_answer, updateThread, thread?.root, thread?.id]);
+    const isAnswered = root_thread?.answer != undefined;
     if (!thread || !thread.children) {
         return <Skeleton height="100px" />
     }
     const descendant = thread.children.length > 0;
-    return <Container pl="8" pr="0" alignSelf="flex-start">
-        <Box pos="relative" w="100%" pt="2">
-            <Box
-                pos="absolute"
-                width="5"
-                height="8"
-                left="8"
-                top="0"
-                bottom="0"
-                borderColor="border"
-                roundedBottomLeft="l3"
-                borderStartWidth="2px"
-                borderBottomWidth="2px"
-            />
-            {outerBorders(outerSiblings)}
-            {descendant && <Box
-                pos="absolute" width="2px" left="16" top="10" bottom="0" bg="border" />}
-            <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%">
-                {authorProfile ? <Avatar.Root size="sm" variant="outline" shape="square">
-                    <Avatar.Fallback name={authorProfile!.name} />
-                    <Avatar.Image src={authorProfile!.avatar_url} />
-                </Avatar.Root> : <SkeletonCircle width="40px" height="40px" />}
-                <Stack w="100%">
-                    <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref}>
-                        <HStack gap="1">
-                            <Text textStyle="sm" fontWeight="semibold">
-                                <Link id={`post-${thread.ordinal}`} href={`/course/${thread.class_id}/discussion/${thread.root}#post-${thread.ordinal}`}>#{thread.ordinal}</Link>
-                            </Text>
-                            {authorProfile ? <Text textStyle="sm" fontWeight="semibold">
-                                {authorProfile?.name}
-                                {authorProfile?.real_name && (" (" + authorProfile?.real_name + " to self and instructors)")}
-                                {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
-                                {authorProfile?.flair && <Badge ml="2" colorPalette={authorProfile?.flair_color}>{authorProfile?.flair}</Badge>}
-                            </Text> : <Skeleton width="100px" height="20px" />}
-                            <NotificationAndReadStatusUpdater thread_id={thread.id} root_thread_id={thread.root!} />
-                        </HStack>
-                        <Box textStyle="sm" color="fg.muted">
-                            <Markdown>{thread.body}</Markdown>
+    return <Box>
+        <Container pl="8" pr="0" alignSelf="flex-start">
+            <Box pos="relative" w="100%" pt="2">
+                <Box
+                    pos="absolute"
+                    width="5"
+                    height="8"
+                    left="8"
+                    top="0"
+                    bottom="0"
+                    borderColor="border"
+                    roundedBottomLeft="l3"
+                    borderStartWidth="2px"
+                    borderBottomWidth="2px"
+                />
+                {outerBorders(outerSiblings)}
+                {descendant && <Box
+                    pos="absolute" width="2px" left="16" top="10" bottom="0" bg="border" />}
+                <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%"
+                >
+                    {authorProfile ? <Avatar.Root size="sm" variant="outline" shape="square">
+                        <Avatar.Fallback name={authorProfile!.name} />
+                        <Avatar.Image src={authorProfile!.avatar_url} />
+                    </Avatar.Root> : <SkeletonCircle width="40px" height="40px" />}
+                    <Stack w="100%"
+                        border={thread.id === root_thread?.answer ? "2px solid var(--chakra-colors-green-500)" : "none"}
+                        borderRadius="l3">
+                        <Box bg="bg.muted" rounded="l3" py="2" px="3" ref={ref}>
+                            <HStack gap="1">
+                                <Text textStyle="sm" fontWeight="semibold">
+                                    <Link id={`post-${thread.ordinal}`} href={`/course/${thread.class_id}/discussion/${thread.root}#post-${thread.ordinal}`}>#{thread.ordinal}</Link>
+                                </Text>
+                                {authorProfile ? <Text textStyle="sm" fontWeight="semibold">
+                                    {authorProfile?.name}
+                                    {authorProfile?.real_name && (" (" + authorProfile?.real_name + " to self and instructors)")}
+                                    {thread.author === originalPoster && <Badge ml="2" colorPalette="blue">OP</Badge>}
+                                    {authorProfile?.flair && <Badge ml="2" colorPalette={authorProfile?.flair_color}>{authorProfile?.flair}</Badge>}
+                                </Text> : <Skeleton width="100px" height="20px" />}
+                                {thread.id === root_thread?.answer && <Badge colorPalette="green">Answer to Question</Badge>}
+                                <NotificationAndReadStatusUpdater thread_id={thread.id} root_thread_id={thread.root!} />
+                            </HStack>
+                            {isEditing ? <MessageInput sendMessage={async (message, profile_id) => {
+                                await mutateAsync({
+                                    id: thread.id.toString(),
+                                    values: {
+                                        body: message,
+                                        edited_at: new Date().toISOString()
+                                    }
+                                });
+                                setIsEditing(false);
+                            }}
+                                enableEmojiPicker={true}
+                                enableFilePicker={true}
+                                enableGiphyPicker={true}
+                                sendButtonText="Edit"
+                                value={thread.body} /> : <Box textStyle="sm" color="fg.muted">
+                                <Markdown>{thread.body}</Markdown>
+                            </Box>}
                         </Box>
-                    </Box>
-                    <HStack fontWeight="semibold" textStyle="xs" ps="2">
-                        <Text textStyle="sm" color="fg.muted" ms="3">
-                            {formatRelative(thread.created_at, new Date())}
-                        </Text>
-                        <Text color="fg.muted">Like</Text>
-                        <Link onClick={showReply} color="fg.muted">Reply</Link>
-                    </HStack>
-                    <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
-                </Stack>
-            </Flex>
-        </Box>
-        {/* <Box w="100%" pl="4em"> */}
-        {
-            thread.children.map((child, index) =>
-                <DiscussionThread key={child.id} thread_id={child.id}
-                    originalPoster={originalPoster}
-                    indent={index === 0}
-                    outerSiblings={childOuterSiblings[index]}
-                    isFirstDescendantOfParent={index === 0}
-                />)
-        }
-        {/* </Box> */}
-    </Container>
+                        <HStack fontWeight="semibold" textStyle="xs" ps="2">
+                            <Text textStyle="sm" color="fg.muted" ms="3">
+                                {formatRelative(thread.created_at, new Date())}
+                            </Text>
+                            {/* <Text color="fg.muted">Like</Text> */}
+                            <Link onClick={showReply} color="fg.muted">Reply</Link>
+                            {canEdit && <Link onClick={() => setIsEditing(true)} color="fg.muted">Edit</Link>}
+                            {(root_thread?.is_question && canEdit && !isAnswered) && <Button variant="surface" onClick={toggleAnswered}
+                                size="xs"
+                                colorPalette="green"
+                            >
+                                Accept as Answer</Button>
+                            }
+                            {(canEdit && root_thread?.answer === thread.id) && <Link onClick={toggleAnswered} color="fg.muted">Unmark as answer</Link>}
+                        </HStack>
+                        <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
+                    </Stack>
+                </Flex>
+            </Box>
+            {/* <Box w="100%" pl="4em"> */}
+            {
+                thread.children.map((child, index) =>
+                    <DiscussionThread key={child.id} thread_id={child.id}
+                        originalPoster={originalPoster}
+                        indent={index === 0}
+                        outerSiblings={childOuterSiblings[index]}
+                        isFirstDescendantOfParent={index === 0}
+                    />)
+            }
+            {/* </Box> */}
+        </Container></Box>
 })

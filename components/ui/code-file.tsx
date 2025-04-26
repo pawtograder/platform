@@ -128,6 +128,8 @@ export default function CodeFile({
         {
             "& .source-code-line": {
                 cursor: "pointer",
+                display: "flex",
+                flexDirection: "row",
                 "&:hover": {
                     bg: "yellow.subtle",
                     width: "100%",
@@ -137,10 +139,16 @@ export default function CodeFile({
             "& .selected": {
                 bg: "yellow.subtle",
             }
-        } : {};
+        } : {
+            "& .source-code-line": {
+                display: "flex",
+                flexDirection: "row",
+            },
+        };
     return <Box border="1px solid" borderColor="border.emphasized" p={0}
         m={2}
-        w="4xl"
+        minW="4xl"
+        w="100%"
         css={{
             ...commentsCSS,
             "& .line-number": {
@@ -149,7 +157,15 @@ export default function CodeFile({
                 padding: "0 5px",
                 marginRight: "10px",
                 borderRight: "1px solid #ccc",
-                display: "inline-block",
+            },
+            "& .source-code-line-container": {
+                width: "100%",
+            },
+            "& .source-code-line-content": {
+            },
+            "& pre": {
+                whiteSpace: "pre-wrap",
+                wordWrap: "break-word"
             }
         }}
     >
@@ -191,19 +207,21 @@ export default function CodeFile({
                     prev.filter((l) => l !== line))
             },
             showCommentsFeature
-        }}><pre onClick={(ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            setLineActionPopup((prev) => {
-                prev.onClose?.();
-                return {
-                    ...prev,
-                    visible: false,
-                    onClose: undefined,
-                    close: () => { }
-                }
-            });
-        }}>{reactNode}</pre></CodeLineCommentContext.Provider></Box >
+        }}><VStack
+            gap={0}
+            onClick={(ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                setLineActionPopup((prev) => {
+                    prev.onClose?.();
+                    return {
+                        ...prev,
+                        visible: false,
+                        onClose: undefined,
+                        close: () => { }
+                    }
+                });
+            }}>{reactNode}</VStack></CodeLineCommentContext.Provider></Box >
 }
 
 /**
@@ -580,7 +598,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
                 {(!selectedSubOption && selectedCheckOption.check) && <Text fontSize="sm" color="fg.muted">{formatPoints(selectedCheckOption.check)}</Text>}
                 <MessageInput
                     textAreaRef={messageInputRef}
-                    showGiphyPicker={true}
+                    enableGiphyPicker={true}
                     placeholder={
                         !selectedCheckOption.check ? "Add a comment about this line and press enter to submit..." :
                             selectedCheckOption.check.is_comment_required ? "Add a comment about this check and press enter to submit..." : "Optionally add a comment, or just press enter to submit..."
@@ -679,14 +697,14 @@ function LineNumber({ lineNumber }: { lineNumber: number }) {
 function createLine(children: ElementContent[], line: number, setExpanded: Dispatch<SetStateAction<number[]>>, setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>) {
     return {
         type: 'element',
-        tagName: 'span',
+        tagName: 'div',
         properties: {
             className: 'source-code-line-container',
         },
         children: [
             {
                 type: 'element',
-                tagName: 'span',
+                tagName: 'pre',
                 properties: {
                     className: 'source-code-line',
                     id: `L${line}`,
@@ -762,7 +780,14 @@ function createLine(children: ElementContent[], line: number, setExpanded: Dispa
                         properties: { lineNumber: line },
                         children: []
                     },
-                    ...children
+                    {
+                        type: 'element',
+                        tagName: 'div',
+                        properties: {
+                            className: 'source-code-line-content',
+                        },
+                        children: children
+                    }
                 ]
             },
             {

@@ -22,7 +22,23 @@ function FilePicker({ curFile, setCurFile }: { curFile: number, setCurFile: (fil
     const comments = useSubmissionFileComments({
     });
     const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
-    return (
+    return (<Box maxH="250px" overflowY="auto" css={{
+        '&::-webkit-scrollbar': {
+            width: '8px',
+            display: 'block'
+        },
+        '&::-webkit-scrollbar-track': {
+            background: '#f1f1f1',
+            borderRadius: '4px'
+        },
+        '&::-webkit-scrollbar-thumb': {
+            background: '#888',
+            borderRadius: '4px'
+        },
+        '&::-webkit-scrollbar-thumb:hover': {
+            background: '#555'
+        }
+    }}>
         <Table.Root borderWidth="1px" borderColor="border.emphasized"
             w="4xl"
             m={2}
@@ -36,13 +52,14 @@ function FilePicker({ curFile, setCurFile }: { curFile: number, setCurFile: (fil
             <Table.Body>
                 {submission.submission_files.map((file, idx) => (
                     <Table.Row key={file.id}>
-                        <Table.Cell><Link 
-                        variant={curFile === idx ? "underline" : undefined} href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?file_id=${file.id}`}>{file.name}</Link></Table.Cell>
+                        <Table.Cell><Link
+                            variant={curFile === idx ? "underline" : undefined} href={`/course/${submission.assignments.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files/?file_id=${file.id}`}>{file.name}</Link></Table.Cell>
                         {showCommentsFeature && <Table.Cell>{comments.filter((comment) => comment.submission_file_id === file.id).length}</Table.Cell>}
                     </Table.Row>
                 ))}
             </Table.Body>
         </Table.Root>
+    </Box>
     )
 }
 function RubricItem({ rubric }: { rubric: Rubric }) {
@@ -189,12 +206,12 @@ export default function FilesView() {
     useEffect(() => {
         submissionController.file = submission.submission_files[curFile];
     }, [curFile]);
-    return <Container pt={4}>
-        <Flex>
-            <Box>
+    return <Box pt={4} w="100%">
+        <Flex w="100%">
+            <Box w="100%">
                 <FilePicker curFile={curFile} setCurFile={setCurFile} />
                 <CodeFile file={submission.submission_files[curFile]} />
             </Box>
         </Flex>
-    </Container>
+    </Box>
 }

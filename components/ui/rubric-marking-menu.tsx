@@ -2,6 +2,7 @@
 import { ClientMetricReportDirection } from "amazon-chime-sdk-js";
 import { RubricCheckSelectOption, RubricCriteriaSelectGroupOption, RubricCheckSubOptions } from "./code-file";
 import { Menu, MenuItem, SubMenu } from "@jonbell/react-radial-menu";
+import { Box } from "@chakra-ui/react";
 
 
 function RubricCheckSubMenuOrItem({ criterion, option, handleItemClick, handleSubItemClick, handleDisplayClick }: { criterion: RubricCriteriaSelectGroupOption, option: RubricCheckSelectOption, handleItemClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSelectOption) => void, handleSubItemClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: RubricCheckSubOptions) => void, handleDisplayClick: (event: React.MouseEvent<SVGGElement, MouseEvent>, position: string) => void }) {
@@ -33,7 +34,7 @@ function RubricCriteriaSubMenuOrItem({ criterion, handleItemClick, handleSubItem
             {children}
         </SubMenu>
     }
-    else if(criterion.options.length === 1) {
+    else if (criterion.options.length === 1) {
         return RubricCheckSubMenuOrItem({
             criterion,
             option: criterion.options[0],
@@ -72,7 +73,19 @@ export function RubricMarkingMenu({ criteria, top, left, setSelectedCheckOption,
         handleSubItemClick,
         handleDisplayClick
     }));
-    return <Menu
+    return <Box css={{
+        '--__reactRadialMenu__menu-bgColor': 'var(--chakra-colors-bg-inverted)',
+        '--__reactRadialMenu__item-color': 'var(--chakra-colors-fg-inverted)',
+        '--__reactRadialMenu__separator-color': 'var(--chakra-colors-border-emphasized)',
+        '--__reactRadialMenu__activeItem-color': 'var(--chakra-colors-fg-emphasized)',
+        '--__reactRadialMenu__activeItem-bgColor': 'var(--chakra-colors-bg-emphasized)',
+        '--__reactRadialMenu__arrow-color': 'var(--chakra-colors-fg-inverted)',
+        '__reactRadialMenu__activeArrowColor': 'var(--chakra-colors-fg-emphasized)',
+
+        '& .__rrm-content':{
+            padding: '5px'
+        }
+    }}><Menu
         centerX={left}
         centerY={top}
         innerRadius={75}
@@ -83,6 +96,7 @@ export function RubricMarkingMenu({ criteria, top, left, setSelectedCheckOption,
         animation={["fade", "scale"]}
         animationTimeout={150}
         drawBackground>
-        {children}
-    </Menu>
+            {children}
+        </Menu>
+    </Box>
 }

@@ -8,6 +8,7 @@ import { Refine } from "@refinedev/core";
 import { dataProvider, liveProvider } from "@refinedev/supabase";
 import {
   ColorModeProvider,
+  ColorModeWatcher,
   type ColorModeProviderProps,
 } from "./color-mode";
 

@@ -13,7 +13,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { Controller } from "react-hook-form";
-import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote } from "react-icons/fa";
+import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -54,18 +54,30 @@ export default function NewDiscussionThread() {
             }
         ]
     })
-    const { private_profile_id } = useClassProfiles()
+    const { private_profile_id, public_profile_id, public_profile, private_profile } = useClassProfiles()
     const onSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         async function populate() {
-            setValue("author", private_profile_id!)
-            setValue("is_question", false)
-            setValue("root_class_id", Number.parseInt(course_id as string))
+            if (getValues("is_anonymous") === "true") {
+                setValue("author", public_profile_id!)
+            } else {
+                setValue("author", private_profile_id!)
+            }
+            console.log(`Author: ${getValues("author")}`)
+            console.log(`Class ID: ${getValues("class_id")}`)
+            if (getValues("is_instructors_only") === "true") {
+                setValue("instructors_only", true)
+            } else {
+                setValue("instructors_only", false)
+            }
+            setValue("is_instructors_only", undefined)
+            setValue("is_anonymous", undefined)
             setValue("class_id", Number.parseInt(course_id as string))
+            setValue("root_class_id", Number.parseInt(course_id as string))
             handleSubmit(refineCore.onFinish)()
         }
         populate()
-    }, [handleSubmit, refineCore.onFinish, private_profile_id])
+    }, [handleSubmit, refineCore.onFinish, private_profile_id, public_profile_id])
     return (
         <Box>
             <Heading as="h1">New Discussion Thread</Heading>
@@ -89,14 +101,14 @@ export default function NewDiscussionThread() {
                                             maxW="4xl"
                                             name={field.name}
                                             value={field.value}
-                                            onChange={field.onChange}    
+                                            onChange={field.onChange}
                                         >
                                             <Flex flexWrap="wrap" gap="2">
                                                 {topics?.data?.map((topic: DiscussionTopic) => (
                                                     <Box key={topic.id} w="sm">
                                                         <RadioCardItem
-                                                        p="0"
-                                                        m="0"
+                                                            p="0"
+                                                            m="0"
                                                             indicator={false}
                                                             colorPalette={topic.color}
                                                             description={topic.description}
@@ -144,7 +156,7 @@ export default function NewDiscussionThread() {
                         <Fieldset.Content>
                             <Controller
                                 control={control}
-                                name="instructors_only"
+                                name="is_instructors_only"
                                 render={({ field }) => {
                                     return (<RadioCardRoot
                                         orientation="horizontal"
@@ -177,6 +189,41 @@ export default function NewDiscussionThread() {
                                 }} />
                         </Fieldset.Content>
                         <Fieldset.Content>
+                            <Controller
+                                control={control}
+                                name="is_anonymous"
+                                render={({ field }) => {
+                                    return (<RadioCardRoot
+                                        orientation="horizontal"
+                                        align="center"
+                                        justify="center"
+                                        maxW="4xl"
+                                        name={field.name}
+                                        value={field.value}
+                                        onChange={field.onChange}
+                                    >
+                                        <RadioCardLabel>Post Anonymity</RadioCardLabel>
+                                        <Flex flexWrap="wrap" gap="2">
+                                            <Box w="sm">
+                                                <RadioCardItem value="false" label={`Post with your name`}
+                                                    indicator={false}
+                                                    icon={<Icon fontSize="2xl" color="fg.muted" mb="2"><FaUser /></Icon>}
+                                                    description="Your name will be displayed to other students." />
+                                            </Box>
+
+                                            <Box w="sm">
+                                                <RadioCardItem value="true"
+                                                    indicator={false}
+
+                                                    icon={<Icon fontSize="2xl" color="fg.muted" mb="2"><FaUserSecret /></Icon>}
+                                                    description={`Students will see your pseudonym (${public_profile.name}), course staff will always see your real name.`}
+                                                    label="Use your pseudonym" />
+                                            </Box>
+                                        </Flex>
+                                    </RadioCardRoot>)
+                                }} />
+                        </Fieldset.Content>
+                        <Fieldset.Content>
                             <Field label="Subject"
                                 helperText="A short, descriptive subject for your post. Be specific."
                                 errorText={errors.title?.message?.toString()}
@@ -199,7 +246,7 @@ export default function NewDiscussionThread() {
                                     control={control}
                                     render={({ field }) => {
                                         return (<MdEditor
-                                            style={{ width: "800px" }}
+                                            style={{ minWidth: "400px", width: "100%" }}
                                             onChange={field.onChange} value={field.value} />)
                                     }} />
                             </Field>

@@ -8,16 +8,30 @@ export type DiscussionThreadWithChildren = DiscussionThread & {
 type UpdateCallback<T> = (data: T) => void;
 type Unsubscribe = () => void;
 
+export function useDiscussionThreadRoot() {
+    const controller = useDiscussionThreadsController();
+    const [thread, setThread] = useState<DiscussionThreadWithChildren>();
+    useEffect(() => {
+        const { unsubscribe, data } = controller.getDiscussionThreadWithChildren(controller.root_id, (data) => {
+            setThread(data);
+        });
+        if (data) {
+            setThread(data);
+        }
+        return unsubscribe;
+    }, [controller]);
+    return thread;
+}
 export default function useDiscussionThreadChildren(threadId: number) {
     const controller = useDiscussionThreadsController();
     const [thread, setThread] = useState<DiscussionThreadWithChildren>();
 
     useEffect(() => {
         const { unsubscribe, data } = controller.getDiscussionThreadWithChildren(threadId, (data) => {
-            setThread({...data});
+            setThread({ ...data });
         });
         if (data) {
-            setThread({...data});
+            setThread({ ...data });
         }
         return unsubscribe;
     }, [controller, threadId]);
@@ -61,18 +75,22 @@ export class DiscussionThreadsController {
                 || thread.draft !== body.draft
 
             )) { //Only notify if the body has changed
-                this.discussionThreadWithChildren.set(body.id, {children: thread.children, ...body});
-                this.notifyDiscussionThreadWithChildrenSubscribers(body.id, {children: thread.children, ...body});
+                this.discussionThreadWithChildren.set(body.id, { children: thread.children, ...body });
+                this.notifyDiscussionThreadWithChildrenSubscribers(body.id, { children: thread.children, ...body });
             }
         }
     }
 
-    getDiscussionThreadWithChildren(threadId: number, callback: UpdateCallback<DiscussionThreadWithChildren>): { unsubscribe: Unsubscribe, data: DiscussionThreadWithChildren | undefined } {
+    getDiscussionThreadWithChildren(threadId: number, callback?: UpdateCallback<DiscussionThreadWithChildren>): { unsubscribe: Unsubscribe, data: DiscussionThreadWithChildren | undefined } {
         const subscribers = this.discussionThreadWithChildrenSubscribers.get(threadId) || [];
-        this.discussionThreadWithChildrenSubscribers.set(threadId, [...subscribers, callback]);
+        if (callback) {
+            this.discussionThreadWithChildrenSubscribers.set(threadId, [...subscribers, callback]);
+        }
         return {
             unsubscribe: () => {
-                this.discussionThreadWithChildrenSubscribers.set(threadId, subscribers.filter(cb => cb !== callback));
+                if (callback) {
+                    this.discussionThreadWithChildrenSubscribers.set(threadId, subscribers.filter(cb => cb !== callback));
+                }
             },
             data: this.discussionThreadWithChildren.get(threadId)
         }
@@ -99,7 +117,7 @@ export class DiscussionThreadsController {
     private notifyDiscussionThreadWithChildrenSubscribers(threadId: number, data: DiscussionThreadWithChildren) {
         const subscribers = this.discussionThreadWithChildrenSubscribers.get(threadId);
         if (subscribers) {
-            subscribers.forEach(cb => cb(data));
+            subscribers.filter(cb => cb !== undefined).forEach(cb => cb(data));
         }
     }
 }

@@ -12,6 +12,8 @@ type ClassProfileContextType = {
     profiles: UserProfile[];
     private_profile_id: string;
     public_profile_id: string;
+    private_profile: UserProfile;
+    public_profile: UserProfile;
 }
 
 const ClassProfileContext = createContext<ClassProfileContextType | undefined>(undefined)
@@ -81,7 +83,9 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
             private_profile_id: myRole.private_profile_id,
             public_profile_id: myRole.public_profile_id,
             allVisibleRoles: roles.data,
-            profiles: profiles.data
+            profiles: profiles.data,
+            private_profile: profiles.data.find(p => p.id === myRole.private_profile_id)!,
+            public_profile: profiles.data.find(p => p.id === myRole.public_profile_id)!
         }}>
             {children}
         </ClassProfileContext.Provider>

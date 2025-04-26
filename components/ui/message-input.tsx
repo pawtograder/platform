@@ -29,10 +29,10 @@ import { toaster } from './toaster';
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
     defaultSingleLine?: boolean;
     sendMessage: (message: string, profile_id: string, close?: boolean) => Promise<void>;
-    showFilePicker?: boolean;
-    showGiphyPicker?: boolean;
-    showEmojiPicker?: boolean;
-    showAnonymousModeToggle?: boolean;
+    enableFilePicker?: boolean;
+    enableGiphyPicker?: boolean;
+    enableEmojiPicker?: boolean;
+    enableAnonymousModeToggle?: boolean;
     otherButtons?: React.ReactNode | React.ReactNode[];
     sendButtonText?: string;
     placeholder?: string;
@@ -42,9 +42,23 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
     closeButtonText?: string;
 }
 export default function MessageInput(props: MessageInputProps) {
+    const { defaultSingleLine, sendMessage,
+        enableFilePicker,
+        enableGiphyPicker,
+        enableEmojiPicker,
+        enableAnonymousModeToggle,
+        otherButtons,
+        sendButtonText,
+        placeholder,
+        allowEmptyMessage,
+        textAreaRef,
+        onClose,
+        closeButtonText,
+        value: initialValue,
+        ...editorProps } = props;
     const { course_id } = useParams();
     const [enterToSend, setEnterToSend] = useState(true);
-    const [value, setValue] = useState(props.value);
+    const [value, setValue] = useState(initialValue);
     const [singleLine, setSingleLine] = useState(props.defaultSingleLine ?? false);
     const [focused, setFocused] = useState(false);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -179,20 +193,20 @@ export default function MessageInput(props: MessageInputProps) {
                 <HStack justify="flex-end">
                     <HStack spaceX="0" gap="0">
                         {props.otherButtons}
-                        {props.showAnonymousModeToggle && <Text color="text.muted" fontSize="xs">
+                        {enableAnonymousModeToggle && <Text color="text.muted" fontSize="xs">
                             Post {anonymousMode ? `with your pseudonym, ${public_profile?.name} ` : `as ${private_profile?.name}`}
                         </Text>}
-                        {props.showAnonymousModeToggle && <Tooltip content="Toggle anonymous mode">
+                        {enableAnonymousModeToggle && <Tooltip content="Toggle anonymous mode">
                             <Button aria-label="Toggle anonymous mode" onClick={toggleAnonymousMode} variant={anonymousMode ? "solid" : "ghost"} size="xs" colorScheme={anonymousMode ? "red" : "teal"} p={0}><FaUserSecret /></Button>
                         </Tooltip>}
-                        {props.showFilePicker && <Tooltip content="Attach a file">
+                        {enableFilePicker && <Tooltip content="Attach a file">
                             <Button aria-label="Attach a file" onClick={() => fileInputRef.current?.click()} variant="ghost" size="xs" colorScheme="teal" p={0}><FaPaperclip /></Button>
                         </Tooltip>}
                         <Tooltip content="Toggle markdown preview (supports LaTeX)">
                             <Button aria-label="Toggle markdown preview (supports LaTeX)" onClick={() => setShowMarkdownPreview(!showMarkdownPreview)} variant="ghost" size="xs" colorScheme="teal" p={0}><TbMathFunction /></Button>
                         </Tooltip>
-                        {props.showFilePicker && <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={attachFile} />}
-                        {props.showGiphyPicker && <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
+                        {enableFilePicker && <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={attachFile} />}
+                        {enableGiphyPicker && <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
                             <PopoverTrigger asChild>
                                 <Button aria-label="Toggle giphy picker" variant="ghost" size="xs" colorScheme="teal" p={0} onClick={() => setShowGiphyPicker(!showGiphyPicker)}>GIF</Button>
                             </PopoverTrigger>
@@ -206,7 +220,7 @@ export default function MessageInput(props: MessageInputProps) {
                                 </PopoverBody>
                             </PopoverContent>
                         </PopoverRoot>}
-                        {props.showEmojiPicker && <Tooltip content="Toggle emoji picker">
+                        {enableEmojiPicker && <Tooltip content="Toggle emoji picker">
                             <Button aria-label="Toggle emoji picker" onClick={toggleEmojiPicker} variant="ghost" size="xs" colorScheme="teal" p={0}><FaSmile /></Button>
                         </Tooltip>}
 
@@ -214,12 +228,12 @@ export default function MessageInput(props: MessageInputProps) {
                     <Box>
                         <Field.Root orientation="horizontal">
                             <Field.Label fontSize="xs">
-                                {props.sendButtonText ? `Enter to ${props.sendButtonText}` : "Enter to send"}
+                                {sendButtonText ? `Enter to ${sendButtonText}` : "Enter to send"}
                             </Field.Label>
                             <Checkbox checked={enterToSend} onChange={e => setEnterToSend(!enterToSend)} />
                         </Field.Root>
                     </Box>
-                    {props.onClose && <Button aria-label="Close" onClick={props.onClose} variant="ghost" size="xs" ml={2}>{props.closeButtonText ?? "Close"}</Button>}
+                    {onClose && <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2}>{closeButtonText ?? "Close"}</Button>}
                     <Button aria-label="Send message" onClick={() => {
                         if ((value?.trim() === '' || !value) && !props.allowEmptyMessage) {
                             toaster.create({
@@ -237,9 +251,59 @@ export default function MessageInput(props: MessageInputProps) {
             </VStack>
         )
     }
-    const { defaultSingleLine, sendMessage, onChange: editorOnChange, ...editorProps } = props;
-    return <MDEditor value={value} onChange={(value) => {
-        setValue(value);
-        props.onChange?.(value);
-    }}  {...editorProps} />
+    return <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
+        <MDEditor value={value} onChange={(value) => {
+            setValue(value);
+            props.onChange?.(value);
+        }}  {...editorProps} />
+        <HStack justify="flex-end">
+            <HStack spaceX="0" gap="0">
+                {props.otherButtons}
+                {enableAnonymousModeToggle && <Text color="text.muted" fontSize="xs">
+                    Post {anonymousMode ? `with your pseudonym, ${public_profile?.name} ` : `as ${private_profile?.name}`}
+                </Text>}
+                {enableAnonymousModeToggle && <Tooltip content="Toggle anonymous mode">
+                    <Button aria-label="Toggle anonymous mode" onClick={toggleAnonymousMode} variant={anonymousMode ? "solid" : "ghost"} size="xs" colorScheme={anonymousMode ? "red" : "teal"} p={0}><FaUserSecret /></Button>
+                </Tooltip>}
+                {enableFilePicker && <Tooltip content="Attach a file">
+                    <Button aria-label="Attach a file" onClick={() => fileInputRef.current?.click()} variant="ghost" size="xs" colorScheme="teal" p={0}><FaPaperclip /></Button>
+                </Tooltip>}
+                <Tooltip content="Toggle markdown preview (supports LaTeX)">
+                    <Button aria-label="Toggle markdown preview (supports LaTeX)" onClick={() => setShowMarkdownPreview(!showMarkdownPreview)} variant="ghost" size="xs" colorScheme="teal" p={0}><TbMathFunction /></Button>
+                </Tooltip>
+                {enableFilePicker && <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={attachFile} />}
+                {enableGiphyPicker && <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
+                    <PopoverTrigger asChild>
+                        <Button aria-label="Toggle giphy picker" variant="ghost" size="xs" colorScheme="teal" p={0} onClick={() => setShowGiphyPicker(!showGiphyPicker)}>GIF</Button>
+                    </PopoverTrigger>
+                    <PopoverContent width="400px">
+                        <PopoverArrow />
+                        <PopoverBody>
+                            <GiphyPicker onGifSelect={(gif: IGif) => {
+                                setShowGiphyPicker(false);
+                                props.sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false)
+                            }} />
+                        </PopoverBody>
+                    </PopoverContent>
+                </PopoverRoot>}
+                {enableEmojiPicker && <Tooltip content="Toggle emoji picker">
+                    <Button aria-label="Toggle emoji picker" onClick={toggleEmojiPicker} variant="ghost" size="xs" colorScheme="teal" p={0}><FaSmile /></Button>
+                </Tooltip>}
+
+            </HStack>
+            {onClose && <Button aria-label="Close" onClick={onClose} variant="ghost" size="xs" ml={2}>{closeButtonText ?? "Close"}</Button>}
+            <Button aria-label="Send message" onClick={() => {
+                if ((value?.trim() === '' || !value) && !props.allowEmptyMessage) {
+                    toaster.create({
+                        title: "Empty message",
+                        description: "You must add a message to continue",
+                        type: "error"
+                    })
+                    return;
+                }
+                props.sendMessage(value!, profile_id, true)
+                setValue('');
+            }} variant="solid" colorPalette="green" size="xs" ml={2}>{props.sendButtonText ? props.sendButtonText : "Send"}</Button>
+        </HStack>
+    </VStack>
 }

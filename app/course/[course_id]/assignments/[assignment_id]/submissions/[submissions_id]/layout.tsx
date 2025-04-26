@@ -444,7 +444,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </Box>
         <Box flex={1}>
             <Flex>
-                <Box flex={1}>
+                <Box flex={10} pr={4}>
                     {children}
                 </Box>
                 <Box flex={0}>

@@ -121,6 +121,12 @@ async function sendEmail(params: {
     emailBody = emailBody.replace('{course_name}', course_name);
     emailSubject = emailSubject.replace('{course_name}', course_name);
   }
+  if('root_thread_id' in body)
+  {
+    const thread_url = `https://${Deno.env.get('APP_URL')}/course/${notification.message.class_id}/discussion/${body.root_thread_id}`;
+    emailBody = emailBody.replace('{thread_url}', thread_url);
+    emailSubject = emailSubject.replace('{thread_url}', thread_url);
+  }
   const recipient = emails.find((email) => email.email);
   if (!recipient) {
     console.error(`No recipient found for notification ${notification.msg_id}, ${JSON.stringify(notification)}`);

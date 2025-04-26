@@ -10,6 +10,37 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { addHours } from "date-fns";
 import { TZDate } from "@date-fns/tz";
 
+export function useUpdateThreadTeaser() {
+    const controller = useCourseController();
+    const { mutateAsync: updateThread } = useUpdate<DiscussionThread>({
+        resource: "discussion_threads",
+        mutationMode: 'optimistic',
+    });
+    return useCallback(async ({ id, old, values }: { id: number, old: DiscussionThreadTeaser, values: Partial<DiscussionThreadTeaser> }) => {
+
+        const copy = { ...old, ...values };
+        controller.handleDiscussionThreadTeaserEvent({
+            type: "updated",
+            payload: copy,
+            channel: "discussion_threads",
+            date: new Date()
+        });
+        try {
+            await updateThread({
+                id,
+                values
+            });
+        } catch (error) {
+            console.error("error updating thread", error);
+            controller.handleDiscussionThreadTeaserEvent({
+                type: "updated",
+                payload: old,
+                channel: "discussion_threads",
+                date: new Date()
+            });
+        }
+    }, [updateThread, controller]);
+}
 /**
  * Returns a hook that returns the read status of a thread.
  * @param threadId The id of the thread to get the read status of.
@@ -74,7 +105,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
     }, [user?.id, createdThreadReadStatuses, controller]);
     return { readStatus, setUnread };
 }
-type DiscussionThreadTeaser = Pick<DiscussionThread, "id" | "subject" | "created_at" | "author" | "children_count" | "instructors_only" | "is_question" | "likes_count" | "topic_id" | "draft" | "class_id" | "body" | "ordinal">;
+type DiscussionThreadTeaser = Pick<DiscussionThread, "id" | "subject" | "created_at" | "author" | "children_count" | "instructors_only" | "is_question" | "likes_count" | "topic_id" | "draft" | "class_id" | "body" | "ordinal" | "answer">;
 export function useDiscussionThreadTeasers() {
     const controller = useCourseController();
     const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>([]);
@@ -255,6 +286,8 @@ class CourseController {
                 existing.topic_id === body.topic_id &&
                 existing.is_question === body.is_question &&
                 existing.instructors_only === body.instructors_only &&
+                existing.body === body.body &&
+                existing.answer === body.answer &&
                 existing.draft === body.draft) {
                 return;
             }

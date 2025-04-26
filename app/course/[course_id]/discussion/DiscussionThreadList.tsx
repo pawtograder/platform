@@ -27,18 +27,20 @@ interface MessageData {
 interface Props {
     thread_id: number
     selected?: boolean
+    width?: string
 }
 
-const DiscussionThreadTeaser = (props: Props) => {
+export const DiscussionThreadTeaser = (props: Props) => {
     const thread = useDiscussionThreadTeaser(props.thread_id);
     const avatarTriggerId = useId()
     const { root_id } = useParams();
     const selected = root_id ? props.thread_id === Number.parseInt(root_id as string) : false;
+    const is_answered = thread?.answer != undefined;
 
     const { readStatus } = useDiscussionThreadReadStatus(props.thread_id);
 
     const userProfile = useUserProfile(thread?.author);
-    return (<Box position="relative"><NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
+    return (<Box position="relative" width={props.width || "100%"}><NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
         <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
             {!readStatus?.read_at && (
                 <Box w="8px" h="8px" bg="blue.500" rounded="full">
@@ -64,6 +66,8 @@ const DiscussionThreadTeaser = (props: Props) => {
                 <Text fontWeight="medium" flex="1" css={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>
                     #{thread?.ordinal} {thread?.subject}
                 </Text>
+                {(thread?.is_question && !is_answered) && <Box><Badge colorPalette="red">Unanswered</Badge></Box>}
+                {is_answered && <Box><Badge colorPalette="green">Answered</Badge></Box>}
                 <Box color="fg.subtle" truncate>
                     <Markdown
                         components={{
@@ -129,12 +133,13 @@ export default function DiscussionThreadList() {
 
 
     return <Flex width="314px"
-    bottom={0}
+        height="100vh"
+        bottom={0}
         direction="column"
         top={0} justify="space-between" align="center">
         <Box>
             <Heading size="md">Discussion Feed</Heading>
-            <Button asChild size="sm" variant="surface">
+            <Button asChild size="sm" variant="surface" colorScheme="green">
                 <NextLink prefetch={true} href={`/course/${course_id}/discussion/new`}>
                     <Icon as={FaPlus} />
                     New Thread
