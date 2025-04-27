@@ -1,7 +1,7 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from 'dotenv';
-dotenv.config({path: '.env.local.prod'});
+dotenv.config({path: '.env.local.staging.priv'});
 
 const courseID = parseInt(process.argv[2]);
 const userEmail = process.argv[3];
@@ -21,6 +21,7 @@ async function main() {
         name: user.name,
         class_id: courseID,
         is_private_profile: true,
+        avatar_url: "https://api.dicebear.com/9.x/identicon/svg?seed=" + userEmail,
     }).select('id').single();
     if (privateProfileError) {
         console.error("Error creating private profile", privateProfileError);
@@ -29,6 +30,7 @@ async function main() {
     const { data: publicProfile , error: publicProfileError} = await supabase.from('profiles').insert({
         name: "Anonymous Turtle",
         class_id: courseID,
+        avatar_url: "https://api.dicebear.com/9.x/identicon/svg?seed=" + userEmail,
         is_private_profile: false,
     }).select('id').single();
     if (publicProfileError) {

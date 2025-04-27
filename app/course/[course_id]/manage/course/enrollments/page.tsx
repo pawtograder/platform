@@ -94,11 +94,6 @@ function EnrollmentsTable() {
         // onColumnFiltersChange: setColumnFilters,
         refineCoreProps: {
             resource: "user_roles",
-            filters: {
-                mode: 'off',
-                //     // defaultBehavior: "merge",
-                permanent: [{ field: "class_id", operator: "eq", value: course_id as string }],
-            },
             meta: {
                 select: "*,profiles!private_profile_id(*), users(*)"
             },

@@ -110,7 +110,7 @@ END
 $function$
 ;
 
-create or replace view "public"."submissions_with_grades_for_assignment" as  SELECT activesubmissionsbystudent.id,
+create or replace view "public"."submissions_with_grades_for_assignment" WITH ("security_invoker"='true') as  SELECT activesubmissionsbystudent.id,
     activesubmissionsbystudent.class_id,
     activesubmissionsbystudent.assignment_id,
     p.name,

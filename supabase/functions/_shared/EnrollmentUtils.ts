@@ -60,7 +60,7 @@ export async function createUserInClass(supabase: SupabaseClient<Database>, cour
         const { data: existingRole } = await supabase.from('user_roles').select('*')
             .eq('user_id', userId)
             .eq('class_id', courseId).single();
-        if (existingRole) {
+        if (existingRole && user.canvas_id) {
             console.log("WARN: User already has a role in class", courseId, "user_id", userId);
             console.log("Adding Canvas Link")
             const {error: updateError} = await supabase.from('user_roles').update({

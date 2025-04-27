@@ -2,7 +2,7 @@ name: Deploy Functions to Staging
 on:
   push:
     branches:
-      - 
+      - staging
   workflow_dispatch:
 jobs:
   deploy:

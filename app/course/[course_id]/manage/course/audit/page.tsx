@@ -187,11 +187,6 @@ function AuditTable() {
         // onColumnFiltersChange: setColumnFilters,
         refineCoreProps: {
             resource: "audit",
-            filters: {
-                mode: 'off',
-                //     // defaultBehavior: "merge",
-                permanent: [{ field: "class_id", operator: "eq", value: course_id as string }],
-            },
             meta: {
                 select: "*,users(*)"
             },
