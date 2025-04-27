@@ -1,7 +1,7 @@
 'use client'
 
 import { SkeletonCircle } from "@/components/ui/skeleton";
-import { Button, CloseButton, Drawer, HStack, Icon, Portal, Text, VStack } from "@chakra-ui/react";
+import { Button, CloseButton, Drawer, HStack, Icon, IconButton, Menu, Portal, Text, VStack } from "@chakra-ui/react";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
 
@@ -14,8 +14,46 @@ import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { FaGithub, FaUnlink } from "react-icons/fa";
+import { FaGithub, FaUnlink, FaQuestionCircle } from "react-icons/fa";
+import Link from "@/components/ui/link";
+import { HiOutlineSupport } from "react-icons/hi";
 
+function SupportMenu() {
+    return <Menu.Root>
+        <Menu.Trigger asChild>
+            <IconButton variant="outline" colorPalette="gray" size="sm">
+                <HiOutlineSupport />
+            </IconButton>
+        </Menu.Trigger>
+        <Portal>
+            <Menu.Positioner>
+                <Menu.Content>
+                    <Menu.Item value="view-docs">
+                        <Link href={'https://docs.pawtograder.com'} target="_blank">
+                            View documentation
+                        </Link>
+                    </Menu.Item>
+                    <Menu.Item value="report-feature-request">
+                        <Link href={'https://github.com/pawtograder/platform/issues/new?labels=enhancement&template=feature_request.md'} target="_blank">
+                            Request a feature
+                        </Link>
+                    </Menu.Item>
+                    <Menu.Item value="report-bug">
+                        <Link href={'https://github.com/pawtograder/platform/issues/new?labels=bug&template=bug_report.md'} target="_blank">
+                            Report a bug
+                        </Link>
+                    </Menu.Item>
+                    <Menu.Item value="view-open-bugs">
+                        <Link href={'https://github.com/pawtograder/platform/issues?q=is%3Aissue%20state%3Aopen%20label%3Abug'} target="_blank">
+                            View open bugs
+                        </Link>
+                    </Menu.Item>
+
+                </Menu.Content>
+            </Menu.Positioner>
+        </Portal>
+    </Menu.Root>
+}
 function UserSettingsMenu() {
     const [open, setOpen] = useState(false)
     const supabase = createClient();
@@ -146,8 +184,8 @@ export default function UserMenu() {
 
     return (
         <HStack>
+            <SupportMenu />
             <ColorModeButton colorPalette="gray" variant="outline" />
-
             <NotificationsBox />
             <UserSettingsMenu />
         </HStack>
