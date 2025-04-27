@@ -52,7 +52,7 @@
     "amazon-chime-sdk-component-library-react": "^3.9.0",
     "amazon-chime-sdk-js": "^3.26.0",
     "autoprefixer": "10.4.20",
-    "axios": "^1.7.9",
+    "axios": "^1.8.2",
     "chakra-react-select": "^6.1.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
