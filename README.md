@@ -24,3 +24,11 @@ In order to develop new features that require changing the data model, you will 
  5. Run `npm run dev` to start the development server. Follow the instructions in the terminal to view the application. The application will automatically reload if you make changes to the code. The frontend will be available at `https://localhost:3000`. It will set up a self-signed certificate to host the page (HTTPS is required to access camera/microphone for the help queue), so you'll need to click through a browser warning.
 
 In a clean development environment, it is possible to register an account with any email address without confirmation. To get started, simply create a new account. By default, it will be added to the "demo class" as a student. To create a new account in the demo class as an instructor, include the word "instructor" in your email address.
+
+# License
+This project is licensed under the GPLv3 license. See the [LICENSE](LICENSE) file for details.
+
+# Acknowledgements
+This project was made possible thanks to the support of [Khoury College of Computer Sciences](https://www.khoury.northeastern.edu/), and benefits tremendously from the input of many students, instructors, and staff.
+
+This project is tested with BrowserStack.
