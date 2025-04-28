@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { CheckRunStatus, GradingScriptResult, OutputVisibility, RepositoryCheckRun } from "../_shared/FunctionTypes.d.ts";
+import { CheckRunStatus, GradingScriptResult, GradeResponse, OutputVisibility, RepositoryCheckRun } from "../_shared/FunctionTypes.d.ts";
 import { resolveRef, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -8,15 +8,17 @@ import {
   SecurityError,
   wrapRequestHandler,
 } from "../_shared/HandlerUtils.ts";
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request): Promise<GradeResponse> {
   const token = req.headers.get("Authorization");
   const requestBody = await req.json() as GradingScriptResult;
   const url = new URL(req.url);
-  const autograder_regression_test_id = url.searchParams.get("autograder_regression_test_id") ? 
-    parseInt(url.searchParams.get("autograder_regression_test_id")!) : 
+  const autograder_regression_test_id = url.searchParams.get("autograder_regression_test_id") ?
+    parseInt(url.searchParams.get("autograder_regression_test_id")!) :
     undefined;
   console.log(req.url)
   console.log(`autograder_regression_test_id: ${autograder_regression_test_id}`)
+  console.log(requestBody.feedback);
+
   if (!token) {
     throw new UserVisibleError("No token provided");
   }
@@ -80,15 +82,15 @@ async function handleRequest(req: Request) {
   console.log("Action SHA", action_sha);
   console.log("Submission ID", submission_id);
   const score = requestBody.feedback.score ||
-  requestBody.feedback.tests.filter((test) => !test.hide_until_released).reduce(
-    (acc, test) => acc + (test.score || 0),
-    0,
-  );
+    requestBody.feedback.tests.filter((test) => !test.hide_until_released).reduce(
+      (acc, test) => acc + (test.score || 0),
+      0,
+    );
   const max_score = requestBody.feedback.max_score ||
-  requestBody.feedback.tests.reduce(
-    (acc, test) => acc + (test.max_score || 0),
-    0,
-  );
+    requestBody.feedback.tests.reduce(
+      (acc, test) => acc + (test.max_score || 0),
+      0,
+    );
   const { error, data: resultID } = await adminSupabase.from(
     "grader_results",
   ).insert({
@@ -173,10 +175,46 @@ async function handleRequest(req: Request) {
       `Failed to insert test results: ${testResultsError.message}`,
     );
   }
+
+  let artifactUploadLinks: { name: string, token: string, path: string }[] = [];
+  if (requestBody.feedback.artifacts) {
+    // Prepare artifact uploads
+    const { error: artifactError, data: artifactIDs } = await adminSupabase.from("submission_artifacts").insert(
+      requestBody.feedback.artifacts.map((artifact) => ({
+        class_id: class_id,
+        profile_id: profile_id,
+        assignment_group_id,
+        submission_id: submission_id!,
+        autograder_regression_test_id,
+        name: artifact.name,
+        data: artifact.data as any,
+      })),
+    ).select("id");
+    if (artifactError) {
+      console.error(artifactError);
+      throw new UserVisibleError(`Failed to insert artifact: ${artifactError.message}`);
+    }
+
+    artifactUploadLinks = await Promise.all(requestBody.feedback.artifacts.map(async (artifact, idx) => {
+      //Insert to grader_result_artifacts
+      const artifactID = artifactIDs[idx].id;
+      const aritfactPath = `classes/${class_id}/profiles/${profile_id ? profile_id : assignment_group_id}/submissions/${submission_id}/${artifactID}`
+      const signedLink = await adminSupabase.storage.from("submission-artifacts").createSignedUploadUrl(aritfactPath);
+      if (!signedLink.data?.signedUrl) {
+        console.error(signedLink.error);
+        throw new UserVisibleError(`Failed to create signed URL for artifact: ${artifact.name}`);
+      }
+      return {
+        name: artifact.name,
+        token: signedLink.data?.token,
+        path: aritfactPath,
+      }
+    }));
+  }
   // Update the check run status to completed
   // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
   if (submission_id) {
-    if(checkRun){
+    if (checkRun) {
       const newStatus: CheckRunStatus = {
         ...((checkRun.status) as CheckRunStatus),
         completed_at: new Date().toISOString(),
@@ -191,7 +229,7 @@ async function handleRequest(req: Request) {
         status: "completed",
         conclusion: "success",
         details_url: `https://${Deno.env.get("APP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
-        output: { 
+        output: {
           title: "Grading complete",
           summary: "Pawtograder has finished grading the submission",
           text: `Autograder score: ${score} / ${max_score}. See more details in Pawtograder.`
@@ -203,6 +241,9 @@ async function handleRequest(req: Request) {
       message: `Submission ${submission_id} registered`,
       details_url:
         `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/assignments/${assignment_id}/submissions/${submission_id}`,
+      artifacts: artifactUploadLinks,
+      supabase_url: Deno.env.get("SUPABASE_URL") || "",
+      supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || "",
     };
   } else {
     return {
@@ -210,6 +251,9 @@ async function handleRequest(req: Request) {
       message: `Regression test run ${resultID} registered`,
       details_url:
         `${Deno.env.get("PAWTOGRADER_WEBAPP_URL")}/course/${class_id}/manage/assignments/${assignment_id}/autograder/regression-test-run/${resultID}`,
+      artifacts: artifactUploadLinks,
+      supabase_url: Deno.env.get("SUPABASE_URL") || "",
+      supabase_anon_key: Deno.env.get("SUPABASE_ANON_KEY") || "",
     };
   }
 }

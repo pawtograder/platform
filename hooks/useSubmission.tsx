@@ -1,6 +1,6 @@
 'use client';
 import { toaster } from "@/components/ui/toaster";
-import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFile, SubmissionFileComment, SubmissionReview, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
+import { RubricChecks, RubricCriteriaWithRubricChecks, SubmissionArtifact, SubmissionArtifactComment, SubmissionComments, SubmissionFile, SubmissionFileComment, SubmissionReview, SubmissionReviewWithRubric, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -18,6 +18,7 @@ type ItemUpdateCallback<T> = (data: T) => void;
 class SubmissionController {
     private _submission?: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
     private _file?: SubmissionFile;
+    private _artifact?: SubmissionArtifact;
 
     private genericDataSubscribers: { [key in string]: Map<number, ItemUpdateCallback<any>[]> } = {};
     private genericData: { [key in string]: Map<number, any> } = {};
@@ -148,6 +149,9 @@ class SubmissionController {
     set file(file: SubmissionFile | undefined) {
         this._file = file;
     }
+    set artifact(artifact: SubmissionArtifact | undefined) {
+        this._artifact = artifact;
+    }
     get submission() {
         if (!this._submission) {
             throw new Error("Submission not set, must wait for isReady to be true");
@@ -156,6 +160,9 @@ class SubmissionController {
     }
     get file() {
         return this._file;
+    }
+    get artifact() {
+        return this._artifact;
     }
 }
 
@@ -235,6 +242,35 @@ export function useSubmissionComments({ onEnter, onLeave, onUpdate, onJumpTo }: 
     return comments;
 }
 
+export function useSubmissionArtifactComments({ onEnter, onLeave, onUpdate, onJumpTo }: { onEnter?: (comment: SubmissionArtifactComment[]) => void, onLeave?: (comment: SubmissionArtifactComment[]) => void, onUpdate?: (comment: SubmissionArtifactComment[]) => void, onJumpTo?: (comment: SubmissionArtifactComment) => void }) {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return [];
+    }
+    const submissionController = ctx.submissionController;
+    const [comments, setComments] = useState<SubmissionArtifactComment[]>([]);
+    useEffect(() => {
+        const { unsubscribe, data } = submissionController.listGenericData<SubmissionArtifactComment>("submission_artifact_comments", (data, { entered, left, updated }) => {
+            setComments(data.filter((comment) => comment.deleted_at === null));
+            if (onEnter) {
+                onEnter(entered.filter((comment) => comment.deleted_at === null));
+            }
+            if (onLeave) {
+                onLeave(left.filter((comment) => comment.deleted_at === null));
+            }
+            if (onUpdate) {
+                onUpdate(updated.filter((comment) => comment.deleted_at === null));
+            }
+        });
+        setComments(data.filter((comment) => comment.deleted_at === null));
+        if (onEnter) {
+            onEnter(data.filter((comment) => comment.deleted_at === null));
+        }
+        return () => unsubscribe();
+    }, [submissionController]);
+    return comments;
+}
+
 function SubmissionControllerCreator({ submission_id, setReady }: { submission_id: number, setReady: (ready: boolean) => void }) {
     const ctx = useContext(SubmissionContext);
     if (!ctx) {
@@ -245,7 +281,7 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
         resource: "submissions",
         id: submission_id,
         meta: {
-            select: "*, assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*))"
+            select: "*, assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
         }
     });
     const { data: liveFileComments, isLoading: liveFileCommentsLoading } = useList<SubmissionFileComment>({
@@ -290,7 +326,20 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
             submissionController.handleGenericDataEvent("submission_comments", event);
         }
     });
-    const anyIsLoading = liveFileCommentsLoading || liveReviewsLoading || liveCommentsLoading || query.isLoading;
+    const { data: liveArtifactComments, isLoading: liveArtifactCommentsLoading } = useList<SubmissionArtifactComment>({
+        resource: "submission_artifact_comments",
+        filters: [
+            { field: "submission_id", operator: "eq", value: submission_id }
+        ],
+        liveMode: "manual",
+        pagination: {
+            pageSize: 1000
+        },
+        onLiveEvent: (event) => {
+            submissionController.handleGenericDataEvent("submission_artifact_comments", event);
+        }
+    }); 
+    const anyIsLoading = liveFileCommentsLoading || liveReviewsLoading || liveCommentsLoading || liveArtifactCommentsLoading || query.isLoading;
     useEffect(() => {
         if (query.data?.data) {
             submissionController.submission = query.data.data;
@@ -317,6 +366,12 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
     useEffect(() => {
         if (liveReviews?.data) {
             submissionController.setGeneric("submission_reviews", liveReviews.data);
+        }
+    }, [submissionController, anyIsLoading]);
+    submissionController.registerGenericDataType("submission_artifact_comments", (item: SubmissionArtifactComment) => item.id);
+    useEffect(() => {
+        if (liveArtifactComments?.data) {
+            submissionController.setGeneric("submission_artifact_comments", liveArtifactComments.data);
         }
     }, [submissionController, anyIsLoading]);
     if (query.isLoading || !liveFileComments?.data) {

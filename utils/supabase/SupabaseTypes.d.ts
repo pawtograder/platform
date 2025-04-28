@@ -1923,6 +1923,7 @@ export type Database = {
           id: number
           profile_id: string | null
           repository: string
+          synced_handout_sha: string | null
         }
         Insert: {
           assignment_group_id?: number | null
@@ -1932,6 +1933,7 @@ export type Database = {
           id?: number
           profile_id?: string | null
           repository: string
+          synced_handout_sha?: string | null
         }
         Update: {
           assignment_group_id?: number | null
@@ -1941,6 +1943,7 @@ export type Database = {
           id?: number
           profile_id?: string | null
           repository?: string
+          synced_handout_sha?: string | null
         }
         Relationships: [
           {
@@ -2088,6 +2091,7 @@ export type Database = {
       }
       rubric_checks: {
         Row: {
+          artifact: string | null
           class_id: number
           created_at: string
           data: Json | null
@@ -2105,6 +2109,7 @@ export type Database = {
           rubric_criteria_id: number
         }
         Insert: {
+          artifact?: string | null
           class_id: number
           created_at?: string
           data?: Json | null
@@ -2122,6 +2127,7 @@ export type Database = {
           rubric_criteria_id: number
         }
         Update: {
+          artifact?: string | null
           class_id?: number
           created_at?: string
           data?: Json | null
@@ -2302,6 +2308,266 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "classes"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      submission_artifact_comments: {
+        Row: {
+          author: string
+          class_id: number
+          comment: string
+          created_at: string
+          deleted_at: string | null
+          edited_at: string | null
+          edited_by: string | null
+          id: number
+          points: number | null
+          released: boolean
+          rubric_check_id: number | null
+          submission_artifact_id: number
+          submission_id: number
+          submission_review_id: number | null
+        }
+        Insert: {
+          author: string
+          class_id: number
+          comment: string
+          created_at?: string
+          deleted_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
+          id?: number
+          points?: number | null
+          released?: boolean
+          rubric_check_id?: number | null
+          submission_artifact_id: number
+          submission_id: number
+          submission_review_id?: number | null
+        }
+        Update: {
+          author?: string
+          class_id?: number
+          comment?: string
+          created_at?: string
+          deleted_at?: string | null
+          edited_at?: string | null
+          edited_by?: string | null
+          id?: number
+          points?: number | null
+          released?: boolean
+          rubric_check_id?: number | null
+          submission_artifact_id?: number
+          submission_id?: number
+          submission_review_id?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submission_artifact_comments_author_fkey"
+            columns: ["author"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_author_fkey1"
+            columns: ["author"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_class_id_fkey1"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_rubric_check_id_fkey"
+            columns: ["rubric_check_id"]
+            isOneToOne: false
+            referencedRelation: "rubric_checks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_rubric_check_id_fkey1"
+            columns: ["rubric_check_id"]
+            isOneToOne: false
+            referencedRelation: "rubric_checks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_artifact_id_fkey"
+            columns: ["submission_artifact_id"]
+            isOneToOne: false
+            referencedRelation: "submission_artifacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_id_fkey1"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_id_fkey1"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_id_fkey1"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_review_id_fkey"
+            columns: ["submission_review_id"]
+            isOneToOne: false
+            referencedRelation: "submission_reviews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifact_comments_submission_review_id_fkey1"
+            columns: ["submission_review_id"]
+            isOneToOne: false
+            referencedRelation: "submission_reviews"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      submission_artifacts: {
+        Row: {
+          assignment_group_id: number | null
+          autograder_regression_test_id: number | null
+          class_id: number
+          created_at: string
+          data: Json | null
+          id: number
+          name: string
+          profile_id: string | null
+          submission_file_id: number | null
+          submission_id: number
+        }
+        Insert: {
+          assignment_group_id?: number | null
+          autograder_regression_test_id?: number | null
+          class_id: number
+          created_at?: string
+          data?: Json | null
+          id?: number
+          name: string
+          profile_id?: string | null
+          submission_file_id?: number | null
+          submission_id: number
+        }
+        Update: {
+          assignment_group_id?: number | null
+          autograder_regression_test_id?: number | null
+          class_id?: number
+          created_at?: string
+          data?: Json | null
+          id?: number
+          name?: string
+          profile_id?: string | null
+          submission_file_id?: number | null
+          submission_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "submission_artifacts_assignment_group_id_fkey"
+            columns: ["assignment_group_id"]
+            isOneToOne: false
+            referencedRelation: "assignment_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_autograder_regression_test_id_fkey"
+            columns: ["autograder_regression_test_id"]
+            isOneToOne: false
+            referencedRelation: "autograder_regression_test"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_autograder_regression_test_id_fkey"
+            columns: ["autograder_regression_test_id"]
+            isOneToOne: false
+            referencedRelation: "autograder_regression_test_by_grader"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_class_id_fkey"
+            columns: ["class_id"]
+            isOneToOne: false
+            referencedRelation: "classes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_submission_file_id_fkey"
+            columns: ["submission_file_id"]
+            isOneToOne: false
+            referencedRelation: "submission_files"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_agg"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "submission_artifacts_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "submissions_with_grades_for_assignment"
+            referencedColumns: ["activesubmissionid"]
           },
         ]
       }
@@ -3135,6 +3401,10 @@ export type Database = {
       }
     }
     Functions: {
+      authorize_for_private_discussion_thread: {
+        Args: { root: number }
+        Returns: boolean
+      }
       authorize_for_submission: {
         Args: { requested_submission_id: number }
         Returns: boolean
