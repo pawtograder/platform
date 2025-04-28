@@ -80,13 +80,9 @@ function AssignmentGroupMemberNotificationTeaser({ notification }: { notificatio
 function AssignmentGroupInvitationNotificationTeaser({ notification }: { notification: Notification }) {
     const body = notification.body as AssignmentGroupInvitationNotification;
     const { course_id } = useParams();
-    return (
-        <Link
-            href={`/course/${course_id}/assignments/${body.assignment_id}`}
-            legacyBehavior><HStack align="flex-start" color="text.muted">
-            <Text>{body.inviter_name} invited you to join {body.assignment_group_name} for {body.assignment_name}</Text>
-        </HStack></Link>
-    );
+    return <Link href={`/course/${course_id}/assignments/${body.assignment_id}`}><HStack align="flex-start" color="text.muted">
+        <Text>{body.inviter_name} invited you to join {body.assignment_group_name} for {body.assignment_name}</Text>
+    </HStack></Link>
 }
 function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notification: Notification }) {
     const body = notification.body as AssignmentGroupJoinRequestNotification;
@@ -101,13 +97,9 @@ function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notifi
     } else if (body.status === "withdrawn") {
         message = <Text>{body.requestor_name} withdrew their request to join {body.assignment_group_name} for {body.assignment_name}</Text>
     }
-    return (
-        <Link
-            href={`/course/${course_id}/assignments/${body.assignment_id}`}
-            legacyBehavior><HStack align="flex-start" color="text.muted">
-            {message}
-        </HStack></Link>
-    );
+    return <Link href={`/course/${course_id}/assignments/${body.assignment_id}`}><HStack align="flex-start" color="text.muted">
+        {message}
+    </HStack></Link>
 }
 function DiscussionThreadReplyNotificationTeaser({ notification }: { notification: Notification }) {
     const body = notification.body as DiscussionThreadNotification;
@@ -117,24 +109,20 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
         return <Skeleton boxSize="4" />
     }
     const replyIdx = body.new_comment_number ? `#post-${body.new_comment_number}` : '';
-    return (
-        <Link
-            href={`/course/${rootThread.class_id}/discussion/${rootThread.id}${replyIdx}`}
-            legacyBehavior>
-            <HStack align="flex-start" color="text.muted">
-                <Avatar.Root size="sm">
-                    <Avatar.Image src={author.avatar_url} />
-                    <Avatar.Fallback>
-                        {author.name.charAt(0)}
-                    </Avatar.Fallback>
-                </Avatar.Root>
-                <VStack align="flex-start">
-                    <Text>{author.name} replied to thread #{rootThread.ordinal} {rootThread.subject}</Text>
-                    <Text>{body.teaser}</Text>
-                </VStack>
-            </HStack>
-        </Link>
-    );
+    return <Link href={`/course/${rootThread.class_id}/discussion/${rootThread.id}${replyIdx}`}>
+        <HStack align="flex-start" color="text.muted">
+            <Avatar.Root size="sm">
+                <Avatar.Image src={author.avatar_url} />
+                <Avatar.Fallback>
+                    {author.name.charAt(0)}
+                </Avatar.Fallback>
+            </Avatar.Root>
+            <VStack align="flex-start">
+                <Text>{author.name} replied to thread #{rootThread.ordinal} {rootThread.subject}</Text>
+                <Text>{body.teaser}</Text>
+            </VStack>
+        </HStack>
+    </Link>
 }
 
 export default function NotificationTeaser({ notification_id, markAsRead, dismiss }: { notification_id: number, markAsRead: () => Promise<void>, dismiss: () => Promise<void> }) {
