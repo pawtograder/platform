@@ -57,33 +57,37 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                 <Heading size="lg" mb={4}>Upcoming Assignments</Heading>
                 <Stack spaceY={4}>
                     {assignments?.map(assignment => {
-                        return (<CardRoot key={assignment.id}>
-                            <CardHeader>
-                                <Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}`}>
-                                    {assignment.title}
-                                </Link>
-                            </CardHeader>
-                            <CardBody>
-                                <DataListRoot orientation="horizontal">
-                                    <DataListItem>
-                                        <DataListItemLabel>Due</DataListItemLabel>
-                                        <DataListItemValue>{assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"}</DataListItemValue>
-                                    </DataListItem>
-                                    <DataListItem>
-                                        <DataListItemLabel>Students who have accepted the assignment</DataListItemLabel>
-                                        <DataListItemValue>{assignment.repositories.length}</DataListItemValue>
-                                    </DataListItem>
-                                    <DataListItem>
-                                        <DataListItemLabel>Students who have submitted</DataListItemLabel>
-                                        <DataListItemValue>{new Set(assignment.submissions.map(s => s.profile_id)).size}</DataListItemValue>
-                                    </DataListItem>
-                                </DataListRoot>
-                            </CardBody>
-                        </CardRoot>)
+                        return (
+                            <CardRoot key={assignment.id}>
+                                <CardHeader>
+                                    <Link
+                                        prefetch={true}
+                                        href={`/course/${course_id}/assignments/${assignment.id}`}
+                                        legacyBehavior>
+                                        {assignment.title}
+                                    </Link>
+                                </CardHeader>
+                                <CardBody>
+                                    <DataListRoot orientation="horizontal">
+                                        <DataListItem>
+                                            <DataListItemLabel>Due</DataListItemLabel>
+                                            <DataListItemValue>{assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"}</DataListItemValue>
+                                        </DataListItem>
+                                        <DataListItem>
+                                            <DataListItemLabel>Students who have accepted the assignment</DataListItemLabel>
+                                            <DataListItemValue>{assignment.repositories.length}</DataListItemValue>
+                                        </DataListItem>
+                                        <DataListItem>
+                                            <DataListItemLabel>Students who have submitted</DataListItemLabel>
+                                            <DataListItemValue>{new Set(assignment.submissions.map(s => s.profile_id)).size}</DataListItemValue>
+                                        </DataListItem>
+                                    </DataListRoot>
+                                </CardBody>
+                            </CardRoot>
+                        );
                     })}
                 </Stack>
             </Box>
-
             <Box>
                 <Heading size="lg" mb={4}>Recent Discussions</Heading>
                 <Stack spaceY={4}>
@@ -92,20 +96,25 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                         if (!topic) {
                             return <Skeleton key={thread.id} height="100px" />
                         }
-                        return <Link prefetch={true} href={`/course/${course_id}/discussion/${thread.id}`} key={thread.id}>
-                            <DiscussionPostSummary thread={thread} topic={topic} />
-                        </Link>
+                        return (
+                            <Link
+                                prefetch={true}
+                                href={`/course/${course_id}/discussion/${thread.id}`}
+                                key={thread.id}
+                                legacyBehavior>
+                                <DiscussionPostSummary thread={thread} topic={topic} />
+                            </Link>
+                        );
                     })}
                 </Stack>
             </Box>
-
             <Box>
                 <Heading size="lg" mb={4}>Open Help Requests</Heading>
                 <Stack spaceY={4}>
                     {helpRequests?.map(request => (
                         <CardRoot key={request.id}>
                             <CardHeader>
-                                <Link href={`/course/${course_id}/help/${request.id}`}>
+                                <Link href={`/course/${course_id}/help/${request.id}`} legacyBehavior>
                                     {request.request}
                                 </Link>
                             </CardHeader>

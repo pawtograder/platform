@@ -398,61 +398,69 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const submission = useSubmission();
     const submitter = useUserProfile(submission.profile_id);
-    return <Flex direction="column" borderColor="border.muted"
-        borderWidth="2px"
-        borderRadius="md"
-    >
-        <HStack pl={4} pr={4} alignItems="center" justify="space-between" align="center">
-            <Box><Heading size="lg">{submission.assignments.title} - Submission #{submission.ordinal}</Heading>
-                <VStack align="flex-start">
-                    <HStack gap={1}>
-                        {submission.is_active && <ActiveSubmissionIcon />}
-                        {submission.assignment_groups ? <Text>Group {submission.assignment_groups.name} ({submission.assignment_groups.assignment_groups_members.map((member) => member.profiles!.name).join(", ")})</Text> : <Text>{submitter?.name}</Text>}
-                    </HStack>
-                    <HStack gap={1}>
-                        <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">Commit {submission.sha.substring(0, 7)}</Link>
-                        <Link href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">(Download)</Link>
-                    </HStack>
-                </VStack>
-            </Box>
-            <HStack>
-                <AskForHelpButton />
-                <SubmissionHistory submission={submission} />
+    return (
+        <Flex direction="column" borderColor="border.muted"
+            borderWidth="2px"
+            borderRadius="md"
+        >
+            <HStack pl={4} pr={4} alignItems="center" justify="space-between" align="center">
+                <Box><Heading size="lg">{submission.assignments.title} - Submission #{submission.ordinal}</Heading>
+                    <VStack align="flex-start">
+                        <HStack gap={1}>
+                            {submission.is_active && <ActiveSubmissionIcon />}
+                            {submission.assignment_groups ? <Text>Group {submission.assignment_groups.name} ({submission.assignment_groups.assignment_groups_members.map((member) => member.profiles!.name).join(", ")})</Text> : <Text>{submitter?.name}</Text>}
+                        </HStack>
+                        <HStack gap={1}>
+                            <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">Commit {submission.sha.substring(0, 7)}</Link>
+                            <Link href={`https://github.com/${submission.repository}/archive/${submission.sha}.zip`} target="_blank">(Download)</Link>
+                        </HStack>
+                    </VStack>
+                </Box>
+                <HStack>
+                    <AskForHelpButton />
+                    <SubmissionHistory submission={submission} />
+                </HStack>
             </HStack>
-        </HStack>
-        <Text textStyle="sm" color="text.muted">
-        </Text>
-        <Box
-            p={0}
-            m={0}
-            borderBottomColor="border.emphasized"
-            borderBottomWidth="2px"
-            bg="bg.muted"
-            defaultValue="results">
-            <NextLink prefetch={true} href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results`}>
-                <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
-                    <Icon as={FaCheckCircle} />
-                    Grading Summary
-                </Button>
-            </NextLink>
-            <NextLink prefetch={true} href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files`}>
-                <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
-                    <Icon as={FaFile} />
-                    Files
-                </Button>
-            </NextLink>
-        </Box>
-        <Box flex={1}>
-            <Flex>
-                <Box flex={10} pr={4}>
-                    {children}
-                </Box>
-                <Box flex={0}>
-                    <RubricView />
-                </Box>
-            </Flex>
-        </Box>
-    </Flex>
+            <Text textStyle="sm" color="text.muted">
+            </Text>
+            <Box
+                p={0}
+                m={0}
+                borderBottomColor="border.emphasized"
+                borderBottomWidth="2px"
+                bg="bg.muted"
+                defaultValue="results">
+                <NextLink
+                    prefetch={true}
+                    href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results`}
+                    legacyBehavior>
+                    <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
+                        <Icon as={FaCheckCircle} />
+                        Grading Summary
+                    </Button>
+                </NextLink>
+                <NextLink
+                    prefetch={true}
+                    href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files`}
+                    legacyBehavior>
+                    <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
+                        <Icon as={FaFile} />
+                        Files
+                    </Button>
+                </NextLink>
+            </Box>
+            <Box flex={1}>
+                <Flex>
+                    <Box flex={10} pr={4}>
+                        {children}
+                    </Box>
+                    <Box flex={0}>
+                        <RubricView />
+                    </Box>
+                </Flex>
+            </Box>
+        </Flex>
+    );
 }
 
 export default function SubmissionsLayoutWrapper({ children }: { children: React.ReactNode }) {

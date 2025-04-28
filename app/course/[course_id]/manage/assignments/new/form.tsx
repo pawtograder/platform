@@ -161,102 +161,103 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
     const course = useCourse();
 
 
-    return (<div>
-        <Toaster />
-        <form onSubmit={handleSubmit(onSubmit)}>
-            <Fieldset.Root maxW="lg">
-                <Fieldset.Content>
-                    <Field label="Title"
-                        errorText={errors.title?.message?.toString()}
-                        invalid={errors.title ? true : false}
-                    ><Input
-                            {...register('title', {
-                                required: 'This is required',
-                            })} /></Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label="Slug"
-                        helperText="A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
-                        errorText={errors.slug?.message?.toString()}
-                        invalid={errors.slug ? true : false}
-                    ><Input
-                            {...register('slug', {
-                                required: 'This is required',
-                                pattern: {
-                                    value: /^[a-z0-9_-]+$/,
-                                    message: 'Slug must contain only lowercase letters, numbers, underscores, and hyphens'
-                                },
-                                maxLength: {
-                                    value: 16,
-                                    message: 'Slug must be less than 16 characters'
-                                }
-                            })} /></Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label={`Release Date (${course.classes.time_zone})`} helperText="Date that students can see the assignment"
-                        errorText={errors.release_date?.message?.toString()}
-                        invalid={errors.release_date ? true : false}
-                    ><Input
-                            type="datetime-local"
-                            {...register('release_date', {
+    return (
+        <div>
+            <Toaster />
+            <form onSubmit={handleSubmit(onSubmit)}>
+                <Fieldset.Root maxW="lg">
+                    <Fieldset.Content>
+                        <Field label="Title"
+                            errorText={errors.title?.message?.toString()}
+                            invalid={errors.title ? true : false}
+                        ><Input
+                                {...register('title', {
+                                    required: 'This is required',
+                                })} /></Field>
+                    </Fieldset.Content>
+                    <Fieldset.Content>
+                        <Field label="Slug"
+                            helperText="A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
+                            errorText={errors.slug?.message?.toString()}
+                            invalid={errors.slug ? true : false}
+                        ><Input
+                                {...register('slug', {
+                                    required: 'This is required',
+                                    pattern: {
+                                        value: /^[a-z0-9_-]+$/,
+                                        message: 'Slug must contain only lowercase letters, numbers, underscores, and hyphens'
+                                    },
+                                    maxLength: {
+                                        value: 16,
+                                        message: 'Slug must be less than 16 characters'
+                                    }
+                                })} /></Field>
+                    </Fieldset.Content>
+                    <Fieldset.Content>
+                        <Field label={`Release Date (${course.classes.time_zone})`} helperText="Date that students can see the assignment"
+                            errorText={errors.release_date?.message?.toString()}
+                            invalid={errors.release_date ? true : false}
+                        ><Input
+                                type="datetime-local"
+                                {...register('release_date', {
+                                    required: 'This is required',
+                                })}
+                            /></Field>
+                    </Fieldset.Content>
+                    <Fieldset.Content>
+                        <Field label={`Due Date (${course.classes.time_zone})`}
+                            helperText="No submissions accepted after this time unless late submissions are allowed"
+                            errorText={errors.due_date?.message?.toString()}
+                            invalid={errors.due_date ? true : false}
+                        ><Input type="datetime-local"
+                            {...register('due_date', {
                                 required: 'This is required',
                             })}
-                        /></Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label={`Due Date (${course.classes.time_zone})`}
-                        helperText="No submissions accepted after this time unless late submissions are allowed"
-                        errorText={errors.due_date?.message?.toString()}
-                        invalid={errors.due_date ? true : false}
-                    ><Input type="datetime-local"
-                        {...register('due_date', {
-                            required: 'This is required',
-                        })}
-                        /></Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label="Max Late Tokens"
-                        helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
-                    ><Input type="number" defaultValue={0} {...register('max_late_tokens', {
-                        required: false,
-                        min: { value: 0, message: 'Max late tokens must be at least 0' }
-                    })} /></Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label="Description URL" helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"><Input name="description" /></Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Field label="Points Possible"><Input type="number" {...register('total_points', {
-                        required: true,
-                        min: { value: 0, message: 'Points possible must be at least 0' }
-                    })} /></Field>
-                </Fieldset.Content>
-                <GroupConfigurationSubform form={form} />
-                <Fieldset.Content>
-                    <Field label="Template repository" helperText="A link to a repository that will be used as a template for each student's assignment"
-                        errorText={errors.template_repo?.message?.toString()}
-                        invalid={errors.template_repo ? true : false}
-                    >
-                        <Controller
-                            control={control}
-                            name="template_repo"
-                            render={({ field }) => {
-                                return <RepoSelector
-                                    templateReposOnly
-                                    name={field.name} value={field.value ? field.value : ""} onBlur={field.onBlur} onChange={(val) => {
-                                        field.onChange(val)
-                                    }} />
-                            }} />
+                            /></Field>
+                    </Fieldset.Content>
+                    <Fieldset.Content>
+                        <Field label="Max Late Tokens"
+                            helperText="The maximum number of late tokens a student can use for this assignment (0 means no late tokens are allowed)"
+                        ><Input type="number" defaultValue={0} {...register('max_late_tokens', {
+                            required: false,
+                            min: { value: 0, message: 'Max late tokens must be at least 0' }
+                        })} /></Field>
+                    </Fieldset.Content>
+                    <Fieldset.Content>
+                        <Field label="Description URL" helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"><Input name="description" /></Field>
+                    </Fieldset.Content>
+                    <Fieldset.Content>
+                        <Field label="Points Possible"><Input type="number" {...register('total_points', {
+                            required: true,
+                            min: { value: 0, message: 'Points possible must be at least 0' }
+                        })} /></Field>
+                    </Fieldset.Content>
+                    <GroupConfigurationSubform form={form} />
+                    <Fieldset.Content>
+                        <Field label="Template repository" helperText="A link to a repository that will be used as a template for each student's assignment"
+                            errorText={errors.template_repo?.message?.toString()}
+                            invalid={errors.template_repo ? true : false}
+                        >
+                            <Controller
+                                control={control}
+                                name="template_repo"
+                                render={({ field }) => {
+                                    return <RepoSelector
+                                        templateReposOnly
+                                        name={field.name} value={field.value ? field.value : ""} onBlur={field.onBlur} onChange={(val) => {
+                                            field.onChange(val)
+                                        }} />
+                                }} />
 
 
-                    </Field>
-                </Fieldset.Content>
-                <Fieldset.Content>
-                    <Button type="submit" loading={isSubmitting}>Save</Button>
-                </Fieldset.Content>
+                        </Field>
+                    </Fieldset.Content>
+                    <Fieldset.Content>
+                        <Button type="submit" loading={isSubmitting}>Save</Button>
+                    </Fieldset.Content>
 
-            </Fieldset.Root>
-        </form>
-    </div>
+                </Fieldset.Root>
+            </form>
+        </div>
     );
 }

@@ -259,7 +259,9 @@ export default function EnrollmentsPage() {
                 <List.Root as="ul" pl="4">
                     {sections?.data?.map((section) => (
                         <List.Item key={section.id} as="li" fontSize="sm">
-                            <Link href={`https://canvas.instructure.com/courses/${section.canvas_course_id}`}>{section.name}</Link>
+                            <Link
+                                href={`https://canvas.instructure.com/courses/${section.canvas_course_id}`}
+                                legacyBehavior>{section.name}</Link>
                         </List.Item>
                     ))}
                 </List.Root>

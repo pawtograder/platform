@@ -48,37 +48,39 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
     const { course_id, assignment_id } = useParams();
     const { data: assignment } = useOne<Assignment>({ resource: "assignments", id: Number.parseInt(assignment_id as string) });
     const pathname = usePathname();
-    return <Flex pt={4}>
-        <Box w="xs" pr={2} flex={0}>
-            <VStack align="flex-start">
-                {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string)).map((item) => (
-                    <Button key={item.label} variant={pathname.endsWith(item.href) ? "solid" : "ghost"}
-                        w="100%"
-                        size="xs"
-                        pt="0"
-                        fontSize="sm"
-                        justifyContent="flex-start"
-                        asChild>
-                        <NextLink href={item.href} prefetch={true}>
-                            <HStack textAlign="left" w="100%" justify="flex-start">
-                                {React.createElement(item.icon)}
-                                {item.label}</HStack>
-                        </NextLink>
-                    </Button>
-                ))}
-                <CreateGitHubRepos courseId={Number.parseInt(course_id as string)} assignmentId={Number.parseInt(assignment_id as string)} />
-            </VStack>
-        </Box>
-        <Box borderColor="border.muted"
-            borderWidth="2px"
-            borderRadius="md"
-            p={4}
-            flexGrow={1}
-        >
-            <Heading size="lg">Assignment: {assignment ? assignment.data?.title : "Loading..."}</Heading>
-            <Box>
-                {children}
+    return (
+        <Flex pt={4}>
+            <Box w="xs" pr={2} flex={0}>
+                <VStack align="flex-start">
+                    {LinkItems(Number.parseInt(course_id as string), Number.parseInt(assignment_id as string)).map((item) => (
+                        <Button key={item.label} variant={pathname.endsWith(item.href) ? "solid" : "ghost"}
+                            w="100%"
+                            size="xs"
+                            pt="0"
+                            fontSize="sm"
+                            justifyContent="flex-start"
+                            asChild>
+                            <NextLink href={item.href} prefetch={true} legacyBehavior>
+                                <HStack textAlign="left" w="100%" justify="flex-start">
+                                    {React.createElement(item.icon)}
+                                    {item.label}</HStack>
+                            </NextLink>
+                        </Button>
+                    ))}
+                    <CreateGitHubRepos courseId={Number.parseInt(course_id as string)} assignmentId={Number.parseInt(assignment_id as string)} />
+                </VStack>
             </Box>
-        </Box>
-    </Flex >
+            <Box borderColor="border.muted"
+                borderWidth="2px"
+                borderRadius="md"
+                p={4}
+                flexGrow={1}
+            >
+                <Heading size="lg">Assignment: {assignment ? assignment.data?.title : "Loading..."}</Heading>
+                <Box>
+                    {children}
+                </Box>
+            </Box>
+        </Flex >
+    );
 }
