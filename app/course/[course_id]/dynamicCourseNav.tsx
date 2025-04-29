@@ -148,68 +148,25 @@ export default function DynamicCourseNav() {
                             .filter((link) => !link.feature_flag || course.features?.find((f) => f.name === link.feature_flag)?.enabled)
                         .map((link) => {
                             if (link.submenu) {
-                                return (
-                                    <Box key={link.name}
-                                        borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
-                                        borderColor="orange.600"
-                                    >
-                                        <Menu.Root>
-                                            <Menu.Trigger asChild>
-                                                <Button
-                                                    colorPalette="gray"
-                                                    _hover={{
-                                                        bg: "#EBEDEF"
-                                                    }}
-                                                    size="xs"
-                                                    fontSize="sm"
-                                                    pt="0"
-                                                    // href={link.target || '#'}
-                                                    // style={{ textDecoration: 'none' }}
-                                                    variant="ghost"
-                                                    asChild
-                                                >
-                                                    <Flex
-                                                        align="center"
-                                                        role="group"
-                                                    >
-                                                        <HStack>
-                                                            {React.createElement(link.icon)}
-                                                            {link.name}</HStack>
-                                                    </Flex>
-                                                </Button>
-                                            </Menu.Trigger>
-                                            <Portal>
-                                                <Menu.Positioner>
-                                                    <Menu.Content>
-                                                        {link.submenu.map((submenu) => (
-                                                            <Menu.Item key={submenu.name} value={submenu.name} asChild>
-                                                                <NextLink prefetch={true} href={submenu.target || '#'} legacyBehavior>
-                                                                    {React.createElement(submenu.icon)}
-                                                                    {submenu.name}
-                                                                </NextLink>
-                                                            </Menu.Item>
-                                                        ))}
-                                                    </Menu.Content>
-                                                </Menu.Positioner>
-                                            </Portal>
-                                        </Menu.Root>
-                                    </Box>
-                                );
-                            } else {
-                                return (
-                                    <Box key={link.name}
-                                        borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
-                                        borderColor="orange.600"
-                                    >
-                                        <Button
-                                            colorPalette="gray"
-                                            size="xs"
-                                            fontSize="sm"
-                                            pt="0"
-                                            variant="ghost"
-                                            asChild
-                                        >
-                                            <NextLink prefetch={true} href={link.target || '#'} legacyBehavior>
+                                return <Box key={link.name}
+                                    borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
+                                    borderColor="orange.600"
+                                >
+                                    <Menu.Root>
+                                        <Menu.Trigger asChild>
+                                            <Button
+                                                colorPalette="gray"
+                                                _hover={{
+                                                    bg: "#EBEDEF"
+                                                }}
+                                                size="xs"
+                                                fontSize="sm"
+                                                pt="0"
+                                                // href={link.target || '#'}
+                                                // style={{ textDecoration: 'none' }}
+                                                variant="ghost"
+                                                asChild
+                                            >
                                                 <Flex
                                                     align="center"
                                                     role="group"
@@ -218,9 +175,48 @@ export default function DynamicCourseNav() {
                                                         {React.createElement(link.icon)}
                                                         {link.name}</HStack>
                                                 </Flex>
-                                            </NextLink>
-                                        </Button></Box>
-                                );
+                                            </Button>
+                                        </Menu.Trigger>
+                                        <Portal>
+                                            <Menu.Positioner>
+                                                <Menu.Content>
+                                                    {link.submenu.map((submenu) => (
+                                                        <Menu.Item key={submenu.name} value={submenu.name} asChild>
+                                                            <NextLink prefetch={true} href={submenu.target || '#'}>
+                                                                {React.createElement(submenu.icon)}
+                                                                {submenu.name}
+                                                            </NextLink>
+                                                        </Menu.Item>
+                                                    ))}
+                                                </Menu.Content>
+                                            </Menu.Positioner>
+                                        </Portal>
+                                    </Menu.Root>
+                                </Box>
+                            } else {
+                                return <Box key={link.name}
+                                    borderBottom={pathname.startsWith(link.target || '#') ? "3px solid" : "none"}
+                                    borderColor="orange.600"
+                                >
+                                    <Button
+                                        colorPalette="gray"
+                                        size="xs"
+                                        fontSize="sm"
+                                        pt="0"
+                                        variant="ghost"
+                                        asChild
+                                    >
+                                        <NextLink prefetch={true} href={link.target || '#'}>
+                                            <Flex
+                                                align="center"
+                                                role="group"
+                                            >
+                                                <HStack>
+                                                    {React.createElement(link.icon)}
+                                                    {link.name}</HStack>
+                                            </Flex>
+                                        </NextLink>
+                                    </Button></Box>
                             }
                         })}
                     </HStack>
@@ -228,5 +224,5 @@ export default function DynamicCourseNav() {
                 <UserMenu />
             </Flex>
         </Box>
-    );
+    )
 }

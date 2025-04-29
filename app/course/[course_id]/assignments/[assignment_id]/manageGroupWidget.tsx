@@ -25,88 +25,86 @@ function CreateGroupButton({ assignment, allGroups }: { assignment: Assignment, 
     const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null, value: string }>>([]);
     const supabase = createClient();
 
-    return (
-        <Dialog.Root open={open} onOpenChange={e => {
-            setOpen(e.open);
-        }}>
-            <Dialog.Trigger asChild>
-                <Button colorPalette="green" variant="surface">Create a new group</Button>
-            </Dialog.Trigger>
-            <Dialog.Backdrop />
-            <Dialog.Positioner>
-                <Dialog.Content>
-                    <form>
+    return <Dialog.Root open={open} onOpenChange={e => {
+        setOpen(e.open);
+    }}>
+        <Dialog.Trigger asChild>
+            <Button colorPalette="green" variant="surface">Create a new group</Button>
+        </Dialog.Trigger>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+            <Dialog.Content>
+                <form>
 
-                        <Dialog.Header>
-                            <Dialog.Title>Create a new group</Dialog.Title>
-                        </Dialog.Header>
-                        <Dialog.Body>
-                            <Field.Root invalid={name.length > 0 && !/^[a-zA-Z0-9_-]{1,36}$/.test(name)}>
-                                <Field.Label>Choose a name for your group</Field.Label>
-                                <Input name="name" value={name} onChange={(e) => setName(e.target.value)} />
-                                <Field.HelperText>Other students will use this name to find your group, and instructors will use this name to identify the group.
-                                    The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
-                                </Field.HelperText>
-                                <Field.ErrorText>The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.</Field.ErrorText>
-                            </Field.Root>
-                            <Field.Root>
-                                <Field.Label>Invite other students to join your group</Field.Label>
-                                <Select
-                                    onChange={(e) => setSelectedInvitees(e)}
-                                    isMulti={true}
-                                    options={ungroupedProfiles.map(p => ({ label: p.name, value: p.id }))}
-                                />
-                            </Field.Root>
-                            You can choose to invite other students to join your group, and if they accept it, they will be added to your group.
-                            Any student who has been enrolled in the course will also be able to request to join your group (requiring approval from a current group member).
-                        </Dialog.Body>
-                        <Dialog.Footer>
-                            <Dialog.ActionTrigger asChild>
-                                <Button variant="ghost">Cancel</Button>
-                            </Dialog.ActionTrigger>
-                            <Button colorPalette="green" onClick={() => {
-                                assignmentGroupCreate({
-                                    course_id: assignment.class_id,
-                                    assignment_id: assignment.id,
-                                    name: name,
-                                    invitees: selectedInvitees.map(i => i.value),
-                                }, supabase).then(res => {
-                                    toaster.create({
-                                        title: "Group created",
-                                        description: "",
-                                        type: "success",
-                                    });
-                                    setOpen(false);
-                                    setName("");
-                                    setSelectedInvitees([]);
-                                    invalidate({
-                                        resource: "assignment_groups",
-                                        invalidates: ["all"],
-                                    });
-                                    invalidate({
-                                        resource: "assignment_groups_members",
-                                        invalidates: ["all"],
-                                    });
-                                    invalidate({
-                                        resource: "assignment_group_invitations",
-                                        invalidates: ["all"],
-                                    });
-                                }).catch(e => {
-                                    if (e instanceof EdgeFunctionError) {
-                                        toaster.create({
-                                            title: "Error: " + e.message,
-                                            description: e.details,
-                                            type: "error",
-                                        });
-                                    }
+                    <Dialog.Header>
+                        <Dialog.Title>Create a new group</Dialog.Title>
+                    </Dialog.Header>
+                    <Dialog.Body>
+                        <Field.Root invalid={name.length > 0 && !/^[a-zA-Z0-9_-]{1,36}$/.test(name)}>
+                            <Field.Label>Choose a name for your group</Field.Label>
+                            <Input name="name" value={name} onChange={(e) => setName(e.target.value)} />
+                            <Field.HelperText>Other students will use this name to find your group, and instructors will use this name to identify the group.
+                                The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
+                            </Field.HelperText>
+                            <Field.ErrorText>The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.</Field.ErrorText>
+                        </Field.Root>
+                        <Field.Root>
+                            <Field.Label>Invite other students to join your group</Field.Label>
+                            <Select
+                                onChange={(e) => setSelectedInvitees(e)}
+                                isMulti={true}
+                                options={ungroupedProfiles.map(p => ({ label: p.name, value: p.id }))}
+                            />
+                        </Field.Root>
+                        You can choose to invite other students to join your group, and if they accept it, they will be added to your group.
+                        Any student who has been enrolled in the course will also be able to request to join your group (requiring approval from a current group member).
+                    </Dialog.Body>
+                    <Dialog.Footer>
+                        <Dialog.ActionTrigger asChild>
+                            <Button variant="ghost">Cancel</Button>
+                        </Dialog.ActionTrigger>
+                        <Button colorPalette="green" onClick={() => {
+                            assignmentGroupCreate({
+                                course_id: assignment.class_id,
+                                assignment_id: assignment.id,
+                                name: name,
+                                invitees: selectedInvitees.map(i => i.value),
+                            }, supabase).then(res => {
+                                toaster.create({
+                                    title: "Group created",
+                                    description: "",
+                                    type: "success",
                                 });
-                            }}>Save</Button>
-                        </Dialog.Footer>
-                    </form>
-                </Dialog.Content>
-            </Dialog.Positioner>
-        </Dialog.Root>
-    );
+                                setOpen(false);
+                                setName("");
+                                setSelectedInvitees([]);
+                                invalidate({
+                                    resource: "assignment_groups",
+                                    invalidates: ["all"],
+                                });
+                                invalidate({
+                                    resource: "assignment_groups_members",
+                                    invalidates: ["all"],
+                                });
+                                invalidate({
+                                    resource: "assignment_group_invitations",
+                                    invalidates: ["all"],
+                                });
+                            }).catch(e => {
+                                if (e instanceof EdgeFunctionError) {
+                                    toaster.create({
+                                        title: "Error: " + e.message,
+                                        description: e.details,
+                                        type: "error",
+                                    });
+                                }
+                            });
+                        }}>Save</Button>
+                    </Dialog.Footer>
+                </form>
+            </Dialog.Content>
+        </Dialog.Positioner>
+    </Dialog.Root>
 }
 
 function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
