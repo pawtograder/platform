@@ -469,6 +469,7 @@ function ArtifactWithComments({ artifact }: { artifact: SubmissionArtifact }) {
                 colorPalette="green"
                 onClick={() => {
                                 const client = createClient();
+                                const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
                                 client.storage.from('submission-artifacts').createSignedUrl(artifactKey, 60 * 60 * 24 * 30).then((data) => {
                                     //Coerce download of the signed url
                                     const a = document.createElement('a');
@@ -488,7 +489,6 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
     const [artifactData, setArtifactData] = useState<Blob | null>(null);
     const [siteUrl, setSiteUrl] = useState<string | null>(null);
     const comments = useSubmissionArtifactComments({}).filter((comment) => comment.deleted_at === null && comment.submission_artifact_id === artifact.id);
-    console.log(comments);
     const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
     useEffect(() => {
         let cleanup: (() => void) | undefined = undefined;

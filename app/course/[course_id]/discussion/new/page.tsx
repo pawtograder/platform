@@ -63,8 +63,6 @@ export default function NewDiscussionThread() {
             } else {
                 setValue("author", private_profile_id!)
             }
-            console.log(`Author: ${getValues("author")}`)
-            console.log(`Class ID: ${getValues("class_id")}`)
             if (getValues("is_instructors_only") === "true") {
                 setValue("instructors_only", true)
             } else {
