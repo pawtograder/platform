@@ -71,7 +71,6 @@ export default function GraderResults() {
         </Container>
     }
     const data = query.data.data;
-    console.log(data.grader_results)
     return (
         <Tabs.Root m={3} defaultValue="tests">
             <Tabs.List>

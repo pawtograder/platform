@@ -5,6 +5,9 @@
         "YmlRubricChecksType": {
             "additionalProperties": false,
             "properties": {
+                "artifact": {
+                    "type": "string"
+                },
                 "data": {
                     "additionalProperties": false,
                     "properties": {

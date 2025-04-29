@@ -1,6 +1,6 @@
 'use client'
 import { Button } from "@/components/ui/button";
-import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria, HydratedRubricPart, RubricChecks, RubricCriteriaWithRubricChecks, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
+import { HydratedRubric, HydratedRubricCheck, HydratedRubricCriteria, HydratedRubricPart, RubricChecks, RubricCriteriaWithRubricChecks, SubmissionArtifactComment, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Menu, Portal, RadioGroup, Text, VStack } from "@chakra-ui/react";
 
 import { Checkbox } from "@/components/ui/checkbox";
@@ -19,10 +19,10 @@ import path from "path";
 import { useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
-export function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComment | SubmissionComments, setIsEditing: (isEditing: boolean) => void }) {
+export function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment, setIsEditing: (isEditing: boolean) => void }) {
     const { private_profile_id } = useClassProfiles();
     const { mutateAsync: updateComment } = useUpdate({
-        resource: isLineComment(comment) ? "submission_file_comments" : "submission_comments",
+        resource: isArtifactComment(comment) ? "submission_artifact_comments" : isLineComment(comment) ? "submission_file_comments" : "submission_comments",
     });
     return <Menu.Root onSelect={async (value) => {
         if (value.value === "edit") {
@@ -58,6 +58,18 @@ export function CommentActions({ comment, setIsEditing }: { comment: SubmissionF
 export function isLineComment(comment: SubmissionFileComment | SubmissionComments): comment is SubmissionFileComment {
     return 'line' in comment;
 }
+export function isArtifactComment(comment: SubmissionFileComment | SubmissionComments): comment is SubmissionArtifactComment {
+    return 'submission_artifact_id' in comment;
+}
+export function SubmissionArtifactCommentLink({ comment }: { comment: SubmissionArtifactComment }) {
+    const submission = useSubmission();
+    const artifact = submission.submission_artifacts.find((artifact) => artifact.id === comment.submission_artifact_id);
+    if (!artifact) {
+        return <></>;
+    }
+    const shortFileName = path.basename(artifact.name);
+    return <Link href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?artifact_id=${comment.submission_artifact_id}`}>@ {shortFileName}</Link>
+}
 export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
     const submission = useSubmission();
     const file = submission.submission_files.find((file) => file.id === comment.submission_file_id);
@@ -67,12 +79,12 @@ export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFile
     const shortFileName = path.basename(file.name);
     return <Link href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?file_id=${comment.submission_file_id}#L${comment.line}`}>@ {shortFileName}:{comment.line}</Link>
 }
-export function RubricCheckComment({ comment, criteria }: { comment: SubmissionFileComment | SubmissionComments, criteria: HydratedRubricCriteria }) {
+export function RubricCheckComment({ comment, criteria }: { comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment, criteria: HydratedRubricCriteria }) {
     const author = useUserProfile(comment.author);
     const [isEditing, setIsEditing] = useState(false);
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
     const { mutateAsync: updateComment } = useUpdate({
-        resource: isLineComment(comment) ? "submission_file_comments" : "submission_comments",
+        resource: isArtifactComment(comment) ? "submission_artifact_comments" : isLineComment(comment) ? "submission_file_comments" : "submission_comments",
     });
     return <Box border="1px solid" borderColor="border.info" borderRadius="md" p={0} w="100%"
         fontSize="sm">
@@ -87,7 +99,7 @@ export function RubricCheckComment({ comment, criteria }: { comment: SubmissionF
             pr={1}
             color="fg.muted">
             <HStack gap={1}>
-                {criteria.is_additive ? <><Icon as={FaCheckCircle} color="green.500" />+{comment.points}</> : <><Icon as={FaTimesCircle} color="red.500" />-{comment.points}</>} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}
+                {criteria.is_additive ? <><Icon as={FaCheckCircle} color="green.500" />+{comment.points}</> : <><Icon as={FaTimesCircle} color="red.500" />-{comment.points}</>} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />} {isArtifactComment(comment) && <SubmissionArtifactCommentLink comment={comment} />}
             </HStack>
             {isEditing ? <MessageInput
                 textAreaRef={messageInputRef}
@@ -134,6 +146,11 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
     const criteriaCheckComments = useRubricCriteriaInstances({ criteria: criteria as RubricCriteriaWithRubricChecks, review_id: review?.id });
     const [selected, setSelected] = useState<boolean>(rubricCheckComments.length > 0);
     const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
+    const submission = useSubmission();
+
+    const linkedAritfactId = check.artifact ? submission.submission_artifacts.find((artifact) => artifact.name === check.artifact)?.id : undefined;
+    const linkedFileId = check.file ? submission.submission_files.find((file) => file.name === check.file)?.id : undefined;
+
     useEffect(() => {
         setSelected(rubricCheckComments.length > 0);
     }, [rubricCheckComments.length]);
@@ -158,6 +175,8 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
             p={1}
             >
                 <Text fontSize="sm">{check.name}</Text>
+                {linkedFileId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}>File: {check.file}</Link>}
+                {linkedAritfactId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
                 {gradingIsRequired && <Text fontSize="xs" color="fg.error">Select one:</Text>}
                 <RadioGroup.Root
                     value={selectedOptionIndex?.toString()}
@@ -184,6 +203,8 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
                     setSelected(newState.checked ? true : false);
                 }}>
                 <Text>{points} {check.name}</Text>
+                {linkedFileId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}>File: {check.file}</Link>}
+                {linkedAritfactId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
             </Checkbox>}
             {(!hasOptions && format == 'radio') && <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !review}>
                 <Text>{points} {check.name}</Text>
@@ -192,16 +213,16 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
         <Markdown style={{
             fontSize: "0.8rem",
         }}>{check.description}</Markdown>
-        {isEditing && <SubmissionCommentForm check={check} criteria={criteria} selectedOptionIndex={selectedOptionIndex} />}
+        {isEditing && <SubmissionCommentForm check={check} criteria={criteria} selectedOptionIndex={selectedOptionIndex} linkedArtifactId={linkedAritfactId} />}
         {rubricCheckComments.map((comment) => <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} />)}
     </>
 }
-function SubmissionCommentForm({ check, criteria, selectedOptionIndex }: { check: HydratedRubricCheck, criteria: HydratedRubricCriteria, selectedOptionIndex?: number }) {
+function SubmissionCommentForm({ check, criteria, selectedOptionIndex, linkedArtifactId }: { check: HydratedRubricCheck, criteria: HydratedRubricCriteria, selectedOptionIndex?: number, linkedArtifactId?: number }) {
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
     const review = useSubmissionReview();
     const submission = useSubmission();
     const { mutateAsync: createComment } = useCreate({
-        resource: "submission_comments",
+        resource: check.artifact ? "submission_artifact_comments" : "submission_file_comments",
     })
     useEffect(() => {
         if (messageInputRef.current) {
@@ -224,6 +245,9 @@ function SubmissionCommentForm({ check, criteria, selectedOptionIndex }: { check
                 if (selectedOptionIndex !== undefined) {
                     comment = selectedOption?.label + "\n" + comment;
                 }
+                const artifactInfo = check.artifact ? {
+                    submission_artifact_id: linkedArtifactId,
+                } : {}
                 const values = {
                     comment,
                     rubric_check_id: check.id,
@@ -232,7 +256,8 @@ function SubmissionCommentForm({ check, criteria, selectedOptionIndex }: { check
                     author: profile_id,
                     points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
                     released: false,
-                    submission_review_id: review!.id
+                    submission_review_id: review!.id,
+                    ...artifactInfo
                 }
                 await createComment({ values });
 

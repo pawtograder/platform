@@ -578,3 +578,6 @@ entrypoint = "./functions/autograder-trigger-grading-workflow/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/autograder-trigger-grading-workflow/*.html" ]
+
+[experimental.webhooks]
+enabled = true

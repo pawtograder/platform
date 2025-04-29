@@ -120,6 +120,26 @@ export type SubmissionWithFilesAndComments = GetResult<
     Database["public"]["Tables"]["submissions"]["Relationships"],
     "*, assignments(*), submission_files(*, submission_file_comments(*, profiles(*))), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*)))"
 >;
+export type SubmissionArtifact = Omit<GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submission_artifacts"]["Row"],
+    "submission_artifacts",
+    Database["public"]["Tables"]["submission_artifacts"]["Relationships"],
+    "*"
+>, "data"> & {
+    data: SubmissionArtifactDataType;
+}
+export type SubmissionArtifactDataType = {
+    format: string;
+    display: string;
+}
+export type SubmissionArtifactComment = GetResult<
+    Database["public"],
+    Database["public"]["Tables"]["submission_artifact_comments"]["Row"],
+    "submission_artifact_comments",
+    Database["public"]["Tables"]["submission_artifact_comments"]["Relationships"],
+    "*"
+>;
 export type SubmissionReview = GetResult<
     Database["public"],
     Database["public"]["Tables"]["submission_reviews"]["Row"],
@@ -139,7 +159,7 @@ export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
     Database["public"]["Tables"]["submissions"]["Row"],
     "submissions",
     Database["public"]["Tables"]["submissions"]["Relationships"],
-    "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*)"
+    "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
 export type SubmissionWithGraderResultsAndReview = GetResult<
     Database["public"],
@@ -428,10 +448,11 @@ export type YmlRubricCriteriaType = Omit<HydratedRubricCriteria, "id" | "class_i
     min_checks_per_submission?: number;
     total_points?: number;
 }
-export type YmlRubricChecksType = Omit<HydratedRubricCheck, "id" | "class_id" | "ordinal" | 'created_at' | "group" | "rubric_criteria_id" | "rubric_parts" | "description" | "file" | "max_annotations"> & {
+export type YmlRubricChecksType = Omit<HydratedRubricCheck, "id" | "class_id" | "ordinal" | 'created_at' | "group" | "rubric_criteria_id" | "rubric_parts" | "description" | "file" | "max_annotations" | "artifact"> & {
     id?: number;
     description?: string;
     file?: string;
+    artifact?: string;
     max_annotations?: number;
 }
 

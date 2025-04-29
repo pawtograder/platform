@@ -41,6 +41,11 @@ export type AutograderFeedback = {
         hide_until_released?: boolean;
         extra_data?: { [key: string]: string };
     }[];
+    artifacts?: {
+        name: string;
+        path: string; // Local path in the grader container
+        data?: object;
+    }[];
 };
 export type GradingScriptResult = {
     ret_code: number;
@@ -56,6 +61,13 @@ export type GradeResponse = {
     is_ok: boolean;
     message: string;
     details_url: string;
+    artifacts?: {
+        name: string;
+        path: string;
+        token: string;
+    }[];
+    supabase_url: string;
+    supabase_anon_key: string;
 };
 
 export type SubmissionResponse = {
@@ -171,6 +183,6 @@ export type CheckRunStatus = {
     submission_id?: number;
     requested_at?: string;
 }
-export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_check_runs"]["Row"],'status'> & {
+export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_check_runs"]["Row"], 'status'> & {
     status: CheckRunStatus
 };
