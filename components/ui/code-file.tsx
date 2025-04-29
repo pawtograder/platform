@@ -2,7 +2,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { useIsGraderOrInstructor } from '@/hooks/useClassProfiles';
 import { useRubricCheck, useSubmission, useSubmissionFile, useSubmissionFileComments, useSubmissionReview } from '@/hooks/useSubmission';
 import { useUserProfile } from '@/hooks/useUserProfiles';
-import { HydratedRubricCriteria, HydratedRubricCheck, RubricChecks, RubricCriteria, SubmissionFile, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from '@/utils/supabase/DatabaseTypes';
+import { HydratedRubricCheck, HydratedRubricCriteria, SubmissionFile, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from '@/utils/supabase/DatabaseTypes';
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from '@chakra-ui/react';
 import { useCreate, useUpdate } from '@refinedev/core';
 import { common, createStarryNight } from '@wooorm/starry-night';
@@ -19,8 +19,8 @@ import Markdown from './markdown';
 import MessageInput from './message-input';
 import PersonAvatar from './person-avatar';
 import { RubricMarkingMenu } from './rubric-marking-menu';
-import { Skeleton } from './skeleton';
 import { CommentActions } from './rubric-sidebar';
+import { Skeleton } from './skeleton';
 type CodeLineCommentContextType = {
     submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
     comments: SubmissionFileComment[];

@@ -428,10 +428,11 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
     }
     const fileComments = useSubmissionFileComments({});
     const submissionComments = useSubmissionComments({});
+    const artifactComments = useSubmissionArtifactComments({});
     if (!review_id) {
         return [];
     }
-    const comments = [...fileComments, ...submissionComments];
+    const comments = [...fileComments, ...submissionComments, ...artifactComments];
     return comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
 }
 export function useSubmissionRubric() {

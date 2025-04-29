@@ -448,10 +448,11 @@ export type YmlRubricCriteriaType = Omit<HydratedRubricCriteria, "id" | "class_i
     min_checks_per_submission?: number;
     total_points?: number;
 }
-export type YmlRubricChecksType = Omit<HydratedRubricCheck, "id" | "class_id" | "ordinal" | 'created_at' | "group" | "rubric_criteria_id" | "rubric_parts" | "description" | "file" | "max_annotations"> & {
+export type YmlRubricChecksType = Omit<HydratedRubricCheck, "id" | "class_id" | "ordinal" | 'created_at' | "group" | "rubric_criteria_id" | "rubric_parts" | "description" | "file" | "max_annotations" | "artifact"> & {
     id?: number;
     description?: string;
     file?: string;
+    artifact?: string;
     max_annotations?: number;
 }
 

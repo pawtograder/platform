@@ -1,24 +1,30 @@
 'use client';
 
 import CodeFile from "@/components/ui/code-file";
-import { Skeleton } from "@/components/ui/skeleton";
-import useAuthState from "@/hooks/useAuthState";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { Rubric, SubmissionArtifact, SubmissionWithFilesAndComments } from "@/utils/supabase/DatabaseTypes";
-import { Box, ClientOnly, Container, Editable, Flex, Heading, IconButton, Spinner, Table, Text } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useList, useShow } from "@refinedev/core";
-import { useForm } from "@refinedev/react-hook-form";
-import { Controller } from "react-hook-form";
-import { useParams, usePathname, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import { LuCheck, LuPencilLine, LuX } from "react-icons/lu";
-import { Button, Field, NumberInput } from "@chakra-ui/react"
-import { useSubmission, useSubmissionFileComments, useSubmissionController, useSubmissionComments, useSubmissionArtifactComments } from "@/hooks/useSubmission";
 import Link from "@/components/ui/link";
+import Markdown from "@/components/ui/markdown";
+import MessageInput from "@/components/ui/message-input";
+import PersonAvatar from "@/components/ui/person-avatar";
+import { CommentActions } from "@/components/ui/rubric-sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip } from '@/components/ui/tooltip';
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useRubricCheck, useSubmission, useSubmissionArtifactComments, useSubmissionController, useSubmissionFileComments, useSubmissionReview } from "@/hooks/useSubmission";
+import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
-import JSZip from 'jszip';
+import { Rubric, SubmissionArtifact, SubmissionArtifactComment, SubmissionFileComment, SubmissionWithFilesGraderResultsOutputTestsAndRubric } from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, ClientOnly, Editable, Field, Flex, Heading, HStack, Icon, IconButton, NumberInput, Spinner, Table, Tag, Text, VStack } from "@chakra-ui/react";
+import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { useForm } from "@refinedev/react-hook-form";
+import { SelectInstance } from "chakra-react-select";
+import { format } from "date-fns";
+import JSZip, { file } from 'jszip';
+import { useParams, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Controller } from "react-hook-form";
+import { FaCheckCircle, FaEyeSlash, FaFile, FaTimesCircle } from "react-icons/fa";
+import { LuCheck, LuPencilLine, LuX } from "react-icons/lu";
 import zipToHTMLBlobs from "./zipToHTMLBlobs";
-
 function FilePicker({ curFile, setCurFile }: { curFile: number, setCurFile: (file: number) => void }) {
     const submission = useSubmission();
     const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -243,10 +249,246 @@ function RubricView() {
     </Box>
 }
 
+function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment }) {
+    const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
+    if (!rubricCheck || !rubricCriteria) {
+        return <Skeleton height="100px" width="100%" />;
+    }
+    const gradingReview = useSubmissionReview(comment.submission_review_id);
+    const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
+
+    const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
+    const commentAuthor = useUserProfile(comment.author);
+    const [isEditing, setIsEditing] = useState(false);
+    const messageInputRef = useRef<HTMLTextAreaElement>(null);
+    const { mutateAsync: updateComment } = useUpdate({
+        resource: "submission_artifact_comments",
+    });
+    return <Box m={0} p={0} w="100%" pb={1}>
+        <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
+            <PersonAvatar size="2xs" uid={comment.author} />
+            <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderColor="border.info" borderRadius="md" >
+                <Box bg="bg.info" pl={1} pr={1} borderRadius="md">
+                    <Flex w="100%" justifyContent="space-between">
+                        <HStack>
+                            {!comment.released && <Tooltip content="This comment is not released to the student yet"><Icon as={FaEyeSlash} /></Tooltip>}
+                            <Icon as={
+                                rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle} color={rubricCriteria.is_additive ? "green.500" : "red.500"} />{pointsText}
+                            <Text fontSize="sm" color="fg.muted">{rubricCriteria?.name} &gt; {rubricCheck?.name}</Text>
+                        </HStack>
+                        <HStack gap={0}>
+                            <Text fontSize="sm" fontStyle="italic" color="fg.muted">{commentAuthor?.name} ({reviewName})</Text>
+                            <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                        </HStack>
+                    </Flex>
+                </Box>
+                <Box pl={2}>
+                    <Markdown style={{ fontSize: '0.8rem' }}>{rubricCheck.description}</Markdown>
+                </Box>
+                <Box pl={2}>
+                    {isEditing ? <MessageInput
+                        textAreaRef={messageInputRef}
+                        defaultSingleLine={true}
+                        value={comment.comment}
+                        closeButtonText="Cancel"
+                        onClose={() => {
+                            setIsEditing(false);
+                        }}
+                        sendMessage={async (message, profile_id) => {
+                            await updateComment({ id: comment.id, values: { comment: message } });
+                            setIsEditing(false);
+                        }} /> : <Markdown>{comment.comment}</Markdown>}
+                </Box>
+            </VStack>
+        </HStack>
+    </Box >
+}
+function ArtifactComment({ comment, submission }: { comment: SubmissionArtifactComment, submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
+    const authorProfile = useUserProfile(comment.author);
+    const isAuthor = submission.profile_id === comment.author || submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
+    const [isEditing, setIsEditing] = useState(false);
+    const messageInputRef = useRef<HTMLTextAreaElement>(null);
+    const { mutateAsync: updateComment } = useUpdate({
+        resource: "submission_artifact_comments",
+    });
+    return <Box key={comment.id} m={0} pb={1} w="100%">
+        <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
+            <PersonAvatar size="2xs" uid={comment.author} />
+            <VStack alignItems="flex-start" spaceY={0} gap={1} w="100%" border="1px solid" borderColor="border.emphasized" borderRadius="md" >
+                <HStack w="100%" justifyContent="space-between" bg="bg.muted" p={0} borderTopRadius="md" borderBottom="1px solid" borderColor="border.emphasized">
+                    <HStack gap={1} fontSize="sm" color="fg.muted" ml={1}>
+                        <Text fontWeight="bold">{authorProfile?.name}</Text>
+                        <Text>commented on {format(comment.created_at, 'MMM d, yyyy')}</Text>
+                    </HStack>
+                    <HStack>{isAuthor || authorProfile?.flair ? <Tag.Root size="md" colorScheme={isAuthor ? "green" : "gray"} variant="surface">
+                        <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
+                    </Tag.Root> : <></>}
+                        <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                    </HStack>
+                </HStack>
+                <Box pl={2}>
+                    {isEditing ? <MessageInput
+                        textAreaRef={messageInputRef}
+                        defaultSingleLine={true}
+                        value={comment.comment}
+                        closeButtonText="Cancel"
+                        onClose={() => {
+                            setIsEditing(false);
+                        }}
+                        sendMessage={async (message, profile_id) => {
+                            await updateComment({ id: comment.id, values: { comment: message } });
+                            setIsEditing(false);
+                        }} /> : <Markdown>{comment.comment}</Markdown>}
+                </Box>
+            </VStack>
+        </HStack>
+    </Box>
+}
+
+
+function AritfactComments({ artifact }: { artifact: SubmissionArtifact }) {
+    const comments = useSubmissionArtifactComments({}).filter((comment) => comment.deleted_at === null && comment.submission_artifact_id === artifact.id);
+    const submission = useSubmission();
+
+    const isGraderOrInstructor = useIsGraderOrInstructor();
+    const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
+    const [showReply, setShowReply] = useState(isReplyEnabled);
+    const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
+
+    if (!submission || !artifact || !showCommentsFeature) {
+        return null;
+    }
+    return <Box
+        width="100%"
+        p={4}
+        whiteSpace="normal"
+        position="relative" m={0} borderTop="1px solid"
+        borderBottom="1px solid"
+        borderColor="border.emphasized">
+        <Box position="absolute" left={0}
+            w="40px" h="100%"
+            borderRight="1px solid #ccc"></Box>
+        <Box
+            position="relative"
+            w="100%"
+            fontFamily={"sans-serif"}
+
+            m={0}
+            borderWidth="1px"
+            borderColor="border.emphasized"
+            borderRadius="md"
+            p={0}
+            backgroundColor="bg"
+            boxShadow="sm"
+        >
+            {comments.map((comment) => (
+                comment.rubric_check_id ? <ArtifactAnnotation key={comment.id} comment={comment} /> :
+                    <ArtifactComment key={comment.id} comment={comment} submission={submission} />
+            ))}
+            {showReply ? <ArtifactCommentsForm submission={submission} artifact={artifact} defaultValue={comments.length > 0 ? "Reply" : "Add Comment"} /> : <Box display="flex" justifyContent="flex-end"><Button colorPalette="green" onClick={() => setShowReply(true)}>Add Comment</Button></Box>}
+        </Box>
+    </Box>
+}
+type GroupedRubricOptions = {
+    readonly label: string;
+    readonly options: readonly RubricOption[];
+}
+type RubricOption = {
+    readonly label: string;
+    readonly value: string;
+    readonly points: number;
+    readonly description?: string;
+    readonly isOther?: boolean;
+    readonly rubric_id: number;
+}
+
+function ArtifactCommentsForm({
+    submission,
+    artifact,
+    defaultValue
+}: {
+    submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric,
+    artifact: SubmissionArtifact,
+    defaultValue: string
+}) {
+
+    // const rubrics = submission.assignments.rubrics.filter((rubric) => rubric.is_annotation);
+    // rubrics.sort((a, b) => a.ordinal - b.ordinal);
+
+    const { mutateAsync: createComment } = useCreate<SubmissionArtifactComment>(
+        {
+            resource: "submission_artifact_comments",
+        }
+    );
+    const supabase = createClient();
+    const review = useSubmissionReview();
+    const invalidateQuery = useInvalidate();
+    const { private_profile_id } = useClassProfiles();
+    const selectRef = useRef<SelectInstance<RubricOption, false, GroupedRubricOptions>>(null);
+    const pointsRef = useRef<HTMLInputElement>(null);
+
+    const postComment = useCallback(async (message: string) => {
+        const values = {
+            submission_id: submission.id,
+            submission_artifact_id: artifact.id,
+            class_id: artifact.class_id,
+            author: private_profile_id!,
+            comment: message,
+            submission_review_id: review?.id,
+            released: review ? false : true,
+        }
+        await createComment({
+            values: values
+        });
+        invalidateQuery({
+            resource: "submission_artifacts", id: artifact.id,
+            invalidates: ['all']
+        });
+
+    }, [submission, artifact, supabase, createComment, private_profile_id, selectRef]);
+
+    return (
+        <MessageInput
+            className="w-full p-2 border rounded"
+            defaultSingleLine={true}
+            sendMessage={postComment}
+            sendButtonText="Save"
+            defaultValue={defaultValue}
+        />
+    );
+
+}
+
+function ArtifactWithComments({ artifact }: { artifact: SubmissionArtifact }) {
+    return <Box borderWidth="1px" borderColor="border.emphasized" borderRadius="md" m={2}>
+        <Box bg="bg.muted" p={2} borderBottom="1px solid" borderColor="border.emphasized">
+            <HStack justifyContent="space-between">
+                <Heading size="md">Artifact: {artifact.name}</Heading>
+                <Button 
+                variant="surface"
+                colorPalette="green"
+                onClick={() => {
+                                const client = createClient();
+                                client.storage.from('submission-artifacts').createSignedUrl(artifactKey, 60 * 60 * 24 * 30).then((data) => {
+                                    //Coerce download of the signed url
+                                    const a = document.createElement('a');
+                                    a.href = data?.data?.signedUrl || '';
+                                    a.download = artifact.name;
+                                    a.click();
+                                });
+                            }}>Download</Button>
+            </HStack>
+        </Box>
+        <ArtifactView artifact={artifact} />
+        <AritfactComments artifact={artifact} />
+    </Box>
+}
 function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
     //Load the artifact data from supabase
     const [artifactData, setArtifactData] = useState<Blob | null>(null);
     const [siteUrl, setSiteUrl] = useState<string | null>(null);
+    const comments = useSubmissionArtifactComments({}).filter((comment) => comment.deleted_at === null && comment.submission_artifact_id === artifact.id);
+    console.log(comments);
     const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
     useEffect(() => {
         let cleanup: (() => void) | undefined = undefined;
@@ -283,10 +525,10 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
                                     })
                                 );
                                 // Send all file contents to the iframe
-                                event.source?.postMessage({ 
-                                    type: 'FILE_CONTENTS_RESPONSE', 
-                                    fileContents 
-                                }, {targetOrigin: '*'});
+                                event.source?.postMessage({
+                                    type: 'FILE_CONTENTS_RESPONSE',
+                                    fileContents
+                                }, { targetOrigin: '*' });
                             }
                         };
                         window.addEventListener('message', listener);
@@ -328,20 +570,10 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
                 return (
                     <Box>
                         <ClientOnly>
-                            <Button onClick={() => {
-                                const client = createClient();
-                                client.storage.from('submission-artifacts').createSignedUrl(artifactKey, 60 * 60 * 24 * 30).then((data) => {
-                                    //Coerce download of the signed url
-                                    const a = document.createElement('a');
-                                    a.href = data?.data?.signedUrl || '';
-                                    a.download = artifact.name;
-                                    a.click();
-                                });
-                            }}>Download</Button>
                             <Box borderWidth="1px" borderColor="border.emphasized" borderRadius="md" overflow="hidden">
                                 <iframe
                                     src={siteUrl}
-                                    style={{ width: '100%', height: '100%', border: 'none' }}
+                                    style={{ width: '100%', height: '100%', border: 'none', minHeight: '500px' }}
                                     title={artifact.name}
                                     sandbox="allow-scripts"
                                 />
@@ -395,8 +627,8 @@ export default function FilesView() {
             <Box w="100%">
                 <FilePicker curFile={curFile} setCurFile={setCurFile} />
                 <ArtifactPicker curArtifact={curArtifact} />
-                {currentView === "file" && <CodeFile file={submission.submission_files[curFile]} />}
-                {currentView === "artifact" && <ArtifactView artifact={submission.submission_artifacts[curArtifact] as SubmissionArtifact} />}
+                {(currentView === "file" && submission.submission_files[curFile]) && <CodeFile file={submission.submission_files[curFile]} />}
+                {(currentView === "artifact" && submission.submission_artifacts[curArtifact]) && <ArtifactWithComments artifact={submission.submission_artifacts[curArtifact] as SubmissionArtifact} />}
             </Box>
         </Flex>
     </Box>

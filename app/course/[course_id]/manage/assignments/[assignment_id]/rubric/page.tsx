@@ -39,7 +39,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
         is_annotation: check.is_annotation,
         is_required: check.is_required,
         is_comment_required: check.is_comment_required,
-        artifact: valOrUndefined(check.artifact) || null,
+        artifact: valOrUndefined(check.artifact),
         max_annotations: valOrUndefined(check.max_annotations),
         points: check.points,
         data: valOrUndefined(check.data),
@@ -470,6 +470,9 @@ export default function RubricPage() {
                                     description: 'The rubric has been saved successfully',
                                     type: 'success'
                                 })
+                                //Reload the rubric so that we have ID's on newly created items
+                                await assignment.refetch();
+                                setValue(YAML.stringify(HydratedRubricToYamlRubric(assignment.data?.data.rubrics!)));
                             } catch (error) {
                                 toaster.create({
                                     title: 'Failed to save rubric',
