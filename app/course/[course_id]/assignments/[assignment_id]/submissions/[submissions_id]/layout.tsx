@@ -36,7 +36,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     const invalidate = useInvalidate();
     const router = useRouter();
     const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
-    const groupOrProfileFilter : CrudFilter = submission.assignment_group_id ? {
+    const groupOrProfileFilter: CrudFilter = submission.assignment_group_id ? {
         field: "assignment_group_id",
         operator: "eq",
         value: submission.assignment_group_id
@@ -180,11 +180,8 @@ function TestResults() {
     const testResults = submission.grader_results?.grader_result_tests;
     const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
     const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
-    const graderResultsMaxScore = submission.grader_results?.max_score;
     return <Box>
         <Heading size="md">Automated Check Results ({totalScore}/{totalMaxScore})</Heading>
-        {(graderResultsMaxScore && totalMaxScore && graderResultsMaxScore > totalMaxScore) &&
-            <Text color="text.muted" fontSize="sm">{graderResultsMaxScore - totalMaxScore} additional points are awarded by automated tests that are not shown until after grading is complete.</Text>}
         {testResults?.map((test) => <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
             {test.score == test.max_score ? <Icon as={FaCheckCircle} color="green.500" /> : <Icon as={FaTimesCircle} color="red.500" />}
             <Link href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results#test-${test.id}`}><Heading size="sm">{test.name} {test.score}/{test.max_score}</Heading></Link>
@@ -359,6 +356,28 @@ function ReviewActions() {
         </HStack>
     </VStack>
 }
+function UnGradedGradingSummary() {
+    const submission = useSubmission();
+    const graderResultsMaxScore = submission.grader_results?.max_score;
+    const totalMaxScore = submission.assignments.total_points;
+
+    return <Box>
+        <Heading size="xl">Grading Summary</Heading>
+        <Text color="text.muted" fontSize="sm">This assignment is worth a total of {totalMaxScore} points, broken down as follows:</Text>
+        <List.Root as="ul" fontSize="sm" color="text.muted">
+            {(submission.assignments.autograder_points && submission.assignments.total_points) && <List.Item>
+                <Text as="span" fontWeight="bold">Hand Grading:</Text> {submission.assignments.total_points - submission.assignments.autograder_points} points. This has not been graded yet.
+            </List.Item>}
+            <List.Item>
+                <Text as="span" fontWeight="bold">Automated Checks:</Text> {graderResultsMaxScore} points, results shown below.
+            </List.Item>
+            {(graderResultsMaxScore && totalMaxScore && graderResultsMaxScore > totalMaxScore) &&
+                <List.Item>
+                    <Text as="span" fontWeight="bold">Hidden Automated Checks:</Text> {graderResultsMaxScore - totalMaxScore} points will be awarded by automated tests that are not shown until after grading is complete.
+                </List.Item>}
+        </List.Root>
+    </Box>
+}
 function RubricView() {
     const submission = useSubmission();
     const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -379,16 +398,12 @@ function RubricView() {
     >
         <VStack align="start" w="md">
             {review && <Heading size="xl">Grading Summary ({review?.total_score}/{submission.assignments.total_points})</Heading>}
+            {!review && <UnGradedGradingSummary />}
             {isGraderOrInstructor && <ReviewActions />}
             <TestResults />
             {showHandGrading && <Heading size="md">Hand Check Results</Heading>}
             {showHandGrading && criteria?.map((criteria) => <RubricCriteria key={criteria.id} criteria={criteria} />)}
         </VStack>
-
-        {!review && <Text>This submission has not been hand-graded yet.
-            {(submission.assignments.autograder_points && submission.assignments.total_points) && <>The hand-graded portion will account for {submission.assignments.total_points - submission.assignments.autograder_points} points.</>}
-        </Text>}
-
     </Box>
 
 }

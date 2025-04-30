@@ -47,19 +47,19 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     return (
         <VStack spaceY={8} align="stretch" p={8}>
             <Heading size="xl">Course Dashboard</Heading>
-            <Box>
+            {/* <Box>
                 <Heading size="lg" mb={4}>Poll Questions</Heading>
                 {pollQuestions?.map(question => (
                     <PollQuestionForm key={question.id} question={question} />
                 ))}
-            </Box>
+            </Box> */}
             <Box>
                 <Heading size="lg" mb={4}>Upcoming Assignments</Heading>
                 <Stack spaceY={4}>
                     {assignments?.map(assignment => {
                         return (<CardRoot key={assignment.id}>
                             <CardHeader>
-                                <Link prefetch={true} href={`/course/${course_id}/assignments/${assignment.id}`}>
+                                <Link prefetch={true} href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
                                     {assignment.title}
                                 </Link>
                             </CardHeader>

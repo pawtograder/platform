@@ -79,7 +79,7 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
         <Stack gap="3" colorPalette="gray">
           <Button variant="outline" onClick={signInWithMicrosoftAction} aria-label="Sign in with Microsoft (Northeastern Login)">
             <BsMicrosoft />
-            Continue with Microsoft
+            Continue with Microsoft (Northeastern Login)
           </Button>
         </Stack>
 

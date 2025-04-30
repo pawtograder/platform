@@ -27,7 +27,6 @@ export default function AssignmentsTable() {
             header: "Student",
             enableColumnFilter: true,
             filterFn: (row, id, filterValue) => {
-                console.log(row.original.name, filterValue);
                 if (!row.original.name) 
                     return false;
                 return row.original.name.toLowerCase().includes(filterValue.toLowerCase());
