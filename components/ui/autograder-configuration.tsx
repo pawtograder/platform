@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 
 import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
-import { repositoryGetFile } from "@/lib/edgeFunctions";
+import { EdgeFunctionError, repositoryGetFile } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { MutationTestUnit, RegularTestUnit, GradedUnit, PawtograderConfig } from "@/utils/PawtograderYml";
 
@@ -91,7 +91,7 @@ export default function AutograderConfiguration({ graderRepo, assignment }: { gr
                     }
                 }
             }).catch((err) => {
-                if (err.stack.message === 'Not Found') {
+                if (((err as EdgeFunctionError).message)=== 'Not Found') {
                     setError(`Autograder configuration file not found in ${graderRepo}. Please create a pawtograder.yml file in the root of the repository.`);
                     setAutograderConfig(undefined);
                 } else {
@@ -209,6 +209,9 @@ export default function AutograderConfiguration({ graderRepo, assignment }: { gr
                 ))}
             </Table.Body>
         </Table.Root>
-        <Button disabled={saveLoading} loading={saveLoading} onClick={() => saveRegressionTests()}>Save Testing Configuration</Button>
+        <Button disabled={saveLoading}
+        colorPalette="green"
+        variant="surface"
+        loading={saveLoading} onClick={() => saveRegressionTests()}>Save Testing Configuration</Button>
     </div>
 }

@@ -17,7 +17,7 @@ export default function NewAssignmentPage() {
     });
     const router = useRouter();
     const { getValues, handleSubmit, setValue } = form;
-    const onSubmit = useCallback((values: FieldValues) => {
+    const onSubmit = useCallback(async (values: FieldValues) => {
         async function create() {
             const supabase = createClient();
             // console.log(getValues("submission_files"));
@@ -64,7 +64,7 @@ export default function NewAssignmentPage() {
                 router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`)
             }
         }
-        create()
+        await create()
     }, [handleSubmit, setValue, course_id]);
     return <CreateAssignment form={form} onSubmit={onSubmit} />
 }

@@ -1,25 +1,24 @@
 "use client";
 
+import AutograderConfiguration from "@/components/ui/autograder-configuration";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
 import RepoSelector from "@/components/ui/repo-selector";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Button, Fieldset, Heading, Input, NativeSelect, NativeSelectField, NativeSelectRoot, RadioGroup } from "@chakra-ui/react";
-import { Edit } from "@refinedev/chakra-ui";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
+import { createClient } from "@/utils/supabase/client";
+import { Button, Fieldset, Heading, Input, NativeSelectField, NativeSelectRoot, RadioGroup } from "@chakra-ui/react";
+import { useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import { Controller, FieldValues } from "react-hook-form";
-import { ListReposResponse } from "@/components/github/GitHubTypes";
-import { useState, useCallback, useEffect } from "react";
-import AutograderConfiguration from "@/components/ui/autograder-configuration";
-import { AutograderWithAssignment, Assignment } from "@/utils/supabase/DatabaseTypes";
-import { createClient } from "@/utils/supabase/client";
-import { useUpdate } from "@refinedev/core";
-import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 
 export default function AutograderPage() {
     const { assignment_id } = useParams();
     const [graderRepo, setGraderRepo] = useState<string>();
+    const [loading, setLoading] = useState(false);
     const { mutateAsync: mutateAssignment } = useUpdate<Assignment>({ resource: "assignments", id: Number.parseInt(assignment_id as string) });
     const { refineCore: { formLoading, query },
         saveButtonProps,
@@ -73,9 +72,18 @@ export default function AutograderPage() {
     }
     return <div>
         <Heading size="md">Autograder Configuration</Heading>
-        <form onSubmit={(e) => {
+        <Toaster />
+        <form onSubmit={async(e) => {
             e.preventDefault();
-            handleSubmit(onSubmit)(e);
+            try {
+                setLoading(true);
+                await handleSubmit(onSubmit)(e);
+            } catch (error) {
+                toaster.error({title: "Changes not saved", description: "An error occurred while saving the autograder configuration. Please double-check that the repository exists and that the pawtograder.yml file is present."});
+                console.error(error);
+            } finally {
+                setLoading(false);
+            }
         }}>
             <Fieldset.Root size="lg" maxW="md">
                 <Fieldset.Content>
@@ -129,7 +137,10 @@ export default function AutograderPage() {
                     </Field>
                 </Fieldset.Content>
             </Fieldset.Root>
-            <Button type="submit">Save</Button>
+            <Button type="submit" loading={loading}
+            colorPalette="green"
+            variant="solid"
+            >Save</Button>
         </form>
         {(query.data?.data?.assignments && graderRepo) && <AutograderConfiguration graderRepo={graderRepo} assignment={query.data?.data?.assignments}/>}
 
