@@ -10,7 +10,7 @@ import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useRubricCheckInstances, useRubricCriteriaInstances, useSubmission, useSubmissionReview } from "@/hooks/useSubmission";
+import { useRubricCheckInstances, useRubricCriteriaInstances, useSubmissionMaybe, useSubmissionReview } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useUpdate } from "@refinedev/core";
@@ -62,18 +62,18 @@ export function isArtifactComment(comment: SubmissionFileComment | SubmissionCom
     return 'submission_artifact_id' in comment;
 }
 export function SubmissionArtifactCommentLink({ comment }: { comment: SubmissionArtifactComment }) {
-    const submission = useSubmission();
-    const artifact = submission.submission_artifacts.find((artifact) => artifact.id === comment.submission_artifact_id);
-    if (!artifact) {
+    const submission = useSubmissionMaybe();
+    const artifact = submission?.submission_artifacts.find((artifact) => artifact.id === comment.submission_artifact_id);
+    if (!artifact || !submission) {
         return <></>;
     }
     const shortFileName = path.basename(artifact.name);
     return <Link href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?artifact_id=${comment.submission_artifact_id}`}>@ {shortFileName}</Link>
 }
 export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
-    const submission = useSubmission();
-    const file = submission.submission_files.find((file) => file.id === comment.submission_file_id);
-    if (!file) {
+    const submission = useSubmissionMaybe();
+    const file = submission?.submission_files.find((file) => file.id === comment.submission_file_id);
+    if (!file || !submission) {
         return <></>;
     }
     const shortFileName = path.basename(file.name);
@@ -146,10 +146,10 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
     const criteriaCheckComments = useRubricCriteriaInstances({ criteria: criteria as RubricCriteriaWithRubricChecks, review_id: review?.id });
     const [selected, setSelected] = useState<boolean>(rubricCheckComments.length > 0);
     const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
-    const submission = useSubmission();
+    const submission = useSubmissionMaybe();
 
-    const linkedAritfactId = check.artifact ? submission.submission_artifacts.find((artifact) => artifact.name === check.artifact)?.id : undefined;
-    const linkedFileId = check.file ? submission.submission_files.find((file) => file.name === check.file)?.id : undefined;
+    const linkedAritfactId = check.artifact ? submission?.submission_artifacts.find((artifact) => artifact.name === check.artifact)?.id : undefined;
+    const linkedFileId = check.file ? submission?.submission_files.find((file) => file.name === check.file)?.id : undefined;
 
     useEffect(() => {
         setSelected(rubricCheckComments.length > 0);
@@ -175,8 +175,8 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
             p={1}
             >
                 <Text fontSize="sm">{check.name}</Text>
-                {linkedFileId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}>File: {check.file}</Link>}
-                {linkedAritfactId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
+                {(linkedFileId && submission) && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}>File: {check.file}</Link>}
+                {(linkedAritfactId && submission) && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
                 {gradingIsRequired && <Text fontSize="xs" color="fg.error">Select one:</Text>}
                 <RadioGroup.Root
                     value={selectedOptionIndex?.toString()}
@@ -203,8 +203,8 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
                     setSelected(newState.checked ? true : false);
                 }}>
                 <Text>{points} {check.name}</Text>
-                {linkedFileId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}>File: {check.file}</Link>}
-                {linkedAritfactId && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
+                {(linkedFileId && submission) && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}>File: {check.file}</Link>}
+                {(linkedAritfactId && submission) && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
             </Checkbox>}
             {(!hasOptions && format == 'radio') && <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !review}>
                 <Text>{points} {check.name}</Text>
@@ -220,10 +220,13 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
 function SubmissionCommentForm({ check, criteria, selectedOptionIndex, linkedArtifactId }: { check: HydratedRubricCheck, criteria: HydratedRubricCriteria, selectedOptionIndex?: number, linkedArtifactId?: number }) {
     const messageInputRef = useRef<HTMLTextAreaElement>(null);
     const review = useSubmissionReview();
-    const submission = useSubmission();
+    const submission = useSubmissionMaybe();
     const { mutateAsync: createComment } = useCreate({
         resource: check.artifact ? "submission_artifact_comments" : "submission_file_comments",
     })
+    if (!submission) {
+        return <></>;
+    }
     useEffect(() => {
         if (messageInputRef.current) {
             messageInputRef.current.focus();

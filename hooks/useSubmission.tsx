@@ -404,6 +404,13 @@ function SubmissionControllerCreator({ submission_id, setReady }: { submission_i
     }
     return <></>;
 }
+export function useSubmissionMaybe() {
+    const ctx = useContext(SubmissionContext);
+    if (!ctx) {
+        return undefined;
+    }
+    return ctx.submissionController.submission;
+}
 export function useSubmission() {
     const controller = useSubmissionController();
     return controller.submission;
