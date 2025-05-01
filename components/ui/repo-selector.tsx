@@ -1,12 +1,10 @@
-import { createListCollection, Field, ListCollection, SelectLabel, SelectValueText, Skeleton } from "@chakra-ui/react";
+import { Field, Skeleton } from "@chakra-ui/react";
 
-import { ListReposResponse } from "@/components/github/GitHubTypes";
-import { SelectContent, SelectItem, SelectRoot, SelectTrigger } from "@/components/ui/select";
 import { repositoriesForClass } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
+import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-import { MultiValue, Select } from "chakra-react-select";
 export default function RepoSelector({ name, value, onBlur, onChange, templateReposOnly }: { name: string, value: string, onBlur: () => void, onChange: (value: string) => void, templateReposOnly?: boolean }) {
     const { course_id } = useParams();
     const [templateReposList, setTemplateReposList] = useState<{label: string, value: string}[]>();

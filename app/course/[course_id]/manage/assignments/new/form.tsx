@@ -7,7 +7,7 @@ import { ListFilesResponse } from "@/components/github/GitHubTypes";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import RepoSelector from "@/components/ui/repo-selector";
-import { Toaster } from "@/components/ui/toaster";
+import { toaster, Toaster } from "@/components/ui/toaster";
 import { repositoryListFiles } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -155,15 +155,27 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
         // refineCore: {
         //     onFinish
         // },
-        formState: { errors, isSubmitting },
+        formState: { errors },
     } = form;
 
     const course = useCourse();
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const onSubmitWrapper = useCallback(async (values: FieldValues) => {
+        setIsSubmitting(true);
+        try{
+            await onSubmit(values);
+        } catch (error) {
+            toaster.error({title: "Changes not saved", description: "An error occurred while saving the assignment. Please try again."});
+            console.error(error);
+        } finally {
+            setIsSubmitting(false);
+        }
+    }, [onSubmit]);
 
 
     return (<div>
         <Toaster />
-        <form onSubmit={handleSubmit(onSubmit)}>
+        <form onSubmit={handleSubmit(onSubmitWrapper)}>
             <Fieldset.Root maxW="lg">
                 <Fieldset.Content>
                     <Field label="Title"
@@ -252,7 +264,9 @@ export default function AssignmentForm({ form, onSubmit }: { form: UseFormReturn
                     </Field>
                 </Fieldset.Content>
                 <Fieldset.Content>
-                    <Button type="submit" loading={isSubmitting}>Save</Button>
+                    <Button type="submit" loading={isSubmitting}
+                    colorPalette="green"
+                    >Save</Button>
                 </Fieldset.Content>
 
             </Fieldset.Root>

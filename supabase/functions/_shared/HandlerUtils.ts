@@ -116,7 +116,10 @@ export async function wrapRequestHandler(
         }
         return new Response(JSON.stringify(data), {
             status: 200,
-            headers: corsHeaders,
+            headers: {
+                ...corsHeaders,
+                "Content-Type": "application/json",
+            },
         });
     } catch (e) {
         console.error(e);
