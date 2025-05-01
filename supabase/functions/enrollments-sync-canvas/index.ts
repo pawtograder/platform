@@ -30,7 +30,7 @@ async function handleRequest(req: Request) {
     course_id,
   );
   // Find the enrollments that need to be added
-  const newEnrollments = canvasEnrollments.filter(canvasEnrollment => !supabaseEnrollments.data!.find(supabaseEnrollment => supabaseEnrollment.canvas_id === canvasEnrollment.id));
+  const newEnrollments = canvasEnrollments.filter(canvasEnrollment => !supabaseEnrollments.data!.find(supabaseEnrollment => supabaseEnrollment.canvas_id === canvasEnrollment.user.id));
   const allUsers = await adminSupabase.auth.admin.listUsers({
     perPage: 10000
   });
@@ -41,9 +41,8 @@ async function handleRequest(req: Request) {
       if (enrollment.user.name === "Test Student") {
         return; //Wow I hope that nobody actually has a student named Test Student, great job, Canvas!
       }
-      console.log("Creating user for enrollment", enrollment);
       try {
-        const user = await canvas.getUser(enrollment.user.id);
+        const user = await canvas.getUser(course_id, enrollment.user.id);
         // Does the user already exist in supabase?
         const existingUser = allUsers.data!.users.find((dbUser) =>
           user.primary_email === dbUser.email
@@ -67,7 +66,7 @@ async function handleRequest(req: Request) {
         const classSection = course!.class_sections.find(section => section.canvas_course_section_id === enrollment.course_section_id);
         await createUserInClass(adminSupabase, course_id, {
           existing_user_id: existingUser?.id,
-          canvas_id: enrollment.id,
+          canvas_id: enrollment.user.id,
           canvas_course_id: enrollment.course_id,
           canvas_section_id: enrollment.course_section_id,
           class_section_id: classSection?.id,
@@ -75,8 +74,8 @@ async function handleRequest(req: Request) {
         }, dbRoleForCanvasRole(enrollment.role));
       } catch (e) {
         if ((e as any)?.response?.statusCode === 403) {
-          console.log(`Unable to create account for user ${enrollment.user.name}, Canvas refuses to give us their email.`)
-          failureMessages.push(`Unable to create account for user ${enrollment.user.name}, Canvas refuses to give us their email.`);
+          console.log(`Unable to create account for user ${enrollment.user.name} (${enrollment.user.id}), Canvas refuses to give us their email.`)
+          failureMessages.push(`Unable to create account for user ${enrollment.user.name} (${enrollment.user.id}), Canvas refuses to give us their email.`);
         } else {
           console.error(JSON.stringify(e, null, 2));
           throw new UserVisibleError(`Error creating user for enrollment ${JSON.stringify(enrollment)}: ${e}`);
@@ -87,14 +86,14 @@ async function handleRequest(req: Request) {
   );
   const removedProfiles = supabaseEnrollments.data!.filter(enrollment =>
     enrollment.canvas_id &&
-    !canvasEnrollments.find(canvasEnrollment => canvasEnrollment.id === enrollment.canvas_id));
+    !canvasEnrollments.find(canvasEnrollment => canvasEnrollment.user.id === enrollment.canvas_id));
   await Promise.all(removedProfiles.map(async (enrollment) => {
-    // await adminSupabase.from("user_roles").delete().eq("id", enrollment.id);
+    await adminSupabase.from("user_roles").delete().eq("id", enrollment.id);
     console.log("WARN: Removing enrollment for user", enrollment.canvas_id, "from class", course_id);
   }));
   //Check names, avatars etc.
   await Promise.all(supabaseEnrollments.data!.map(async (enrollment) => {
-    const user = canvasEnrollments.find(canvasEnrollment => canvasEnrollment.id === enrollment.canvas_id);
+    const user = canvasEnrollments.find(canvasEnrollment => canvasEnrollment.user.id === enrollment.canvas_id);
     if (user && user.user.name !== enrollment.profiles.name) {
       await adminSupabase.from("profiles").update({
         name: user.user.name,
