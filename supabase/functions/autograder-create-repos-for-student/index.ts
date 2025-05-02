@@ -65,11 +65,17 @@ async function handleRequest(req: Request) {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
-  const { data: assignments } = await adminSupabase.from("assignments").select(
-    "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
+  console.log(classes.map(c=>c.class_id))
+  const { data: allAssignments, error: assignmentsError } = await adminSupabase.from("assignments").select(
+    "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))),classes(slug,github_org,user_roles(role,users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
   ).in("class_id", classes!.map((c) => c!.class_id))
-    .in("assignment_groups.assignment_groups_members.profile_id", classes!.map(c => c.profiles.id))
-    .lte("release_date", new Date().toISOString());
+    .eq("classes.user_roles.user_id", user.user!.id)
+    .limit(1000);
+  if (assignmentsError) {
+    console.error(assignmentsError);
+    throw new UserVisibleError("Error fetching assignments");
+  }
+  const assignments = allAssignments.filter(a=>(a.release_date && new Date(a.release_date) < new Date()) || a.classes.user_roles.some(r=>r.role === "instructor" || r.role === "grader"))
 
 
   //For each group repo, sync the permissions
