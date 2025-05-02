@@ -17,6 +17,7 @@ export const setNewPasswordAction = async (formData: FormData) => {
     return encodedRedirect("success", "/course", "Password reset successfully");
   }
 }
+
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");

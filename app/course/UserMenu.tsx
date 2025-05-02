@@ -1,7 +1,7 @@
 'use client'
 
 import { SkeletonCircle } from "@/components/ui/skeleton";
-import { Button, CloseButton, Drawer, HStack, Icon, IconButton, Menu, Portal, Text, VStack } from "@chakra-ui/react";
+import { Button, CloseButton, Dialog, Drawer, Flex, HStack, Icon, IconButton, Menu, Portal, Text, VStack } from "@chakra-ui/react";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
 
@@ -17,6 +17,9 @@ import { useCallback, useEffect, useState } from "react";
 import { FaGithub, FaUnlink, FaQuestionCircle } from "react-icons/fa";
 import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
+import { useDropzone } from 'react-dropzone';
+
+
 
 function SupportMenu() {
     return <Menu.Root>
@@ -117,6 +120,66 @@ function UserSettingsMenu() {
             throw new Error(error.message)
         }
     }, [supabase])
+    const [avatarLink, setAvatarLink] = useState<string | undefined | null>(null);
+
+    const completeAvatarUpload = async (file: File) => {
+        console.log(file);
+        console.log("attempting avatar upload");
+        const uuid = crypto.randomUUID();
+        const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, '_');
+
+        /*
+        Avatar link should be uploaded to storage here, discard if it doesn't get used.  Or, potentially tweak Avatar display to show image file,
+        and only upload to storage if user submits changes (depends on how we implement for instructors making changes).
+
+        const {data, error} = await supabase.storage.from('uploads').upload(`${course_id}/profiles/${uuid}/${fileName}`, file, { upsert: true });
+        
+        if(!data || error) {
+            console.log("Error uploading avatar image");
+        }
+        else {
+            console.log(data);
+            setAvatarLink(data.path);
+        }
+        */
+    }
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    if (!acceptedFiles || acceptedFiles.length === 0) return;
+
+    const file = acceptedFiles[0];
+
+    // Ensure the file is a PDF
+    if (file.type === 'image/jpeg' || file.type === 'image/png') {
+      completeAvatarUpload(file);
+    } else {
+      alert('Please upload a valid PDF file.');
+    }
+  }, [completeAvatarUpload],)
+
+
+    const {    
+        acceptedFiles,
+        fileRejections,
+        getRootProps,
+        getInputProps
+     } = useDropzone({
+        onDrop,
+    accept: {
+        'image/jpeg': [],
+        'image/png': []
+      }
+  });
+
+
+  // when profile is changed, change current avatar to match
+  useEffect(() => {
+    if(!profile) {
+        return;
+    }
+    setAvatarLink(profile.avatar_url);
+  }, [profile]);
+
 
     return (
         <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
@@ -139,7 +202,7 @@ function UserSettingsMenu() {
                         <Drawer.Body p={2}>
                             <VStack alignItems="flex-start">
                                 <HStack>
-                                    <Avatar src={profile?.avatar_url || undefined} size="sm" />
+                                    <Avatar src={profile?.avatar_url || undefined} size="sm"/>
                                     <VStack alignItems="flex-start">
                                         <Text fontWeight="bold">{profile?.name}</Text>
                                     </VStack>
@@ -162,7 +225,46 @@ function UserSettingsMenu() {
                                     </>
                                     }
                                 </HStack>
-                                <Button variant="ghost"
+                                <Dialog.Root size={"md"} placement={"center"}>
+                                    <Dialog.Trigger asChild>
+                                    <Button>
+                                        Open
+                                    </Button>
+                                    </Dialog.Trigger>
+                                    <Portal>
+                                    <Dialog.Backdrop />
+                                    <Dialog.Positioner >
+                                        <Dialog.Content>
+                                        <Dialog.Header>
+                                            <Dialog.Title>{profile?.name}</Dialog.Title>
+                                        </Dialog.Header>
+                                        <Dialog.Body>
+                                            <Flex alignItems="center" justifyContent={"center"}>
+                                                <div {...getRootProps()}>
+                                                <input {...getInputProps()}/>
+                                                <Avatar width="100px" height="100px" src={avatarLink || undefined} size="sm" 
+                                                _hover={{
+                                                            boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
+                                                            background: "rgba(0, 0, 0, 0.5)",
+                                                            opacity: 0.4,
+                                                }}
+                                                />
+
+                                                </div>
+                                               
+                                            </Flex>
+                                        </Dialog.Body>
+                                        <Dialog.Footer>
+                                            <Dialog.ActionTrigger asChild>
+                                            <Button variant="outline">Cancel</Button>
+                                            </Dialog.ActionTrigger>
+                                            <Button>Save</Button>
+                                        </Dialog.Footer>
+                                        </Dialog.Content>
+                                    </Dialog.Positioner>
+                                    </Portal>
+                                </Dialog.Root>
+                               <Button variant="ghost"
                                     pl={0}
                                     onClick={signOutAction}
                                     width="100%" textAlign="left" justifyContent="flex-start">
