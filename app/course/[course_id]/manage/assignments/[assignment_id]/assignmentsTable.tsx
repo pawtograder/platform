@@ -1,10 +1,9 @@
 'use client';
 import Link from "@/components/ui/link";
 import { useCourse } from "@/hooks/useAuthState";
-import { ActiveSubmissionsWithGradesForAssignment, AggregatedSubmissions, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { HStack, Box, Text, VStack, NativeSelect, Button, Icon, Table, Input, Checkbox } from "@chakra-ui/react";
+import { ActiveSubmissionsWithGradesForAssignment } from "@/utils/supabase/DatabaseTypes";
+import { HStack, Box, Text, VStack, NativeSelect, Button, Icon, Table, Input } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
@@ -20,6 +19,9 @@ export default function AssignmentsTable() {
             id: "assignment_id",
             accessorKey: "assignment_id",
             header: "Assignment",
+            filterFn: (row, id, filterValue) => {
+                return String(row.original.assignment_id) === String(filterValue);
+            }
         },
         {
             id: "name",
@@ -27,9 +29,10 @@ export default function AssignmentsTable() {
             header: "Student",
             enableColumnFilter: true,
             filterFn: (row, id, filterValue) => {
-                if (!row.original.name) 
+                if (!row.original.name)
                     return false;
-                return row.original.name.toLowerCase().includes(filterValue.toLowerCase());
+                const filterString = String(filterValue).toLowerCase();
+                return row.original.name.toLowerCase().includes(filterString);
             }
         },
         {
@@ -75,8 +78,10 @@ export default function AssignmentsTable() {
                 return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>
             },
             filterFn: (row, id, filterValue) => {
-                const date = new TZDate(row.original.created_at!, timeZone);
-                return date.toLocaleString().includes(filterValue);
+                if (!row.original.created_at) return false;
+                const date = new TZDate(row.original.created_at, timeZone);
+                const filterString = String(filterValue);
+                return date.toLocaleString().includes(filterString);
             }
         },
         {
@@ -123,10 +128,14 @@ export default function AssignmentsTable() {
         },
         refineCoreProps: {
             resource: "submissions_with_grades_for_assignment",
+            filters: {
+                mode: "off",
+            },
             meta: {
                 select: "*"
             }
         },
+        filterFromLeafRows: true,
     });
     return (<VStack>
         <VStack paddingBottom="55px">
@@ -155,7 +164,7 @@ export default function AssignmentsTable() {
                                                         (header.column.getFilterValue() as string) ?? ""
                                                     }
                                                     onChange={(e) => {
-                                                        header.column.setFilterValue('' + e.target.value)
+                                                        header.column.setFilterValue(e.target.value)
                                                     }
                                                     }
                                                 />
@@ -231,6 +240,7 @@ export default function AssignmentsTable() {
                 <VStack>
                     | Go to page:
                     <input
+                        title="Go to page"
                         type="number"
                         defaultValue={getState().pagination.pageIndex + 1}
                         onChange={(e) => {
