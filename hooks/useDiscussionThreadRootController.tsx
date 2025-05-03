@@ -39,6 +39,7 @@ export default function useDiscussionThreadChildren(threadId: number) {
 }
 export type DiscussionThreadReadWithAllDescendants = DiscussionThreadReadStatus & {
     numReadDescendants: number;
+    current_children_count: number;
 }
 export class DiscussionThreadsController {
     private discussionThreadWithChildrenSubscribers: Map<number, UpdateCallback<DiscussionThreadWithChildren>[]> = new Map();
