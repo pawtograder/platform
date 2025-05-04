@@ -101,8 +101,8 @@ export const DiscussionThreadTeaser = (props: Props) => {
                                 </Text>
                             </HStack>
                         )}
-                        {readStatus?.numReadDescendants !== thread?.children_count && (
-                            <Badge colorScheme="blue">{(thread?.children_count ?? 0) - (readStatus?.numReadDescendants ?? 0)} new</Badge>
+                        {(readStatus?.numReadDescendants ?? 0) < (readStatus?.current_children_count ?? 0) && (
+                            <Badge colorScheme="blue">{Math.max(0, (readStatus?.current_children_count ?? 0) - (readStatus?.numReadDescendants ?? 0))} new</Badge>
                         )}
                         <Spacer />
                         <Text fontSize="xs" color="text.muted">{thread?.created_at ? formatRelative(new Date(thread?.created_at), new Date()) : ""}</Text>
