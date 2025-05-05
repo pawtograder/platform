@@ -13,7 +13,6 @@ import {
   UserVisibleError,
   wrapRequestHandler,
 } from "../_shared/HandlerUtils.ts";
-console.log("Hello from Functions!");
 async function handleRequest(req: Request) {
   const url = req.url;
   const lastURLPart = url.split("/").pop();

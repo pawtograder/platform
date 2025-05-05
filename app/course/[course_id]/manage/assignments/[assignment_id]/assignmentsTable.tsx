@@ -1,25 +1,28 @@
 'use client';
 import Link from "@/components/ui/link";
 import { useCourse } from "@/hooks/useAuthState";
-import { ActiveSubmissionsWithGradesForAssignment, AggregatedSubmissions, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { HStack, Box, Text, VStack, NativeSelect, Button, Icon, Table, Input, Checkbox } from "@chakra-ui/react";
+import { ActiveSubmissionsWithGradesForAssignment } from "@/utils/supabase/DatabaseTypes";
+import { HStack, Box, Text, VStack, NativeSelect, Button, Icon, Table, Input } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { ColumnDef, flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FaSort, FaSortUp, FaSortDown, FaCheck, FaTimes } from "react-icons/fa";
 
 export default function AssignmentsTable() {
     const { assignment_id, course_id } = useParams();
     const course = useCourse();
     const timeZone = course.classes.time_zone || "America/New_York";
+    const [pageCount, setPageCount] = useState(0);
     const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(() => [
         {
             id: "assignment_id",
             accessorKey: "assignment_id",
             header: "Assignment",
+            filterFn: (row, id, filterValue) => {
+                return String(row.original.assignment_id) === String(filterValue);
+            }
         },
         {
             id: "name",
@@ -27,9 +30,10 @@ export default function AssignmentsTable() {
             header: "Student",
             enableColumnFilter: true,
             filterFn: (row, id, filterValue) => {
-                if (!row.original.name) 
+                if (!row.original.name)
                     return false;
-                return row.original.name.toLowerCase().includes(filterValue.toLowerCase());
+                const filterString = String(filterValue).toLowerCase();
+                return row.original.name.toLowerCase().includes(filterString);
             }
         },
         {
@@ -75,8 +79,10 @@ export default function AssignmentsTable() {
                 return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>
             },
             filterFn: (row, id, filterValue) => {
-                const date = new TZDate(row.original.created_at!, timeZone);
-                return date.toLocaleString().includes(filterValue);
+                if (!row.original.created_at) return false;
+                const date = new TZDate(row.original.created_at, timeZone);
+                const filterString = String(filterValue);
+                return date.toLocaleString().includes(filterString);
             }
         },
         {
@@ -103,6 +109,7 @@ export default function AssignmentsTable() {
         getHeaderGroups,
         getRowModel,
         getState,
+        getRowCount,
         setPageIndex,
         getCanPreviousPage,
         getPageCount,
@@ -110,7 +117,7 @@ export default function AssignmentsTable() {
         nextPage,
         previousPage,
         setPageSize,
-        getPrePaginationRowModel,
+
     } = useTable({
         columns,
         initialState: {
@@ -121,13 +128,31 @@ export default function AssignmentsTable() {
             },
             sorting: [{ id: "name", desc: false }]
         },
+        manualPagination: false,
+        manualFiltering: false,
+        getPaginationRowModel:  getPaginationRowModel(),
+        pageCount,
+        getCoreRowModel: getCoreRowModel(),
+        getFilteredRowModel: getFilteredRowModel(),
         refineCoreProps: {
             resource: "submissions_with_grades_for_assignment",
+            syncWithLocation: false,
+            pagination: {
+                mode: "off",
+            },
+            filters: {
+                mode: "off",
+            },
             meta: {
                 select: "*"
             }
         },
     });
+    const nRows = getRowCount();
+    const pageSize = getState().pagination.pageSize;
+    useEffect(() => {
+        setPageCount(Math.ceil(nRows / pageSize));
+    }, [nRows, pageSize]);
     return (<VStack>
         <VStack paddingBottom="55px">
             <Table.Root striped>
@@ -155,7 +180,7 @@ export default function AssignmentsTable() {
                                                         (header.column.getFilterValue() as string) ?? ""
                                                     }
                                                     onChange={(e) => {
-                                                        header.column.setFilterValue('' + e.target.value)
+                                                        header.column.setFilterValue(e.target.value)
                                                     }
                                                     }
                                                 />
@@ -231,6 +256,7 @@ export default function AssignmentsTable() {
                 <VStack>
                     | Go to page:
                     <input
+                        title="Go to page"
                         type="number"
                         defaultValue={getState().pagination.pageIndex + 1}
                         onChange={(e) => {
@@ -258,7 +284,7 @@ export default function AssignmentsTable() {
                     </NativeSelect.Root>
                 </VStack>
             </HStack>
-            <div>{getPrePaginationRowModel().rows.length} Rows</div>
+            <div>{getRowCount()} Rows</div>
         </VStack>
         <Box
             p="2"

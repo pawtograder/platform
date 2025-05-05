@@ -8,6 +8,11 @@ import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
 import { Fragment } from "react";
+
+export type GraderResultTestData= {
+    hide_score?: string
+    icon?: string
+}
 function format_result_output(result: { output: string | null | undefined, output_format: string | null | undefined }) {
     if (result.output === undefined && result.output_format === undefined) {
         return <Text textStyle="sm" color="text.muted">No output</Text>;
@@ -110,7 +115,10 @@ export default function GraderResults() {
                                     bg="bg.muted" colSpan={3} fontWeight="bold" textAlign="center">
                                     {data.grader_results?.grader_result_tests[0]?.part}
                                 </Table.Cell></Table.Row>}
-                        {data.grader_results?.grader_result_tests?.map((result, index) => {
+                        {data.grader_results?.grader_result_tests?.filter(
+                            r => (r.extra_data as GraderResultTestData)?.hide_score !== 'true'
+
+                        ).map((result, index) => {
                             const isNewPart = index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
                             return <Fragment key={result.id}>
                                 {isNewPart && (

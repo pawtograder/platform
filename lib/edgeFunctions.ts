@@ -62,7 +62,7 @@ export async function repositoryGetFile(params: FunctionTypes.GetFileRequest, su
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return JSON.parse(data) as { content: any };
+    return data as { content: any };
 }
 export async function githubRepoConfigureWebhook(params: FunctionTypes.GithubRepoConfigureWebhookRequest, supabase: SupabaseClient<Database>) {
     const { data } = await supabase.functions.invoke("github-repo-configure-webhook", {
@@ -72,7 +72,7 @@ export async function githubRepoConfigureWebhook(params: FunctionTypes.GithubRep
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return JSON.parse(data) as { message: string };
+    return data as { message: string };
 }
 export async function enrollmentAdd(params: FunctionTypes.AddEnrollmentRequest, supabase: SupabaseClient<Database>) {
     const { data } = await supabase.functions.invoke("enrollments-add", {
@@ -91,7 +91,7 @@ export async function enrollmentSyncCanvas(params: { course_id: number }, supaba
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return JSON.parse(data) as { message: string };
+    return data as { message: string };
 }
 export async function assignmentGroupLeave(params: { assignment_id: number }, supabase: SupabaseClient<Database>) {
     const { data } = await supabase.functions.invoke("assignment-group-leave", {
@@ -181,7 +181,7 @@ export async function repositoryListCommits(params: FunctionTypes.RepositoryList
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return JSON.parse(data) as {
+    return data as {
             commits: ListCommitsResponse["data"];
             has_more: boolean;
     };
@@ -194,7 +194,7 @@ export async function triggerWorkflow(params: FunctionTypes.AutograderTriggerGra
     if (error) {
         throw new EdgeFunctionError(error);
     }
-    return JSON.parse(data) as { message: string };
+    return data as { message: string };
 }
 export class EdgeFunctionError extends Error {
     details: string;

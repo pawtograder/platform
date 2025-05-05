@@ -17,15 +17,15 @@ import { Controller, FieldValues } from "react-hook-form";
 
 export default function AutograderPage() {
     const { assignment_id } = useParams();
-    const [graderRepo, setGraderRepo] = useState<string>();
     const [loading, setLoading] = useState(false);
     const { mutateAsync: mutateAssignment } = useUpdate<Assignment>({ resource: "assignments", id: Number.parseInt(assignment_id as string) });
     const { refineCore: { formLoading, query },
-        saveButtonProps,
         register,
         handleSubmit,
         refineCore,
         control,
+        watch,
+        reset,
         formState: { errors },
     } = useForm<AutograderWithAssignment>({
         refineCoreProps: {
@@ -37,14 +37,15 @@ export default function AutograderPage() {
             }
         }
     });
+
     useEffect(() => {
-        if (query?.data?.data?.grader_repo) {
-            setGraderRepo(query.data?.data?.grader_repo);
+        if (query?.data?.data) {
+            reset(query.data.data);
         }
-    }, [query?.data?.data?.grader_repo]);
+    }, [query?.data?.data, reset]);
+
     const onSubmit = useCallback(async (values: FieldValues) => {
         const supabase = createClient();
-
         await githubRepoConfigureWebhook(
             {
                 assignment_id: Number.parseInt(assignment_id as string),
@@ -55,7 +56,7 @@ export default function AutograderPage() {
         )
         mutateAssignment({
             values: {
-                has_autograder: values.assignments.has_autograder.value === "true",
+                has_autograder: values.assignments.has_autograder,
             }
         });
         console.log(values.max_submissions_count, values.max_submissions_period_secs);
@@ -63,13 +64,17 @@ export default function AutograderPage() {
             max_submissions_count: values.max_submissions_count || null,
             max_submissions_period_secs: values.max_submissions_period_secs || null
          });
-    }, [refineCore, assignment_id]);
-    if (!query || formLoading) {
+    }, [refineCore, assignment_id, mutateAssignment]);
+
+    if (query?.isLoading || formLoading) {
         return <div>Loading...</div>
     }
-    if (query.error) {
+    if (query?.error) {
         return <div>Error: {query.error.message}</div>
     }
+    const currentGraderRepo = watch("grader_repo");
+    const currentAssignment = watch("assignments");
+
     return <div>
         <Heading size="md">Autograder Configuration</Heading>
         <Toaster />
@@ -95,7 +100,7 @@ export default function AutograderPage() {
                             name="assignments.has_autograder"
                             control={control}
                             render={({ field }) => (
-                                <RadioGroup.Root name={field.name} value={field.value ? "true" : "false"} onValueChange={field.onChange}>
+                                <RadioGroup.Root name={field.name} value={field.value ? "true" : "false"} onValueChange={(details) => field.onChange(details.value === "true")}>
                                     <Radio value="true">Enabled</Radio>
                                     <Radio value="false">Disabled</Radio>
                                 </RadioGroup.Root>
@@ -129,7 +134,6 @@ export default function AutograderPage() {
                             render={({ field }) => {
                                 return <RepoSelector name={field.name} value={field.value || ""} onBlur={field.onBlur}
                                     onChange={(repo) => {
-                                        setGraderRepo(repo);
                                         field.onChange(repo);
                                     }}
                                 />
@@ -142,7 +146,7 @@ export default function AutograderPage() {
             variant="solid"
             >Save</Button>
         </form>
-        {(query.data?.data?.assignments && graderRepo) && <AutograderConfiguration graderRepo={graderRepo} assignment={query.data?.data?.assignments}/>}
+        {(currentAssignment && typeof currentGraderRepo === 'string') && <AutograderConfiguration graderRepo={currentGraderRepo} assignment={currentAssignment}/>}
 
     </div>
 }

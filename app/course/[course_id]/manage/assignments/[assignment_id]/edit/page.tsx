@@ -6,7 +6,7 @@ import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Skeleton } from "@chakra-ui/react";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
 import AssignmentForm from "../../new/form";
 export default function EditAssignment() {
@@ -18,6 +18,13 @@ export default function EditAssignment() {
             id: Number.parseInt(assignment_id as string)
         }
     });
+
+    useEffect(() => {
+        if (form.refineCore.query?.data?.data) {
+            form.reset(form.refineCore.query.data.data);
+        }
+    }, [form.refineCore.query?.data?.data, form.reset]);
+
     const onFinish = useCallback(async (values: FieldValues) => {
         const supabase = createClient();
         if (values.copy_groups_from_assignment !== undefined) {
@@ -44,8 +51,9 @@ export default function EditAssignment() {
                 supabase
             )
         }
-    }, [form.refineCore]);
-    if (form.refineCore.formLoading || form.refineCore.query?.isLoading || !form.refineCore.query?.data?.data) {
+    }, [form.refineCore.onFinish, form.refineCore.query?.data?.data, form.reset, assignment_id, course_id]);
+
+    if (form.refineCore.query?.isLoading || form.refineCore.formLoading) {
         return <Skeleton height="100vh" />
     }
     if (form.refineCore.query?.error) {

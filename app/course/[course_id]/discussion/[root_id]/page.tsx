@@ -25,7 +25,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType, topic: 
             <HStack align="start" gap="2" alignSelf="flex-start">
                 {userProfile ? <Avatar.Root size="xs">
                     <Avatar.Image src={userProfile?.avatar_url} />
-                    <Avatar.Fallback>{userProfile?.name.charAt(0)}</Avatar.Fallback>
+                    <Avatar.Fallback>{userProfile?.name?.charAt(0) || '?'}</Avatar.Fallback>
                 </Avatar.Root> : <SkeletonCircle width="20px" height="20px" />}
                 <VStack gap="0" alignSelf="flex-start" align="start">
                     {thread.instructors_only && <Badge colorPalette="blue">Viewable by poster and staff only</Badge>}
