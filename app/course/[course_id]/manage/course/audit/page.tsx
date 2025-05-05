@@ -16,15 +16,22 @@ function AuditEventDiff({ oldValue, newValue }: { oldValue: any, newValue: any }
     if (newValue === true || newValue === false) {
         newValue = newValue ? "True" : "False";
     }
+
+    const formatValue = (value: any) => {
+        if (value === null || value === undefined) return "";
+        if (typeof value === 'object') return JSON.stringify(value);
+        return String(value);
+    }
+
     if (!oldValue && newValue) {
-        return <Text textStyle="sm" color="text.muted">{newValue}</Text>
+        return <Text textStyle="sm" color="text.muted">{formatValue(newValue)}</Text>
     }
     if (oldValue && !newValue) {
         return <Text textStyle="sm" color="text.muted">Removed</Text>
     }
     return <Box maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
-        <Text textStyle="sm" color="text.muted">Was: {oldValue}</Text>
-        <Text textStyle="sm" color="text.muted">Now: {newValue}</Text>
+        <Text textStyle="sm" color="text.muted">Was: {formatValue(oldValue)}</Text>
+        <Text textStyle="sm" color="text.muted">Now: {formatValue(newValue)}</Text>
     </Box>
 }
 function JSONDiff({ oldValue, newValue }: { oldValue: any, newValue: any }) {
@@ -180,7 +187,6 @@ function AuditTable() {
             enableHiding: true,
         }
     ], [roster.data?.data]);
-    const [pageCount, setPageCount] = useState(0);
     const {
         getHeaderGroups,
         getRowModel,
@@ -194,6 +200,9 @@ function AuditTable() {
         previousPage,
         setPageSize,
         getPrePaginationRowModel,
+        refineCore: {
+            tableQuery,
+        }
     } = useTable({
         columns,
         initialState: {
@@ -204,10 +213,7 @@ function AuditTable() {
             },
             sorting: [{ id: "created_at", desc: true }]
         },
-        manualPagination: false,
-        manualFiltering: false,
         getPaginationRowModel: getPaginationRowModel(),
-        pageCount,
         getCoreRowModel: getCoreRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
         refineCoreProps: {
@@ -218,17 +224,15 @@ function AuditTable() {
             filters: {
                 mode: "off",
             },
+            sorters: {
+                mode: "off",
+            },
             meta: {
-                select: "*,users(*)"
+                select: "*"
             },
         },
         filterFromLeafRows: true,
     });
-    const nRows = getRowCount();
-    const pageSize = getState().pagination.pageSize;
-    useEffect(() => {
-        setPageCount(Math.ceil(nRows / pageSize));
-    }, [nRows, pageSize]);
     return (<VStack>
         <VStack paddingBottom="55px">
             <Table.Root striped>
@@ -337,7 +341,9 @@ function AuditTable() {
                     <Text>Show</Text>
                     <NativeSelect.Root
                     >
-                        <NativeSelect.Field value={'' + getState().pagination.pageSize}
+                        <NativeSelect.Field
+                            title="Select page size"
+                            value={'' + getState().pagination.pageSize}
                             onChange={(event) => {
                                 console.log(event.target.value);
                                 setPageSize(Number(event.target.value));
