@@ -17,9 +17,9 @@ export function Provider(props: ColorModeProviderProps) {
   return (
     <ChakraProvider value={system} >
       <Refine dataProvider={dataProvider(supabaseClient)}
-        // notificationProvider={notificationProvider}
+        //notificationProvider={notificationProvider}
         options={{
-          disableTelemetry: true
+          disableTelemetry: true,
         }}
         liveProvider={liveProvider(supabaseClient)}
       >
