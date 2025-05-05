@@ -104,6 +104,7 @@ function DiscussionPost({ root_id, course_id }: { root_id: number, course_id: nu
             staleTime: Infinity,
             cacheTime: Infinity,
         },
+        liveMode:"auto"
     })
     const { mutateAsync: updateThread } = useUpdate({
         resource: "discussion_threads"
