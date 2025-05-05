@@ -20,21 +20,13 @@ type RolesWithProfilesAndGroupMemberships = GetResult<
   "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"
 >;
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
-  const {
-    data: groups,
-    isLoading: groupsLoading,
-    error: groupsError
-  } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
+  const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
     resource: "assignment_groups",
     meta: { select: "*, assignment_groups_members(*)" },
     filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
     pagination: { pageSize: 1000 }
   });
-  const {
-    data: profiles,
-    isLoading: profilesLoading,
-    error: profilesError
-  } = useList<RolesWithProfilesAndGroupMemberships>({
+  const { data: profiles } = useList<RolesWithProfilesAndGroupMemberships>({
     resource: "user_roles",
     meta: {
       select: "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"

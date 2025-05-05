@@ -245,7 +245,9 @@ export default function DueDateExceptions() {
       <Heading size="md">Due Date Exceptions</Heading>
       <Heading size="sm">
         Normal Due Date:{" "}
-        {new TZDate(assignment?.data.due_date!, course.classes.time_zone || "America/New_York").toLocaleString()}
+        {assignment?.data.due_date
+          ? new TZDate(assignment.data.due_date, course.classes.time_zone || "America/New_York").toLocaleString()
+          : "N/A"}
       </Heading>
       <Text fontSize="sm" color="fg.muted">
         This assignment allows students to use up to {assignment?.data.max_late_tokens} late tokens to extend the due

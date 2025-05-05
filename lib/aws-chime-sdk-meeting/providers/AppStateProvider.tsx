@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useContext, useState, ReactNode, useEffect } from "react";
+import React, { useContext, useState, ReactNode, useEffect, useMemo } from "react";
 import { VideoPriorityBasedPolicy } from "amazon-chime-sdk-js";
 import {
   MeetingMode,
@@ -86,10 +86,13 @@ export function AppStateProvider({ children }: Props) {
     ReplacementOptions.Blue
   );
 
-  const replacementOptionsList: ReplacementDropdownOptionType[] = [
-    { label: ReplacementOptions.Blue, type: ReplacementType.Color, value: "#0000ff" },
-    { label: ReplacementOptions.Beach, type: ReplacementType.Image, value: ReplacementOptions.Beach }
-  ];
+  const replacementOptionsList: ReplacementDropdownOptionType[] = useMemo(
+    () => [
+      { label: ReplacementOptions.Blue, type: ReplacementType.Color, value: "#0000ff" },
+      { label: ReplacementOptions.Beach, type: ReplacementType.Image, value: ReplacementOptions.Beach }
+    ],
+    []
+  );
 
   useEffect(() => {
     /* Load a canvas that will be used as the replacement image for Background Replacement */

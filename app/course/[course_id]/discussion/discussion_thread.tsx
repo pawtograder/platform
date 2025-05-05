@@ -110,6 +110,12 @@ function NotificationAndReadStatusUpdater({
       }
     });
   }, [notifications, set_read, root_thread_id]);
+
+  if (!root_thread_id) {
+    // Handle the case where root_thread_id might be undefined if necessary
+    return null; // Or some fallback UI
+  }
+
   return <div ref={ref}>{threadIsUnread ? <Badge colorPalette="red">New</Badge> : ""}</div>;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -148,7 +154,8 @@ export const DiscussionThread = memo(
     // const isVisible = useIntersection(ref);
 
     const thread = useDiscussionThreadChildren(thread_id);
-    const root_thread = useDiscussionThreadTeaser(thread?.root!);
+    // Pass thread?.root directly; the hook should handle potential undefined
+    const root_thread = useDiscussionThreadTeaser(thread?.root);
     const is_answer = root_thread?.answer === thread?.id;
     const { mutateAsync } = useUpdate<DiscussionThreadType>({
       resource: "discussion_threads",
@@ -198,14 +205,20 @@ export const DiscussionThread = memo(
       setReplyVisible(true);
     }, []);
     const toggleAnswered = useCallback(async () => {
+      // Add checks to ensure thread and root_thread are defined
+      if (!thread || !root_thread || thread.root === undefined || thread.id === undefined) {
+        console.error("Cannot toggle answer status: thread or root_thread is missing.");
+        return; // Should not happen but satisfies TS and prevents errors
+      }
       if (is_answer) {
-        await updateThread({ id: thread!.root!, old: root_thread!, values: { answer: null } });
+        await updateThread({ id: thread.root, old: root_thread, values: { answer: null } });
       } else {
-        await updateThread({ id: thread!.root!, old: root_thread!, values: { answer: thread!.id } });
+        await updateThread({ id: thread.root, old: root_thread, values: { answer: thread.id } });
       }
     }, [is_answer, updateThread, thread, root_thread]);
-    const isAnswered = root_thread?.answer != undefined;
-    if (!thread || !thread.children) {
+    const isAnswered = root_thread?.answer !== undefined; // Use !== undefined for clarity
+    if (!thread || !thread.children || thread.root === undefined) {
+      // Also check thread.root is defined before using it below
       return <Skeleton height="100px" />;
     }
     const descendant = thread.children.length > 0;
@@ -230,8 +243,9 @@ export const DiscussionThread = memo(
             <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%">
               {authorProfile ? (
                 <Avatar.Root size="sm" variant="outline" shape="square">
-                  <Avatar.Fallback name={authorProfile!.name} />
-                  <Avatar.Image src={authorProfile!.avatar_url} />
+                  {/* Avoid non-null assertion if authorProfile might be null/undefined */}
+                  <Avatar.Fallback name={authorProfile.name} />
+                  <Avatar.Image src={authorProfile.avatar_url} />
                 </Avatar.Root>
               ) : (
                 <SkeletonCircle width="40px" height="40px" />
@@ -270,7 +284,7 @@ export const DiscussionThread = memo(
                       <Skeleton width="100px" height="20px" />
                     )}
                     {thread.id === root_thread?.answer && <Badge colorPalette="green">Answer to Question</Badge>}
-                    <NotificationAndReadStatusUpdater thread_id={thread.id} root_thread_id={thread.root!} />
+                    <NotificationAndReadStatusUpdater thread_id={thread.id} root_thread_id={thread.root} />
                   </HStack>
                   {isEditing ? (
                     <MessageInput
@@ -338,3 +352,4 @@ export const DiscussionThread = memo(
     );
   }
 );
+DiscussionThread.displayName = "DiscussionThread";

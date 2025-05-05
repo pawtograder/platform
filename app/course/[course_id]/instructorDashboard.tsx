@@ -42,13 +42,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .eq("status", "open")
     .order("created_at", { ascending: true });
 
-  const { data: pollQuestions, error: pollQuestionsError } = await supabase
-    .from("poll_questions")
-    .select("*, poll_question_answers(*)")
-    .eq("class_id", course_id);
-  if (pollQuestionsError) {
-    console.error(pollQuestionsError);
-  }
+  await supabase.from("poll_questions").select("*, poll_question_answers(*)").eq("class_id", course_id);
   return (
     <VStack spaceY={8} align="stretch" p={8}>
       <Heading size="xl">Course Dashboard</Heading>

@@ -63,7 +63,7 @@ function CommitHistory({
     filters: [{ field: "repository", operator: "eq", value: repository_full_name }],
     sorters: [{ field: "created_at", order: "desc" }]
   });
-  const { data: commits, isLoading: isLoadingCommits } = useList<RepositoryCheckRun>({
+  const { data: commits } = useList<RepositoryCheckRun>({
     resource: "repository_check_runs",
     filters: [{ field: "repository_id", operator: "eq", value: repository_id }]
   });

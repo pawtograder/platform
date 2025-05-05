@@ -124,9 +124,8 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     jsx,
     jsxs,
     components: {
-      // @ts-ignore
+      // @ts-expect-error - Custom component passed to hast-util-to-jsx-runtime
       CodeLineComments: CodeLineComments,
-      // @ts-ignore
       LineNumber: LineNumber
     }
   });
@@ -290,7 +289,7 @@ export function starryNightGutter(
 
         // Add a line, and the eol.
         lineNumber += 1;
-        // @ts-ignore
+        // @ts-expect-error - `replacement` type expects RootContent, `createLine` returns Element
         replacement.push(createLine(line, lineNumber, setExpanded, setLineActionPopup), {
           type: "text",
           value: match[0]
@@ -317,27 +316,29 @@ export function starryNightGutter(
 
   if (line.length > 0) {
     lineNumber += 1;
-    // @ts-ignore
+    // @ts-expect-error - `replacement` type expects RootContent, `createLine` returns Element
     replacement.push(createLine(line, lineNumber, setExpanded));
   }
 
   // Replace children with new array.
-  // @ts-ignore
+  // @ts-expect-error - Type mismatch between inferred type of `replacement` and `tree.children`
   tree.children = replacement;
 }
 function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
-  if (!rubricCheck || !rubricCriteria) {
-    return <Skeleton height="100px" width="100%" />;
-  }
   const gradingReview = useSubmissionReview(comment.submission_review_id);
-  const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
-
-  const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
   const commentAuthor = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({ resource: "submission_file_comments" });
+
+  if (!rubricCheck || !rubricCriteria) {
+    return <Skeleton height="100px" width="100%" />;
+  }
+
+  const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
+  const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
+
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -523,7 +524,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
   const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const [_, setPoints] = useState<string>();
+  const [, setPoints] = useState<string>();
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
 

@@ -39,7 +39,6 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
-import { SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
 import JSZip from "jszip";
 import { useSearchParams } from "next/navigation";
@@ -268,17 +267,18 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
 
 function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
-  if (!rubricCheck || !rubricCriteria) {
-    return <Skeleton height="100px" width="100%" />;
-  }
   const gradingReview = useSubmissionReview(comment.submission_review_id);
-  const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
-
-  const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
   const commentAuthor = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({ resource: "submission_artifact_comments" });
+
+  if (!rubricCheck || !rubricCriteria) {
+    return <Skeleton height="100px" width="100%" />;
+  }
+  const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
+
+  const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -482,15 +482,15 @@ function AritfactComments({ artifact }: { artifact: SubmissionArtifact }) {
     </Box>
   );
 }
-type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
-type RubricOption = {
-  readonly label: string;
-  readonly value: string;
-  readonly points: number;
-  readonly description?: string;
-  readonly isOther?: boolean;
-  readonly rubric_id: number;
-};
+// type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
+// type RubricOption = {
+//   readonly label: string;
+//   readonly value: string;
+//   readonly points: number;
+//   readonly description?: string;
+//   readonly isOther?: boolean;
+//   readonly rubric_id: number;
+// };
 
 function ArtifactCommentsForm({
   submission,

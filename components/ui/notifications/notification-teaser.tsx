@@ -61,12 +61,12 @@ export type AssignmentGroupJoinRequestNotification = NotificationEnvelope & {
   decision_maker_name?: string;
 };
 
-function truncateString(str: string, maxLength: number) {
-  if (str.length <= maxLength) {
-    return str;
-  }
-  return str.substring(0, maxLength) + "...";
-}
+// function truncateString(str: string, maxLength: number) {
+//   if (str.length <= maxLength) {
+//     return str;
+//   }
+//   return str.substring(0, maxLength) + "...";
+// }
 function AssignmentGroupMemberNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupMemberNotification;
   return (
@@ -105,15 +105,15 @@ function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notifi
   } else if (body.status === "approved") {
     message = (
       <Text>
-        {body.decision_maker_name} approved {body.requestor_name}'s request to join {body.assignment_group_name} for{" "}
-        {body.assignment_name}
+        {body.decision_maker_name} approved {body.requestor_name}&apos;s request to join {body.assignment_group_name}{" "}
+        for {body.assignment_name}
       </Text>
     );
   } else if (body.status === "rejected") {
     message = (
       <Text>
-        {body.decision_maker_name} rejected {body.requestor_name}'s request to join {body.assignment_group_name} for{" "}
-        {body.assignment_name}
+        {body.decision_maker_name} rejected {body.requestor_name}&apos;s request to join {body.assignment_group_name}{" "}
+        for {body.assignment_name}
       </Text>
     );
   } else if (body.status === "withdrawn") {

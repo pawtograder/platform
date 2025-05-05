@@ -46,7 +46,7 @@ export function HelpRequestChatChannelProvider({
       if (status !== "SUBSCRIBED") {
         return;
       }
-      const getUidsFromPresence = (presence: any) => {
+      const getUidsFromPresence = (presence: Record<string, { user_id: string }[]>) => {
         const uids = new Set<string>();
         // console.log(JSON.stringify(presence))
         Object.keys(presence).forEach((key) => {
@@ -60,7 +60,7 @@ export function HelpRequestChatChannelProvider({
         setParticipants(getUidsFromPresence(chan.presenceState()));
       });
       // console.log("Tracking user")
-      const presenceTrackStatus = chan.track({ user_id: userID });
+      chan.track({ user_id: userID });
     });
     return () => {
       // console.log(helpRequestID)
@@ -133,7 +133,7 @@ export function EphemeralChatChannelProvider({
           return;
         }
         setChannel(chan);
-        const getUidsFromPresence = (presence: any) => {
+        const getUidsFromPresence = (presence: Record<string, { user_id: string }[]>) => {
           const uids = new Set<string>();
           Object.keys(presence).forEach((key) => {
             if (presence[key][0]) {
@@ -148,7 +148,7 @@ export function EphemeralChatChannelProvider({
         chan.on("broadcast", { event: "chat_message" }, (payload) => {
           setMessages((prev) => [...prev, payload.message as ChatMessage]);
         });
-        const presenceTrackStatus = chan.track({ user_id: private_profile_id! });
+        chan.track({ user_id: private_profile_id! });
       });
     };
     subscribe();

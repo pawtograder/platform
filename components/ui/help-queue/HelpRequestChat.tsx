@@ -46,7 +46,7 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
         <HStack spaceX="4" flex="1">
           {/* <Avatar.Root /> */}
           <Stack spaceY="0">
-            <Text fontWeight="medium">{creator?.name}'s Help Request</Text>
+            <Text fontWeight="medium">{creator?.name}&apos;s Help Request</Text>
             <HStack>
               Here now:
               {participants

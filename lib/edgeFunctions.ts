@@ -61,7 +61,7 @@ export async function repositoryGetFile(params: FunctionTypes.GetFileRequest, su
   if (error) {
     throw new EdgeFunctionError(error);
   }
-  return data as { content: any };
+  return data as { content: string };
 }
 export async function githubRepoConfigureWebhook(
   params: FunctionTypes.GithubRepoConfigureWebhookRequest,
@@ -124,7 +124,7 @@ export async function autograderSyncStaffTeam(params: { course_id: number }, sup
   if (error) {
     throw new EdgeFunctionError(error);
   }
-  return data as {};
+  return data as unknown;
 }
 export async function assignmentGroupJoin(
   params: FunctionTypes.AssignmentGroupJoinRequest,
@@ -146,7 +146,7 @@ export async function assignmentGroupCopyGroupsFromAssignment(
   if (error) {
     throw new EdgeFunctionError(error);
   }
-  return data as {};
+  return data as unknown;
 }
 export async function assignmentGroupInstructorMoveStudent(
   params: FunctionTypes.AssignmentGroupInstructorMoveStudentRequest,
@@ -157,7 +157,7 @@ export async function assignmentGroupInstructorMoveStudent(
   if (error) {
     throw new EdgeFunctionError(error);
   }
-  return data as {};
+  return data as unknown;
 }
 export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {
   const ret = await supabase.rpc("submission_set_active", { _submission_id: params.submission_id });

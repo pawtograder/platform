@@ -29,7 +29,9 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
 
-function AuditEventDiff({ oldValue, newValue }: { oldValue: any; newValue: any }) {
+type JsonPrimitive = string | number | boolean | null;
+
+function AuditEventDiff({ oldValue, newValue }: { oldValue: JsonPrimitive; newValue: JsonPrimitive }) {
   if (oldValue === true || oldValue === false) {
     oldValue = oldValue ? "True" : "False";
   }
@@ -61,25 +63,39 @@ function AuditEventDiff({ oldValue, newValue }: { oldValue: any; newValue: any }
     </Box>
   );
 }
-function JSONDiff({ oldValue, newValue }: { oldValue: any; newValue: any }) {
+function JSONDiff({
+  oldValue,
+  newValue
+}: {
+  oldValue: Record<string, unknown> | null;
+  newValue: Record<string, unknown> | null;
+}) {
   const propertiesChanged = useMemo(() => {
-    const isDifferent = (a: any, b: any) => {
+    const isDifferent = (a: unknown, b: unknown) => {
       if (typeof a === "string" || typeof b === "string") {
         return a !== b;
       }
       return JSON.stringify(a) !== JSON.stringify(b);
     };
-    if (!oldValue && !newValue) {
+    if (oldValue === null && newValue === null) {
       return [];
     }
-    if (!oldValue) {
-      return Object.keys(newValue);
-    }
-    if (!newValue) {
-      return Object.keys(oldValue);
-    }
-    const oldProperties = Object.keys(oldValue);
-    return oldProperties.filter((property) => isDifferent(oldValue[property], newValue[property]));
+
+    const oldProperties = typeof oldValue === "object" && oldValue !== null ? Object.keys(oldValue) : [];
+    const newProperties = typeof newValue === "object" && newValue !== null ? Object.keys(newValue) : [];
+    const properties = new Set([...oldProperties, ...newProperties]);
+
+    return Array.from(properties).filter((property) => {
+      const oldPropValue = oldValue?.[property];
+      const newPropValue = newValue?.[property];
+      const changed = isDifferent(oldPropValue, newPropValue);
+      // Check if values are primitives (or null/undefined) before passing to AuditEventDiff
+      const oldIsPrimitive = typeof oldPropValue !== "object" || oldPropValue === null;
+      const newIsPrimitive = typeof newPropValue !== "object" || newPropValue === null;
+      return (
+        changed && (oldIsPrimitive || oldPropValue === undefined) && (newIsPrimitive || newPropValue === undefined)
+      );
+    });
   }, [oldValue, newValue]);
   return (
     <DataList.Root orientation="horizontal">
@@ -89,15 +105,18 @@ function JSONDiff({ oldValue, newValue }: { oldValue: any; newValue: any }) {
             key={property}
             content={
               <Box>
-                Was: <pre>{oldValue?.[property]}</pre>
-                Now: <pre>{newValue?.[property]}</pre>
+                Was: <pre>{JSON.stringify(oldValue?.[property] ?? null)}</pre>
+                Now: <pre>{JSON.stringify(newValue?.[property] ?? null)}</pre>
               </Box>
             }
           >
             <DataList.Item>
               <DataList.ItemLabel>{property}</DataList.ItemLabel>
               <DataList.ItemValue>
-                <AuditEventDiff oldValue={oldValue?.[property]} newValue={newValue?.[property]} />
+                <AuditEventDiff
+                  oldValue={oldValue?.[property] as JsonPrimitive}
+                  newValue={newValue?.[property] as JsonPrimitive}
+                />
               </DataList.ItemValue>
             </DataList.Item>
           </Tooltip>
@@ -215,7 +234,24 @@ function AuditTable() {
         enableColumnFilter: true,
         enableHiding: true,
         cell: (props) => {
-          return <JSONDiff oldValue={props.getValue()} newValue={props.row.original.new} />;
+          const oldValue = props.getValue() as unknown;
+          const newValue = props.row.original.new as unknown;
+
+          const isObjectOrNull = (val: unknown): val is Record<string, unknown> | null => {
+            return val === null || (typeof val === "object" && !Array.isArray(val));
+          };
+
+          if (isObjectOrNull(oldValue) && isObjectOrNull(newValue)) {
+            // Only render JSONDiff if both are objects or null
+            return <JSONDiff oldValue={oldValue} newValue={newValue} />;
+          }
+          // Handle cases where values aren't suitable for object diff
+          // TODO: Potentially render a simpler diff for primitives/arrays if needed
+          return (
+            <Text textStyle="sm" color="text.muted">
+              Non-object change
+            </Text>
+          );
         }
       },
       {

@@ -4,7 +4,6 @@ import { Menu, MenuItem, SubMenu } from "@jonbell/react-radial-menu";
 import { Box } from "@chakra-ui/react";
 
 function RubricCheckSubMenuOrItem({
-  criterion,
   option,
   handleItemClick,
   handleSubItemClick,

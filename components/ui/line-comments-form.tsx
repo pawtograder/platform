@@ -1,25 +1,23 @@
-import { createClient } from "@/utils/supabase/client";
 import {
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useInvalidate } from "@refinedev/core";
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import MessageInput from "./message-input";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { SelectInstance } from "chakra-react-select";
 import { useSubmissionReview } from "@/hooks/useSubmission";
 
-type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
-type RubricOption = {
-  readonly label: string;
-  readonly value: string;
-  readonly points: number;
-  readonly description?: string;
-  readonly isOther?: boolean;
-  readonly rubric_id: number;
-};
+// type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
+// type RubricOption = {
+//   readonly label: string;
+//   readonly value: string;
+//   readonly points: number;
+//   readonly description?: string;
+//   readonly isOther?: boolean;
+//   readonly rubric_id: number;
+// };
 
 function LineCommentForm({
   lineNumber,

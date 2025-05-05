@@ -47,9 +47,10 @@ import { useState } from "react";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { CrudFilter } from "@refinedev/core";
 import { GraderResultTestData } from "./results/page";
+import type { IconType } from "react-icons";
 
 // Create a mapping of icon names to their components
-const iconMap: { [key: string]: any } = {
+const iconMap: { [key: string]: IconType } = {
   FaBell,
   FaCheckCircle,
   FaFile,

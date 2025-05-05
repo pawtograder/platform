@@ -5,7 +5,7 @@ import { DefaultAudioMixController, TimeoutScheduler } from "amazon-chime-sdk-js
 
 class TestSound {
   constructor(sinkId: string | null, frequency = 440, durationSec = 1, rampSec = 0.1, maxGainValue = 0.1) {
-    // @ts-ignore
+    // @ts-expect-error: window.webkitAudioContext may not exist
     const audioContext: AudioContext = new (window.AudioContext || window.webkitAudioContext)();
     const gainNode = audioContext.createGain();
     gainNode.gain.value = 0;
@@ -26,7 +26,7 @@ class TestSound {
     const handlingBindingAsynchronous = async () => {
       if ("setSinkId" in HTMLAudioElement.prototype) {
         try {
-          // @ts-ignore
+          // @ts-expect-error: deviceId might not be assignable or method might not exist on type
           await audioMixController.bindAudioDevice({ deviceId: sinkId });
         } catch (e) {
           console.error("Failed to bind audio device", e);
@@ -34,7 +34,6 @@ class TestSound {
       }
 
       try {
-        // @ts-ignore
         await audioMixController.bindAudioElement(new Audio());
       } catch (e) {
         console.error("Failed to bind audio element", e);

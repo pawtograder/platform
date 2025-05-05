@@ -1,10 +1,22 @@
 import LinkAccount from "@/components/github/link-account";
-import { AssignmentWithRepositoryAndSubmissionsAndGraderResults } from "@/utils/supabase/DatabaseTypes";
+import {
+  AssignmentWithRepositoryAndSubmissionsAndGraderResults,
+  AssignmentGroupMember,
+  AssignmentGroup,
+  Repo
+} from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
 import { Container, Heading, Table } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
 import { Alert } from "@/components/ui/alert";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
+import { PostgrestError } from "@supabase/supabase-js";
+
+// Define the type for the groups query result
+type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
+  assignment_groups: (AssignmentGroup & { repositories: Repo[] }) | null;
+};
+
 export default async function StudentPage({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
 
@@ -17,6 +29,20 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     .eq("user_id", user!.id)
     .eq("class_id", Number(course_id))
     .single();
+
+  let groups: { data: AssignmentGroupMemberWithGroupAndRepo[] | null; error: PostgrestError | null } = {
+    data: [],
+    error: null
+  };
+
+  if (private_profile_id?.private_profile_id) {
+    groups = await client
+      .from("assignment_groups_members")
+      .select("*, assignment_groups(*, repositories(*))")
+      .eq("assignment_groups.class_id", Number(course_id))
+      .eq("profile_id", private_profile_id.private_profile_id);
+  }
+
   //TODO need to get the group assignments, too!
   let assignments = await client
     .from("assignments")
@@ -24,12 +50,6 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     .eq("class_id", Number(course_id))
     .eq("repositories.user_roles.user_id", user!.id)
     .order("due_date", { ascending: false });
-
-  let groups = await client
-    .from("assignment_groups_members")
-    .select("*, assignment_groups(*, repositories(*))")
-    .eq("assignment_groups.class_id", Number(course_id))
-    .eq("profile_id", private_profile_id?.private_profile_id!);
 
   //list identities
   const identities = await client.auth.getUserIdentities();
@@ -42,7 +62,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     const assignmentsWithoutRepos = assignments.data?.filter((assignment) => {
       const hasIndividualRepo = assignment.repositories.length > 0;
       const assignmentGroup = groups?.data?.find((group) => group.assignment_id === assignment.id);
-      const hasGroupRepo = assignmentGroup?.assignment_groups.repositories.length || 0 > 0;
+      const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
       if (assignmentGroup) {
         return !hasGroupRepo;
       }
@@ -61,11 +81,14 @@ export default async function StudentPage({ params }: { params: Promise<{ course
         .eq("class_id", Number(course_id))
         .eq("repositories.user_roles.user_id", user!.id)
         .order("due_date", { ascending: false });
-      groups = await client
-        .from("assignment_groups_members")
-        .select("*, assignment_groups(*, repositories(*))")
-        .eq("assignment_groups.class_id", Number(course_id))
-        .eq("profile_id", private_profile_id?.private_profile_id!);
+      // Refetch groups only if profile_id is available
+      if (private_profile_id?.private_profile_id) {
+        groups = await client
+          .from("assignment_groups_members")
+          .select("*, assignment_groups(*, repositories(*))")
+          .eq("assignment_groups.class_id", Number(course_id))
+          .eq("profile_id", private_profile_id.private_profile_id);
+      }
       actions = (
         <>
           <Alert status="info">
@@ -78,7 +101,6 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     }
   }
   const getLatestSubmission = (assignment: AssignmentWithRepositoryAndSubmissionsAndGraderResults) => {
-    assignment;
     return assignment.submissions.sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     )[0];
@@ -107,7 +129,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
               repo = assignment.repositories[0].repository;
             }
             const group = groups?.data?.find((group) => group.assignment_id === assignment.id);
-            if (group) {
+            if (group && group.assignment_groups) {
               if (group.assignment_groups.repositories.length) {
                 repo = group.assignment_groups.repositories[0].repository;
               } else {
@@ -147,7 +169,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
                 <Table.Cell>
                   {assignment.group_config === "individual"
                     ? "Individual"
-                    : group?.assignment_groups.name || "No Group"}
+                    : group?.assignment_groups?.name || "No Group"}
                 </Table.Cell>
               </Table.Row>
             );

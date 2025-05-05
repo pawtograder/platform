@@ -41,7 +41,7 @@ const MdEditor = (props: MDEditorProps) => {
   const supabase = createClient();
   const { course_id } = useParams();
   const onImagePasted = useCallback(
-    async (dataTransfer: DataTransfer, setMarkdown: (value: string | undefined) => void) => {
+    async (dataTransfer: DataTransfer) => {
       const fileUpload = async (file: File) => {
         const uuid = crypto.randomUUID();
         const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
@@ -84,7 +84,7 @@ const MdEditor = (props: MDEditorProps) => {
       {...props}
       draggable={true}
       onPaste={async (event) => {
-        await onImagePasted(event.clipboardData, onChange);
+        await onImagePasted(event.clipboardData);
       }}
       onDrop={async (event) => {
         event.preventDefault();
@@ -93,7 +93,7 @@ const MdEditor = (props: MDEditorProps) => {
         target.style.border = "none";
         target.style.backgroundColor = "transparent";
         target.style.cursor = "default";
-        await onImagePasted(event.dataTransfer, onChange);
+        await onImagePasted(event.dataTransfer);
       }}
       onDragEnter={(e) => {
         const target = e.target as HTMLElement;

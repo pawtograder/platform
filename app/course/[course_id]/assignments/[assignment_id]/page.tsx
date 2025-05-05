@@ -41,12 +41,12 @@ export default async function AssignmentPage({
     .order("created_at", { ascending: false });
 
   let assignment_group_id: number | undefined;
-  if (assignment.group_config !== "individual") {
+  if (assignment.group_config !== "individual" && enrollment?.private_profile_id) {
     const { data: group } = await client
       .from("assignment_groups_members")
       .select("*, assignment_groups!id(*)")
       .eq("assignment_id", Number.parseInt(assignment_id))
-      .eq("profile_id", enrollment?.private_profile_id!)
+      .eq("profile_id", enrollment.private_profile_id)
       .single();
     assignment_group_id = group?.assignment_group_id;
   }

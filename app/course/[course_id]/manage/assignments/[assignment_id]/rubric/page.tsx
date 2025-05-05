@@ -391,13 +391,15 @@ export default function RubricPage() {
     await Promise.all(partChanges.toDelete.map((id) => deleteResource({ id, resource: "rubric_parts" })));
     await Promise.all(
       partChanges.toCreate.map(async (part) => {
-        const partCopy = { ...part };
-        partCopy.class_id = assignment.data?.data.class_id || 0;
-        partCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
-        (partCopy as any).rubric_criteria = undefined;
-        (partCopy as any).id = undefined;
-        (partCopy as any).created_at = undefined;
-        const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
+        const partToCreate = {
+          name: part.name,
+          description: part.description,
+          ordinal: part.ordinal,
+          data: part.data,
+          class_id: assignment.data?.data.class_id || 0,
+          rubric_id: assignment.data?.data.rubrics.id || 0
+        };
+        const createdPart = await createResource({ resource: "rubric_parts", values: partToCreate });
         if (!createdPart.data.id) {
           throw new Error("Failed to create part");
         }
@@ -426,13 +428,20 @@ export default function RubricPage() {
     );
     await Promise.all(
       criteriaChanges.toCreate.map(async (criteria) => {
-        const criteriaCopy = { ...criteria };
-        criteriaCopy.class_id = assignment.data?.data.class_id || 0;
-        criteriaCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
-        (criteriaCopy as any).id = undefined;
-        (criteriaCopy as any).created_at = undefined;
-        (criteriaCopy as any).rubric_checks = undefined;
-        const createdCriteria = await createResource({ resource: "rubric_criteria", values: criteriaCopy });
+        const criteriaToCreate = {
+          name: criteria.name,
+          description: criteria.description,
+          ordinal: criteria.ordinal,
+          data: criteria.data,
+          rubric_part_id: criteria.rubric_part_id,
+          is_additive: criteria.is_additive,
+          total_points: criteria.total_points,
+          max_checks_per_submission: criteria.max_checks_per_submission,
+          min_checks_per_submission: criteria.min_checks_per_submission,
+          class_id: criteria.class_id,
+          rubric_id: criteria.rubric_id
+        };
+        const createdCriteria = await createResource({ resource: "rubric_criteria", values: criteriaToCreate });
         if (!createdCriteria.data.id) {
           throw new Error("Failed to create criteria");
         }
@@ -455,27 +464,45 @@ export default function RubricPage() {
     );
     await Promise.all(
       checkChanges.toCreate.map(async (check) => {
-        const checkCopy = { ...check };
-        (checkCopy as any).id = undefined;
-        (checkCopy as any).created_at = undefined;
-        (checkCopy as any).rubric_id = undefined;
-        const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
+        const checkToCreate = {
+          name: check.name,
+          description: check.description,
+          ordinal: check.ordinal,
+          data: check.data,
+          rubric_criteria_id: check.rubric_criteria_id,
+          file: check.file,
+          artifact: check.artifact,
+          group: check.group,
+          is_annotation: check.is_annotation,
+          is_comment_required: check.is_comment_required,
+          max_annotations: check.max_annotations,
+          points: check.points,
+          is_required: check.is_required,
+          class_id: check.class_id
+        };
+        const createdCheck = await createResource({ resource: "rubric_checks", values: checkToCreate });
         if (!createdCheck.data.id) {
           throw new Error("Failed to create check");
         }
         check.id = createdCheck.data.id as number;
       })
     );
+
+    await assignment.refetch();
+    const updatedRubric = assignment.data?.data.rubrics;
+    if (!updatedRubric) {
+      throw new Error("Rubric data not found after refetch.");
+    }
+    setValue(YAML.stringify(HydratedRubricToYamlRubric(updatedRubric)));
   }, [
     rubric,
     existingRubric,
-    assignment.data?.data.class_id,
-    assignment.data?.data.rubrics.id,
     createResource,
     deleteResource,
     updateCheckIfChanged,
     updateCriteriaIfChanged,
-    updatePartIfChanged
+    updatePartIfChanged,
+    assignment
   ]);
 
   return (
@@ -519,9 +546,6 @@ export default function RubricPage() {
                       description: "The rubric has been saved successfully",
                       type: "success"
                     });
-                    //Reload the rubric so that we have ID's on newly created items
-                    await assignment.refetch();
-                    setValue(YAML.stringify(HydratedRubricToYamlRubric(assignment.data?.data.rubrics!)));
                   } catch (error) {
                     toaster.create({
                       title: "Failed to save rubric",

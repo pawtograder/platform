@@ -16,9 +16,7 @@ import { StyledMediaMetricsWrapper } from "../../components/MediaStatsList/Style
 
 export const LocalMediaStreamMetrics: React.FC = () => {
   const audioVideo = useAudioVideo();
-  if (!audioVideo) {
-    return null;
-  }
+  const meetingManager = useMeetingManager();
   const {
     audioPacketsSentFractionLossPercent,
     audioPacketsReceivedFractionLossPercent,
@@ -27,10 +25,13 @@ export const LocalMediaStreamMetrics: React.FC = () => {
     videoStreamMetrics
   } = useMediaStreamMetrics();
 
+  if (!audioVideo) {
+    return null;
+  }
+
   const isLocalAudioActive =
     audioPacketsSentFractionLossPercent !== null && audioPacketsReceivedFractionLossPercent !== null;
 
-  const meetingManager = useMeetingManager();
   const localAttendeeId = meetingManager.meetingSession?.configuration.credentials?.attendeeId;
   const localVideoStreamMetrics = localAttendeeId ? videoStreamMetrics[localAttendeeId] : {};
   const ssrcArray = localVideoStreamMetrics ? Object.keys(localVideoStreamMetrics) : [];

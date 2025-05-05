@@ -25,7 +25,7 @@ export default function HelpRequestForm() {
     refineCore: { onFinish }
   } = useForm<HelpRequest>({
     defaultValues: async () => {
-      const { data: queues, error: queuesError } = await supabase.from("help_queues").select("*");
+      const { data: queues } = await supabase.from("help_queues").select("*");
       return { help_queue: queues?.[0]?.id.toString() || "" };
     },
     refineCoreProps: {

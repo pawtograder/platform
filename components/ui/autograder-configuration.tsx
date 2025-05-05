@@ -53,20 +53,12 @@ export default function AutograderConfiguration({
   const { mutateAsync: updateAssignment } = useUpdate<Assignment>({ resource: "assignments" });
   const { mutateAsync: deleteRegressionTest } = useDelete<AutograderRegressionTest>({});
   const [saveLoading, setSaveLoading] = useState(false);
-  const {
-    data: repos,
-    error: reposError,
-    isLoading: reposLoading
-  } = useList<Repository>({
+  const { data: repos, isLoading: reposLoading } = useList<Repository>({
     resource: "repositories",
     meta: { select: "*" },
     filters: [{ field: "assignment_id", operator: "eq", value: Number(assignment_id) }]
   });
-  const {
-    data: regressionTestRepos,
-    error: regressionTestReposError,
-    isLoading: regressionTestReposLoading
-  } = useList<AutograderRegressionTest>({
+  const { data: regressionTestRepos, isLoading: regressionTestReposLoading } = useList<AutograderRegressionTest>({
     resource: "autograder_regression_test",
     meta: { select: "*" },
     filters: [{ field: "autograder_id", operator: "eq", value: Number(assignment_id) }]
@@ -172,7 +164,7 @@ export default function AutograderConfiguration({
       <Box>
         <Heading size="sm">Submission source files</Heading>
         <Text fontSize="sm" color="fg.muted">
-          These files will be submitted to the autograder for grading, and will be graded against the instructor's
+          These files will be submitted to the autograder for grading, and will be graded against the instructor&apos;s
           tests.
         </Text>
         <List.Root as="ul" pl={4}>
@@ -219,7 +211,7 @@ export default function AutograderConfiguration({
       <Heading as="h2">Regression Testing</Heading>
       <Alert status="info">
         Automatically run a smoke test of the autograder on a selection of student submissions. If enabled, a new
-        autograder won't be published until the smoke test passes.
+        autograder won&apos;t be published until the smoke test passes.
       </Alert>
       <Table.Root>
         <Table.Header>

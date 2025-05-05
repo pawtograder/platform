@@ -387,14 +387,17 @@ function SubmissionCommentForm({
   const { mutateAsync: createComment } = useCreate({
     resource: check.artifact ? "submission_artifact_comments" : "submission_file_comments"
   });
-  if (!submission) {
-    return <></>;
-  }
+
   useEffect(() => {
     if (messageInputRef.current) {
       messageInputRef.current.focus();
     }
   }, []);
+
+  if (!submission) {
+    return <></>;
+  }
+
   const selectedOption = selectedOptionIndex !== undefined ? check.data!.options[selectedOptionIndex] : undefined;
   return (
     <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%" fontSize="sm">
@@ -405,6 +408,7 @@ function SubmissionCommentForm({
         </Text>
       </Box>
       <MessageInput
+        textAreaRef={messageInputRef}
         placeholder={"Comment"}
         sendButtonText="Add Check"
         sendMessage={async (message, profile_id) => {

@@ -8,16 +8,23 @@ import { useInvalidate } from "@refinedev/core";
 import { useCallback } from "react";
 import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+
+type FormData = {
+  email: string;
+  name: string;
+  role: "student" | "grader" | "instructor";
+};
+
 export default function AddSingleStudent() {
   const { course_id } = useParams();
   const {
     register,
     handleSubmit,
     formState: { errors }
-  } = useForm();
+  } = useForm<FormData>();
   const invalidate = useInvalidate();
   const onSubmit = useCallback(
-    async (data: any) => {
+    async (data: FormData) => {
       console.log("Submitting");
       const supabase = createClient();
       await enrollmentAdd(
@@ -49,12 +56,12 @@ export default function AddSingleStudent() {
               <Field.Root invalid={!!errors.email}>
                 <Field.Label>Email</Field.Label>
                 <Input placeholder="Email" {...register("email", { required: true })} />
-                <Field.ErrorText>{errors.email?.message as string}</Field.ErrorText>
+                <Field.ErrorText>{errors.email?.message}</Field.ErrorText>
               </Field.Root>
               <Field.Root invalid={!!errors.name}>
                 <Field.Label>Name</Field.Label>
                 <Input placeholder="Name" {...register("name", { required: true })} />
-                <Field.ErrorText>{errors.name?.message as string}</Field.ErrorText>
+                <Field.ErrorText>{errors.name?.message}</Field.ErrorText>
               </Field.Root>
               <Field.Root invalid={!!errors.role}>
                 <Field.Label>Role</Field.Label>
@@ -65,7 +72,7 @@ export default function AddSingleStudent() {
                     <option value="instructor">Instructor</option>
                   </NativeSelect.Field>
                 </NativeSelect.Root>
-                <Field.ErrorText>{errors.role?.message as string}</Field.ErrorText>
+                <Field.ErrorText>{errors.role?.message}</Field.ErrorText>
               </Field.Root>
               <Button type="submit">Add Student</Button>
             </form>

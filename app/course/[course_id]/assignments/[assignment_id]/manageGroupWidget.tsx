@@ -41,6 +41,7 @@ import { MultiValue, Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
+
 function CreateGroupButton({
   assignment,
   allGroups
@@ -154,6 +155,7 @@ function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJo
   }, [profiles, groups]);
   return ungroupedProfiles;
 }
+
 function InviteButton({
   group,
   allGroups
@@ -253,6 +255,7 @@ function InviteButton({
     </Dialog.Root>
   );
 }
+
 function GroupMemberList({ group }: { group: AssignmentGroupWithMembersInvitationsAndJoinRequests }) {
   const { profiles } = useClassProfiles();
   return (
@@ -267,6 +270,7 @@ function GroupMemberList({ group }: { group: AssignmentGroupWithMembersInvitatio
     </HStack>
   );
 }
+
 function JoinGroupButton({
   groups,
   assignment
@@ -584,6 +588,7 @@ function GroupMember({ profile_id }: { profile_id: string }) {
     </HStack>
   );
 }
+
 function InactiveJoinRequests({ group }: { group: AssignmentGroupWithMembersInvitationsAndJoinRequests }) {
   const nonPendingRequests = group.assignment_group_join_request.filter((j) => j.status !== "pending");
   nonPendingRequests.sort((a, b) => {
@@ -629,6 +634,7 @@ function InactiveJoinRequests({ group }: { group: AssignmentGroupWithMembersInvi
     </Dialog.Root>
   );
 }
+
 function AssignmentGroupJoinRequests({ group }: { group: AssignmentGroupWithMembersInvitationsAndJoinRequests }) {
   const pendingRequests = group.assignment_group_join_request.filter((j) => j.status === "pending");
   if (pendingRequests.length == 0) {
@@ -649,6 +655,7 @@ function AssignmentGroupJoinRequests({ group }: { group: AssignmentGroupWithMemb
     </Box>
   );
 }
+
 function AssignmentGroupJoinRequestView({ join_request }: { join_request: AssignmentGroupJoinRequest }) {
   const profile = useUserProfile(join_request.profile_id);
   const { private_profile_id, role } = useClassProfiles();
@@ -733,6 +740,7 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
     </HStack>
   );
 }
+
 function AssignmentGroupJoinRequestStatus({ join_request }: { join_request: AssignmentGroupJoinRequest }) {
   const decider = useUserProfile(join_request.decision_maker);
   return (
@@ -744,6 +752,7 @@ function AssignmentGroupJoinRequestStatus({ join_request }: { join_request: Assi
     </Box>
   );
 }
+
 function AssignmentGroupInvitationView({
   invitation,
   invalidateInvites
@@ -787,7 +796,7 @@ function GroupDetails({
 }) {
   return (
     <VStack alignItems="flex-start">
-      <Heading size="md">You are in group "{group.name}"</Heading>
+      <Heading size="md">You are in group &quot;{group.name}&quot;</Heading>
       <HStack>
         {group.assignment_groups_members.map((m) => (
           <GroupMember profile_id={m.profile_id} key={m.profile_id} />
@@ -802,8 +811,19 @@ function GroupDetails({
     </VStack>
   );
 }
+
 export default function ManageGroupWidget({ assignment }: { assignment: Assignment }) {
   const { private_profile_id } = useClassProfiles();
+  const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
+    resource: "assignment_groups",
+    meta: { select: "*,assignment_groups_members(*),assignment_group_join_request(*),assignment_group_invitations(*)" },
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
+    pagination: { pageSize: 1000 }
+  });
+  const myGroup = useMemo(() => {
+    return groups?.data?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === private_profile_id));
+  }, [groups, private_profile_id]);
+
   if (assignment.group_config === "individual") {
     return (
       <Box>
@@ -814,16 +834,6 @@ export default function ManageGroupWidget({ assignment }: { assignment: Assignme
       </Box>
     );
   }
-
-  const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
-    resource: "assignment_groups",
-    meta: { select: "*,assignment_groups_members(*),assignment_group_join_request(*),assignment_group_invitations(*)" },
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
-    pagination: { pageSize: 1000 }
-  });
-  const myGroup = useMemo(() => {
-    return groups?.data?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === private_profile_id));
-  }, [groups, private_profile_id]);
 
   if (!groups?.data) {
     return <Skeleton height="100px" />;

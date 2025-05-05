@@ -53,8 +53,8 @@ export default function MessageInput(props: MessageInputProps) {
   const { course_id } = useParams();
   const [enterToSend, setEnterToSend] = useState(true);
   const [value, setValue] = useState(initialValue);
-  const [singleLine, _setSingleLine] = useState(props.defaultSingleLine ?? false);
-  const [_, setFocused] = useState(false);
+  const [singleLine] = useState(defaultSingleLine ?? false);
+  const [, setFocused] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGiphyPicker, setShowGiphyPicker] = useState(false);
   const [anonymousMode, setAnonymousMode] = useState(false);
@@ -89,10 +89,10 @@ export default function MessageInput(props: MessageInputProps) {
       const urlEncodedFilename = encodeURIComponent(fileName);
 
       const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
-      props.sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
+      sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
       return url;
     },
-    [props, course_id, profile_id]
+    [course_id, profile_id, sendMessage]
   );
 
   const attachFile = useCallback(
@@ -122,9 +122,9 @@ export default function MessageInput(props: MessageInputProps) {
           return insertedMarkdown;
         })
       );
-      props.sendMessage("Attachment: " + insertedMarkdowns.join("\n"), profile_id, false);
+      sendMessage("Attachment: " + insertedMarkdowns.join("\n"), profile_id, false);
     },
-    [props, profile_id, fileUpload]
+    [profile_id, fileUpload, sendMessage]
   );
   if (singleLine) {
     return (
@@ -138,9 +138,9 @@ export default function MessageInput(props: MessageInputProps) {
         <Textarea
           p="2"
           width="100%"
-          placeholder={props.placeholder ?? "Reply..."}
+          placeholder={placeholder ?? "Reply..."}
           m="0"
-          ref={props.textAreaRef}
+          ref={textAreaRef}
           onDragEnter={(e) => {
             const target = e.target as HTMLElement;
             target.style.border = "2px dashed #999";
@@ -173,7 +173,7 @@ export default function MessageInput(props: MessageInputProps) {
           onKeyDown={(e) => {
             if (e.key === "Enter" && !(e.shiftKey || e.metaKey || !enterToSend)) {
               e.preventDefault();
-              if ((value?.trim() === "" || !value) && !props.allowEmptyMessage) {
+              if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
                 toaster.create({
                   title: "Empty message",
                   description: "You must add a message to continue",
@@ -181,7 +181,7 @@ export default function MessageInput(props: MessageInputProps) {
                 });
                 return;
               }
-              props.sendMessage(value!, profile_id, true);
+              sendMessage(value!, profile_id, true);
               setValue("");
             }
           }}
@@ -190,7 +190,7 @@ export default function MessageInput(props: MessageInputProps) {
           <Picker
             data={data}
             onClickOutside={() => setShowEmojiPicker(false)}
-            onEmojiSelect={(emoji: any) => {
+            onEmojiSelect={(emoji: { native: string }) => {
               setValue((value ?? "") + emoji.native);
               setShowEmojiPicker(false);
             }}
@@ -198,7 +198,7 @@ export default function MessageInput(props: MessageInputProps) {
         )}
         <HStack justify="flex-end">
           <HStack spaceX="0" gap="0">
-            {props.otherButtons}
+            {otherButtons}
             {enableAnonymousModeToggle && (
               <Text color="text.muted" fontSize="xs">
                 Post {anonymousMode ? `with your pseudonym, ${public_profile?.name} ` : `as ${private_profile?.name}`}
@@ -273,7 +273,7 @@ export default function MessageInput(props: MessageInputProps) {
                     <GiphyPicker
                       onGifSelect={(gif: IGif) => {
                         setShowGiphyPicker(false);
-                        props.sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
+                        sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
                       }}
                     />
                   </PopoverBody>
@@ -309,7 +309,7 @@ export default function MessageInput(props: MessageInputProps) {
           <Button
             aria-label="Send message"
             onClick={() => {
-              if ((value?.trim() === "" || !value) && !props.allowEmptyMessage) {
+              if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
                 toaster.create({
                   title: "Empty message",
                   description: "You must add a message to continue",
@@ -317,7 +317,7 @@ export default function MessageInput(props: MessageInputProps) {
                 });
                 return;
               }
-              props.sendMessage(value!, profile_id, true);
+              sendMessage(value!, profile_id, true);
               setValue("");
             }}
             variant="solid"
@@ -343,7 +343,7 @@ export default function MessageInput(props: MessageInputProps) {
       />
       <HStack justify="flex-end">
         <HStack spaceX="0" gap="0">
-          {props.otherButtons}
+          {otherButtons}
           {enableAnonymousModeToggle && (
             <Text color="text.muted" fontSize="xs">
               Post {anonymousMode ? `with your pseudonym, ${public_profile?.name} ` : `as ${private_profile?.name}`}
@@ -418,7 +418,7 @@ export default function MessageInput(props: MessageInputProps) {
                   <GiphyPicker
                     onGifSelect={(gif: IGif) => {
                       setShowGiphyPicker(false);
-                      props.sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
+                      sendMessage(`![${gif.title}](${gif.images.original.url})`, profile_id, false);
                     }}
                   />
                 </PopoverBody>
@@ -448,7 +448,7 @@ export default function MessageInput(props: MessageInputProps) {
         <Button
           aria-label="Send message"
           onClick={() => {
-            if ((value?.trim() === "" || !value) && !props.allowEmptyMessage) {
+            if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
               toaster.create({
                 title: "Empty message",
                 description: "You must add a message to continue",
@@ -456,7 +456,7 @@ export default function MessageInput(props: MessageInputProps) {
               });
               return;
             }
-            props.sendMessage(value!, profile_id, true);
+            sendMessage(value!, profile_id, true);
             setValue("");
           }}
           variant="solid"

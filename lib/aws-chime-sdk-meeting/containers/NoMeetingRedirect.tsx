@@ -17,18 +17,18 @@ const NoMeetingRedirect: React.FC<PropsWithChildren> = ({ children }) => {
   const dispatch = useNotificationDispatch();
   const meetingManager = useMeetingManager();
 
-  const payload: { severity: Severity; message: string; autoClose: boolean } = {
-    severity: Severity.INFO,
-    message: "No meeting found, please enter a valid meeting Id",
-    autoClose: true
-  };
-
   useEffect(() => {
+    const payload: { severity: Severity; message: string; autoClose: boolean } = {
+      severity: Severity.INFO,
+      message: "No meeting found, please enter a valid meeting Id",
+      autoClose: true
+    };
+
     if (!meetingManager.meetingSession) {
       dispatch({ type: ActionType.ADD, payload: payload });
       router.push(routes.HOME);
     }
-  }, [meetingManager.meetingSession, dispatch, router, payload]);
+  }, [meetingManager.meetingSession, dispatch, router]);
 
   return <>{children}</>;
 };
