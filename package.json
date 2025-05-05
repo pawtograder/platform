@@ -57,6 +57,8 @@
     "chakra-react-select": "^6.1.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "csv-parse": "^5.6.0",
+    "csv-writer": "^1.6.0",
     "date-fns": "^4.1.0",
     "emoji-mart": "^5.6.0",
     "jszip": "^3.10.1",

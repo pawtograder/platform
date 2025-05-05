@@ -4,9 +4,9 @@ import { AuditEvent, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/
 import { Box, Button, Container, DataList, Heading, HStack, Icon, Input, List, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { useTable, } from "@refinedev/react-table";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { ColumnDef, flexRender, getPaginationRowModel, getCoreRowModel, getFilteredRowModel } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
 
 function AuditEventDiff({ oldValue, newValue }: { oldValue: any, newValue: any }) {
@@ -180,6 +180,7 @@ function AuditTable() {
             enableHiding: true,
         }
     ], [roster.data?.data]);
+    const [pageCount, setPageCount] = useState(0);
     const {
         getHeaderGroups,
         getRowModel,
@@ -188,6 +189,7 @@ function AuditTable() {
         getCanPreviousPage,
         getPageCount,
         getCanNextPage,
+        getRowCount,
         nextPage,
         previousPage,
         setPageSize,
@@ -202,8 +204,17 @@ function AuditTable() {
             },
             sorting: [{ id: "created_at", desc: true }]
         },
+        manualPagination: false,
+        manualFiltering: false,
+        getPaginationRowModel: getPaginationRowModel(),
+        pageCount,
+        getCoreRowModel: getCoreRowModel(),
+        getFilteredRowModel: getFilteredRowModel(),
         refineCoreProps: {
             resource: "audit",
+            pagination: {
+                mode: "off",
+            },
             filters: {
                 mode: "off",
             },
@@ -213,6 +224,11 @@ function AuditTable() {
         },
         filterFromLeafRows: true,
     });
+    const nRows = getRowCount();
+    const pageSize = getState().pagination.pageSize;
+    useEffect(() => {
+        setPageCount(Math.ceil(nRows / pageSize));
+    }, [nRows, pageSize]);
     return (<VStack>
         <VStack paddingBottom="55px">
             <Table.Root striped>
