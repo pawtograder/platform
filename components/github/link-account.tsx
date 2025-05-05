@@ -17,7 +17,7 @@ export default function LinkAccount() {
         <Button
           colorPalette="gray"
           onClick={async () => {
-            const { data, error } = await supabase.auth.linkIdentity({ provider: "github" });
+            const { error } = await supabase.auth.linkIdentity({ provider: "github" });
             if (error) {
               console.error(error);
             }

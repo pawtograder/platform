@@ -1,31 +1,15 @@
-import {
-  Avatar,
-  Box,
-  Button,
-  Card,
-  HStack,
-  Icon,
-  IconButton,
-  Skeleton,
-  Text,
-  TextProps,
-  VStack
-} from "@chakra-ui/react";
-import { Notification, DiscussionThread } from "@/utils/supabase/DatabaseTypes";
-import { useOne } from "@refinedev/core";
+import { Avatar, Box, Button, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { FaTimes } from "react-icons/fa";
 import Link from "next/link";
 import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams } from "next/navigation";
-type NotificationTextProps = {
-  notification: Notification;
-} & TextProps;
+// type NotificationTextProps = {
+//   notification: Notification;
+// } & TextProps;
 
-export type NotificationEnvelope = {
-  type: string;
-};
+export type NotificationEnvelope = { type: string };
 export type DiscussionThreadNotification = NotificationEnvelope & {
   type: "discussion_thread";
   new_comment_number: number;
@@ -218,10 +202,7 @@ export default function NotificationTeaser({
       borderColor={notification.viewed_at ? "border.muted" : "border.info"}
       p={4}
       bg={notification.viewed_at ? "bg.muted" : "yellow.subtle"}
-      _hover={{
-        bg: "yellow.emphasized",
-        cursor: "pointer"
-      }}
+      _hover={{ bg: "yellow.emphasized", cursor: "pointer" }}
       onMouseDown={() => {
         markAsRead();
       }}

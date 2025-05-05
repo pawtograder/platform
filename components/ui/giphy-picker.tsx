@@ -1,9 +1,8 @@
 "use client";
-import React, { useState, useCallback, useEffect, useContext } from "react";
-import { GiphyFetch } from "@giphy/js-fetch-api";
+import React, { useContext } from "react";
 import { IGif } from "@giphy/js-types";
 import { Grid, SearchBar, SearchContext, SearchContextManager, SuggestionBar } from "@giphy/react-components";
-import { Input, VStack, HStack, Button, Container } from "@chakra-ui/react";
+import { VStack, Container } from "@chakra-ui/react";
 
 const GiphyPicker = ({ onGifSelect }: { onGifSelect: (gif: IGif) => void }) => (
   <SearchContextManager apiKey="yVBc6zuQtPlYItUXdgBTPXP1NYx1P3vW">

@@ -1,10 +1,10 @@
 import HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
 import { HelpRequestChatChannelProvider } from "@/lib/chat";
-import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Stack, Text } from "@chakra-ui/react";
 import { useState } from "react";
 
-export default function HelpRequestHistory({ queue, requests }: { queue: HelpQueue; requests: HelpRequest[] }) {
+export default function HelpRequestHistory({ requests }: { requests: HelpRequest[] }) {
   const [curRequest, setCurRequest] = useState<HelpRequest | null>(requests[0]);
   return (
     <div>

@@ -100,8 +100,8 @@ export const DiscussionThreadTeaser = (props: Props) => {
             <Box color="fg.subtle" truncate>
               <Markdown
                 components={{
-                  a: ({ href, children }) => children,
-                  img: ({ src, alt }) => (
+                  a: ({ children }) => children,
+                  img: () => (
                     <Text as="span" color="gray.500">
                       [image]
                     </Text>

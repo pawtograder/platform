@@ -1,11 +1,10 @@
 "use client";
 import MDEditor from "@uiw/react-md-editor";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import "@uiw/react-md-editor/markdown-editor.css";
 import "@uiw/react-markdown-preview/markdown.css";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
-import { createHash } from "crypto";
 import "katex/dist/katex.min.css";
 import { MDEditorProps } from "@uiw/react-md-editor";
 import rehypeKatex from "rehype-katex";
@@ -46,7 +45,7 @@ const MdEditor = (props: MDEditorProps) => {
       const fileUpload = async (file: File) => {
         const uuid = crypto.randomUUID();
         const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
-        const { data, error } = await supabase.storage
+        const { error } = await supabase.storage
           .from("uploads")
           .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
         if (error) {
@@ -77,7 +76,7 @@ const MdEditor = (props: MDEditorProps) => {
         })
       );
     },
-    [supabase, onChange]
+    [supabase, onChange, course_id]
   );
 
   return (
@@ -116,10 +115,7 @@ const MdEditor = (props: MDEditorProps) => {
         e.preventDefault();
         e.stopPropagation();
       }}
-      previewOptions={{
-        rehypePlugins: [rehypeKatex],
-        remarkPlugins: [remarkMath]
-      }}
+      previewOptions={{ rehypePlugins: [rehypeKatex], remarkPlugins: [remarkMath] }}
     />
   );
 };

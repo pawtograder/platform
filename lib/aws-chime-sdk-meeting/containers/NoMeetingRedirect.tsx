@@ -25,13 +25,10 @@ const NoMeetingRedirect: React.FC<PropsWithChildren> = ({ children }) => {
 
   useEffect(() => {
     if (!meetingManager.meetingSession) {
-      dispatch({
-        type: ActionType.ADD,
-        payload: payload
-      });
+      dispatch({ type: ActionType.ADD, payload: payload });
       router.push(routes.HOME);
     }
-  }, []);
+  }, [meetingManager.meetingSession, dispatch, router, payload]);
 
   return <>{children}</>;
 };

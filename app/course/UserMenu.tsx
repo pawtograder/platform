@@ -14,7 +14,7 @@ import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { FaGithub, FaUnlink, FaQuestionCircle } from "react-icons/fa";
+import { FaGithub, FaUnlink } from "react-icons/fa";
 import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
 
@@ -111,7 +111,7 @@ function UserSettingsMenu() {
       }
     };
     fetchProfile();
-  }, [course_id, user]);
+  }, [course_id, user, supabase]);
 
   const unlinkGitHub = useCallback(async () => {
     const identities = await supabase.auth.getUserIdentities();
@@ -126,11 +126,9 @@ function UserSettingsMenu() {
     setGitHubUsername(null);
   }, [supabase]);
   const linkGitHub = useCallback(async () => {
-    const { data, error } = await supabase.auth.linkIdentity({
+    const { error } = await supabase.auth.linkIdentity({
       provider: "github",
-      options: {
-        redirectTo: `${window.location.href}`
-      }
+      options: { redirectTo: `${window.location.href}` }
     });
     if (error) {
       throw new Error(error.message);
@@ -204,8 +202,6 @@ function UserSettingsMenu() {
   );
 }
 export default function UserMenu() {
-  const { course_id } = useParams();
-
   return (
     <HStack>
       <SupportMenu />

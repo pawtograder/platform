@@ -11,12 +11,10 @@ export async function GET(request: Request) {
   const next = searchParams.get("next") ?? "/";
   if (token_hash) {
     const supabase = await createClient();
-    const { error, data } = await supabase.auth.verifyOtp({
+    const { error } = await supabase.auth.verifyOtp({
       token_hash,
       type: "email",
-      options: {
-        redirectTo: `${origin}${next}`
-      }
+      options: { redirectTo: `${origin}${next}` }
     });
     if (error) {
       return NextResponse.redirect(`${origin}/auth/auth-code-error?error=${error.message}`);

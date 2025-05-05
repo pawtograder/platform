@@ -30,15 +30,12 @@ export default function RepoSelector({
       repos.sort((a, b) => a.owner.login.localeCompare(b.owner.login) || a.name.localeCompare(b.name));
       setTemplateReposList(
         repos.map((repo) => {
-          return {
-            label: `${repo.owner.login}/${repo.name}`,
-            value: `${repo.owner.login}/${repo.name}`
-          };
+          return { label: `${repo.owner.login}/${repo.name}`, value: `${repo.owner.login}/${repo.name}` };
         })
       );
     }
     fetchRepos();
-  }, []);
+  }, [course_id, templateReposOnly]);
   if (!templateReposList) return <Skeleton height="20px" />;
   return (
     <Field.Root>

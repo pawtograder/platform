@@ -1,5 +1,5 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { HStack, Avatar, Text, VStack } from "@chakra-ui/react";
+import { Avatar } from "@chakra-ui/react";
 import { Tooltip } from "./tooltip";
 
 export default function PersonName({ uid, size = "sm" }: { uid: string; size?: "2xs" | "xs" | "sm" | "md" | "lg" }) {

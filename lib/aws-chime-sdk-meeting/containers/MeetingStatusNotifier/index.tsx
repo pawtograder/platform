@@ -18,35 +18,21 @@ const MeetingStatusNotifier: React.FC = () => {
   const router = useRouter();
 
   const getMeetingStatusPayload = (message: string, severity: Severity) => {
-    return {
-      severity,
-      message,
-      autoClose: true,
-      replaceAll: true
-    };
+    return { severity, message, autoClose: true, replaceAll: true };
   };
 
   useEffect(() => {
     switch (meetingStatus) {
       case MeetingStatus.Loading:
         setStatus("connecting");
-        dispatch({
-          type: ActionType.ADD,
-          payload: getMeetingStatusPayload("Meeting connecting...", Severity.INFO)
-        });
+        dispatch({ type: ActionType.ADD, payload: getMeetingStatusPayload("Meeting connecting...", Severity.INFO) });
         break;
       case MeetingStatus.Succeeded:
         setStatus("connected");
         if (status === "reconnecting") {
-          dispatch({
-            type: ActionType.ADD,
-            payload: getMeetingStatusPayload("Meeting reconnected", Severity.SUCCESS)
-          });
+          dispatch({ type: ActionType.ADD, payload: getMeetingStatusPayload("Meeting reconnected", Severity.SUCCESS) });
         } else {
-          dispatch({
-            type: ActionType.ADD,
-            payload: getMeetingStatusPayload("Meeting connected", Severity.SUCCESS)
-          });
+          dispatch({ type: ActionType.ADD, payload: getMeetingStatusPayload("Meeting connected", Severity.SUCCESS) });
         }
         break;
       case MeetingStatus.Reconnecting:
@@ -84,7 +70,7 @@ const MeetingStatusNotifier: React.FC = () => {
     return () => {
       setStatus(undefined);
     };
-  }, [meetingStatus]);
+  }, [meetingStatus, dispatch, router, status]);
 
   useEffect(() => {
     let id: NodeJS.Timeout;
@@ -99,7 +85,7 @@ const MeetingStatusNotifier: React.FC = () => {
     return () => {
       clearInterval(id);
     };
-  }, [status]);
+  }, [status, dispatch]);
 
   return null;
 };

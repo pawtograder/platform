@@ -1,12 +1,6 @@
 import { Box, Flex } from "@chakra-ui/react";
 import HelpRequestList from "./HelpRequestList";
-export default function HelpManageLayout({
-  children,
-  params
-}: Readonly<{
-  children: React.ReactNode;
-  params: Promise<{ course_id: string }>;
-}>) {
+export default function HelpManageLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <Box>
       <Flex flex="1">

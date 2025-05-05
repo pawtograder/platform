@@ -1,48 +1,28 @@
 "use client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, HStack, Menu, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
 import { useParams, usePathname } from "next/navigation";
-import { FaCalendar, FaCode, FaEdit, FaGithub, FaHome, FaPen, FaPlay, FaUsers } from "react-icons/fa";
+import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaUsers } from "react-icons/fa";
 import NextLink from "next/link";
 import React from "react";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
 const LinkItems = (courseId: number, assignmentId: number) => [
-  {
-    label: "Assignment Home",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}`,
-    icon: FaHome
-  },
-  {
-    label: "Edit Assignment",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`,
-    icon: FaEdit
-  },
+  { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
+  { label: "Edit Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`, icon: FaEdit },
   {
     label: "Configure Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/autograder`,
     icon: FaCode
   },
-  {
-    label: "Configure Rubric",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`,
-    icon: FaPen
-  },
+  { label: "Configure Rubric", href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`, icon: FaPen },
   {
     label: "Manage Due Date Exceptions",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/due-date-exceptions`,
     icon: FaCalendar
   },
-  {
-    label: "Manage Groups",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`,
-    icon: FaUsers
-  },
-  {
-    label: "Test Assignment",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}/test`,
-    icon: FaPlay
-  }
+  { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
+  { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay }
 ];
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
   const { course_id, assignment_id } = useParams();

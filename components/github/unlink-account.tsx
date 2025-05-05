@@ -2,7 +2,6 @@
 
 import { Button, VStack } from "@chakra-ui/react";
 import { createBrowserClient } from "@supabase/ssr";
-import { Alert } from "../ui/alert";
 import { BsGithub } from "react-icons/bs";
 import { PopConfirm } from "../ui/popconfirm";
 export default function UnlinkAccount() {

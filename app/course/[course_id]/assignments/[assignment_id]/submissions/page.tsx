@@ -7,7 +7,7 @@ export default async function SubmissionsListing({
   params: Promise<{ course_id: string; assignment_id: string }>;
 }) {
   const client = await createClient();
-  const { course_id, assignment_id } = await params;
+  const { assignment_id } = await params;
   const { data: submissions } = await client
     .from("submissions")
     .select("*, assignments(*)")

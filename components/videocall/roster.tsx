@@ -1,11 +1,4 @@
-import {
-  Roster as ChimeRoster,
-  RosterAttendee,
-  RosterGroup,
-  RosterHeader,
-  useRosterState,
-  useMeetingStatus
-} from "amazon-chime-sdk-component-library-react";
+import { RosterAttendee, RosterHeader, useRosterState } from "amazon-chime-sdk-component-library-react";
 import { HStack } from "@chakra-ui/react";
 export default function Roster() {
   const { roster } = useRosterState();

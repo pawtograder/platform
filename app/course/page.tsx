@@ -1,5 +1,4 @@
 import LinkAccount from "@/components/github/link-account";
-import UnlinkAccount from "@/components/github/unlink-account";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
@@ -50,15 +49,7 @@ export default async function ProtectedPage() {
           <Stack gap="4" direction="row" wrap="wrap">
             {courses.data!.map((course) => (
               <Link key={course.id} href={`/course/${course.id}`}>
-                <Card.Root
-                  key={course.id}
-                  p="4"
-                  w="300px"
-                  _hover={{
-                    bg: "bg.subtle",
-                    cursor: "pointer"
-                  }}
-                >
+                <Card.Root key={course.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
                   <Card.Body>
                     <Card.Title>{course.name}</Card.Title>
                     <Card.Description>

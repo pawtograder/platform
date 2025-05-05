@@ -1,6 +1,5 @@
 import { useNotifications } from "@/hooks/useNotifications";
-import { Notification } from "@/utils/supabase/DatabaseTypes";
-import { Box, IconButton, Badge, Popover, VStack, Text, Portal, Card } from "@chakra-ui/react";
+import { Box, IconButton, Badge, Popover, VStack, Portal } from "@chakra-ui/react";
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser from "./notification-teaser";
 

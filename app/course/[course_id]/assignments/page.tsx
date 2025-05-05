@@ -1,14 +1,9 @@
 import LinkAccount from "@/components/github/link-account";
 import { AssignmentWithRepositoryAndSubmissionsAndGraderResults } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Button, Container, Heading, Table } from "@chakra-ui/react";
-import { format, formatDistanceToNowStrict, formatRelative } from "date-fns";
+import { Container, Heading, Table } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
-import CreateStudentReposButton from "./createStudentReposButton";
-import { revalidatePath } from "next/cache";
 import { Alert } from "@/components/ui/alert";
-import UnlinkAccount from "@/components/github/unlink-account";
-import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 export default async function StudentPage({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
@@ -60,7 +55,6 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     if (assignmentsWithoutRepos?.length) {
       console.log("Creating GitHub repos for student, needs:");
       console.log(assignmentsWithoutRepos.map((a) => a.title));
-      const ret = await autograderCreateReposForStudent(client);
       assignments = await client
         .from("assignments")
         .select("*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))")

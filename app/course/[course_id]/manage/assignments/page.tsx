@@ -2,7 +2,6 @@ import { createClient } from "@/utils/supabase/server";
 import { Box, Button, HStack, Table } from "@chakra-ui/react";
 import Link from "@/components/ui/link";
 import NextLink from "next/link";
-import { autograderSyncStaffTeam } from "@/lib/edgeFunctions";
 import SyncStaffTeamButton from "./syncStaffTeamButton";
 
 function numUniqueSubmissions(submissions: { profile_id: string | null; assignment_group_id: number | null }[]) {

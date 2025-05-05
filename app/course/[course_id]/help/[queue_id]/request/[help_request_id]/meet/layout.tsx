@@ -6,10 +6,8 @@ import { GlobalStyles, LoggerProvider } from "amazon-chime-sdk-component-library
 
 import { NotificationProvider } from "amazon-chime-sdk-component-library-react";
 import Notifications from "@/lib/aws-chime-sdk-meeting/containers/Notifications";
-import MeetingProviderWrapper from "@/lib/aws-chime-sdk-meeting/containers/MeetingProviderWrapper";
 import ErrorProvider from "@/lib/aws-chime-sdk-meeting/providers/ErrorProvider";
 import meetingConfig from "@/lib/aws-chime-sdk-meeting/meetingConfig";
-import Router from "next/router";
 import { FC, PropsWithChildren } from "react";
 import { demoDarkTheme } from "@/lib/aws-chime-sdk-meeting/theme/demoTheme";
 import { demoLightTheme } from "@/lib/aws-chime-sdk-meeting/theme/demoTheme";

@@ -38,6 +38,7 @@ function TriggerWorkflowButton({ repository, sha }: { repository: string; sha: s
           await triggerWorkflow({ repository, sha, class_id: Number(course_id) }, supabase);
           setIsSuccess(true);
         } catch (error) {
+          console.error(error);
           setIsError(true);
         } finally {
           setIsLoading(false);
@@ -56,34 +57,15 @@ function CommitHistory({
   repository_id: number;
   repository_full_name: string;
 }) {
-  const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
+  const { data } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
-    meta: {
-      select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
-    },
-    filters: [
-      {
-        field: "repository",
-        operator: "eq",
-        value: repository_full_name
-      }
-    ],
-    sorters: [
-      {
-        field: "created_at",
-        order: "desc"
-      }
-    ]
+    meta: { select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
+    filters: [{ field: "repository", operator: "eq", value: repository_full_name }],
+    sorters: [{ field: "created_at", order: "desc" }]
   });
   const { data: commits, isLoading: isLoadingCommits } = useList<RepositoryCheckRun>({
     resource: "repository_check_runs",
-    filters: [
-      {
-        field: "repository_id",
-        operator: "eq",
-        value: repository_id
-      }
-    ]
+    filters: [{ field: "repository_id", operator: "eq", value: repository_id }]
   });
 
   return (
@@ -146,30 +128,13 @@ export function CommitHistoryDialog({
   assignment_group_id: number | undefined;
   profile_id: string | undefined;
 }) {
-  const filters: CrudFilter[] = [
-    {
-      field: "assignment_id",
-      operator: "eq",
-      value: assignment.id
-    }
-  ];
+  const filters: CrudFilter[] = [{ field: "assignment_id", operator: "eq", value: assignment.id }];
   if (assignment_group_id) {
-    filters.push({
-      field: "assignment_group_id",
-      operator: "eq",
-      value: assignment_group_id
-    });
+    filters.push({ field: "assignment_group_id", operator: "eq", value: assignment_group_id });
   } else {
-    filters.push({
-      field: "profile_id",
-      operator: "eq",
-      value: profile_id
-    });
+    filters.push({ field: "profile_id", operator: "eq", value: profile_id });
   }
-  const { data: repository } = useList<Repository>({
-    resource: "repositories",
-    filters
-  });
+  const { data: repository } = useList<Repository>({ resource: "repositories", filters });
   return (
     <Dialog.Root>
       <Dialog.Trigger asChild>

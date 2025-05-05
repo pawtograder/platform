@@ -27,7 +27,7 @@ const SIPURI: React.FC<SIPProps> = ({ sipURI }: SIPProps) => {
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
       } catch (error) {
-        console.error("Could not copy content");
+        console.error("Could not copy content ", error);
       }
     } else {
       console.error("Could not get window selection to copy content");

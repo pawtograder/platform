@@ -26,15 +26,13 @@ export default function RepoPicker(params: RepoPickerParams) {
       const supabase = await createClient();
       const session = await supabase.auth.getSession();
       const response = await fetch(`http://localhost:3100/api/course/${course.id}/template-repos`, {
-        headers: {
-          Authorization: `${session.data.session?.access_token}`
-        }
+        headers: { Authorization: `${session.data.session?.access_token}` }
       });
       const data = (await response.json()) as ListReposResponse;
       setTemplateRepos(data);
     };
     fetchRepos();
-  }, []);
+  }, [course.id]);
 
   if (!templateRepos) {
     return <div>Loading...</div>;

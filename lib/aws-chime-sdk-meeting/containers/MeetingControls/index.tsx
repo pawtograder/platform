@@ -18,14 +18,12 @@ import EndMeetingControl from "../EndMeetingControl";
 import { useNavigation } from "../../providers/NavigationProvider";
 import { StyledControls } from "./Styled";
 import { useAppState } from "../../providers/AppStateProvider";
-import { VideoFiltersCpuUtilization } from "../../types";
 import { Box } from "@chakra-ui/react";
 
 const MeetingControls: React.FC = () => {
   const { toggleNavbar, closeRoster, showRoster } = useNavigation();
   const { isUserActive } = useUserActivityState();
-  const { isWebAudioEnabled, videoTransformCpuUtilization } = useAppState();
-  const videoTransformsEnabled = videoTransformCpuUtilization !== VideoFiltersCpuUtilization.Disabled;
+  const { isWebAudioEnabled } = useAppState();
 
   const handleToggle = (): void => {
     if (showRoster) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Icon, Button, Input, Dialog, Popover, Field, Select, NativeSelect } from "@chakra-ui/react";
+import { Icon, Button, Input, Dialog, Field, NativeSelect } from "@chakra-ui/react";
 import { FaPlus } from "react-icons/fa";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
@@ -21,19 +21,11 @@ export default function AddSingleStudent() {
       console.log("Submitting");
       const supabase = createClient();
       await enrollmentAdd(
-        {
-          courseId: Number(course_id),
-          email: data.email,
-          name: data.name,
-          role: data.role
-        },
+        { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
         supabase
       );
       console.log("Invalidating user_roles");
-      invalidate({
-        resource: "user_roles",
-        invalidates: ["list"]
-      });
+      invalidate({ resource: "user_roles", invalidates: ["list"] });
     },
     [course_id, invalidate]
   );

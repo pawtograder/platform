@@ -32,14 +32,11 @@ export const VideoTransformDropdown: React.FC<Props> = ({ label = "Video Transfo
     if (!isVideoTransformDevice(selectedDevice) && transformOption !== VideoTransformOptions.None) {
       setTransformOption(VideoTransformOptions.None);
     }
-  }, [selectedDevice]);
+  }, [selectedDevice, transformOption]);
 
   // Available background filter options based off if Background Blur and Replacement ware offered/supported.
   const options: VideoTransformDropdownOptionType[] = [
-    {
-      label: VideoTransformOptions.None,
-      value: VideoTransformOptions.None
-    },
+    { label: VideoTransformOptions.None, value: VideoTransformOptions.None },
     {
       label: VideoTransformOptions.Blur,
       value:

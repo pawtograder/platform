@@ -7,9 +7,7 @@ import { redirect } from "next/navigation";
 export const setNewPasswordAction = async (formData: FormData) => {
   const password = formData.get("password");
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.updateUser({
-    password: password as string
-  });
+  const { data, error } = await supabase.auth.updateUser({ password: password as string });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
@@ -31,7 +29,7 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
 };
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
   });
   if (error) {
@@ -41,10 +39,7 @@ export const resetPasswordAction = async (email: string) => {
 };
 export const signInWithEmailAction = async (email: string, password: string) => {
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password
-  });
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });
   }
@@ -81,10 +76,7 @@ export const signInWithMicrosoftAction = async () => {
   const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
-    options: {
-      scopes: "email",
-      redirectTo
-    }
+    options: { scopes: "email", redirectTo }
   });
 
   if (error) {
@@ -113,9 +105,7 @@ export const linkGitHubAction = async () => {
   }
   console.log("Linking GitHub");
   console.log(session);
-  const { data, error } = await supabase.auth.linkIdentity({
-    provider: "github"
-  });
+  const { data, error } = await supabase.auth.linkIdentity({ provider: "github" });
   console.log(data);
   console.log(error);
   if (data.url) return redirect(data.url);

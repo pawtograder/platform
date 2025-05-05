@@ -1,5 +1,4 @@
 import { isInstructor } from "@/lib/ssrUtils";
-import { createClient } from "@/utils/supabase/server";
 import { Box } from "@chakra-ui/react";
 import InstructorDashboard from "./instructorDashboard";
 import StudentDashboard from "./studentDashboard";

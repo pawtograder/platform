@@ -120,16 +120,12 @@ function EnrollmentsTable() {
     nextPage,
     previousPage,
     setPageSize,
-    getPrePaginationRowModel,
-    refineCore
+    getPrePaginationRowModel
   } = useTable({
     columns,
     initialState: {
       columnFilters: [{ id: "class_id", value: course_id as string }],
-      pagination: {
-        pageIndex: 0,
-        pageSize: 50
-      }
+      pagination: { pageIndex: 0, pageSize: 50 }
     },
     manualPagination: false,
     manualFiltering: false,
@@ -139,15 +135,9 @@ function EnrollmentsTable() {
     pageCount,
     refineCoreProps: {
       resource: "user_roles",
-      filters: {
-        mode: "off"
-      },
-      pagination: {
-        mode: "off"
-      },
-      meta: {
-        select: "*,profiles!private_profile_id(*), users(*)"
-      }
+      filters: { mode: "off" },
+      pagination: { mode: "off" },
+      meta: { select: "*,profiles!private_profile_id(*), users(*)" }
     },
     filterFromLeafRows: true
   });
@@ -173,10 +163,7 @@ function EnrollmentsTable() {
                           <>
                             <Text onClick={header.column.getToggleSortingHandler()}>
                               {flexRender(header.column.columnDef.header, header.getContext())}
-                              {{
-                                asc: " 🔼",
-                                desc: " 🔽"
-                              }[header.column.getIsSorted() as string] ?? null}
+                              {{ asc: " 🔼", desc: " 🔽" }[header.column.getIsSorted() as string] ?? null}
                             </Text>
                             <Input
                               id={header.id}
@@ -272,12 +259,7 @@ function EnrollmentsTable() {
         borderColor="border.muted"
         backgroundColor="bg.subtle"
         height="55px"
-        style={{
-          position: "fixed",
-          bottom: 0,
-          right: 0,
-          width: "100%"
-        }}
+        style={{ position: "fixed", bottom: 0, right: 0, width: "100%" }}
       >
         <HStack>
           <AddSingleStudent />
@@ -326,10 +308,7 @@ export default function EnrollmentsPage() {
                 type: "success"
               });
 
-              invalidate({
-                resource: "user_roles",
-                invalidates: ["all"]
-              });
+              invalidate({ resource: "user_roles", invalidates: ["all"] });
             } catch (error) {
               toaster.create({
                 title: "Error syncing Canvas Enrollments",

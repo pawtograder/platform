@@ -5,7 +5,7 @@ export default async function ErrorPage({
 }: {
   searchParams: Promise<{ error: string; error_code: string; error_description: string }>;
 }) {
-  const { error, error_code, error_description } = await searchParams;
+  const { error, error_description } = await searchParams;
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
       <Stack gap="6">

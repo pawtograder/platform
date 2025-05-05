@@ -1,16 +1,13 @@
-import { Button } from "@/components/ui/button";
 import { formatDueDate } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/server";
 import { Box, DataList, HStack, VStack } from "@chakra-ui/react";
-import NextLink from "next/link";
 import AssignmentsTable from "./assignmentsTable";
-import { CreateGitHubRepos } from "./CreateGitHubRepos";
 export default async function AssignmentHome({
   params
 }: {
   params: Promise<{ course_id: string; assignment_id: string }>;
 }) {
-  const { course_id, assignment_id } = await params;
+  const { assignment_id } = await params;
   const client = await createClient();
   const { data: assignment } = await client
     .from("assignments")

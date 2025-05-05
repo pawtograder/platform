@@ -19,7 +19,6 @@ import Markdown from "react-markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import MessageInput from "@/components/ui/message-input";
-import PersonName from "@/components/ui/person-name";
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
   return (
@@ -132,16 +131,8 @@ function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
 function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: number }) {
   const { data: discussion_topics } = useList<DiscussionTopic>({
     resource: "discussion_topics",
-    meta: {
-      select: "*"
-    },
-    filters: [
-      {
-        field: "class_id",
-        operator: "eq",
-        value: course_id
-      }
-    ]
+    meta: { select: "*" },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
   const { data: rootThread, isLoading } = useOne<DiscussionThreadType>({
     resource: "discussion_threads",
@@ -151,16 +142,10 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
       select:
         "answer, author, body, class_id, created_at, draft, edited_at, id, instructors_only, is_question, ordinal, parent, root, root_class_id, subject, topic_id"
     },
-    queryOptions: {
-      enabled: !!root_id,
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
+    queryOptions: { enabled: !!root_id, staleTime: Infinity, cacheTime: Infinity },
     liveMode: "auto"
   });
-  const { mutateAsync: updateThread } = useUpdate({
-    resource: "discussion_threads"
-  });
+  const { mutateAsync: updateThread } = useUpdate({ resource: "discussion_threads" });
   const [editing, setEditing] = useState(false);
 
   const { readStatus, setUnread } = useDiscussionThreadReadStatus(root_id);
@@ -169,7 +154,7 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
     if (!readStatus?.read_at) {
       setUnread(root_id, root_id, false);
     }
-  }, [readStatus, setUnread]);
+  }, [readStatus, setUnread, root_id]);
 
   if (isLoading || !discussion_topics?.data || !rootThread?.data) {
     return <Skeleton height="100px" />;
@@ -183,13 +168,10 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
       <Box>
         {editing ? (
           <MessageInput
-            sendMessage={async (message, profile_id) => {
+            sendMessage={async (message) => {
               await updateThread({
                 id: root_id.toString(),
-                values: {
-                  body: message,
-                  edited_at: new Date().toISOString()
-                }
+                values: { body: message, edited_at: new Date().toISOString() }
               });
               setEditing(false);
             }}

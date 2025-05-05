@@ -1,10 +1,8 @@
-import { ListReposResponse } from "@/components/github/GitHubTypes";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import yaml from "yaml";
 import { Alert } from "@/components/ui/alert";
-import Markdown from "react-markdown";
-import { Box, Button, Heading, Spinner, Link, Table, Text, Separator, List } from "@chakra-ui/react";
+import { Box, Button, Heading, Spinner, Link, Table, Text, List } from "@chakra-ui/react";
 import { Checkbox } from "@/components/ui/checkbox";
 
 import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
@@ -52,9 +50,7 @@ export default function AutograderConfiguration({
   const { mutateAsync: createRegressionTest } = useCreate<AutograderRegressionTest>({
     resource: "autograder_regression_test"
   });
-  const { mutateAsync: updateAssignment } = useUpdate<Assignment>({
-    resource: "assignments"
-  });
+  const { mutateAsync: updateAssignment } = useUpdate<Assignment>({ resource: "assignments" });
   const { mutateAsync: deleteRegressionTest } = useDelete<AutograderRegressionTest>({});
   const [saveLoading, setSaveLoading] = useState(false);
   const {
@@ -63,9 +59,7 @@ export default function AutograderConfiguration({
     isLoading: reposLoading
   } = useList<Repository>({
     resource: "repositories",
-    meta: {
-      select: "*"
-    },
+    meta: { select: "*" },
     filters: [{ field: "assignment_id", operator: "eq", value: Number(assignment_id) }]
   });
   const {
@@ -74,9 +68,7 @@ export default function AutograderConfiguration({
     isLoading: regressionTestReposLoading
   } = useList<AutograderRegressionTest>({
     resource: "autograder_regression_test",
-    meta: {
-      select: "*"
-    },
+    meta: { select: "*" },
     filters: [{ field: "autograder_id", operator: "eq", value: Number(assignment_id) }]
   });
   useEffect(() => {
@@ -104,9 +96,7 @@ export default function AutograderConfiguration({
               await updateAssignment({
                 resource: "assignments",
                 id: assignment.id,
-                values: {
-                  autograder_points: points
-                }
+                values: { autograder_points: points }
               });
             }
           }
@@ -124,7 +114,7 @@ export default function AutograderConfiguration({
         });
     }
     fetchAutograderConfig();
-  }, [graderRepo, assignment]);
+  }, [graderRepo, assignment, course_id, updateAssignment]);
   const saveRegressionTests = useCallback(async () => {
     setSaveLoading(true);
     const additions = selectedRepos.filter((r) => !regressionTestRepos?.data.some((rt) => rt.repository === r));
@@ -134,12 +124,7 @@ export default function AutograderConfiguration({
     async function saveAdditions() {
       return Promise.all(
         additions.map(async (repo) => {
-          await createRegressionTest({
-            values: {
-              autograder_id: Number(assignment_id),
-              repository: repo
-            }
-          });
+          await createRegressionTest({ values: { autograder_id: Number(assignment_id), repository: repo } });
         })
       );
     }
@@ -147,16 +132,13 @@ export default function AutograderConfiguration({
       if (deletions)
         return Promise.all(
           deletions.map(async (id) => {
-            await deleteRegressionTest({
-              resource: "autograder_regression_test",
-              id: id
-            });
+            await deleteRegressionTest({ resource: "autograder_regression_test", id: id });
           })
         );
     }
     await Promise.all([saveAdditions(), saveDeletions()]);
     setSaveLoading(false);
-  }, [selectedRepos, regressionTestRepos]);
+  }, [selectedRepos, regressionTestRepos, assignment_id, createRegressionTest, deleteRegressionTest]);
   const toggleRepo = useCallback(
     (repo: string) => {
       setSelectedRepos((oldRepos) => {

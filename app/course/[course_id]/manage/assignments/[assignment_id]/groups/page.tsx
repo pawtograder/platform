@@ -4,7 +4,6 @@ import { Box, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -27,19 +26,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     error: groupsError
   } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
     resource: "assignment_groups",
-    meta: {
-      select: "*, assignment_groups_members(*)"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: assignment.id
-      }
-    ],
-    pagination: {
-      pageSize: 1000
-    }
+    meta: { select: "*, assignment_groups_members(*)" },
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
+    pagination: { pageSize: 1000 }
   });
   const {
     data: profiles,
@@ -51,30 +40,15 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       select: "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"
     },
     filters: [
-      {
-        field: "class_id",
-        operator: "eq",
-        value: course_id
-      },
-      {
-        field: "role",
-        operator: "eq",
-        value: "student"
-      },
-      {
-        field: "profiles.assignment_groups_members.assignment_id",
-        operator: "eq",
-        value: assignment.id
-      }
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "role", operator: "eq", value: "student" },
+      { field: "profiles.assignment_groups_members.assignment_id", operator: "eq", value: assignment.id }
     ],
-    pagination: {
-      pageSize: 1000
-    }
+    pagination: { pageSize: 1000 }
   });
   const groupsData = groups?.data;
   const invalidate = useInvalidate();
   const supabase = createClient();
-  const { private_profile_id } = useClassProfiles();
   const [loading, setLoading] = useState<boolean>(false);
   const updateGroupForStudent = useCallback(
     async (
@@ -95,11 +69,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           },
           supabase
         );
-        toaster.create({
-          title: "Student moved",
-          description: "",
-          type: "success"
-        });
+        toaster.create({ title: "Student moved", description: "", type: "success" });
       } catch (e) {
         console.error(e);
         toaster.create({
@@ -110,12 +80,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       } finally {
         setLoading(false);
       }
-      invalidate({
-        resource: "assignment_groups_members",
-        invalidates: ["all"]
-      });
+      invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
     },
-    [supabase, invalidate]
+    [supabase, invalidate, course_id]
   );
   if (!groupsData || !assignment) {
     return (
@@ -227,10 +194,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
 }
 export default function AssignmentGroupsPage() {
   const { course_id, assignment_id } = useParams();
-  const assignmentQuery = useShow<Assignment>({
-    resource: "assignments",
-    id: Number(assignment_id)
-  });
+  const assignmentQuery = useShow<Assignment>({ resource: "assignments", id: Number(assignment_id) });
   if (assignmentQuery.query.isLoading) {
     return (
       <Box>

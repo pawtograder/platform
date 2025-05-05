@@ -29,9 +29,7 @@ export function DiscussionThreadReply({
   setVisible: (visible: boolean) => void;
 }) {
   // const invalidate = useInvalidate();
-  const { mutateAsync: mutate } = useCreate({
-    resource: "discussion_threads"
-  });
+  const { mutateAsync: mutate } = useCreate({ resource: "discussion_threads" });
 
   const sendMessage = useCallback(
     async (message: string, profile_id: string, close = true) => {
@@ -60,15 +58,7 @@ export function DiscussionThreadReply({
         setVisible(false);
       }
     },
-    [
-      thread?.subject,
-      thread?.id,
-      thread?.root,
-      thread?.topic_id,
-      thread?.instructors_only,
-      thread?.class_id,
-      thread?.author
-    ]
+    [mutate, setVisible, thread]
   );
   if (!visible) {
     return <></>;
@@ -144,7 +134,6 @@ export function useLogIfChanged<T>(name: string, value: T) {
 export const DiscussionThread = memo(
   ({
     thread_id,
-    indent,
     outerSiblings,
     isFirstDescendantOfParent,
     originalPoster
@@ -175,7 +164,7 @@ export const DiscussionThread = memo(
     }, [authorProfile, originalPoster, role.role]);
     const outerBorders = useCallback(
       (present: string): JSX.Element => {
-        let ret: JSX.Element[] = [];
+        const ret: JSX.Element[] = [];
         for (let i = 0; i < present.length; i++) {
           if (present[i] === "1") {
             ret.push(
@@ -193,7 +182,7 @@ export const DiscussionThread = memo(
         }
         return <>{ret}</>;
       },
-      [isFirstDescendantOfParent, outerSiblings]
+      [isFirstDescendantOfParent]
     );
     const childOuterSiblings = useMemo(() => {
       const ret: string[] = [];
@@ -203,26 +192,18 @@ export const DiscussionThread = memo(
         }
       }
       return ret;
-    }, [outerSiblings, thread?.children.length]);
+    }, [thread?.children, outerSiblings]);
     const updateThread = useUpdateThreadTeaser();
     const showReply = useCallback(() => {
       setReplyVisible(true);
     }, []);
     const toggleAnswered = useCallback(async () => {
       if (is_answer) {
-        await updateThread({
-          id: thread!.root!,
-          old: root_thread!,
-          values: { answer: null }
-        });
+        await updateThread({ id: thread!.root!, old: root_thread!, values: { answer: null } });
       } else {
-        await updateThread({
-          id: thread!.root!,
-          old: root_thread!,
-          values: { answer: thread!.id }
-        });
+        await updateThread({ id: thread!.root!, old: root_thread!, values: { answer: thread!.id } });
       }
-    }, [is_answer, updateThread, thread?.root, thread?.id]);
+    }, [is_answer, updateThread, thread, root_thread]);
     const isAnswered = root_thread?.answer != undefined;
     if (!thread || !thread.children) {
       return <Skeleton height="100px" />;
@@ -293,13 +274,10 @@ export const DiscussionThread = memo(
                   </HStack>
                   {isEditing ? (
                     <MessageInput
-                      sendMessage={async (message, profile_id) => {
+                      sendMessage={async (message) => {
                         await mutateAsync({
                           id: thread.id.toString(),
-                          values: {
-                            body: message,
-                            edited_at: new Date().toISOString()
-                          }
+                          values: { body: message, edited_at: new Date().toISOString() }
                         });
                         setIsEditing(false);
                       }}

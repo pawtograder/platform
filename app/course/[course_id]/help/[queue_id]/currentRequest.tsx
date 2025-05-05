@@ -1,28 +1,25 @@
-import { DataList, Flex, Icon, IconButton, Text } from "@chakra-ui/react";
+import { DataList, Flex, Icon, IconButton } from "@chakra-ui/react";
 
 import { Box } from "@chakra-ui/react";
-import { HelpQueue, HelpRequest, HelpRequestMessage } from "@/utils/supabase/DatabaseTypes";
-import { HelpRequestChatChannelProvider, useChatChannel } from "@/lib/chat";
-import useUserProfiles, { useUserProfile } from "@/hooks/useUserProfiles";
-import { useList, useOne } from "@refinedev/core";
-import { useAppState } from "@/lib/aws-chime-sdk-meeting/providers/AppStateProvider";
-import useAuthState from "@/hooks/useAuthState";
+import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { HelpRequestChatChannelProvider } from "@/lib/chat";
+import { useUserProfile } from "@/hooks/useUserProfiles";
 import HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
 import { BsCameraVideo } from "react-icons/bs";
-function ChatChannelParticipants() {
-  const { participants } = useChatChannel();
-  const profiles = useUserProfiles();
-  return (
-    <>
-      {participants.map((participant, index) => (
-        <Text key={participant}>
-          {profiles.users.find((p) => p.id === participant)?.name}
-          {index === participants.length - 1 ? "" : ", "}
-        </Text>
-      ))}
-    </>
-  );
-}
+// function ChatChannelParticipants() {
+//   const { participants } = useChatChannel();
+//   const profiles = useUserProfiles();
+//   return (
+//     <>
+//       {participants.map((participant, index) => (
+//         <Text key={participant}>
+//           {profiles.users.find((p) => p.id === participant)?.name}
+//           {index === participants.length - 1 ? "" : ", "}
+//         </Text>
+//       ))}
+//     </>
+//   );
+// }
 function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
   console.log(request.is_video_live);
   if (request.is_video_live)

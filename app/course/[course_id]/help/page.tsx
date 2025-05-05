@@ -2,21 +2,14 @@
 
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Link, useList } from "@refinedev/core";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { redirect } from "next/navigation";
 
 export default function HelpPage() {
   const { course_id } = useParams();
-  const router = useRouter();
   const queues = useList<HelpQueue>({
     resource: "help_queues",
-    filters: [
-      {
-        field: "class_id",
-        operator: "eq",
-        value: course_id
-      }
-    ]
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
   if (queues.isLoading) {
     return <div>Loading...</div>;

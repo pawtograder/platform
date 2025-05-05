@@ -1,11 +1,9 @@
-import Controls from "@/components/videocall/controls";
 import Roster from "@/components/videocall/roster";
 import VideoGrid from "@/components/videocall/videogrid";
 import useUserProfiles from "@/hooks/useUserProfiles";
 import MeetingControls from "@/lib/aws-chime-sdk-meeting/containers/MeetingControls";
 import { NavigationProvider } from "@/lib/aws-chime-sdk-meeting/providers/NavigationProvider";
 import { VideoTileGridProvider } from "@/lib/aws-chime-sdk-meeting/providers/VideoTileGridProvider";
-import isValidProp from "@emotion/is-prop-valid";
 import {
   BackgroundBlurProvider,
   BackgroundReplacementProvider,
@@ -30,11 +28,7 @@ const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => 
         <StyleSheetManager>
           <NavigationProvider>
             <VoiceFocusProvider>
-              <BackgroundBlurProvider
-                options={{
-                  filterCPUUtilization: 0
-                }}
-              >
+              <BackgroundBlurProvider options={{ filterCPUUtilization: 0 }}>
                 <BackgroundReplacementProvider>
                   <VideoTileGridProvider>
                     <UserActivityProvider>{children}</UserActivityProvider>
@@ -60,11 +54,7 @@ function HelpMeeting() {
       if (!user) {
         throw new Error("User not found");
       }
-      return {
-        chimeAttendeeId,
-        externalUserId,
-        name: user.name!
-      };
+      return { chimeAttendeeId, externalUserId, name: user.name! };
     };
   }, [users, meetingManager]);
   const initialized = useRef(false);
@@ -101,7 +91,7 @@ function HelpMeeting() {
     return () => {
       meetingManager.leave();
     };
-  }, [meetingManager]);
+  }, [meetingManager, course_id, help_request_id]);
   return (
     <>
       <Roster />

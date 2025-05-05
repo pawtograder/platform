@@ -15,7 +15,7 @@ interface Props {
 }
 
 export const HelpRequestTeaser = (props: Props) => {
-  const { user, updatedAt, message, isResolved, isAssigned } = props.data;
+  const { user, updatedAt, message } = props.data;
   const { selected } = props;
   const userProfile = useUserProfile(user);
   return (

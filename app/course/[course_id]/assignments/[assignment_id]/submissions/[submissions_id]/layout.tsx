@@ -31,7 +31,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { useInvalidate, useList, useSubscription, useUpdate } from "@refinedev/core";
+import { useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
@@ -44,7 +44,6 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { PiSignOut } from "react-icons/pi";
 import { useState } from "react";
-import { Tooltip } from "@/components/ui/tooltip";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { CrudFilter } from "@refinedev/core";
 import { GraderResultTestData } from "./results/page";
@@ -77,48 +76,18 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const router = useRouter();
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
-    ? {
-        field: "assignment_group_id",
-        operator: "eq",
-        value: submission.assignment_group_id
-      }
-    : {
-        field: "profile_id",
-        operator: "eq",
-        value: submission.profile_id
-      };
+    ? { field: "assignment_group_id", operator: "eq", value: submission.assignment_group_id }
+    : { field: "profile_id", operator: "eq", value: submission.profile_id };
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
-    meta: {
-      select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: submission.assignments.id
-      },
-      groupOrProfileFilter
-    ],
-    sorters: [
-      {
-        field: "created_at",
-        order: "desc"
-      }
-    ]
+    meta: { select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
+    filters: [{ field: "assignment_id", operator: "eq", value: submission.assignments.id }, groupOrProfileFilter],
+    sorters: [{ field: "created_at", order: "desc" }]
   });
   useList<Submission>({
     resource: "submissions",
-    meta: {
-      select: "*"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: submission.assignments.id
-      }
-    ],
+    meta: { select: "*" },
+    filters: [{ field: "assignment_id", operator: "eq", value: submission.assignments.id }],
     liveMode: "manual",
     onLiveEvent: (event) => {
       const newSubmission = event.payload as Submission;
@@ -152,20 +121,10 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
             maxHeight="400px"
             overflowY="auto"
             css={{
-              "&::-webkit-scrollbar": {
-                width: "8px"
-              },
-              "&::-webkit-scrollbar-track": {
-                background: "#f1f1f1",
-                borderRadius: "4px"
-              },
-              "&::-webkit-scrollbar-thumb": {
-                background: "#888",
-                borderRadius: "4px"
-              },
-              "&::-webkit-scrollbar-thumb:hover": {
-                background: "#555"
-              }
+              "&::-webkit-scrollbar": { width: "8px" },
+              "&::-webkit-scrollbar-track": { background: "#f1f1f1", borderRadius: "4px" },
+              "&::-webkit-scrollbar-thumb": { background: "#888", borderRadius: "4px" },
+              "&::-webkit-scrollbar-thumb:hover": { background: "#555" }
             }}
           >
             <Table.Root>
@@ -334,14 +293,8 @@ function incompleteRubricChecks(
 ): {
   required_checks: HydratedRubricCheck[];
   optional_checks: HydratedRubricCheck[];
-  required_criteria: {
-    criteria: HydratedRubricCriteria;
-    check_count_applied: number;
-  }[];
-  optional_criteria: {
-    criteria: HydratedRubricCriteria;
-    check_count_applied: number;
-  }[];
+  required_criteria: { criteria: HydratedRubricCriteria; check_count_applied: number }[];
+  optional_criteria: { criteria: HydratedRubricCriteria; check_count_applied: number }[];
 } {
   const required_checks = rubric.rubric_criteria.flatMap((criteria) =>
     criteria.rubric_checks.filter(
@@ -369,15 +322,9 @@ function incompleteRubricChecks(
   const optional_criteria = criteria.filter(
     (criteria) => criteria.criteria.min_checks_per_submission === null && criteria.check_count_applied === 0
   );
-  return {
-    required_checks,
-    optional_checks,
-    required_criteria,
-    optional_criteria
-  };
+  return { required_checks, optional_checks, required_criteria, optional_criteria };
 }
 function CompleteRubricButton() {
-  const submission = useSubmission();
   const review = useSubmissionReview();
   const rubric = useSubmissionRubric();
   const comments = useAllRubricCheckInstances(review?.id);
@@ -406,10 +353,7 @@ function CompleteRubricButton() {
   //             }
   const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
   const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
-  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
-    resource: "submission_reviews"
-  });
-  const review_id = review?.id;
+  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({ resource: "submission_reviews" });
   const { private_profile_id } = useClassProfiles();
   return (
     <Popover.Root>
@@ -497,9 +441,7 @@ function CompleteRubricButton() {
 function ReviewActions() {
   const review = useSubmissionReview();
   const { private_profile_id } = useClassProfiles();
-  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
-    resource: "submission_reviews"
-  });
+  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({ resource: "submission_reviews" });
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -588,7 +530,6 @@ function RubricView() {
   const review = useSubmissionReview();
   const showHandGrading = isGraderOrInstructor || review?.released;
   const criteria = submission.assignments.rubrics?.rubric_criteria as HydratedRubricCriteria[];
-  const comments = useAllRubricCheckInstances(review?.id);
   // rubrics.sort((a, b) => a.name.localeCompare(b.name));
   return (
     <Box
@@ -618,7 +559,6 @@ function RubricView() {
 }
 
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
-  const { submissions_id } = useParams();
   const pathname = usePathname();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);

@@ -14,7 +14,6 @@ import { VStack } from "@chakra-ui/react";
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { createClient } from "@/utils/supabase/server";
 import Link from "next/link";
-import { PollQuestionForm } from "@/components/ui/polls/poll-question-form";
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase

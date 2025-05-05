@@ -12,18 +12,14 @@ import AssignmentForm from "../../new/form";
 export default function EditAssignment() {
   const { course_id, assignment_id } = useParams();
   const form = useForm<Assignment>({
-    refineCoreProps: {
-      resource: "assignments",
-      action: "edit",
-      id: Number.parseInt(assignment_id as string)
-    }
+    refineCoreProps: { resource: "assignments", action: "edit", id: Number.parseInt(assignment_id as string) }
   });
 
   useEffect(() => {
     if (form.refineCore.query?.data?.data) {
       form.reset(form.refineCore.query.data.data);
     }
-  }, [form.refineCore.query?.data?.data, form.reset]);
+  }, [form]);
 
   const onFinish = useCallback(
     async (values: FieldValues) => {
@@ -53,7 +49,7 @@ export default function EditAssignment() {
         );
       }
     },
-    [form.refineCore.onFinish, form.refineCore.query?.data?.data, form.reset, assignment_id, course_id]
+    [form.refineCore, assignment_id, course_id]
   );
 
   if (form.refineCore.query?.isLoading || form.refineCore.formLoading) {

@@ -1,5 +1,4 @@
 import Markdown from "@/components/ui/markdown";
-import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, HStack, Link, Table, Text } from "@chakra-ui/react";
 import { format } from "date-fns";

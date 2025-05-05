@@ -184,9 +184,7 @@ function YamlRubricToHydratedRubric(yaml: YmlRubricType): HydratedRubric {
   };
 }
 
-type AssignmentWithRubric = Assignment & {
-  rubrics: HydratedRubric;
-};
+type AssignmentWithRubric = Assignment & { rubrics: HydratedRubric };
 
 function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T): (keyof T)[] {
   return Object.keys(newItem)
@@ -208,9 +206,7 @@ export default function RubricPage() {
   const { query: assignment } = useShow<AssignmentWithRubric>({
     resource: "assignments",
     id: assignment_id as string,
-    meta: {
-      select: "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
-    }
+    meta: { select: "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))" }
   });
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
@@ -267,7 +263,7 @@ export default function RubricPage() {
   );
 
   const handleEditorChange = useCallback(
-    (value: string | undefined, event: any) => {
+    (value: string | undefined) => {
       if (value) {
         setValue(value);
         if (debounceTimeoutRef.current) {
@@ -307,9 +303,7 @@ export default function RubricPage() {
       await updateResource({
         id: part.id,
         resource: "rubric_parts",
-        values: updatedPropertyNames.map((propertyName) => ({
-          [propertyName]: part[propertyName]
-        }))
+        values: updatedPropertyNames.map((propertyName) => ({ [propertyName]: part[propertyName] }))
       });
     },
     [updateResource]
@@ -323,19 +317,9 @@ export default function RubricPage() {
       if (updatedPropertyNames.length === 0) {
         return;
       }
-      const values = updatedPropertyNames.reduce(
-        (acc, curr) => ({
-          ...acc,
-          [curr]: criteria[curr]
-        }),
-        {}
-      );
+      const values = updatedPropertyNames.reduce((acc, curr) => ({ ...acc, [curr]: criteria[curr] }), {});
       console.log(values);
-      await updateResource({
-        id: criteria.id,
-        resource: "rubric_criteria",
-        values
-      });
+      await updateResource({ id: criteria.id, resource: "rubric_criteria", values });
     },
     [updateResource]
   );
@@ -348,18 +332,8 @@ export default function RubricPage() {
       if (updatedPropertyNames.length === 0) {
         return;
       }
-      const values = updatedPropertyNames.reduce(
-        (acc, curr) => ({
-          ...acc,
-          [curr]: check[curr]
-        }),
-        {}
-      );
-      await updateResource({
-        id: check.id,
-        resource: "rubric_checks",
-        values
-      });
+      const values = updatedPropertyNames.reduce((acc, curr) => ({ ...acc, [curr]: check[curr] }), {});
+      await updateResource({ id: check.id, resource: "rubric_checks", values });
     },
     [updateResource]
   );
@@ -369,11 +343,7 @@ export default function RubricPage() {
     const findChanges = <T extends { id: number | undefined }>(
       newItems: T[],
       existingItems: T[]
-    ): {
-      toCreate: T[];
-      toUpdate: T[];
-      toDelete: number[];
-    } => {
+    ): { toCreate: T[]; toUpdate: T[]; toDelete: number[] } => {
       const existingIds = new Set(existingItems.map((item) => item.id).filter((id): id is number => id !== undefined));
       const newIds = new Set(newItems.map((item) => item.id).filter((id): id is number => id !== undefined));
 
@@ -411,28 +381,14 @@ export default function RubricPage() {
       )
     );
 
-    await Promise.all(
-      criteriaChanges.toDelete.map((id) =>
-        deleteResource({
-          id,
-          resource: "rubric_criteria"
-        })
-      )
-    );
+    await Promise.all(criteriaChanges.toDelete.map((id) => deleteResource({ id, resource: "rubric_criteria" })));
 
     await Promise.all(
       partChanges.toUpdate.map((part) =>
         updatePartIfChanged(part, existingRubric.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart)
       )
     );
-    await Promise.all(
-      partChanges.toDelete.map((id) =>
-        deleteResource({
-          id,
-          resource: "rubric_parts"
-        })
-      )
-    );
+    await Promise.all(partChanges.toDelete.map((id) => deleteResource({ id, resource: "rubric_parts" })));
     await Promise.all(
       partChanges.toCreate.map(async (part) => {
         const partCopy = { ...part };
@@ -441,10 +397,7 @@ export default function RubricPage() {
         (partCopy as any).rubric_criteria = undefined;
         (partCopy as any).id = undefined;
         (partCopy as any).created_at = undefined;
-        const createdPart = await createResource({
-          resource: "rubric_parts",
-          values: partCopy
-        });
+        const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
         if (!createdPart.data.id) {
           throw new Error("Failed to create part");
         }
@@ -479,10 +432,7 @@ export default function RubricPage() {
         (criteriaCopy as any).id = undefined;
         (criteriaCopy as any).created_at = undefined;
         (criteriaCopy as any).rubric_checks = undefined;
-        const createdCriteria = await createResource({
-          resource: "rubric_criteria",
-          values: criteriaCopy
-        });
+        const createdCriteria = await createResource({ resource: "rubric_criteria", values: criteriaCopy });
         if (!createdCriteria.data.id) {
           throw new Error("Failed to create criteria");
         }
@@ -509,17 +459,24 @@ export default function RubricPage() {
         (checkCopy as any).id = undefined;
         (checkCopy as any).created_at = undefined;
         (checkCopy as any).rubric_id = undefined;
-        const createdCheck = await createResource({
-          resource: "rubric_checks",
-          values: checkCopy
-        });
+        const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
         if (!createdCheck.data.id) {
           throw new Error("Failed to create check");
         }
         check.id = createdCheck.data.id as number;
       })
     );
-  }, [rubric, existingRubric, assignment.data?.data.class_id, assignment.data?.data.rubrics.id]);
+  }, [
+    rubric,
+    existingRubric,
+    assignment.data?.data.class_id,
+    assignment.data?.data.rubrics.id,
+    createResource,
+    deleteResource,
+    updateCheckIfChanged,
+    updateCriteriaIfChanged,
+    updatePartIfChanged
+  ]);
 
   return (
     <Flex w="100%">

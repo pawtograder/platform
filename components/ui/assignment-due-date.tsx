@@ -1,14 +1,14 @@
 "use client";
 
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
-import { useAssignmentDueDate, useCourse, useLateTokens } from "@/hooks/useCourseController";
+import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
 import { addHours, format } from "date-fns";
 import { TZDate } from "@date-fns/tz";
 import { Skeleton } from "./skeleton";
 import { Button } from "./button";
 import { Text, HStack, Dialog, Heading } from "@chakra-ui/react";
 import { Alert } from "./alert";
-import { useCreate, useList, useOne } from "@refinedev/core";
+import { useCreate, useList } from "@refinedev/core";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useState } from "react";
 import { toaster, Toaster } from "./toaster";
@@ -21,13 +21,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const course = role.classes;
   const { data: assignmentGroup } = useList<AssignmentGroup>({
     resource: "assignment_groups",
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: assignment.id
-      }
-    ]
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }]
   });
   const assignment_group_id = assignmentGroup?.data?.[0]?.id;
   const { mutateAsync: createAssignmentDueDateException } = useCreate<AssignmentDueDateException>({
@@ -130,6 +124,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                     type: "success"
                   });
                 } catch (err) {
+                  console.error(err);
                   toaster.create({
                     title: "Error consuming late token",
                     description:

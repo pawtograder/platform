@@ -2,16 +2,10 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
-import useAuthState from "@/hooks/useAuthState";
 import { HelpRequest, HelpRequestMessage } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useList } from "@refinedev/core";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-export type ChatMessage = {
-  id: number | string;
-  message: string;
-  created_at: string;
-  author: string;
-};
+export type ChatMessage = { id: number | string; message: string; created_at: string; author: string };
 export type ChatChannelContextType = {
   messages: ChatMessage[];
   postMessage: (message: string, profile_id: string) => Promise<void>;
@@ -38,24 +32,16 @@ export function HelpRequestChatChannelProvider({
     resource: "help_request_messages",
     filters: [{ field: "help_request_id", operator: "eq", value: help_request.id }],
     liveMode: "auto",
-    pagination: {
-      pageSize: 1000
-    },
+    pagination: { pageSize: 1000 },
     sorters: [{ field: "created_at", order: "asc" }]
   });
-  const { mutateAsync: createMessage } = useCreate<HelpRequestMessage>({
-    resource: "help_request_messages"
-  });
+  const { mutateAsync: createMessage } = useCreate<HelpRequestMessage>({ resource: "help_request_messages" });
   const helpRequestID = help_request.id;
   const userID = private_profile_id;
   useEffect(() => {
     const supabase = createClient();
 
-    const chan = supabase.realtime.channel(`help_request_${helpRequestID}`, {
-      config: {
-        broadcast: { self: true }
-      }
-    });
+    const chan = supabase.realtime.channel(`help_request_${helpRequestID}`, { config: { broadcast: { self: true } } });
     chan.subscribe((status) => {
       if (status !== "SUBSCRIBED") {
         return;
@@ -74,9 +60,7 @@ export function HelpRequestChatChannelProvider({
         setParticipants(getUidsFromPresence(chan.presenceState()));
       });
       // console.log("Tracking user")
-      const presenceTrackStatus = chan.track({
-        user_id: userID
-      });
+      const presenceTrackStatus = chan.track({ user_id: userID });
     });
     return () => {
       // console.log(helpRequestID)
@@ -142,9 +126,7 @@ export function EphemeralChatChannelProvider({
     const subscribe = async () => {
       const supabase = createClient();
       const chan = supabase.realtime.channel(`help_queue_${class_id}_${queue_id}`, {
-        config: {
-          broadcast: { self: true }
-        }
+        config: { broadcast: { self: true } }
       });
       chan.subscribe((status) => {
         if (status !== "SUBSCRIBED") {
@@ -166,13 +148,11 @@ export function EphemeralChatChannelProvider({
         chan.on("broadcast", { event: "chat_message" }, (payload) => {
           setMessages((prev) => [...prev, payload.message as ChatMessage]);
         });
-        const presenceTrackStatus = chan.track({
-          user_id: private_profile_id!
-        });
+        const presenceTrackStatus = chan.track({ user_id: private_profile_id! });
       });
     };
     subscribe();
-  }, [queue_id, class_id]);
+  }, [queue_id, class_id, private_profile_id]);
   return (
     <ChatChannelContext.Provider value={{ participants, messages, postMessage }}>
       {children}

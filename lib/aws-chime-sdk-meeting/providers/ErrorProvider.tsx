@@ -3,13 +3,11 @@
 
 import React, { useState, ReactNode } from "react";
 
-type Props = {
-  children: ReactNode;
-};
+type Props = { children: ReactNode };
 
 const context = React.createContext({
   errorMessage: "",
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   updateErrorMessage: (_errorMessage: string) => {}
 });
 
@@ -25,9 +23,6 @@ export default function ErrorProvider({ children }: Props) {
     setErrorMessage(message);
   };
 
-  const providerValue = {
-    errorMessage,
-    updateErrorMessage
-  };
+  const providerValue = { errorMessage, updateErrorMessage };
   return <ErrorContext.Provider value={providerValue}>{children}</ErrorContext.Provider>;
 }

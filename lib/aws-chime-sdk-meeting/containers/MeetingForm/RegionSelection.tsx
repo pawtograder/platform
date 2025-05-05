@@ -27,9 +27,7 @@ const RegionSelection: React.FC<Props> = ({ setRegion, region }) => {
       }
 
       try {
-        const res = await fetch("https://nearest-media-region.l.chime.aws", {
-          method: "GET"
-        });
+        const res = await fetch("https://nearest-media-region.l.chime.aws", { method: "GET" });
 
         if (!res.ok) {
           throw new Error("Server error");
@@ -51,7 +49,7 @@ const RegionSelection: React.FC<Props> = ({ setRegion, region }) => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [setRegion, region]);
 
   return (
     <FormField

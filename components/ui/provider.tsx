@@ -2,7 +2,7 @@
 
 import { system } from "@/components/ui/theme";
 import { createClient } from "@/utils/supabase/client";
-import { ChakraProvider, createSystem, defaultConfig } from "@chakra-ui/react";
+import { ChakraProvider } from "@chakra-ui/react";
 
 import { Refine } from "@refinedev/core";
 import { dataProvider, liveProvider } from "@refinedev/supabase";
@@ -16,9 +16,7 @@ export function Provider(props: ColorModeProviderProps) {
       <Refine
         dataProvider={dataProvider(supabaseClient)}
         //notificationProvider={notificationProvider}
-        options={{
-          disableTelemetry: true
-        }}
+        options={{ disableTelemetry: true }}
         liveProvider={liveProvider(supabaseClient)}
       >
         <ColorModeProvider {...props} />

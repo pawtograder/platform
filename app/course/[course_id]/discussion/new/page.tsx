@@ -5,7 +5,6 @@ import { Field } from "@/components/ui/field";
 import MdEditor from "@/components/ui/md-editor";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { Toaster } from "@/components/ui/toaster";
-import { createClient } from "@/utils/supabase/client";
 import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
@@ -15,7 +14,6 @@ import { useCallback } from "react";
 import { Controller } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
-import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
@@ -39,22 +37,11 @@ export default function NewDiscussionThread() {
   });
   const { data: topics } = useList<DiscussionTopic>({
     resource: "discussion_topics",
-    sorters: [
-      {
-        field: "ordinal",
-        order: "asc"
-      }
-    ],
+    sorters: [{ field: "ordinal", order: "asc" }],
 
-    filters: [
-      {
-        field: "class_id",
-        operator: "eq",
-        value: Number.parseInt(course_id as string)
-      }
-    ]
+    filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }]
   });
-  const { private_profile_id, public_profile_id, public_profile, private_profile } = useClassProfiles();
+  const { private_profile_id, public_profile_id, public_profile } = useClassProfiles();
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -77,7 +64,7 @@ export default function NewDiscussionThread() {
       }
       populate();
     },
-    [handleSubmit, refineCore.onFinish, private_profile_id, public_profile_id]
+    [handleSubmit, refineCore.onFinish, private_profile_id, public_profile_id, course_id, getValues, setValue]
   );
   return (
     <Box>
@@ -287,13 +274,7 @@ export default function NewDiscussionThread() {
                 errorText={errors.title?.message?.toString()}
                 invalid={errors.title ? true : false}
               >
-                <Input
-                  variant="outline"
-                  type="text"
-                  {...register("subject", {
-                    required: "This is required"
-                  })}
-                />
+                <Input variant="outline" type="text" {...register("subject", { required: "This is required" })} />
               </Field>
             </Fieldset.Content>
             <Fieldset.Content>

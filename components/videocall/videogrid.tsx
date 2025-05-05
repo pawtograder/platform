@@ -1,6 +1,6 @@
 "use client";
 import { Box } from "@chakra-ui/react";
-import { MeetingStatus, useMeetingManager, VideoTileGrid } from "amazon-chime-sdk-component-library-react";
+import { VideoTileGrid } from "amazon-chime-sdk-component-library-react";
 
 export default function VideoGrid() {
   return (

@@ -16,13 +16,10 @@ import {
   Assignment,
   AssignmentGroupInvitation,
   AssignmentGroupJoinRequest,
-  AssignmentGroupMembersWithGroupMembersInvitationsAndJoinRequests,
-  AssignmentGroupWithMembersInvitationsAndJoinRequests,
-  UserProfile
+  AssignmentGroupWithMembersInvitationsAndJoinRequests
 } from "@/utils/supabase/DatabaseTypes";
 import {
   Avatar,
-  Badge,
   Box,
   Button,
   Card,
@@ -34,18 +31,16 @@ import {
   Icon,
   Input,
   List,
-  ListItem,
   Separator,
   Skeleton,
-  Tag,
   Text,
   VStack
 } from "@chakra-ui/react";
 import { useInvalidate, useList } from "@refinedev/core";
 import { MultiValue, Select } from "chakra-react-select";
-import { format, formatRelative, set } from "date-fns";
+import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 function CreateGroupButton({
   assignment,
   allGroups
@@ -121,35 +116,18 @@ function CreateGroupButton({
                     },
                     supabase
                   )
-                    .then((res) => {
-                      toaster.create({
-                        title: "Group created",
-                        description: "",
-                        type: "success"
-                      });
+                    .then(() => {
+                      toaster.create({ title: "Group created", description: "", type: "success" });
                       setOpen(false);
                       setName("");
                       setSelectedInvitees([]);
-                      invalidate({
-                        resource: "assignment_groups",
-                        invalidates: ["all"]
-                      });
-                      invalidate({
-                        resource: "assignment_groups_members",
-                        invalidates: ["all"]
-                      });
-                      invalidate({
-                        resource: "assignment_group_invitations",
-                        invalidates: ["all"]
-                      });
+                      invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+                      invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+                      invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
                     })
                     .catch((e) => {
                       if (e instanceof EdgeFunctionError) {
-                        toaster.create({
-                          title: "Error: " + e.message,
-                          description: e.details,
-                          type: "error"
-                        });
+                        toaster.create({ title: "Error: " + e.message, description: e.details, type: "error" });
                       }
                     });
                 }}
@@ -193,10 +171,7 @@ function InviteButton({
     return ungroupedProfiles.filter((p) => !group.assignment_group_invitations.some((i) => i.invitee === p.id));
   }, [ungroupedProfiles, group]);
   const invalidateInvites = useCallback(() => {
-    invalidate({
-      resource: "assignment_group_invitations",
-      invalidates: ["all"]
-    });
+    invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
   }, [invalidate]);
 
   return (
@@ -261,11 +236,7 @@ function InviteButton({
                           type: "error"
                         });
                       } else {
-                        toaster.create({
-                          title: "Invitations sent",
-                          description: "",
-                          type: "success"
-                        });
+                        toaster.create({ title: "Invitations sent", description: "", type: "success" });
                         setSelectedInvitees([]);
                         invalidateInvites();
                         setOpen(false);
@@ -304,30 +275,17 @@ function JoinGroupButton({
   assignment: Assignment;
 }) {
   const { private_profile_id } = useClassProfiles();
-  const [ungroupedProfiles, setUngroupedProfiles] = useState<UserProfile[]>([]);
   const [open, setOpen] = useState(false);
   const invalidate = useInvalidate();
   const supabase = createClient();
   const [groupToJoin, setGroupToJoin] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(null);
   const myInvitations = useMemo(() => {
-    const invitations = groups
-      .map((g) =>
-        g.assignment_group_invitations.map((i) => ({
-          ...i,
-          group: g
-        }))
-      )
-      .flat();
+    const invitations = groups.map((g) => g.assignment_group_invitations.map((i) => ({ ...i, group: g }))).flat();
     return invitations.filter((i) => i.invitee === private_profile_id);
   }, [groups, private_profile_id]);
   const myRequests = useMemo(() => {
     const requests = groups
-      .map((g) =>
-        g.assignment_group_join_request.map((i) => ({
-          ...i,
-          group: g
-        }))
-      )
+      .map((g) => g.assignment_group_join_request.map((i) => ({ ...i, group: g })))
       .flat()
       .filter((j) => j.profile_id === private_profile_id);
     return requests.sort((a, b) => {
@@ -342,18 +300,9 @@ function JoinGroupButton({
     );
   }, [groups, private_profile_id]);
   const invalidateInvites = useCallback(() => {
-    invalidate({
-      resource: "assignment_group_join_request",
-      invalidates: ["all"]
-    });
-    invalidate({
-      resource: "assignment_group_invitations",
-      invalidates: ["all"]
-    });
-    invalidate({
-      resource: "assignment_groups_members",
-      invalidates: ["all"]
-    });
+    invalidate({ resource: "assignment_group_join_request", invalidates: ["all"] });
+    invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
   }, [invalidate]);
   return (
     <Dialog.Root
@@ -490,45 +439,24 @@ function JoinGroupButton({
                       </HStack>
                     );
                   }}
-                  options={myGroupsWithoutInvitationsOrRequests.map((p) => ({
-                    group: p,
-                    label: p.name,
-                    value: p.id
-                  }))}
+                  options={myGroupsWithoutInvitationsOrRequests.map((p) => ({ group: p, label: p.name, value: p.id }))}
                 />
                 <Button
                   colorPalette="green"
                   onClick={async () => {
                     try {
-                      const res = await assignmentGroupJoin(
-                        {
-                          assignment_group_id: groupToJoin!.id
-                        },
-                        supabase
-                      );
+                      const res = await assignmentGroupJoin({ assignment_group_id: groupToJoin!.id }, supabase);
                       setGroupToJoin(null);
                       invalidateInvites();
                       if (res.joined_group) {
-                        toaster.create({
-                          title: "Group joined",
-                          description: res.message,
-                          type: "success"
-                        });
+                        toaster.create({ title: "Group joined", description: res.message, type: "success" });
                         setOpen(false);
                       } else {
-                        toaster.create({
-                          title: "Request sent",
-                          description: res.message,
-                          type: "info"
-                        });
+                        toaster.create({ title: "Request sent", description: res.message, type: "info" });
                       }
                     } catch (err) {
                       if (err instanceof EdgeFunctionError) {
-                        toaster.create({
-                          title: "Error: " + err.message,
-                          description: err.details,
-                          type: "error"
-                        });
+                        toaster.create({ title: "Error: " + err.message, description: err.details, type: "error" });
                       }
                     }
                   }}
@@ -578,17 +506,10 @@ function JoinGroupButton({
                                   const joinRequest = g;
                                   const { error } = await supabase
                                     .from("assignment_group_join_request")
-                                    .update({
-                                      status: "withdrawn",
-                                      decision_maker: private_profile_id
-                                    })
+                                    .update({ status: "withdrawn", decision_maker: private_profile_id })
                                     .eq("id", joinRequest.id);
                                   if (error) {
-                                    toaster.create({
-                                      title: "Error",
-                                      description: error.message,
-                                      type: "error"
-                                    });
+                                    toaster.create({ title: "Error", description: error.message, type: "error" });
                                   }
                                   invalidateInvites();
                                   toaster.create({
@@ -641,21 +562,9 @@ function LeaveGroupButton({ assignment }: { assignment: Assignment }) {
       confirmHeader="Leave Group"
       confirmText="Are you sure you want to leave this group? You will be removed from the group and will no longer be able to submit assignments as part of this group. If you have already submitted an assignment, your prior group submission will no longer be associated with your account. Your groupmates and the instructor will be notified of your departure."
       onConfirm={async () => {
-        const res = await assignmentGroupLeave(
-          {
-            assignment_id: assignment.id
-          },
-          supabase
-        );
-        invalidate({
-          resource: "assignment_groups_members",
-          invalidates: ["all"]
-        });
-        toaster.create({
-          title: "Group left",
-          description: res.message,
-          type: "success"
-        });
+        const res = await assignmentGroupLeave({ assignment_id: assignment.id }, supabase);
+        invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+        toaster.create({ title: "Group left", description: res.message, type: "success" });
       }}
     />
   );
@@ -746,22 +655,10 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
   const supabase = createClient();
   const invalidate = useInvalidate();
   const invalidateInvites = useCallback(() => {
-    invalidate({
-      resource: "assignment_group_join_request",
-      invalidates: ["all"]
-    });
-    invalidate({
-      resource: "assignment_groups_members",
-      invalidates: ["all"]
-    });
-    invalidate({
-      resource: "assignment_groups",
-      invalidates: ["all"]
-    });
-    invalidate({
-      resource: "assignment_group_invitations",
-      invalidates: ["all"]
-    });
+    invalidate({ resource: "assignment_group_join_request", invalidates: ["all"] });
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+    invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+    invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
   }, [invalidate]);
   return (
     <HStack>
@@ -772,25 +669,14 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
         onConfirm={async () => {
           try {
             const res = await assignmentGroupApproveRequest(
-              {
-                join_request_id: join_request.id,
-                course_id: role.class_id
-              },
+              { join_request_id: join_request.id, course_id: role.class_id },
               supabase
             );
-            toaster.create({
-              title: "Join request approved",
-              description: res.message,
-              type: "success"
-            });
+            toaster.create({ title: "Join request approved", description: res.message, type: "success" });
             invalidateInvites();
           } catch (e) {
             if (e instanceof EdgeFunctionError) {
-              toaster.create({
-                title: e.message,
-                description: e.details,
-                type: "error"
-              });
+              toaster.create({ title: e.message, description: e.details, type: "error" });
             } else {
               toaster.create({
                 title: "Error",
@@ -816,10 +702,7 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
           try {
             const { error } = await supabase
               .from("assignment_group_join_request")
-              .update({
-                status: "rejected",
-                decision_maker: private_profile_id
-              })
+              .update({ status: "rejected", decision_maker: private_profile_id })
               .eq("id", join_request.id);
             if (error) {
               throw error;
@@ -851,7 +734,6 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
   );
 }
 function AssignmentGroupJoinRequestStatus({ join_request }: { join_request: AssignmentGroupJoinRequest }) {
-  const joiner = useUserProfile(join_request.profile_id);
   const decider = useUserProfile(join_request.decision_maker);
   return (
     <Box>
@@ -870,7 +752,6 @@ function AssignmentGroupInvitationView({
   invalidateInvites: () => void;
 }) {
   const { private_profile_id } = useClassProfiles();
-  const profile = useUserProfile(invitation.invitee);
   let actions = <></>;
   if (invitation.inviter === private_profile_id) {
     actions = (
@@ -936,19 +817,9 @@ export default function ManageGroupWidget({ assignment }: { assignment: Assignme
 
   const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
     resource: "assignment_groups",
-    meta: {
-      select: "*,assignment_groups_members(*),assignment_group_join_request(*),assignment_group_invitations(*)"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: assignment.id
-      }
-    ],
-    pagination: {
-      pageSize: 1000
-    }
+    meta: { select: "*,assignment_groups_members(*),assignment_group_join_request(*),assignment_group_invitations(*)" },
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
+    pagination: { pageSize: 1000 }
   });
   const myGroup = useMemo(() => {
     return groups?.data?.find((g) => g.assignment_groups_members.some((m) => m.profile_id === private_profile_id));

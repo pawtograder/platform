@@ -1,15 +1,12 @@
-import { Box, Button, Flex, HStack, Stack, Textarea } from "@chakra-ui/react";
-import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
-import { ChatActionButton } from "./ChatActionButton";
+import { Box, Button, Flex, Stack, Textarea } from "@chakra-ui/react";
+import { FiSend } from "react-icons/fi";
 import { ChatMessage } from "./ChatMessage";
 import { ChatMessages } from "./ChatMessages";
-import useUserProfiles from "@/hooks/useUserProfiles";
 import { useChatChannel, ChatMessage as ChatMessageType } from "@/lib/chat";
 import { useCallback, useRef } from "react";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 export const ChatChannel = () => {
   const { messages, postMessage } = useChatChannel();
-  const userProfile = useUserProfiles();
   const { private_profile_id } = useClassProfiles();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   //Group messages by contiguous messages from the same user
@@ -19,10 +16,7 @@ export const ChatChannel = () => {
       if (lastGroup && lastGroup.author === msg.author) {
         lastGroup.messages.push(msg);
       } else {
-        acc.push({
-          author: msg.author,
-          messages: [msg]
-        });
+        acc.push({ author: msg.author, messages: [msg] });
       }
       return acc;
     },
@@ -36,7 +30,7 @@ export const ChatChannel = () => {
       inputRef.current!.value = "";
       inputRef.current!.focus();
     });
-  }, [postMessage]);
+  }, [postMessage, private_profile_id]);
   return (
     <Box>
       <Flex direction="column" pos="relative" bg="bg.canvas" height="100vh" overflow="hidden">

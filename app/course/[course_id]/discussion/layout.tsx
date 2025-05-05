@@ -1,12 +1,6 @@
 import { Box, Flex } from "@chakra-ui/react";
 import DiscussionThreadList from "./DiscussionThreadList";
-const DiscussionLayout = async ({
-  children,
-  params
-}: Readonly<{
-  children: React.ReactNode;
-  params: Promise<{ course_id: string }>;
-}>) => {
+const DiscussionLayout = async ({ children }: Readonly<{ children: React.ReactNode }>) => {
   return (
     <Box>
       <Flex flex="1">

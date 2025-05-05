@@ -15,9 +15,7 @@ import { JoinMeetingInfo } from "../utils/api";
 import { useLogger } from "amazon-chime-sdk-component-library-react";
 import { createBlob } from "../utils/background-replacement";
 
-type Props = {
-  children: ReactNode;
-};
+type Props = { children: ReactNode };
 
 interface AppStateValue {
   meetingId: string;
@@ -67,7 +65,6 @@ export function useAppState(): AppStateValue {
   return state;
 }
 
-// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 export function AppStateProvider({ children }: Props) {
   const logger = useLogger();
   const [meetingId, setMeetingId] = useState("aMeetingID");
@@ -90,16 +87,8 @@ export function AppStateProvider({ children }: Props) {
   );
 
   const replacementOptionsList: ReplacementDropdownOptionType[] = [
-    {
-      label: ReplacementOptions.Blue,
-      type: ReplacementType.Color,
-      value: "#0000ff"
-    },
-    {
-      label: ReplacementOptions.Beach,
-      type: ReplacementType.Image,
-      value: ReplacementOptions.Beach
-    }
+    { label: ReplacementOptions.Blue, type: ReplacementType.Color, value: "#0000ff" },
+    { label: ReplacementOptions.Beach, type: ReplacementType.Image, value: ReplacementOptions.Beach }
   ];
 
   useEffect(() => {
@@ -116,7 +105,7 @@ export function AppStateProvider({ children }: Props) {
       }
     }
     loadImage();
-  }, [backgroundReplacementOption]);
+  }, [backgroundReplacementOption, replacementOptionsList, logger]);
 
   const toggleTheme = (): void => {
     if (theme === "light") {

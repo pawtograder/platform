@@ -1,47 +1,44 @@
 import JSZip from "jszip";
 import { resolve, dirname } from "path";
 
-function getMimeType(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    case "html":
-      return "text/html";
-    case "css":
-      return "text/css";
-    case "js":
-      return "application/javascript";
-    case "json":
-      return "application/json";
-    case "png":
-      return "image/png";
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "gif":
-      return "image/gif";
-    case "svg":
-      return "image/svg+xml";
-    case "ico":
-      return "image/x-icon";
-    case "woff":
-      return "font/woff";
-    case "woff2":
-      return "font/woff2";
-    case "ttf":
-      return "font/ttf";
-    case "eot":
-      return "application/vnd.ms-fontobject";
-    case "otf":
-      return "font/otf";
-    default:
-      return "application/octet-stream";
-  }
-}
+// function getMimeType(filename: string): string {
+//   const ext = filename.split(".").pop()?.toLowerCase();
+//   switch (ext) {
+//     case "html":
+//       return "text/html";
+//     case "css":
+//       return "text/css";
+//     case "js":
+//       return "application/javascript";
+//     case "json":
+//       return "application/json";
+//     case "png":
+//       return "image/png";
+//     case "jpg":
+//     case "jpeg":
+//       return "image/jpeg";
+//     case "gif":
+//       return "image/gif";
+//     case "svg":
+//       return "image/svg+xml";
+//     case "ico":
+//       return "image/x-icon";
+//     case "woff":
+//       return "font/woff";
+//     case "woff2":
+//       return "font/woff2";
+//     case "ttf":
+//       return "font/ttf";
+//     case "eot":
+//       return "application/vnd.ms-fontobject";
+//     case "otf":
+//       return "font/otf";
+//     default:
+//       return "application/octet-stream";
+//   }
+// }
 
-type ZipToHtmlBlobsResult = {
-  rewrittenHTMLFiles: Map<string, string>;
-  topLevelDir: string;
-};
+type ZipToHtmlBlobsResult = { rewrittenHTMLFiles: Map<string, string>; topLevelDir: string };
 export default async function zipToHTMLBlobs(data: Blob): Promise<ZipToHtmlBlobsResult> {
   const zip = await JSZip.loadAsync(data);
   const rewrittenHTMLFiles = new Map<string, string>();

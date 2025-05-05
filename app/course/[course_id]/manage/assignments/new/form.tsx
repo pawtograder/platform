@@ -1,39 +1,22 @@
 "use client";
 import { Field } from "@/components/ui/field";
 import {
-  Box,
-  Card,
   CardBody,
   CardHeader,
   CardRoot,
   CardTitle,
-  createListCollection,
   Fieldset,
-  Heading,
   Input,
-  ListCollection,
-  NativeSelect,
   NativeSelectField,
-  NativeSelectRoot,
-  Select,
-  Spinner,
-  Stack,
-  Table,
-  Text,
-  VStack
+  NativeSelectRoot
 } from "@chakra-ui/react";
-import { Controller, FieldErrors, FieldValues } from "react-hook-form";
+import { Controller, FieldValues } from "react-hook-form";
 
-import { ListFilesResponse } from "@/components/github/GitHubTypes";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { repositoryListFiles } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { useCallback, useState } from "react";
 import { useCourse } from "@/hooks/useAuthState";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
@@ -42,30 +25,16 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
   const { course_id } = useParams();
   const { data: otherAssignments } = useList({
     resource: "assignments",
-    queryOptions: {
-      enabled: !!course_id
-    },
+    queryOptions: { enabled: !!course_id },
     filters: [
-      {
-        field: "class_id",
-        operator: "eq",
-        value: Number.parseInt(course_id as string)
-      },
-      {
-        field: "group_config",
-        operator: "ne",
-        value: "individual"
-      }
+      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
+      { field: "group_config", operator: "ne", value: "individual" }
     ],
-    pagination: {
-      pageSize: 1000
-    }
+    pagination: { pageSize: 1000 }
   });
 
   const {
     register,
-    control,
-    setValue,
     getValues,
     formState: { errors }
   } = form;
@@ -196,15 +165,10 @@ export default function AssignmentForm({
   form: UseFormReturnType<Assignment>;
   onSubmit: (values: FieldValues) => void;
 }) {
-  const { course_id } = useParams();
-
   const {
     handleSubmit,
     register,
     control,
-    setValue,
-    getValues,
-    refineCore,
     // refineCore: {
     //     onFinish
     // },
@@ -238,11 +202,7 @@ export default function AssignmentForm({
         <Fieldset.Root maxW="lg">
           <Fieldset.Content>
             <Field label="Title" errorText={errors.title?.message?.toString()} invalid={errors.title ? true : false}>
-              <Input
-                {...register("title", {
-                  required: "This is required"
-                })}
-              />
+              <Input {...register("title", { required: "This is required" })} />
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
@@ -259,10 +219,7 @@ export default function AssignmentForm({
                     value: /^[a-z0-9_-]+$/,
                     message: "Slug must contain only lowercase letters, numbers, underscores, and hyphens"
                   },
-                  maxLength: {
-                    value: 16,
-                    message: "Slug must be less than 16 characters"
-                  }
+                  maxLength: { value: 16, message: "Slug must be less than 16 characters" }
                 })}
               />
             </Field>
@@ -274,12 +231,7 @@ export default function AssignmentForm({
               errorText={errors.release_date?.message?.toString()}
               invalid={errors.release_date ? true : false}
             >
-              <Input
-                type="datetime-local"
-                {...register("release_date", {
-                  required: "This is required"
-                })}
-              />
+              <Input type="datetime-local" {...register("release_date", { required: "This is required" })} />
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
@@ -289,12 +241,7 @@ export default function AssignmentForm({
               errorText={errors.due_date?.message?.toString()}
               invalid={errors.due_date ? true : false}
             >
-              <Input
-                type="datetime-local"
-                {...register("due_date", {
-                  required: "This is required"
-                })}
-              />
+              <Input type="datetime-local" {...register("due_date", { required: "This is required" })} />
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>

@@ -18,7 +18,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Course, CourseWithFeatures, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import NextLink from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef } from "react";
 import { FaScroll } from "react-icons/fa";
 import { FiClipboard, FiCompass, FiMenu, FiMessageSquare, FiSettings, FiStar, FiUsers } from "react-icons/fi";
@@ -113,7 +113,6 @@ function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[
   );
 }
 export default function DynamicCourseNav() {
-  const router = useRouter();
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
   const { role: enrollment } = useClassProfiles();
@@ -125,7 +124,7 @@ export default function DynamicCourseNav() {
       const height = courseNavRef.current.offsetHeight;
       document.documentElement.style.setProperty("--nav-height", `${height + 10}px`);
     }
-  }, [courseNavRef?.current]);
+  });
   if (!enrollment || !courses) {
     return <Skeleton height="40" width="100%" />;
   }
@@ -174,9 +173,7 @@ export default function DynamicCourseNav() {
                         <Menu.Trigger asChild>
                           <Button
                             colorPalette="gray"
-                            _hover={{
-                              bg: "#EBEDEF"
-                            }}
+                            _hover={{ bg: "#EBEDEF" }}
                             size="xs"
                             fontSize="sm"
                             pt="0"

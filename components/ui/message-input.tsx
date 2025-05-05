@@ -3,19 +3,10 @@ import data from "@emoji-mart/data";
 import { useCallback, useRef, useState } from "react";
 import { IGif } from "@giphy/js-types";
 import MDEditor from "@uiw/react-md-editor";
-import {
-  PopoverArrow,
-  PopoverBody,
-  PopoverContent,
-  PopoverRoot,
-  PopoverTitle,
-  PopoverTrigger
-} from "@/components/ui/popover";
-import remarkGfm from "remark-gfm";
-import { Box, Button, Field, HStack, Textarea, VStack, SimpleGrid, Popover, Text } from "@chakra-ui/react";
+import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
+import { Box, Button, Field, HStack, Textarea, VStack, Text } from "@chakra-ui/react";
 import Picker from "@emoji-mart/react";
-import { GiphyFetch } from "@giphy/js-fetch-api";
-import { FaEye, FaPaperclip, FaSmile, FaUserSecret } from "react-icons/fa";
+import { FaPaperclip, FaSmile, FaUserSecret } from "react-icons/fa";
 import { TbMathFunction } from "react-icons/tb";
 import { Checkbox } from "./checkbox";
 import GiphyPicker from "./giphy-picker";
@@ -62,11 +53,10 @@ export default function MessageInput(props: MessageInputProps) {
   const { course_id } = useParams();
   const [enterToSend, setEnterToSend] = useState(true);
   const [value, setValue] = useState(initialValue);
-  const [singleLine, setSingleLine] = useState(props.defaultSingleLine ?? false);
-  const [focused, setFocused] = useState(false);
+  const [singleLine, _setSingleLine] = useState(props.defaultSingleLine ?? false);
+  const [_, setFocused] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGiphyPicker, setShowGiphyPicker] = useState(false);
-  const [showFilePicker, setShowFilePicker] = useState(false);
   const [anonymousMode, setAnonymousMode] = useState(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -75,7 +65,7 @@ export default function MessageInput(props: MessageInputProps) {
       setValue(value);
       props.onChange?.(value);
     },
-    [props.onChange]
+    [props]
   );
   const { public_profile_id, private_profile_id } = useClassProfiles();
   const public_profile = useUserProfile(public_profile_id);
@@ -83,7 +73,6 @@ export default function MessageInput(props: MessageInputProps) {
   const profile_id = anonymousMode ? public_profile_id! : private_profile_id!;
 
   const toggleEmojiPicker = () => setShowEmojiPicker(!showEmojiPicker);
-  const toggleGiphyPicker = () => setShowGiphyPicker(!showGiphyPicker);
   const toggleAnonymousMode = () => setAnonymousMode(!anonymousMode);
   const fileUpload = useCallback(
     async (file: File) => {
@@ -91,7 +80,7 @@ export default function MessageInput(props: MessageInputProps) {
       const uuid = crypto.randomUUID();
       const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
 
-      const { data, error } = await supabase.storage
+      const { error } = await supabase.storage
         .from("uploads")
         .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
       if (error) {
@@ -103,7 +92,7 @@ export default function MessageInput(props: MessageInputProps) {
       props.sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
       return url;
     },
-    [props.sendMessage, course_id]
+    [props, course_id, profile_id]
   );
 
   const attachFile = useCallback(
@@ -116,24 +105,27 @@ export default function MessageInput(props: MessageInputProps) {
     },
     [fileUpload]
   );
-  const onFileTransfer = useCallback(async (dataTransfer: DataTransfer) => {
-    const files: File[] = [];
-    for (let index = 0; index < dataTransfer.items.length; index += 1) {
-      const file = dataTransfer.files.item(index);
-      if (file) {
-        files.push(file);
+  const onFileTransfer = useCallback(
+    async (dataTransfer: DataTransfer) => {
+      const files: File[] = [];
+      for (let index = 0; index < dataTransfer.items.length; index += 1) {
+        const file = dataTransfer.files.item(index);
+        if (file) {
+          files.push(file);
+        }
       }
-    }
-    const insertedMarkdowns = await Promise.all(
-      files.map(async (file) => {
-        const url = await fileUpload(file);
-        const isImage = file.type.startsWith("image/");
-        const insertedMarkdown = isImage ? `![](${url})` : `[${file.name}](${url})`;
-        return insertedMarkdown;
-      })
-    );
-    props.sendMessage("Attachment: " + insertedMarkdowns.join("\n"), profile_id, false);
-  }, []);
+      const insertedMarkdowns = await Promise.all(
+        files.map(async (file) => {
+          const url = await fileUpload(file);
+          const isImage = file.type.startsWith("image/");
+          const insertedMarkdown = isImage ? `![](${url})` : `[${file.name}](${url})`;
+          return insertedMarkdown;
+        })
+      );
+      props.sendMessage("Attachment: " + insertedMarkdowns.join("\n"), profile_id, false);
+    },
+    [props, profile_id, fileUpload]
+  );
   if (singleLine) {
     return (
       <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
@@ -253,7 +245,13 @@ export default function MessageInput(props: MessageInputProps) {
               </Button>
             </Tooltip>
             {enableFilePicker && (
-              <input type="file" ref={fileInputRef} style={{ display: "none" }} onChange={attachFile} />
+              <input
+                title="Attach a file"
+                type="file"
+                ref={fileInputRef}
+                style={{ display: "none" }}
+                onChange={attachFile}
+              />
             )}
             {enableGiphyPicker && (
               <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
@@ -300,7 +298,7 @@ export default function MessageInput(props: MessageInputProps) {
           <Box>
             <Field.Root orientation="horizontal">
               <Field.Label fontSize="xs">{sendButtonText ? `Enter to ${sendButtonText}` : "Enter to send"}</Field.Label>
-              <Checkbox checked={enterToSend} onChange={(e) => setEnterToSend(!enterToSend)} />
+              <Checkbox checked={enterToSend} onChange={() => setEnterToSend(!enterToSend)} />
             </Field.Root>
           </Box>
           {onClose && (
@@ -392,7 +390,13 @@ export default function MessageInput(props: MessageInputProps) {
             </Button>
           </Tooltip>
           {enableFilePicker && (
-            <input type="file" ref={fileInputRef} style={{ display: "none" }} onChange={attachFile} />
+            <input
+              title="Attach a file"
+              type="file"
+              ref={fileInputRef}
+              style={{ display: "none" }}
+              onChange={attachFile}
+            />
           )}
           {enableGiphyPicker && (
             <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>

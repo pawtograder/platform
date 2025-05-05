@@ -4,14 +4,12 @@ import { Avatar, Badge, Box, Button, Flex, HStack, Icon, Spacer, Stack, Status, 
 import excerpt from "@stefanprobst/remark-excerpt";
 
 import Markdown from "@/components/ui/markdown";
-import useAuthState from "@/hooks/useAuthState";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { formatRelative } from "date-fns";
-import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { BsChat } from "react-icons/bs";
 import { FaCheckCircle, FaRegHeart, FaRegStickyNote } from "react-icons/fa";
 import { RxQuestionMarkCircled } from "react-icons/rx";
@@ -25,13 +23,11 @@ export function DiscussionThreadLikeButton({ thread }: { thread: DiscussionThrea
     if (likeStatus) {
       await supabase.from("discussion_thread_likes").delete().eq("id", likeStatus.id);
     } else {
-      await supabase.from("discussion_thread_likes").insert({
-        discussion_thread: thread.id,
-        creator: private_profile_id!,
-        emoji: "👍"
-      });
+      await supabase
+        .from("discussion_thread_likes")
+        .insert({ discussion_thread: thread.id, creator: private_profile_id!, emoji: "👍" });
     }
-  }, [thread.class_id, thread.id, likeStatus]);
+  }, [thread.id, likeStatus, private_profile_id, supabase]);
 
   return (
     <Button variant="ghost" size="sm" onClick={toggleLike}>
@@ -46,9 +42,7 @@ export function DiscussionPostSummary({
   thread: DiscussionThreadType | ThreadWithChildren;
   topic: DiscussionTopic;
 }) {
-  const router = useRouter();
   const userProfile = useUserProfile(thread.author);
-  const [replyVisible, setReplyVisible] = useState(false);
   const getIcon = () => {
     if (thread.is_question) {
       if (thread.answer) {
@@ -69,15 +63,7 @@ export function DiscussionPostSummary({
   );
   return (
     <Box>
-      <Flex
-        borderWidth="1px"
-        divideX="1px"
-        borderRadius="l3"
-        bg="bg"
-        _hover={{
-          bg: "bg.subtle"
-        }}
-      >
+      <Flex borderWidth="1px" divideX="1px" borderRadius="l3" bg="bg" _hover={{ bg: "bg.subtle" }}>
         <Stack p="6" flex="1">
           <Badge variant="surface" alignSelf="flex-start" colorPalette={topic.color}>
             {topic.topic}
@@ -88,7 +74,7 @@ export function DiscussionPostSummary({
           </Text>
           <Markdown
             components={{
-              a: ({ children, href }) => {
+              a: ({ children }) => {
                 return <>{children}</>;
               }
             }}

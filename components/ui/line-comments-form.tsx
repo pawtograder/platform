@@ -1,23 +1,17 @@
 import { createClient } from "@/utils/supabase/client";
 import {
-  Rubric,
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { useCreate, useInvalidate, useList } from "@refinedev/core";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCreate, useInvalidate } from "@refinedev/core";
+import { useCallback, useRef } from "react";
 import MessageInput from "./message-input";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { Select, SelectInstance, ChakraStylesConfig } from "chakra-react-select";
-import { Box, Field, Heading, HStack, NumberInput, Text, VStack } from "@chakra-ui/react";
-import { LineActionPopupProps } from "./code-file";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { SelectInstance } from "chakra-react-select";
 import { useSubmissionReview } from "@/hooks/useSubmission";
 
-type GroupedRubricOptions = {
-  readonly label: string;
-  readonly options: readonly RubricOption[];
-};
+type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
 type RubricOption = {
   readonly label: string;
   readonly value: string;
@@ -39,15 +33,10 @@ function LineCommentForm({
   // const rubrics = submission.assignments.rubrics.filter((rubric) => rubric.is_annotation);
   // rubrics.sort((a, b) => a.ordinal - b.ordinal);
 
-  const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
-    resource: "submission_file_comments"
-  });
-  const supabase = createClient();
+  const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({ resource: "submission_file_comments" });
   const review = useSubmissionReview();
   const invalidateQuery = useInvalidate();
   const { private_profile_id } = useClassProfiles();
-  const selectRef = useRef<SelectInstance<RubricOption, false, GroupedRubricOptions>>(null);
-  const pointsRef = useRef<HTMLInputElement>(null);
 
   const postComment = useCallback(
     async (message: string) => {
@@ -61,16 +50,10 @@ function LineCommentForm({
         submission_review_id: review?.id,
         released: review ? false : true
       };
-      await createComment({
-        values: values
-      });
-      invalidateQuery({
-        resource: "submission_files",
-        id: file.id,
-        invalidates: ["all"]
-      });
+      await createComment({ values: values });
+      invalidateQuery({ resource: "submission_files", id: file.id, invalidates: ["all"] });
     },
-    [submission, file, lineNumber, supabase, createComment, private_profile_id, selectRef]
+    [submission, file, lineNumber, createComment, private_profile_id, invalidateQuery, review]
   );
 
   return (

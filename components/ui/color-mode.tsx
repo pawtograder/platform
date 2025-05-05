@@ -31,7 +31,7 @@ export function ColorModeWatcher() {
     if (!currentTheme) {
       setColorMode(mediaQuery.matches ? "dark" : "light");
     }
-  }, []);
+  }, [setColorMode]);
   return <></>;
 }
 export function useColorMode() {
@@ -39,11 +39,7 @@ export function useColorMode() {
   const toggleColorMode = () => {
     setTheme(resolvedTheme === "light" ? "dark" : "light");
   };
-  return {
-    colorMode: resolvedTheme,
-    setColorMode: setTheme,
-    toggleColorMode
-  };
+  return { colorMode: resolvedTheme, setColorMode: setTheme, toggleColorMode };
 }
 
 export function useColorModeValue<T>(light: T, dark: T) {
@@ -61,7 +57,6 @@ interface ColorModeButtonProps extends Omit<IconButtonProps, "aria-label"> {}
 export const ColorModeButton = React.forwardRef<HTMLButtonElement, ColorModeButtonProps>(
   function ColorModeButton(props, ref) {
     const { toggleColorMode } = useColorMode();
-    const { setColorMode } = useColorMode();
 
     return (
       <ClientOnly fallback={<Skeleton boxSize="8" />}>
@@ -72,12 +67,7 @@ export const ColorModeButton = React.forwardRef<HTMLButtonElement, ColorModeButt
           size="sm"
           ref={ref}
           {...props}
-          css={{
-            _icon: {
-              width: "5",
-              height: "5"
-            }
-          }}
+          css={{ _icon: { width: "5", height: "5" } }}
         >
           <ColorModeIcon />
         </IconButton>

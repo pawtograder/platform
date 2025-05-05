@@ -1,10 +1,10 @@
 import { createClient } from "@/utils/supabase/client";
-import { use, useCallback, useEffect } from "react";
-import { useList, useShow, useTable } from "@refinedev/core";
+import { useCallback } from "react";
+import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
 import { RadioCardRoot, RadioCardItem } from "@/components/ui/radio-card";
-import { Fieldset, Input, Button, Heading, Text } from "@chakra-ui/react";
+import { Fieldset, Button, Heading, Text } from "@chakra-ui/react";
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Field } from "@/components/ui/field";
@@ -18,7 +18,6 @@ export default function HelpRequestForm() {
   const router = useRouter();
   const {
     refineCore: { formLoading, query },
-    register,
     setValue,
     control,
     formState: { errors, isSubmitting },
@@ -27,9 +26,7 @@ export default function HelpRequestForm() {
   } = useForm<HelpRequest>({
     defaultValues: async () => {
       const { data: queues, error: queuesError } = await supabase.from("help_queues").select("*");
-      return {
-        help_queue: queues?.[0]?.id.toString() || ""
-      };
+      return { help_queue: queues?.[0]?.id.toString() || "" };
     },
     refineCoreProps: {
       resource: "help_requests",
@@ -41,9 +38,7 @@ export default function HelpRequestForm() {
   });
   const { data: queues, error: queuesError } = useList<HelpQueue>({
     resource: "help_queues",
-    meta: {
-      select: "*"
-    },
+    meta: { select: "*" },
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
   const { private_profile_id } = useClassProfiles();
@@ -58,7 +53,7 @@ export default function HelpRequestForm() {
       }
       populate();
     },
-    [handleSubmit, onFinish, private_profile_id]
+    [handleSubmit, onFinish, private_profile_id, course_id, setValue]
   );
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;

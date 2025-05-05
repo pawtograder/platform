@@ -20,9 +20,7 @@ export type NavigationContextType = {
   toggleChat: () => void;
 };
 
-type Props = {
-  children: ReactNode;
-};
+type Props = { children: ReactNode };
 
 const NavigationContext = React.createContext<NavigationContextType | null>(null);
 
@@ -43,7 +41,7 @@ const NavigationProvider = ({ children }: Props) => {
         meetingManager.leave();
       };
     }
-  }, [pathname]);
+  }, [pathname, meetingManager]);
 
   useEffect(() => {
     const handler = () => {

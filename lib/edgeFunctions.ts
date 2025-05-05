@@ -1,6 +1,5 @@
 import { ListReposResponse } from "@/components/github/GitHubTypes";
 import * as FunctionTypes from "@/supabase/functions/_shared/FunctionTypes.js";
-import { SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
 import { Endpoints } from "@octokit/types";
@@ -17,9 +16,7 @@ export async function autograderCreateAssignmentRepos(
   params: FunctionTypes.AssignmentCreateAllReposRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-create-all-repos", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("assignment-create-all-repos", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -30,9 +27,7 @@ export async function liveMeetingForHelpRequest(
   params: FunctionTypes.LiveMeetingForHelpRequestRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("live-meeting-for-help-request", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("live-meeting-for-help-request", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -44,9 +39,7 @@ export async function repositoriesForClass(
   params: FunctionTypes.ListReposRequest,
   supabase: SupabaseClient<Database>
 ): Promise<ListReposResponse> {
-  const { data } = await supabase.functions.invoke("repositories-list", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("repositories-list", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -55,9 +48,7 @@ export async function repositoriesForClass(
 }
 
 export async function repositoryListFiles(params: FunctionTypes.ListFilesRequest, supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("repository-list-files", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("repository-list-files", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -65,9 +56,7 @@ export async function repositoryListFiles(params: FunctionTypes.ListFilesRequest
   return data as FunctionTypes.FileListing[];
 }
 export async function repositoryGetFile(params: FunctionTypes.GetFileRequest, supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("repository-get-file", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("repository-get-file", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -78,9 +67,7 @@ export async function githubRepoConfigureWebhook(
   params: FunctionTypes.GithubRepoConfigureWebhookRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("github-repo-configure-webhook", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("github-repo-configure-webhook", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -88,18 +75,14 @@ export async function githubRepoConfigureWebhook(
   return data as { message: string };
 }
 export async function enrollmentAdd(params: FunctionTypes.AddEnrollmentRequest, supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("enrollments-add", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("enrollments-add", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
   }
 }
 export async function enrollmentSyncCanvas(params: { course_id: number }, supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("enrollments-sync-canvas", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("enrollments-sync-canvas", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -107,9 +90,7 @@ export async function enrollmentSyncCanvas(params: { course_id: number }, supaba
   return data as { message: string };
 }
 export async function assignmentGroupLeave(params: { assignment_id: number }, supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("assignment-group-leave", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("assignment-group-leave", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -120,9 +101,7 @@ export async function assignmentGroupApproveRequest(
   params: { join_request_id: number; course_id: number },
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-group-approve-request", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("assignment-group-approve-request", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -133,18 +112,14 @@ export async function assignmentGroupCreate(
   params: FunctionTypes.AssignmentGroupCreateRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-group-create", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("assignment-group-create", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
   }
 }
 export async function autograderSyncStaffTeam(params: { course_id: number }, supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("autograder-sync-staff-team", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("autograder-sync-staff-team", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -155,9 +130,7 @@ export async function assignmentGroupJoin(
   params: FunctionTypes.AssignmentGroupJoinRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-group-join", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("assignment-group-join", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -168,9 +141,7 @@ export async function assignmentGroupCopyGroupsFromAssignment(
   params: FunctionTypes.AssignmentGroupCopyGroupsFromAssignmentRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-group-copy-groups-from-assignment", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("assignment-group-copy-groups-from-assignment", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -181,9 +152,7 @@ export async function assignmentGroupInstructorMoveStudent(
   params: FunctionTypes.AssignmentGroupInstructorMoveStudentRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("assignment-group-instructor-move-student", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("assignment-group-instructor-move-student", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
@@ -191,9 +160,7 @@ export async function assignmentGroupInstructorMoveStudent(
   return data as {};
 }
 export async function activateSubmission(params: { submission_id: number }, supabase: SupabaseClient<Database>) {
-  const ret = await supabase.rpc("submission_set_active", {
-    _submission_id: params.submission_id
-  });
+  const ret = await supabase.rpc("submission_set_active", { _submission_id: params.submission_id });
   if (ret.data) {
     return true;
   }
@@ -208,25 +175,18 @@ export async function repositoryListCommits(
   params: FunctionTypes.RepositoryListCommitsRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("repository-list-commits", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("repository-list-commits", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);
   }
-  return data as {
-    commits: ListCommitsResponse["data"];
-    has_more: boolean;
-  };
+  return data as { commits: ListCommitsResponse["data"]; has_more: boolean };
 }
 export async function triggerWorkflow(
   params: FunctionTypes.AutograderTriggerGradingWorkflowRequest,
   supabase: SupabaseClient<Database>
 ) {
-  const { data } = await supabase.functions.invoke("autograder-trigger-grading-workflow", {
-    body: params
-  });
+  const { data } = await supabase.functions.invoke("autograder-trigger-grading-workflow", { body: params });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new EdgeFunctionError(error);

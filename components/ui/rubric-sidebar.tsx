@@ -55,13 +55,7 @@ export function CommentActions({
         if (value.value === "edit") {
           setIsEditing(true);
         } else if (value.value === "delete") {
-          await updateComment({
-            id: comment.id,
-            values: {
-              edited_by: private_profile_id,
-              deleted_at: new Date()
-            }
-          });
+          await updateComment({ id: comment.id, values: { edited_by: private_profile_id, deleted_at: new Date() } });
         }
       }}
     >
@@ -171,11 +165,8 @@ export function RubricCheckComment({
               setIsEditing(false);
             }}
             sendButtonText="Save"
-            sendMessage={async (message, profile_id) => {
-              await updateComment({
-                id: comment.id,
-                values: { comment: message }
-              });
+            sendMessage={async (message) => {
+              await updateComment({ id: comment.id, values: { comment: message } });
               setIsEditing(false);
             }}
           />
@@ -211,13 +202,7 @@ export function RubricCheckAnnotation({
         </Tooltip>
         <Text>{check.name}</Text>
       </HStack>
-      <Markdown
-        style={{
-          fontSize: "0.8rem"
-        }}
-      >
-        {check.description}
-      </Markdown>
+      <Markdown style={{ fontSize: "0.8rem" }}>{check.description}</Markdown>
       {rubricCheckComments.map((comment) => (
         <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} />
       ))}
@@ -371,13 +356,7 @@ export function RubricCheckGlobal({
           </Radio>
         )}
       </HStack>
-      <Markdown
-        style={{
-          fontSize: "0.8rem"
-        }}
-      >
-        {check.description}
-      </Markdown>
+      <Markdown style={{ fontSize: "0.8rem" }}>{check.description}</Markdown>
       {isEditing && (
         <SubmissionCommentForm
           check={check}
@@ -394,7 +373,6 @@ export function RubricCheckGlobal({
 }
 function SubmissionCommentForm({
   check,
-  criteria,
   selectedOptionIndex,
   linkedArtifactId
 }: {
@@ -434,11 +412,7 @@ function SubmissionCommentForm({
           if (selectedOptionIndex !== undefined) {
             comment = selectedOption?.label + "\n" + comment;
           }
-          const artifactInfo = check.artifact
-            ? {
-                submission_artifact_id: linkedArtifactId
-              }
-            : {};
+          const artifactInfo = check.artifact ? { submission_artifact_id: linkedArtifactId } : {};
           const values = {
             comment,
             rubric_check_id: check.id,
@@ -523,13 +497,7 @@ export function RubricCriteria({ criteria }: { criteria: HydratedRubricCriteria 
       <Heading size="md">
         {criteria.name} {pointsText}
       </Heading>
-      <Markdown
-        style={{
-          fontSize: "0.8rem"
-        }}
-      >
-        {criteria.description}
-      </Markdown>
+      <Markdown style={{ fontSize: "0.8rem" }}>{criteria.description}</Markdown>
       <VStack align="flex-start" w="100%" gap={0}>
         <Heading size="sm">Checks</Heading>
         <Text fontSize="sm" color={gradingIsRequired ? "fg.error" : "fg.muted"}>

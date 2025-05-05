@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useShow, useUpdate } from "@refinedev/core";
-import { HelpRequest, HelpRequestMessage } from "@/utils/supabase/DatabaseTypes";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { BsCameraVideo, BsClipboardCheckFill, BsClipboardCheck } from "react-icons/bs";
 import { HelpRequestChatChannelProvider } from "@/lib/chat";
 import { Icon, IconButton, Skeleton, Text } from "@chakra-ui/react";
@@ -62,10 +62,7 @@ export default function HelpRequestPage() {
   const { request_id } = useParams();
   const {
     query: { data: activeRequest, isLoading }
-  } = useShow<HelpRequest>({
-    resource: "help_requests",
-    id: Number.parseInt(request_id as string)
-  });
+  } = useShow<HelpRequest>({ resource: "help_requests", id: Number.parseInt(request_id as string) });
   if (isLoading || !activeRequest) {
     return <Skeleton />;
   }

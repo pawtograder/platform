@@ -1,4 +1,4 @@
-import { Button, IconButton, Text } from "@chakra-ui/react";
+import { IconButton, Text } from "@chakra-ui/react";
 import { Icon } from "@chakra-ui/react";
 import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverHeader, PopoverBody } from "./popover";
 import { BsCheck, BsX } from "react-icons/bs";

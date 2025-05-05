@@ -20,42 +20,33 @@ import {
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
 import {
-  Rubric,
   SubmissionArtifact,
   SubmissionArtifactComment,
-  SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Button,
   ClientOnly,
-  Editable,
-  Field,
   Flex,
   Heading,
   HStack,
   Icon,
-  IconButton,
-  NumberInput,
   Spinner,
   Table,
   Tag,
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
-import { useForm } from "@refinedev/react-hook-form";
+import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
 import { SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
-import JSZip, { file } from "jszip";
-import { useParams, useSearchParams } from "next/navigation";
+import JSZip from "jszip";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Controller } from "react-hook-form";
-import { FaCheckCircle, FaEyeSlash, FaFile, FaTimesCircle } from "react-icons/fa";
-import { LuCheck, LuPencilLine, LuX } from "react-icons/lu";
+import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 import zipToHTMLBlobs from "./zipToHTMLBlobs";
-function FilePicker({ curFile, setCurFile }: { curFile: number; setCurFile: (file: number) => void }) {
+function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const comments = useSubmissionFileComments({});
@@ -65,21 +56,10 @@ function FilePicker({ curFile, setCurFile }: { curFile: number; setCurFile: (fil
       maxH="250px"
       overflowY="auto"
       css={{
-        "&::-webkit-scrollbar": {
-          width: "8px",
-          display: "block"
-        },
-        "&::-webkit-scrollbar-track": {
-          background: "#f1f1f1",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb": {
-          background: "#888",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb:hover": {
-          background: "#555"
-        }
+        "&::-webkit-scrollbar": { width: "8px", display: "block" },
+        "&::-webkit-scrollbar-track": { background: "#f1f1f1", borderRadius: "4px" },
+        "&::-webkit-scrollbar-thumb": { background: "#888", borderRadius: "4px" },
+        "&::-webkit-scrollbar-thumb:hover": { background: "#555" }
       }}
     >
       <Table.Root borderWidth="1px" borderColor="border.emphasized" w="4xl" m={2} borderRadius="md">
@@ -123,21 +103,10 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
       maxH="250px"
       overflowY="auto"
       css={{
-        "&::-webkit-scrollbar": {
-          width: "8px",
-          display: "block"
-        },
-        "&::-webkit-scrollbar-track": {
-          background: "#f1f1f1",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb": {
-          background: "#888",
-          borderRadius: "4px"
-        },
-        "&::-webkit-scrollbar-thumb:hover": {
-          background: "#555"
-        }
+        "&::-webkit-scrollbar": { width: "8px", display: "block" },
+        "&::-webkit-scrollbar-track": { background: "#f1f1f1", borderRadius: "4px" },
+        "&::-webkit-scrollbar-thumb": { background: "#888", borderRadius: "4px" },
+        "&::-webkit-scrollbar-thumb:hover": { background: "#555" }
       }}
     >
       <Table.Root borderWidth="1px" borderColor="border.emphasized" w="4xl" m={2} borderRadius="md">
@@ -171,151 +140,131 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
   );
 }
 
-function RubricItem({ rubric }: { rubric: Rubric }) {
-  const invalidateQuery = useInvalidate();
-  const {
-    register,
-    control,
-    getValues,
-    handleSubmit,
-    refineCore,
-    formState: { errors, isSubmitting, isLoading }
-  } = useForm<Rubric>({
-    refineCoreProps: {
-      action: "edit",
-      resource: "rubrics",
-      id: rubric.id
-    }
-  });
+// function RubricItem({ rubric }: { rubric: Rubric }) {
+//   const {
+//     register,
+//     control,
+//     getValues,
+//     handleSubmit,
+//     refineCore,
+//     formState: { errors }
+//   } = useForm<Rubric>({ refineCoreProps: { action: "edit", resource: "rubrics", id: rubric.id } });
 
-  if (refineCore.query?.isLoading || refineCore.query?.isFetching) {
-    return <Skeleton height="48px" width="full" />;
-  }
-  return (
-    <Box>
-      <form onSubmit={handleSubmit(refineCore.onFinish)}>
-        <Editable.Root
-          {...register("name")}
-          placeholder="Click to enter a comment"
-          submitMode="both"
-          onValueCommit={(details) => {
-            handleSubmit(refineCore.onFinish)();
-          }}
-        >
-          <Editable.Preview minH="48px" alignItems="flex-start" width="full">
-            {getValues("name")}
-          </Editable.Preview>
-          <Editable.Input />
-          <Editable.Control>
-            <Editable.EditTrigger asChild>
-              <IconButton variant="ghost" size="xs">
-                <LuPencilLine />
-              </IconButton>
-            </Editable.EditTrigger>
-            <Editable.CancelTrigger asChild>
-              <IconButton variant="outline" size="xs">
-                <LuX />
-              </IconButton>
-            </Editable.CancelTrigger>
-            <Editable.SubmitTrigger asChild>
-              <IconButton variant="outline" size="xs">
-                <LuCheck />
-              </IconButton>
-            </Editable.SubmitTrigger>
-          </Editable.Control>
-        </Editable.Root>
-        <Field.Root invalid={!!errors.deduction} orientation="horizontal">
-          <Field.Label>Deduction</Field.Label>
-          <Controller
-            name="deduction"
-            control={control}
-            render={({ field }) => (
-              <NumberInput.Root
-                name={field.name}
-                value={field.value}
-                onValueChange={({ value }) => {
-                  field.onChange(value);
-                  handleSubmit(refineCore.onFinish)();
-                }}
-              >
-                <NumberInput.Control />
-                <NumberInput.Input onBlur={field.onBlur} />
-              </NumberInput.Root>
-            )}
-          />
-        </Field.Root>
-      </form>
-    </Box>
-  );
-}
-function RubricView() {
-  const invalidateQuery = useInvalidate();
-  const submission = useSubmission();
-  const { data: rubrics } = useList<Rubric>({
-    resource: "rubrics",
-    filters: [
-      {
-        field: "class_id",
-        operator: "eq",
-        value: submission.assignments.class_id
-      }
-    ],
-    sorters: [
-      {
-        field: "ordinal",
-        order: "asc"
-      }
-    ],
-    meta: {
-      select: "*"
-    }
-  });
-  const { mutate: addRubric } = useCreate<Rubric>({
-    resource: "rubrics",
-    mutationOptions: {
-      onSuccess: () => {
-        invalidateQuery({ resource: "rubrics", invalidates: ["all"] });
-      }
-    }
-  });
-  return (
-    <Box
-      position="sticky"
-      top="0"
-      borderLeftWidth="1px"
-      borderColor="border.emphasized"
-      p={4}
-      ml={7}
-      w="md"
-      height="100vh"
-      overflowY="auto"
-    >
-      <Heading size="xl">Rubric</Heading>
-      <Box>
-        <Heading size="lg">Criteria</Heading>
-        {rubrics?.data.map((rubric) => (
-          <Box key={rubric.id}>
-            <RubricItem rubric={rubric} />
-          </Box>
-        ))}
-        <Button
-          onClick={() => {
-            addRubric({
-              values: {
-                class_id: submission.assignments.class_id,
-                name: "New Rubric Item",
-                deduction: 0,
-                ordinal: rubrics?.data.length || 0
-              }
-            });
-          }}
-        >
-          Add Rubric Item
-        </Button>
-      </Box>
-    </Box>
-  );
-}
+//   if (refineCore.query?.isLoading || refineCore.query?.isFetching) {
+//     return <Skeleton height="48px" width="full" />;
+//   }
+//   return (
+//     <Box>
+//       <form onSubmit={handleSubmit(refineCore.onFinish)}>
+//         <Editable.Root
+//           {...register("name")}
+//           placeholder="Click to enter a comment"
+//           submitMode="both"
+//           onValueCommit={() => {
+//             handleSubmit(refineCore.onFinish)();
+//           }}
+//         >
+//           <Editable.Preview minH="48px" alignItems="flex-start" width="full">
+//             {getValues("name")}
+//           </Editable.Preview>
+//           <Editable.Input />
+//           <Editable.Control>
+//             <Editable.EditTrigger asChild>
+//               <IconButton variant="ghost" size="xs">
+//                 <LuPencilLine />
+//               </IconButton>
+//             </Editable.EditTrigger>
+//             <Editable.CancelTrigger asChild>
+//               <IconButton variant="outline" size="xs">
+//                 <LuX />
+//               </IconButton>
+//             </Editable.CancelTrigger>
+//             <Editable.SubmitTrigger asChild>
+//               <IconButton variant="outline" size="xs">
+//                 <LuCheck />
+//               </IconButton>
+//             </Editable.SubmitTrigger>
+//           </Editable.Control>
+//         </Editable.Root>
+//         <Field.Root invalid={!!errors.deduction} orientation="horizontal">
+//           <Field.Label>Deduction</Field.Label>
+//           <Controller
+//             name="deduction"
+//             control={control}
+//             render={({ field }) => (
+//               <NumberInput.Root
+//                 name={field.name}
+//                 value={field.value}
+//                 onValueChange={({ value }) => {
+//                   field.onChange(value);
+//                   handleSubmit(refineCore.onFinish)();
+//                 }}
+//               >
+//                 <NumberInput.Control />
+//                 <NumberInput.Input onBlur={field.onBlur} />
+//               </NumberInput.Root>
+//             )}
+//           />
+//         </Field.Root>
+//       </form>
+//     </Box>
+//   );
+// }
+// function RubricView() {
+//   const invalidateQuery = useInvalidate();
+//   const submission = useSubmission();
+//   const { data: rubrics } = useList<Rubric>({
+//     resource: "rubrics",
+//     filters: [{ field: "class_id", operator: "eq", value: submission.assignments.class_id }],
+//     sorters: [{ field: "ordinal", order: "asc" }],
+//     meta: { select: "*" }
+//   });
+//   const { mutate: addRubric } = useCreate<Rubric>({
+//     resource: "rubrics",
+//     mutationOptions: {
+//       onSuccess: () => {
+//         invalidateQuery({ resource: "rubrics", invalidates: ["all"] });
+//       }
+//     }
+//   });
+//   return (
+//     <Box
+//       position="sticky"
+//       top="0"
+//       borderLeftWidth="1px"
+//       borderColor="border.emphasized"
+//       p={4}
+//       ml={7}
+//       w="md"
+//       height="100vh"
+//       overflowY="auto"
+//     >
+//       <Heading size="xl">Rubric</Heading>
+//       <Box>
+//         <Heading size="lg">Criteria</Heading>
+//         {rubrics?.data.map((rubric) => (
+//           <Box key={rubric.id}>
+//             <RubricItem rubric={rubric} />
+//           </Box>
+//         ))}
+//         <Button
+//           onClick={() => {
+//             addRubric({
+//               values: {
+//                 class_id: submission.assignments.class_id,
+//                 name: "New Rubric Item",
+//                 deduction: 0,
+//                 ordinal: rubrics?.data.length || 0
+//               }
+//             });
+//           }}
+//         >
+//           Add Rubric Item
+//         </Button>
+//       </Box>
+//     </Box>
+//   );
+// }
 
 function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
@@ -329,9 +278,7 @@ function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment })
   const commentAuthor = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({
-    resource: "submission_artifact_comments"
-  });
+  const { mutateAsync: updateComment } = useUpdate({ resource: "submission_artifact_comments" });
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -383,7 +330,7 @@ function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment })
                 onClose={() => {
                   setIsEditing(false);
                 }}
-                sendMessage={async (message, profile_id) => {
+                sendMessage={async (message) => {
                   await updateComment({ id: comment.id, values: { comment: message } });
                   setIsEditing(false);
                 }}
@@ -410,9 +357,7 @@ function ArtifactComment({
     submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({
-    resource: "submission_artifact_comments"
-  });
+  const { mutateAsync: updateComment } = useUpdate({ resource: "submission_artifact_comments" });
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -460,7 +405,7 @@ function ArtifactComment({
                 onClose={() => {
                   setIsEditing(false);
                 }}
-                sendMessage={async (message, profile_id) => {
+                sendMessage={async (message) => {
                   await updateComment({ id: comment.id, values: { comment: message } });
                   setIsEditing(false);
                 }}
@@ -537,10 +482,7 @@ function AritfactComments({ artifact }: { artifact: SubmissionArtifact }) {
     </Box>
   );
 }
-type GroupedRubricOptions = {
-  readonly label: string;
-  readonly options: readonly RubricOption[];
-};
+type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
 type RubricOption = {
   readonly label: string;
   readonly value: string;
@@ -565,12 +507,9 @@ function ArtifactCommentsForm({
   const { mutateAsync: createComment } = useCreate<SubmissionArtifactComment>({
     resource: "submission_artifact_comments"
   });
-  const supabase = createClient();
   const review = useSubmissionReview();
   const invalidateQuery = useInvalidate();
   const { private_profile_id } = useClassProfiles();
-  const selectRef = useRef<SelectInstance<RubricOption, false, GroupedRubricOptions>>(null);
-  const pointsRef = useRef<HTMLInputElement>(null);
 
   const postComment = useCallback(
     async (message: string) => {
@@ -583,16 +522,10 @@ function ArtifactCommentsForm({
         submission_review_id: review?.id,
         released: review ? false : true
       };
-      await createComment({
-        values: values
-      });
-      invalidateQuery({
-        resource: "submission_artifacts",
-        id: artifact.id,
-        invalidates: ["all"]
-      });
+      await createComment({ values: values });
+      invalidateQuery({ resource: "submission_artifacts", id: artifact.id, invalidates: ["all"] });
     },
-    [submission, artifact, supabase, createComment, private_profile_id, selectRef]
+    [submission, artifact, createComment, invalidateQuery, private_profile_id, review]
   );
 
   return (
@@ -643,9 +576,6 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   //Load the artifact data from supabase
   const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
-  const comments = useSubmissionArtifactComments({}).filter(
-    (comment) => comment.deleted_at === null && comment.submission_artifact_id === artifact.id
-  );
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   useEffect(() => {
     let cleanup: (() => void) | undefined = undefined;
@@ -686,13 +616,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
                   })
                 );
                 // Send all file contents to the iframe
-                event.source?.postMessage(
-                  {
-                    type: "FILE_CONTENTS_RESPONSE",
-                    fileContents
-                  },
-                  { targetOrigin: "*" }
-                );
+                event.source?.postMessage({ type: "FILE_CONTENTS_RESPONSE", fileContents }, { targetOrigin: "*" });
               }
             };
             window.addEventListener("message", listener);
@@ -721,7 +645,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         cleanup();
       }
     };
-  }, [artifactKey]);
+  }, [artifactKey, artifact.data.format, artifact.data.display]);
   if (artifact.data.format === "png") {
     if (artifactData) {
       return <img src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
@@ -758,16 +682,12 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
 }
 
 export default function FilesView() {
-  const { submissions_id } = useParams();
-  const { role } = useClassProfiles();
-  const isInstructor = role?.role === "instructor";
   const [curFile, setCurFile] = useState<number>(0);
   const [curArtifact, setCurArtifact] = useState<number>(0);
   const [currentView, setCurrentView] = useState<"file" | "artifact">("file");
   const searchParams = useSearchParams();
   const file_id = searchParams.get("file_id");
   const artifact_id = searchParams.get("artifact_id");
-  const line = searchParams.get("line");
   const submission = useSubmission();
   const submissionController = useSubmissionController();
   useEffect(() => {
@@ -775,7 +695,7 @@ export default function FilesView() {
       setCurrentView("file");
       setCurFile(submission.submission_files.findIndex((file) => file.id === Number.parseInt(file_id)));
     }
-  }, [file_id]);
+  }, [file_id, submission.submission_files]);
   useEffect(() => {
     if (artifact_id) {
       setCurrentView("artifact");
@@ -783,13 +703,13 @@ export default function FilesView() {
         submission.submission_artifacts.findIndex((artifact) => artifact.id === Number.parseInt(artifact_id))
       );
     }
-  }, [artifact_id]);
+  }, [artifact_id, submission.submission_artifacts]);
   useEffect(() => {
     submissionController.file = submission.submission_files[curFile];
-  }, [curFile]);
+  }, [curFile, submission.submission_files, submissionController]);
   useEffect(() => {
     submissionController.artifact = submission.submission_artifacts[curArtifact] as SubmissionArtifact;
-  }, [curArtifact]);
+  }, [curArtifact, submission.submission_artifacts, submissionController]);
   return (
     <Box pt={4} w="100%">
       <Flex w="100%">

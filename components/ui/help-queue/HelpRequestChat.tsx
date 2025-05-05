@@ -1,32 +1,13 @@
-import { useRouter } from "next/navigation";
-import { useRef, useCallback, useEffect, Fragment, useState } from "react";
+import { useRef, useCallback, useEffect, Fragment } from "react";
 import { useChatChannel } from "@/lib/chat";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import {
-  Flex,
-  HStack,
-  Stack,
-  Text,
-  AvatarGroup,
-  Box,
-  IconButton,
-  Icon,
-  Textarea,
-  Group,
-  Button,
-  AvatarImage,
-  VStack,
-  Badge
-} from "@chakra-ui/react";
-import { BsCameraVideo, BsCheck, BsSend } from "react-icons/bs";
+import { Flex, HStack, Stack, Text, AvatarGroup, Box, Button, VStack, Badge, Icon } from "@chakra-ui/react";
+import { BsCheck } from "react-icons/bs";
 import useUserProfiles, { getUserProfile, useUserProfile } from "@/hooks/useUserProfiles";
 import { ChatMessage } from "./ChatMessage";
-import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverHeader, PopoverBody } from "../popover";
 import { useUpdate } from "@refinedev/core";
-import useAuthState from "@/hooks/useAuthState";
 import { PopConfirm } from "../popconfirm";
 import { Avatar } from "../avatar";
-import MdEditor from "../md-editor";
 import MessageInput from "../message-input";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 export default function HelpRequestChat({ request, actions }: { request: HelpRequest; actions: React.ReactNode }) {
@@ -47,11 +28,7 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
       }
     }
   }, [messages, request.resolved_by]);
-  const { mutate } = useUpdate({
-    resource: "help_requests",
-    id: request.id,
-    mutationMode: "optimistic"
-  });
+  const { mutate } = useUpdate({ resource: "help_requests", id: request.id, mutationMode: "optimistic" });
   const { private_profile_id } = useClassProfiles();
   const resolveRequest = useCallback(() => {
     mutate({ id: request.id, values: { resolved_by: private_profile_id, resolved_at: new Date().toISOString() } });
@@ -114,23 +91,11 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
       </Flex>
 
       <Box width="100%" flex="1" overflow="auto" px="5" py="4" borderWidth="1px" borderStyle="solid" height="full">
-        <ChatMessage
-          data={{
-            user: request.creator,
-            updatedAt: request.created_at,
-            message: request.request
-          }}
-        />
+        <ChatMessage data={{ user: request.creator, updatedAt: request.created_at, message: request.request }} />
         {messages.map((message, idx) => {
           return (
             <Fragment key={message.id}>
-              <ChatMessage
-                data={{
-                  user: message.author,
-                  updatedAt: message.created_at,
-                  message: message.message
-                }}
-              />
+              <ChatMessage data={{ user: message.author, updatedAt: message.created_at, message: message.message }} />
               {idx === messages.length - 2 && <Box ref={secondFromBottomRef} />}
             </Fragment>
           );

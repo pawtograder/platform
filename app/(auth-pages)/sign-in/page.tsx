@@ -2,17 +2,11 @@ import { setNewPasswordAction, signInOrSignUpWithEmailAction, signInWithMicrosof
 import { FormMessage, Message } from "@/components/form-message";
 import { Button } from "@/components/ui/button";
 import Logo from "@/components/ui/logo";
-import { createClient } from "@/utils/supabase/server";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
-import { redirect, RedirectType } from "next/navigation";
-import { NextResponse } from "next/server";
 import { BsMicrosoft } from "react-icons/bs";
 
-type SearchParams = Message & {
-  email?: string;
-  code?: string;
-};
-async function ResetPassword({ code, message }: { code: string; message: Message }) {
+type SearchParams = Message & { email?: string; code?: string };
+async function ResetPassword({ message }: { message: Message }) {
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
       <Stack gap="6">

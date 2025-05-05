@@ -1,8 +1,6 @@
 "use client";
 import { useDiscussionThreadTeasers } from "@/hooks/useCourseController";
-import { Box, Container, Heading, VStack } from "@chakra-ui/react";
-import { useTable } from "@refinedev/core";
-import { useParams } from "next/navigation";
+import { Box, Heading } from "@chakra-ui/react";
 import { useMemo } from "react";
 import { DiscussionThreadTeaser } from "./DiscussionThreadList";
 

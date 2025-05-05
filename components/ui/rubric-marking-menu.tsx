@@ -1,5 +1,4 @@
 "use client";
-import { ClientMetricReportDirection } from "amazon-chime-sdk-js";
 import { RubricCheckSelectOption, RubricCriteriaSelectGroupOption, RubricCheckSubOptions } from "./code-file";
 import { Menu, MenuItem, SubMenu } from "@jonbell/react-radial-menu";
 import { Box } from "@chakra-ui/react";
@@ -70,13 +69,7 @@ function RubricCriteriaSubMenuOrItem({
 }) {
   if (criterion.options.length > 1) {
     const children = criterion.options.map((option) =>
-      RubricCheckSubMenuOrItem({
-        criterion,
-        option,
-        handleItemClick,
-        handleSubItemClick,
-        handleDisplayClick
-      })
+      RubricCheckSubMenuOrItem({ criterion, option, handleItemClick, handleSubItemClick, handleDisplayClick })
     );
     return (
       <SubMenu
@@ -137,20 +130,12 @@ export function RubricMarkingMenu({
     setSelectedSubOption(data!);
     setCurrentMode("select");
   };
-  const handleSubMenuClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, index: number, data?: string) => {
-    console.log(`[SubMenu] ${data} clicked`);
-  };
   const handleDisplayClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, position: string) => {
     console.log(`[Display] ${position} clicked`);
   };
 
   const children = criteria.map((criterion) =>
-    RubricCriteriaSubMenuOrItem({
-      criterion,
-      handleItemClick,
-      handleSubItemClick,
-      handleDisplayClick
-    })
+    RubricCriteriaSubMenuOrItem({ criterion, handleItemClick, handleSubItemClick, handleDisplayClick })
   );
   return (
     <Box
@@ -163,9 +148,7 @@ export function RubricMarkingMenu({
         "--__reactRadialMenu__arrow-color": "var(--chakra-colors-fg-inverted)",
         __reactRadialMenu__activeArrowColor: "var(--chakra-colors-fg-emphasized)",
 
-        "& .__rrm-content": {
-          padding: "5px"
-        }
+        "& .__rrm-content": { padding: "5px" }
       }}
     >
       <Menu

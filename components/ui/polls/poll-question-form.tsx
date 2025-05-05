@@ -1,7 +1,6 @@
 "use client";
-import { PollQuestionWithAnswers, PollResponseAnswer } from "@/utils/supabase/DatabaseTypes";
-import { Box, Card, HStack, Progress, Text, VStack } from "@chakra-ui/react";
-import { useCreate } from "@refinedev/core";
+import { PollQuestionWithAnswers } from "@/utils/supabase/DatabaseTypes";
+import { Card, HStack, Progress, Text, VStack } from "@chakra-ui/react";
 
 export function PollQuestionForm({ question }: { question: PollQuestionWithAnswers }) {
   // const createAnswer = useCreate<PollResponseAnswer>({

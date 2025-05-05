@@ -34,7 +34,7 @@ const useMeetingEndRedirect = () => {
       });
       router.push(routes.HOME);
     }
-  }, [meetingStatus]);
+  }, [meetingStatus, dispatch, router, logger]);
 };
 
 export default useMeetingEndRedirect;

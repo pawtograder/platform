@@ -26,7 +26,7 @@ export const DataMessagesProvider: FC<PropsWithChildren> = ({ children }) => {
     return () => {
       audioVideo.realtimeUnsubscribeFromReceiveDataMessage(DATA_MESSAGE_TOPIC);
     };
-  }, [audioVideo]);
+  }, [audioVideo, handler]);
 
   const handler = useCallback(
     (dataMessage: DataMessage) => {
@@ -88,20 +88,14 @@ export const DataMessagesProvider: FC<PropsWithChildren> = ({ children }) => {
         )
       );
     },
-    [meetingManager, audioVideo]
+    [meetingManager, audioVideo, handler, localUserName]
   );
 
-  const value = {
-    sendMessage,
-    messages: state.messages
-  };
+  const value = { sendMessage, messages: state.messages };
   return <DataMessagesStateContext.Provider value={value}>{children}</DataMessagesStateContext.Provider>;
 };
 
-export const useDataMessages = (): {
-  sendMessage: (message: string) => void;
-  messages: ChatDataMessage[];
-} => {
+export const useDataMessages = (): { sendMessage: (message: string) => void; messages: ChatDataMessage[] } => {
   const meetingManager = useMeetingManager();
   const context = useContext(DataMessagesStateContext);
   if (!meetingManager || !context) {

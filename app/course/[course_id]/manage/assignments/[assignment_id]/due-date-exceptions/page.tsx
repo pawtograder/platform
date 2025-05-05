@@ -33,7 +33,7 @@ import { useParams } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCallback } from "react";
-import { FaTrash, FaXbox } from "react-icons/fa";
+import { FaTrash } from "react-icons/fa";
 import { PopConfirm } from "@/components/ui/popconfirm";
 function AdjustDueDateDialog({
   student,
@@ -63,12 +63,7 @@ function AdjustDueDateDialog({
     watch,
     formState: { errors, isSubmitting },
     refineCore
-  } = useForm({
-    refineCoreProps: {
-      resource: "assignment_due_date_exceptions",
-      action: "create"
-    }
-  });
+  } = useForm({ refineCoreProps: { resource: "assignment_due_date_exceptions", action: "create" } });
   const { private_profile_id } = useClassProfiles();
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
@@ -83,7 +78,16 @@ function AdjustDueDateDialog({
       }
       populate();
     },
-    [handleSubmit, refineCore.onFinish, private_profile_id]
+    [
+      handleSubmit,
+      refineCore.onFinish,
+      private_profile_id,
+      assignment.id,
+      group,
+      student.id,
+      setValue,
+      student.class_id
+    ]
   );
   const toHoursDays = (hours: number) => {
     const days = Math.floor(hours / 24);
@@ -116,13 +120,7 @@ function AdjustDueDateDialog({
                     errorText={errors.hours?.message?.toString()}
                     invalid={errors.hours ? true : false}
                   >
-                    <Input
-                      type="number"
-                      {...register("hours", {
-                        min: 0,
-                        required: "Hours extended is required"
-                      })}
-                    />
+                    <Input type="number" {...register("hours", { min: 0, required: "Hours extended is required" })} />
                   </Field>
                   <Field
                     label="Tokens to Consume"
@@ -227,33 +225,15 @@ export default function DueDateExceptions() {
   });
   const { data: groups } = useList<AssignmentGroupMembersWithGroup>({
     resource: "assignment_groups_members",
-    queryOptions: {
-      enabled: !!assignment
-    },
-    meta: {
-      select: "*, assignment_groups(*)"
-    },
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: Number.parseInt(assignment_id as string)
-      }
-    ]
+    queryOptions: { enabled: !!assignment },
+    meta: { select: "*, assignment_groups(*)" },
+    filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }]
   });
   const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
-    queryOptions: {
-      enabled: !!course
-    },
+    queryOptions: { enabled: !!course },
     liveMode: "auto",
-    filters: [
-      {
-        field: "assignment_id",
-        operator: "eq",
-        value: Number.parseInt(assignment_id as string)
-      }
-    ],
+    filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }],
     sorters: [{ field: "created_at", order: "desc" }]
   });
   if (!assignment || !groups || !dueDateExceptions) {
