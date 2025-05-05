@@ -2,10 +2,10 @@
 import { ClassSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Container, Heading, HStack, Icon, Input, List, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
 import { useTable, } from "@refinedev/react-table";
-import { ColumnDef, flexRender, getPaginationRowModel, getCoreRowModel, getFilteredRowModel } from "@tanstack/react-table";
+import { ColumnDef, flexRender } from "@tanstack/react-table";
 
 import { useParams } from "next/navigation";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import AddSingleStudent from "./addSingleStudent";
 import { useInvalidate, useList } from "@refinedev/core";
 import Link from "next/link";
@@ -15,7 +15,6 @@ import { FaLink } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
 function EnrollmentsTable() {
     const { course_id } = useParams();
-    const [pageCount, setPageCount] = useState(0);
 
     const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
         () => [
@@ -112,15 +111,12 @@ function EnrollmentsTable() {
                 pageSize: 50,
             }
         },
-        manualPagination: false,
-        manualFiltering: false,
-        getPaginationRowModel: getPaginationRowModel(),
-        getCoreRowModel: getCoreRowModel(),
-        getFilteredRowModel: getFilteredRowModel(),
-        pageCount,
         refineCoreProps: {
             resource: "user_roles",
             filters: {
+                mode: "off",
+            },
+            sorters: {
                 mode: "off",
             },
             pagination: {
@@ -132,11 +128,6 @@ function EnrollmentsTable() {
         },
         filterFromLeafRows: true,
     });
-    const nRows = getRowCount();
-    const pageSize = getState().pagination.pageSize;
-    useEffect(() => {
-        setPageCount(Math.ceil(nRows / pageSize));
-    }, [nRows, pageSize]);
 
     return (<VStack align="start" w="100%">
         <VStack paddingBottom="55px" align="start" w="100%">
@@ -245,6 +236,7 @@ function EnrollmentsTable() {
                 <VStack>
                     <Text>Show</Text>
                     <NativeSelect.Root
+                        title="Select page size"
                     >
                         <NativeSelect.Field value={'' + getState().pagination.pageSize}
                             onChange={(event) => {
