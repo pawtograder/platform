@@ -5,7 +5,7 @@ import { useTable, } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import AddSingleStudent from "./addSingleStudent";
 import { useInvalidate, useList } from "@refinedev/core";
 import Link from "next/link";
@@ -15,6 +15,7 @@ import { FaLink } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
 function EnrollmentsTable() {
     const { course_id } = useParams();
+    const [pageCount, setPageCount] = useState(0);
 
     const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
         () => [
@@ -126,8 +127,18 @@ function EnrollmentsTable() {
                 select: "*,profiles!private_profile_id(*), users(*)"
             },
         },
+        manualPagination: false,
+        manualFiltering: false,
+        manualSorting: false,
+        pageCount,
         filterFromLeafRows: true,
     });
+
+    const nRows = getRowCount();
+    const pageSize = getState().pagination.pageSize;
+    useEffect(() => {
+        setPageCount(Math.ceil(nRows / pageSize));
+    }, [nRows, pageSize]);
 
     return (<VStack align="start" w="100%">
         <VStack paddingBottom="55px" align="start" w="100%">
@@ -210,7 +221,7 @@ function EnrollmentsTable() {
                     {">"}
                 </Button>
                 <Button
-                    onClick={() => setPageIndex(getPageCount() - 1)}
+                    onClick={() => setPageIndex(pageCount - 1)}
                     disabled={!getCanNextPage()}
                 >
                     {">>"}
@@ -218,7 +229,7 @@ function EnrollmentsTable() {
                 <VStack>
                     <Text>Page</Text>
                     <Text>
-                        {getState().pagination.pageIndex + 1} of {getPageCount()}
+                        {getState().pagination.pageIndex + 1} of {pageCount}
                     </Text>
                 </VStack>
                 <VStack>

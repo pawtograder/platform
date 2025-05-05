@@ -84,6 +84,8 @@ function AuditTable() {
             }]
         }
     )
+    const [pageCount, setPageCount] = useState(0);
+
     const columns = useMemo<ColumnDef<AuditEvent>[]>(() => [
         {
             id: "class_id",
@@ -231,8 +233,19 @@ function AuditTable() {
                 select: "*"
             },
         },
+        manualPagination: false,
+        manualFiltering: false,
+        manualSorting: false,
+        pageCount,
         filterFromLeafRows: true,
     });
+
+    const nRows = getRowCount();
+    const pageSize = getState().pagination.pageSize;
+    useEffect(() => {
+        setPageCount(Math.ceil(nRows / pageSize));
+    }, [nRows, pageSize]);
+
     return (<VStack>
         <VStack paddingBottom="55px">
             <Table.Root striped>
@@ -314,7 +327,7 @@ function AuditTable() {
                     {">"}
                 </Button>
                 <Button
-                    onClick={() => setPageIndex(getPageCount() - 1)}
+                    onClick={() => setPageIndex(pageCount - 1)}
                     disabled={!getCanNextPage()}
                 >
                     {">>"}
@@ -322,7 +335,7 @@ function AuditTable() {
                 <VStack>
                     <Text>Page</Text>
                     <Text>
-                        {getState().pagination.pageIndex + 1} of {getPageCount()}
+                        {getState().pagination.pageIndex + 1} of {pageCount}
                     </Text>
                 </VStack>
                 <VStack>
