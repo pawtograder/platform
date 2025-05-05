@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import { Logger, POSTLogger } from 'amazon-chime-sdk-js';
+import { Logger, POSTLogger } from "amazon-chime-sdk-js";
 
 export type FormattedDeviceType = {
   deviceId: string;
@@ -39,27 +39,27 @@ export type ContentShareControlContextType = {
 
 export enum MeetingMode {
   Spectator,
-  Attendee,
+  Attendee
 }
 
 export enum Layout {
   Gallery,
-  Featured,
+  Featured
 }
 
 // Different CPU Utilizations percentage options for initializing background blur and replacement processors
 export const VideoFiltersCpuUtilization = {
-  Disabled: '0',
-  CPU10Percent: '10',
-  CPU20Percent: '20',
-  CPU40Percent: '40',
+  Disabled: "0",
+  CPU10Percent: "10",
+  CPU20Percent: "20",
+  CPU40Percent: "40"
 };
 
 // Video Transform Options
 export const VideoTransformOptions = {
-  None: 'None',
-  Blur: 'Background Blur',
-  Replacement: 'Background Replacement',
+  None: "None",
+  Blur: "Background Blur",
+  Replacement: "Background Replacement"
 };
 
 export type VideoTransformDropdownOptionType = {
@@ -69,14 +69,14 @@ export type VideoTransformDropdownOptionType = {
 
 // Bcakground Replacement Options
 export enum ReplacementOptions {
-  Blue = 'Blue',
-  Beach = 'Beach',
+  Blue = "Blue",
+  Beach = "Beach"
 }
 
 export enum ReplacementType {
   Color,
-  Image,
-};
+  Image
+}
 
 export type ReplacementDropdownOptionType = {
   label: ReplacementOptions;

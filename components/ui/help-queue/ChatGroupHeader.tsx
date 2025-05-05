@@ -1,12 +1,12 @@
-import { HStack, Icon, Text } from '@chakra-ui/react'
+import { HStack, Icon, Text } from "@chakra-ui/react";
 
 interface Props {
-  icon: React.ElementType
-  children: React.ReactNode
+  icon: React.ElementType;
+  children: React.ReactNode;
 }
 
 export const ChatGroupHeader = (props: Props) => {
-  const { icon, children } = props
+  const { icon, children } = props;
   return (
     <HStack color="fg.muted">
       <Icon as={icon} />
@@ -14,5 +14,5 @@ export const ChatGroupHeader = (props: Props) => {
         {children}
       </Text>
     </HStack>
-  )
-}
+  );
+};

@@ -1,15 +1,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { BackgroundImageBeach } from './background-replacement-image';
-import { ReplacementDropdownOptionType, ReplacementOptions, ReplacementType } from '../types/index';
+import { BackgroundImageBeach } from "./background-replacement-image";
+import { ReplacementDropdownOptionType, ReplacementOptions, ReplacementType } from "../types/index";
 
 export async function createBlob(option: ReplacementDropdownOptionType): Promise<Blob> {
   const { type, value } = option;
   switch (type) {
     case ReplacementType.Color:
       return await createColorBlob(value);
-      
+
     case ReplacementType.Image:
       return await createImageBlob(value);
 
@@ -24,10 +24,10 @@ export async function createColorBlob(color: string): Promise<Blob> {
     throw new Error(`Invalid hex color format: ${color}`);
   }
 
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = 500;
   canvas.height = 500;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
 
   if (ctx !== null) {
     ctx.fillStyle = color;
@@ -39,12 +39,12 @@ export async function createColorBlob(color: string): Promise<Blob> {
           console.log(`loaded canvas ${canvas}: ${blob}`);
           resolve(blob);
         } else {
-          reject(new Error('Failed to create blob from canvas'));
+          reject(new Error("Failed to create blob from canvas"));
         }
       });
     });
   } else {
-    throw new Error('Failed to get canvas context');
+    throw new Error("Failed to get canvas context");
   }
 }
 

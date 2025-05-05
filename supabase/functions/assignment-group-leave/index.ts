@@ -9,15 +9,12 @@ import {
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepoPermissions, archiveRepoAndLock } from "../_shared/GitHubWrapper.ts";
 async function handleAssignmentGroupLeave(req: Request): Promise<{ message: string }> {
-  const { assignment_id } = await req.json() as { assignment_id: number };
+  const { assignment_id } = (await req.json()) as { assignment_id: number };
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  const { data: assignment } = await adminSupabase.from("assignments")
-    .select("*")
-    .eq("id", assignment_id)
-    .single();
+  const { data: assignment } = await adminSupabase.from("assignments").select("*").eq("id", assignment_id).single();
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found");
   }
@@ -28,7 +25,8 @@ async function handleAssignmentGroupLeave(req: Request): Promise<{ message: stri
   }
   const { enrollment } = await assertUserIsInCourse(assignment.class_id, req.headers.get("Authorization")!);
 
-  const { data: membership } = await adminSupabase.from("assignment_groups_members")
+  const { data: membership } = await adminSupabase
+    .from("assignment_groups_members")
     .select("*, assignments(slug), classes(*), assignment_groups(*, repositories(*))")
     .eq("assignment_id", assignment_id)
     .eq("profile_id", enrollment.private_profile_id)
@@ -38,16 +36,17 @@ async function handleAssignmentGroupLeave(req: Request): Promise<{ message: stri
   }
 
   //OK I guess we can do it!
-  const { error: remove_member_error } = await adminSupabase.from("assignment_groups_members")
+  const { error: remove_member_error } = await adminSupabase
+    .from("assignment_groups_members")
     .delete()
     .eq("id", membership!.id);
   if (remove_member_error) {
     throw new Error("Failed to remove member from group");
   }
 
-
   //Get remaining members, update the repo permissions or archive it
-  const { data: remaining_members, error: remaining_members_error } = await adminSupabase.from("assignment_groups_members")
+  const { data: remaining_members, error: remaining_members_error } = await adminSupabase
+    .from("assignment_groups_members")
     .select("*, profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
     .eq("assignment_group_id", membership!.assignment_group_id);
   if (remaining_members_error) {
@@ -61,30 +60,26 @@ async function handleAssignmentGroupLeave(req: Request): Promise<{ message: stri
   if (repository) {
     if (remaining_members.length === 0) {
       //Archive
-      const { error: remove_repo_error } = await adminSupabase.from("repositories")
-        .delete()
-        .eq("id", repository.id);
+      const { error: remove_repo_error } = await adminSupabase.from("repositories").delete().eq("id", repository.id);
       if (remove_repo_error) {
         throw new Error("Failed to remove repo");
       }
-      await archiveRepoAndLock(
-        membership.classes!.github_org!,
-        repository.repository
-      );
-    }
-    else {
+      await archiveRepoAndLock(membership.classes!.github_org!, repository.repository);
+    } else {
       //Update the repo permissions
       await syncRepoPermissions(
         membership.classes!.github_org!,
         repository.repository,
         membership.classes!.slug!,
-        remaining_members.filter((m) => m.profiles!.user_roles!.users!.github_username).map((m) => m.profiles!.user_roles!.users!.github_username!)
+        remaining_members
+          .filter((m) => m.profiles!.user_roles!.users!.github_username)
+          .map((m) => m.profiles!.user_roles!.users!.github_username!)
       );
     }
   }
   return {
     message: "You have left the group"
-  }
+  };
 }
 Deno.serve((req) => {
   return wrapRequestHandler(req, handleAssignmentGroupLeave);

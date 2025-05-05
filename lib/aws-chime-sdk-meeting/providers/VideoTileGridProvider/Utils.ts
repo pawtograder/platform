@@ -3,17 +3,17 @@ import {
   TargetDisplaySize,
   VideoPreference,
   VideoPreferences,
-  VideoPriorityBasedPolicy,
-} from 'amazon-chime-sdk-js';
-import { Layout } from '../../types';
-import { AttendeeState, GridState, VideoSourceState } from './state';
+  VideoPriorityBasedPolicy
+} from "amazon-chime-sdk-js";
+import { Layout } from "../../types";
+import { AttendeeState, GridState, VideoSourceState } from "./state";
 
 type VideoSourceWithType = { attendeeId: string; type: VideoSourceType };
 
 enum VideoSourceType {
-  CONTENT_SHARE = 'contentShare',
-  ACTIVE_SPEAKER = 'activeSpeaker',
-  OTHER = 'other',
+  CONTENT_SHARE = "contentShare",
+  ACTIVE_SPEAKER = "activeSpeaker",
+  OTHER = "other"
 }
 
 export const isContentShare = (sourceId: string): boolean =>
@@ -25,12 +25,7 @@ export const calculateVideoSourcesToBeRendered = (
   attendeeStates: { [attendeeId: string]: AttendeeState }
 ): VideoSourceWithType[] => {
   const { layout, isZoomed, threshold } = gridState;
-  const {
-    activeSpeakersWithCameraSource,
-    cameraSources,
-    contentShareId,
-    hasLocalVideo,
-  } = videoSourceState;
+  const { activeSpeakersWithCameraSource, cameraSources, contentShareId, hasLocalVideo } = videoSourceState;
   const videoSources: VideoSourceWithType[] = [];
   let commonSources: string[];
 
@@ -46,31 +41,26 @@ export const calculateVideoSourcesToBeRendered = (
   let maximumNumberOfActiveSpeakers = 0;
 
   if (activeSpeakersWithCameraSource.length > 0) {
-
     if (layout === Layout.Gallery) {
       maximumNumberOfActiveSpeakers = 1;
     }
     if (layout === Layout.Featured) {
-      maximumNumberOfActiveSpeakers =
-        4 - (hasLocalVideo ? 1 : 0) - (contentShareId ? 1 : 0);
+      maximumNumberOfActiveSpeakers = 4 - (hasLocalVideo ? 1 : 0) - (contentShareId ? 1 : 0);
     }
 
     activeSpeakers = activeSpeakersWithCameraSource.slice(0, maximumNumberOfActiveSpeakers);
 
     videoSources.push(
-      ...activeSpeakers.map(attendeeId => ({
+      ...activeSpeakers.map((attendeeId) => ({
         attendeeId,
-        type: VideoSourceType.ACTIVE_SPEAKER,
+        type: VideoSourceType.ACTIVE_SPEAKER
       }))
     );
 
-    commonSources = cameraSources.filter(
-      id => !activeSpeakers.includes(id)
-    );
+    commonSources = cameraSources.filter((id) => !activeSpeakers.includes(id));
   } else {
     commonSources = cameraSources;
   }
-
 
   // Last, add common video sources
   let gridSize = 0;
@@ -90,9 +80,7 @@ export const calculateVideoSourcesToBeRendered = (
   const numberOfAvailableTiles = gridSize - (hasLocalVideo ? 1 : 0) - (contentShareId ? 1 : 0) - activeSpeakers.length;
 
   videoSources.push(
-    ...commonSources
-      .slice(0, numberOfAvailableTiles)
-      .map(attendeeId => ({ attendeeId, type: VideoSourceType.OTHER }))
+    ...commonSources.slice(0, numberOfAvailableTiles).map((attendeeId) => ({ attendeeId, type: VideoSourceType.OTHER }))
   );
 
   return videoSources;
@@ -104,7 +92,6 @@ export const updateDownlinkPreferences = (
   attendeeStates: { [attendeeId: string]: AttendeeState },
   priorityBasedPolicy: VideoPriorityBasedPolicy | undefined
 ): void => {
-
   if (!priorityBasedPolicy) {
     return;
   }
@@ -113,14 +100,9 @@ export const updateDownlinkPreferences = (
   const videoPreferences = VideoPreferences.prepare();
   let targetDisplaySize: TargetDisplaySize;
 
-  const videoSourcesToBeRendered = calculateVideoSourcesToBeRendered(
-    gridState,
-    videoSourceState,
-    attendeeStates
-  );
+  const videoSourcesToBeRendered = calculateVideoSourcesToBeRendered(gridState, videoSourceState, attendeeStates);
 
-  const numberOfTiles =
-    videoSourcesToBeRendered.length + (hasLocalVideo ? 1 : 0);
+  const numberOfTiles = videoSourcesToBeRendered.length + (hasLocalVideo ? 1 : 0);
 
   if (numberOfTiles <= threshold) {
     targetDisplaySize = TargetDisplaySize.High;
@@ -133,27 +115,17 @@ export const updateDownlinkPreferences = (
 
     switch (type) {
       case VideoSourceType.CONTENT_SHARE:
-        videoPreferences.add(
-          new VideoPreference(attendeeId, 1, TargetDisplaySize.High)
-        );
+        videoPreferences.add(new VideoPreference(attendeeId, 1, TargetDisplaySize.High));
         break;
 
       case VideoSourceType.ACTIVE_SPEAKER:
         videoPreferences.add(
-          new VideoPreference(
-            attendeeId,
-            1,
-            layout === Layout.Featured
-              ? TargetDisplaySize.High
-              : targetDisplaySize
-          )
+          new VideoPreference(attendeeId, 1, layout === Layout.Featured ? TargetDisplaySize.High : targetDisplaySize)
         );
         break;
 
       default:
-        videoPreferences.add(
-          new VideoPreference(attendeeId, 2, targetDisplaySize)
-        );
+        videoPreferences.add(new VideoPreference(attendeeId, 2, targetDisplaySize));
         break;
     }
   }

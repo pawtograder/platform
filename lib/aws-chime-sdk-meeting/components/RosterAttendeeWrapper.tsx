@@ -1,13 +1,10 @@
 // Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React from 'react';
+import React from "react";
 
-import {
-  RosterAttendee,
-  useAttendeeStatus,
-} from 'amazon-chime-sdk-component-library-react';
-import VideoStreamMetrics from '../containers/VideoStreamMetrics';
+import { RosterAttendee, useAttendeeStatus } from "amazon-chime-sdk-component-library-react";
+import VideoStreamMetrics from "../containers/VideoStreamMetrics";
 
 interface Props {
   /** The Chime attendee ID */
@@ -19,9 +16,7 @@ const RosterAttendeeWrapper: React.FC<Props> = ({ attendeeId }) => {
   return (
     <RosterAttendee
       attendeeId={attendeeId}
-      menu={
-        videoEnabled ? <VideoStreamMetrics attendeeId={attendeeId} /> : null
-      }
+      menu={videoEnabled ? <VideoStreamMetrics attendeeId={attendeeId} /> : null}
     />
   );
 };

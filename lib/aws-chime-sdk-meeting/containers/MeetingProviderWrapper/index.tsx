@@ -1,24 +1,21 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { PropsWithChildren } from 'react';
-import { AudioInputDevice, Device, VoiceFocusModelName, VoiceFocusTransformDevice } from 'amazon-chime-sdk-js';
+import React, { PropsWithChildren } from "react";
+import { AudioInputDevice, Device, VoiceFocusModelName, VoiceFocusTransformDevice } from "amazon-chime-sdk-js";
 import {
   BackgroundBlurProvider,
   BackgroundReplacementProvider,
   MeetingProvider,
   useLogger,
   useVoiceFocus,
-  VoiceFocusProvider,
-} from 'amazon-chime-sdk-component-library-react';
+  VoiceFocusProvider
+} from "amazon-chime-sdk-component-library-react";
 
-import routes from '../../constants/routes';
-import { NavigationProvider } from '../../providers/NavigationProvider';
-import NoMeetingRedirect from '../NoMeetingRedirect';
-import { Meeting, Home, DeviceSetup } from '../../views';
-import MeetingEventObserver from '../MeetingEventObserver';
-import { useAppState } from '../../providers/AppStateProvider';
-import { VideoFiltersCpuUtilization } from '../../types';
+import { Home } from "../../views";
+import MeetingEventObserver from "../MeetingEventObserver";
+import { useAppState } from "../../providers/AppStateProvider";
+import { VideoFiltersCpuUtilization } from "../../types";
 
 const MeetingProviderWithDeviceReplacement: React.FC<PropsWithChildren> = ({ children }) => {
   const { addVoiceFocus } = useVoiceFocus();
@@ -33,9 +30,7 @@ const MeetingProviderWithDeviceReplacement: React.FC<PropsWithChildren> = ({ chi
     return Promise.resolve(nextDevice);
   };
 
-  const meetingConfigValue = {
-    onDeviceReplacement,
-  };
+  const meetingConfigValue = { onDeviceReplacement };
 
   return <MeetingProvider {...meetingConfigValue}>{children}</MeetingProvider>;
 };
@@ -49,7 +44,7 @@ const MeetingProviderWrapper: React.FC = () => {
   const getMeetingProviderWrapper = () => {
     return (
       <>
-      <Home />
+        <Home />
         {/* <NavigationProvider>
           <Routes>
             <Route path={routes.HOME} element={<Home />} />
@@ -77,23 +72,20 @@ const MeetingProviderWrapper: React.FC = () => {
   };
 
   function voiceFocusName(name: string): VoiceFocusModelName {
-    if (name && ['default', 'ns_es'].includes(name)) {
+    if (name && ["default", "ns_es"].includes(name)) {
       return name as VoiceFocusModelName;
     }
-    return 'default';
+    return "default";
   }
 
   function getVoiceFocusSpecName(): VoiceFocusModelName {
-    if (joinInfo && joinInfo.Meeting?.MeetingFeatures?.Audio?.EchoReduction === 'AVAILABLE') {
-      return voiceFocusName('ns_es');
+    if (joinInfo && joinInfo.Meeting?.MeetingFeatures?.Audio?.EchoReduction === "AVAILABLE") {
+      return voiceFocusName("ns_es");
     }
-    return voiceFocusName('default');
+    return voiceFocusName("default");
   }
 
-  const vfConfigValue = {
-    spec: { name: getVoiceFocusSpecName() },
-    createMeetingResponse: joinInfo,
-  };
+  const vfConfigValue = { spec: { name: getVoiceFocusSpecName() }, createMeetingResponse: joinInfo };
 
   const getMeetingProviderWrapperWithVF = (children: React.ReactNode) => {
     return (
@@ -139,10 +131,10 @@ const MeetingProviderWrapper: React.FC = () => {
   return <>{imageBlob === undefined ? <div>Loading Assets</div> : getMeetingProviderWithFeatures()}</>;
 };
 
-const MeetingModeSelector: React.FC = () => {
-  const { meetingMode } = useAppState();
+// const MeetingModeSelector: React.FC = () => {
+//   const { meetingMode } = useAppState();
 
-  return <Meeting mode={meetingMode} />;
-};
+//   return <Meeting mode={meetingMode} />;
+// };
 
 export default MeetingProviderWrapper;

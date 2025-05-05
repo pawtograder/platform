@@ -1,13 +1,13 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React from 'react';
+import React from "react";
 
-import MeetingRoster from '../MeetingRoster';
-import Navigation from '.';
-import { useNavigation } from '../../providers/NavigationProvider';
-import Chat from '../Chat';
-import { Flex } from 'amazon-chime-sdk-component-library-react';
+import MeetingRoster from "../MeetingRoster";
+import Navigation from ".";
+import { useNavigation } from "../../providers/NavigationProvider";
+import Chat from "../Chat";
+import { Flex } from "amazon-chime-sdk-component-library-react";
 
 const NavigationControl = () => {
   const { showNavbar, showRoster, showChat } = useNavigation();
@@ -15,7 +15,7 @@ const NavigationControl = () => {
   const view = () => {
     if (showRoster && showChat) {
       return (
-        <Flex layout="stack" style={{ height: '100vh' }}>
+        <Flex layout="stack" style={{ height: "100vh" }}>
           <MeetingRoster />
           <Chat />
         </Flex>
