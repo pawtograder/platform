@@ -23,6 +23,8 @@ import React, { Fragment, useEffect, useRef } from "react";
 import { FaScroll } from "react-icons/fa";
 import { FiClipboard, FiCompass, FiMenu, FiMessageSquare, FiSettings, FiStar, FiUsers } from "react-icons/fi";
 import UserMenu from "../UserMenu";
+import Image from "next/image";
+
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
   {
@@ -145,9 +147,9 @@ export default function DynamicCourseNav() {
           <HStack>
             <CoursePicker courses={courses} currentCourse={enrollment.classes} />
             {colorMode === "dark" ? (
-              <img src="/Logo-Dark.png" width="30px" alt="Logo" />
+              <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
             ) : (
-              <img src="/Logo-Light.png" width="30px" alt="Logo" />
+              <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
             )}
             <Text fontSize="xl" fontWeight="medium">
               <Link variant="plain" href={`/course/${enrollment.class_id}`}>

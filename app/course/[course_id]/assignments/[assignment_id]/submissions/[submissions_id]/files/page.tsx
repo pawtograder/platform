@@ -45,6 +45,8 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 import zipToHTMLBlobs from "./zipToHTMLBlobs";
+import Image from "next/image";
+
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -648,7 +650,11 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   }, [artifactKey, artifact.data.format, artifact.data.display]);
   if (artifact.data.format === "png") {
     if (artifactData) {
-      return <img src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
+      return (
+        <Box position="relative" width="100%" height="400px">
+          <Image src={URL.createObjectURL(artifactData)} alt={artifact.name} fill unoptimized />
+        </Box>
+      );
     } else {
       return <Spinner />;
     }
