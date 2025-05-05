@@ -18,6 +18,8 @@ import { FaGithub, FaUnlink, FaQuestionCircle } from "react-icons/fa";
 import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
 import { useDropzone } from 'react-dropzone';
+import { setDefaultAutoSelectFamily } from "net";
+import { imageOptimizer } from "next/dist/server/image-optimizer";
 
 
 
@@ -58,6 +60,9 @@ function SupportMenu()  {
     </Menu.Root>
 }
 
+/**
+ * Modal that handles user profile updates, currently only avatar changes.
+ */
 const ProfileChangesMenu = ({
     profile
 } : {
@@ -66,35 +71,37 @@ const ProfileChangesMenu = ({
     const [avatarLink, setAvatarLink] = useState<string | undefined | null>(null);
     const [isHovered, setIsHovered] = useState<boolean>(false);
     const supabase = createClient();
+    const { course_id } = useParams();
+
+    /**
+     * Uploads user image to avatar storage bucket under avatars/[userid]/[courseid]/uuid.extension 
+     * @param file jpg or png image file for new avatar
+     */
     const completeAvatarUpload = async (file: File) => {
-        console.log(file);
-        console.log("attempting avatar upload");
+        if(!profile) {
+            console.log("Profile required to complete avatar upload");
+            return;
+        }
         const uuid = crypto.randomUUID();
         const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, '_');
+        const fileExtension = fileName.split('.').pop();
+        const { data, error } = await supabase.storage.from('avatars').upload(`${profile.id}/${course_id}/${uuid}.${fileExtension}`, file);
 
-        /*
-        Avatar link should be uploaded to storage here, discard if it doesn't get used.  Or, potentially tweak Avatar display to show image file,
-        and only upload to storage if user submits changes (depends on how we implement for instructors making changes)
-
-        const {data, error} = await supabase.storage.from('uploads').upload(`/${fileName}`, file);
         if(!data || error) {
-            console.log("Error uploading avatar image");
+            console.log("Error uploading avatar image with error " + error);
         }
         else {
-            console.log("Avatar uploaded");
-            console.log(data);
-            setAvatarLink(data.path);
+            setAvatarLink(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${profile.id}/${course_id}/${uuid}.${fileExtension}`);
         }
-            */
-        
     }
 
+    /**
+     * Handles user file drops to accept only the first png or img file chosen.  Prompts file to be uploaded to storage.
+     */
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (!acceptedFiles || acceptedFiles.length === 0) return;
 
     const file = acceptedFiles[0];
-
-    // Ensure the file is a PDF
     if (file.type === 'image/jpeg' || file.type === 'image/png') {
       completeAvatarUpload(file);
     } else {
@@ -102,16 +109,49 @@ const ProfileChangesMenu = ({
     }
   }, [completeAvatarUpload],)
 
+  /**
+   * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar 
+   * storage bucket.
+   */
   const updateProfile = async () => {
     if(!avatarLink || !profile?.id) {
         return;
     }
-    const {data, error} = await supabase.from('profiles').update(
-        {avatar_url:avatarLink}
-    ).eq("id", profile?.id).eq("is_private_profile", false)
-    .single();
+    /**
+     * TO DO:
+     * - Ensure correct accessibility for avatar images.  Users should be able to view and update these images. Everyone should be able to view 
+     * these images
+     * - Ensure RLS is configured correctly s/t users can update only their avatar_url
+     * - After the user saves their avatar, excess files should be removed from storage 
+     * - Clarify the relationship between public and private profile photos
+     * 
+     * Nice to have: users should be able to rearrange / preview what their photos will look like inside the circle 
+     */
+    //removeUnusedImages();
+    const {data, error} = await supabase.from('profiles').update({avatar_url:avatarLink}).eq("id", profile?.id).single();
     if(!data || error) {
         console.log("Error updating user profile");
+    }
+  }
+
+  /**
+   * Removes extra images from storage that may have been populated if the user attempted to open the menu and reselect multiple times.
+   */
+  const removeUnusedImages = async () => {
+    if(!avatarLink || !profile?.id) {
+        return;
+    }
+    // determine from the database 
+    const {data, error} = await supabase.storage.from('avatars').list(`${profile.id}/${course_id}`);
+    if(!data || error) {
+        console.log("failed to find profile photo to update");
+        return;
+    }
+    // transform data to a list of file paths that should be removed from avatars
+    const pathsToRemove = data.filter((image) => (!avatarLink.includes(image.id))).map((imageToRemove) => `${profile.id}/${course_id}/${imageToRemove}.${ imageToRemove.name.split('.').pop()}`);
+    const {data:removeData, error:removeError} = await supabase.storage.from('avatars').remove(pathsToRemove);
+    if(error) {
+        console.log("Error removing extra files: " + error);
     }
   }
 
