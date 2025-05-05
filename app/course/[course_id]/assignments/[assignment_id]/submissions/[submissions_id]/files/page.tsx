@@ -714,7 +714,7 @@ export default function FilesView() {
     <Box pt={4} w="100%">
       <Flex w="100%">
         <Box w="100%">
-          <FilePicker curFile={curFile} setCurFile={setCurFile} />
+          <FilePicker curFile={curFile} />
           <ArtifactPicker curArtifact={curArtifact} />
           {currentView === "file" && submission.submission_files[curFile] && (
             <CodeFile file={submission.submission_files[curFile]} />

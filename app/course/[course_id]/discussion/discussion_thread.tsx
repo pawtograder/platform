@@ -137,38 +137,36 @@ export function useLogIfChanged<T>(name: string, value: T) {
   }
 }
 
-export const DiscussionThread = memo(
+// Define the inner component that assumes thread and thread.root are valid
+const DiscussionThreadContent = memo(
   ({
-    thread_id,
+    thread,
+    originalPoster,
     outerSiblings,
-    isFirstDescendantOfParent,
-    originalPoster
+    isFirstDescendantOfParent
   }: {
-    thread_id: number;
-    indent: boolean;
-    outerSiblings: string; // whether this thread has siblings, at each level
-    isFirstDescendantOfParent: boolean; // whether this thread is the first child of its parent
+    thread: DiscussionThreadType & { children: DiscussionThreadType[] }; // Ensure thread is properly typed
     originalPoster: string;
+    outerSiblings: string;
+    isFirstDescendantOfParent: boolean;
   }) => {
     const ref = useRef<HTMLDivElement>(null);
-    // const isVisible = useIntersection(ref);
-
-    const thread = useDiscussionThreadChildren(thread_id);
-    // Pass thread?.root directly; the hook should handle potential undefined
-    const root_thread = useDiscussionThreadTeaser(thread?.root);
-    const is_answer = root_thread?.answer === thread?.id;
+    // We know thread.root is a number here
+    const root_thread = useDiscussionThreadTeaser(thread.root!);
+    const is_answer = root_thread?.answer === thread.id;
     const { mutateAsync } = useUpdate<DiscussionThreadType>({
       resource: "discussion_threads",
       mutationMode: "optimistic"
     });
 
     const [replyVisible, setReplyVisible] = useState(false);
-    const authorProfile = useUserProfile(thread?.author);
+    const authorProfile = useUserProfile(thread.author);
     const { role } = useClassProfiles();
     const [isEditing, setIsEditing] = useState(false);
     const canEdit = useMemo(() => {
       return authorProfile?.id === originalPoster || role.role === "instructor" || role.role === "grader";
     }, [authorProfile, originalPoster, role.role]);
+
     const outerBorders = useCallback(
       (present: string): JSX.Element => {
         const ret: JSX.Element[] = [];
@@ -191,37 +189,38 @@ export const DiscussionThread = memo(
       },
       [isFirstDescendantOfParent]
     );
+
     const childOuterSiblings = useMemo(() => {
       const ret: string[] = [];
-      if (thread?.children) {
-        for (let i = 0; i < thread?.children.length; i++) {
-          ret.push(outerSiblings + (thread?.children.length > 1 && i !== thread?.children.length - 1 ? "1" : "0"));
+      if (thread.children) {
+        for (let i = 0; i < thread.children.length; i++) {
+          ret.push(outerSiblings + (thread.children.length > 1 && i !== thread.children.length - 1 ? "1" : "0"));
         }
       }
       return ret;
-    }, [thread?.children, outerSiblings]);
+    }, [thread.children, outerSiblings]);
+
     const updateThread = useUpdateThreadTeaser();
     const showReply = useCallback(() => {
       setReplyVisible(true);
     }, []);
+
     const toggleAnswered = useCallback(async () => {
-      // Add checks to ensure thread and root_thread are defined
-      if (!thread || !root_thread || thread.root === undefined || thread.id === undefined) {
-        console.error("Cannot toggle answer status: thread or root_thread is missing.");
-        return; // Should not happen but satisfies TS and prevents errors
+      // root_thread might still be loading initially, handle that case
+      if (!root_thread || thread.root === undefined || thread.id === undefined) {
+        console.error("Cannot toggle answer status: root_thread not loaded or thread IDs missing.");
+        return;
       }
       if (is_answer) {
-        await updateThread({ id: thread.root, old: root_thread, values: { answer: null } });
+        await updateThread({ id: thread.root!, old: root_thread, values: { answer: null } });
       } else {
-        await updateThread({ id: thread.root, old: root_thread, values: { answer: thread.id } });
+        await updateThread({ id: thread.root!, old: root_thread, values: { answer: thread.id } });
       }
     }, [is_answer, updateThread, thread, root_thread]);
-    const isAnswered = root_thread?.answer !== undefined; // Use !== undefined for clarity
-    if (!thread || !thread.children || thread.root === undefined) {
-      // Also check thread.root is defined before using it below
-      return <Skeleton height="100px" />;
-    }
+
+    const isAnswered = root_thread?.answer !== undefined;
     const descendant = thread.children.length > 0;
+
     return (
       <Box>
         <Container pl="8" pr="0" alignSelf="flex-start">
@@ -243,7 +242,6 @@ export const DiscussionThread = memo(
             <Flex gap="2" ps="14" pt="2" as="article" tabIndex={-1} w="100%">
               {authorProfile ? (
                 <Avatar.Root size="sm" variant="outline" shape="square">
-                  {/* Avoid non-null assertion if authorProfile might be null/undefined */}
                   <Avatar.Fallback name={authorProfile.name} />
                   <Avatar.Image src={authorProfile.avatar_url} />
                 </Avatar.Root>
@@ -260,7 +258,7 @@ export const DiscussionThread = memo(
                     <Text textStyle="sm" fontWeight="semibold">
                       <Link
                         id={`post-${thread.ordinal}`}
-                        href={`/course/${thread.class_id}/discussion/${thread.root}#post-${thread.ordinal}`}
+                        href={`/course/${thread.class_id}/discussion/${thread.root!}#post-${thread.ordinal}`}
                       >
                         #{thread.ordinal}
                       </Link>
@@ -284,13 +282,16 @@ export const DiscussionThread = memo(
                       <Skeleton width="100px" height="20px" />
                     )}
                     {thread.id === root_thread?.answer && <Badge colorPalette="green">Answer to Question</Badge>}
-                    <NotificationAndReadStatusUpdater thread_id={thread.id} root_thread_id={thread.root} />
+                    {/* Ensure root_thread_id is valid before passing */}
+                    {thread.root !== null && thread.root !== undefined && (
+                      <NotificationAndReadStatusUpdater thread_id={thread.id} root_thread_id={thread.root} />
+                    )}
                   </HStack>
                   {isEditing ? (
                     <MessageInput
                       sendMessage={async (message) => {
                         await mutateAsync({
-                          id: thread.id.toString(),
+                          id: thread.id.toString(), // Ensure ID is string if needed
                           values: { body: message, edited_at: new Date().toISOString() }
                         });
                         setIsEditing(false);
@@ -311,7 +312,6 @@ export const DiscussionThread = memo(
                   <Text textStyle="sm" color="fg.muted" ms="3">
                     {formatRelative(thread.created_at, new Date())}
                   </Text>
-                  {/* <Text color="fg.muted">Like</Text> */}
                   <Link onClick={showReply} color="fg.muted">
                     Reply
                   </Link>
@@ -335,7 +335,6 @@ export const DiscussionThread = memo(
               </Stack>
             </Flex>
           </Box>
-          {/* <Box w="100%" pl="4em"> */}
           {thread.children.map((child, index) => (
             <DiscussionThread
               key={child.id}
@@ -346,9 +345,42 @@ export const DiscussionThread = memo(
               isFirstDescendantOfParent={index === 0}
             />
           ))}
-          {/* </Box> */}
         </Container>
       </Box>
+    );
+  }
+);
+DiscussionThreadContent.displayName = "DiscussionThreadContent";
+
+// Modified outer component
+export const DiscussionThread = memo(
+  ({
+    thread_id,
+    outerSiblings,
+    isFirstDescendantOfParent,
+    originalPoster
+  }: {
+    thread_id: number;
+    indent: boolean; // This prop seems unused in the original logic provided? Keeping it for signature consistency.
+    outerSiblings: string;
+    isFirstDescendantOfParent: boolean;
+    originalPoster: string;
+  }) => {
+    const thread = useDiscussionThreadChildren(thread_id);
+
+    // Show skeleton if thread or thread.root is not loaded/valid
+    if (!thread || thread.root === undefined || thread.root === null) {
+      return <Skeleton height="100px" />;
+    }
+
+    // Render the content component only when data is ready
+    return (
+      <DiscussionThreadContent
+        thread={thread}
+        originalPoster={originalPoster}
+        outerSiblings={outerSiblings}
+        isFirstDescendantOfParent={isFirstDescendantOfParent}
+      />
     );
   }
 );

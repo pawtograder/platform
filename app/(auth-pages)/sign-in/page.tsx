@@ -44,7 +44,7 @@ async function ResetPassword({ message }: { message: Message }) {
 export default async function Login(props: { searchParams: Promise<SearchParams> }) {
   const { email, code, ...message } = await props.searchParams;
   if (code) {
-    return <ResetPassword code={code} message={message} />;
+    return <ResetPassword message={message} />;
   }
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>

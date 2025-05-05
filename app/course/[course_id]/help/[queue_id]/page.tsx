@@ -52,12 +52,7 @@ export default function HelpQueuePage() {
             {!unResolvedRequest || (unResolvedRequest.length === 0 && <HelpRequestForm />)}
           </Tabs.Content>
           <Tabs.Content width="100%" value="past">
-            {requests && (
-              <HelpRequestHistory
-                queue={queue.data?.data}
-                requests={requests.data.filter((request) => request.resolved_by)}
-              />
-            )}
+            {requests && <HelpRequestHistory requests={requests.data.filter((request) => request.resolved_by)} />}
           </Tabs.Content>
           <Tabs.Indicator />
         </Tabs.Root>

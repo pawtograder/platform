@@ -1,11 +1,11 @@
 import { Input } from "amazon-chime-sdk-component-library-react";
 import React, { ChangeEvent, useState } from "react";
-import { useDataMessages } from "../../providers/DataMessagesProvider";
+import { useDataMessagesState } from "../../providers/DataMessagesProvider";
 import { StyledChatInputContainer } from "./Styled";
 
 export default function ChatInput() {
   const [message, setMessage] = useState("");
-  const { sendMessage } = useDataMessages();
+  const { sendMessage } = useDataMessagesState();
 
   const handleMessageChange = (event: ChangeEvent<HTMLInputElement>) => {
     setMessage(event.target.value);
