@@ -9,13 +9,14 @@ import {
 } from "../_shared/HandlerUtils.ts";
 import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-async function handleAssignmentGroupJoin(req: Request): Promise<{ message: string, joined_group: boolean }> {
-  const { assignment_group_id } = await req.json() as AssignmentGroupJoinRequest;
+async function handleAssignmentGroupJoin(req: Request): Promise<{ message: string; joined_group: boolean }> {
+  const { assignment_group_id } = (await req.json()) as AssignmentGroupJoinRequest;
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  const { data: assignmentGroup } = await adminSupabase.from("assignment_groups")
+  const { data: assignmentGroup } = await adminSupabase
+    .from("assignment_groups")
     .select("*, assignments(*), classes(github_org, slug), repositories(*)")
     .eq("id", assignment_group_id)
     .single();
@@ -31,14 +32,22 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
   const { enrollment } = await assertUserIsInCourse(assignmentGroup.class_id, req.headers.get("Authorization")!);
 
   //Ensure not already in group
-  const { data: existingMember } = await adminSupabase.from("assignment_groups_members").select("*").eq("assignment_group_id", assignment_group_id).eq("profile_id", enrollment.private_profile_id);
+  const { data: existingMember } = await adminSupabase
+    .from("assignment_groups_members")
+    .select("*")
+    .eq("assignment_group_id", assignment_group_id)
+    .eq("profile_id", enrollment.private_profile_id);
   console.log(existingMember);
   if (existingMember && existingMember.length > 0) {
     throw new IllegalArgumentError("You are already in this group");
   }
 
   //Check for invitation
-  const { data: invitation } = await adminSupabase.from("assignment_group_invitations").select("*").eq("invitee", enrollment.private_profile_id).eq("assignment_group_id", assignment_group_id);
+  const { data: invitation } = await adminSupabase
+    .from("assignment_group_invitations")
+    .select("*")
+    .eq("invitee", enrollment.private_profile_id)
+    .eq("assignment_group_id", assignment_group_id);
   if (invitation && invitation.length > 0) {
     //Invitation found, add directly to the group
     const { error } = await adminSupabase.from("assignment_groups_members").insert({
@@ -46,32 +55,44 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
       profile_id: enrollment.private_profile_id,
       assignment_id: assignmentGroup.assignment_id,
       class_id: assignmentGroup.class_id,
-      added_by: invitation[0].inviter,
+      added_by: invitation[0].inviter
     });
     if (error) {
       console.log(error);
       throw new Error("Failed to add to group");
     }
     //Delete invitation
-    const { error: deleteError } = await adminSupabase.from("assignment_group_invitations").delete().eq("id", invitation[0].id);
+    const { error: deleteError } = await adminSupabase
+      .from("assignment_group_invitations")
+      .delete()
+      .eq("id", invitation[0].id);
     if (deleteError) {
       console.log(deleteError);
       throw new Error("Failed to delete invitation");
     }
     //Sync repo permissions
-    const { data: remaining_members, error: remaining_members_error } = await adminSupabase.from("assignment_groups_members")
-    .select("*,classes(github_org), profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))")
-    .eq("assignment_group_id", assignment_group_id);
+    const { data: remaining_members, error: remaining_members_error } = await adminSupabase
+      .from("assignment_groups_members")
+      .select(
+        "*,classes(github_org), profiles!profile_id(user_roles!user_roles_private_profile_id_fkey(users(github_username)))"
+      )
+      .eq("assignment_group_id", assignment_group_id);
     if (remaining_members) {
-      await syncRepoPermissions(assignmentGroup.classes!.github_org!,
+      await syncRepoPermissions(
+        assignmentGroup.classes!.github_org!,
         assignmentGroup.repositories[0].repository,
         assignmentGroup.classes!.slug!,
-        remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!));
+        remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!)
+      );
     }
     //Deactivate any submissions for this assignment for this student
-    const { error: deactivateError } = await adminSupabase.from("submissions").update({
-      is_active: false
-    }).eq("assignment_id", assignmentGroup.assignment_id).eq("profile_id", enrollment.private_profile_id);
+    const { error: deactivateError } = await adminSupabase
+      .from("submissions")
+      .update({
+        is_active: false
+      })
+      .eq("assignment_id", assignmentGroup.assignment_id)
+      .eq("profile_id", enrollment.private_profile_id);
     if (deactivateError) {
       console.log(deactivateError);
       throw new Error("Failed to deactivate submissions");
@@ -82,9 +103,16 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
     };
   } else {
     //Ensure no join requests
-    const { data: joinRequest } = await adminSupabase.from("assignment_group_join_request").select("*").eq("assignment_group_id", assignment_group_id).eq("profile_id", enrollment.private_profile_id).eq("status", "pending");
+    const { data: joinRequest } = await adminSupabase
+      .from("assignment_group_join_request")
+      .select("*")
+      .eq("assignment_group_id", assignment_group_id)
+      .eq("profile_id", enrollment.private_profile_id)
+      .eq("status", "pending");
     if (joinRequest && joinRequest.length > 0) {
-      throw new IllegalArgumentError("You have already requested to join this group. Please wait for approval from a group members.");
+      throw new IllegalArgumentError(
+        "You have already requested to join this group. Please wait for approval from a group members."
+      );
     }
     //Create join request
     const { error: createError } = await adminSupabase.from("assignment_group_join_request").insert({
@@ -92,10 +120,10 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
       profile_id: enrollment.private_profile_id,
       class_id: assignmentGroup.class_id,
       assignment_id: assignmentGroup.assignment_id,
-      status: "pending",
+      status: "pending"
     });
     if (createError) {
-      console.log(createError)
+      console.log(createError);
       throw new Error("Failed to create join request");
     }
     return {
@@ -103,9 +131,8 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
       message: `Requested to join group ${assignmentGroup.name}. Please wait for approval from a current member of the group.`
     };
   }
-
 }
 
 Deno.serve((req) => {
   return wrapRequestHandler(req, handleAssignmentGroupJoin);
-})
+});

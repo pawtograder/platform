@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React from 'react';
+import React from "react";
 import {
   ControlBar,
   AudioInputVFControl,
@@ -11,15 +11,15 @@ import {
   ControlBarButton,
   useUserActivityState,
   Dots,
-  VideoInputControl,
-} from 'amazon-chime-sdk-component-library-react';
+  VideoInputControl
+} from "amazon-chime-sdk-component-library-react";
 
-import EndMeetingControl from '../EndMeetingControl';
-import { useNavigation } from '../../providers/NavigationProvider';
-import { StyledControls } from './Styled';
-import { useAppState } from '../../providers/AppStateProvider';
-import { VideoFiltersCpuUtilization } from '../../types';
-import { Box } from '@chakra-ui/react';
+import EndMeetingControl from "../EndMeetingControl";
+import { useNavigation } from "../../providers/NavigationProvider";
+import { StyledControls } from "./Styled";
+import { useAppState } from "../../providers/AppStateProvider";
+import { VideoFiltersCpuUtilization } from "../../types";
+import { Box } from "@chakra-ui/react";
 
 const MeetingControls: React.FC = () => {
   const { toggleNavbar, closeRoster, showRoster } = useNavigation();
@@ -36,20 +36,9 @@ const MeetingControls: React.FC = () => {
 
   return (
     <StyledControls className="controls" active={!!isUserActive}>
-      <ControlBar
-        className="controls-menu"
-        layout="undocked-horizontal"
-        showLabels
-      >
-        <ControlBarButton
-          className="mobile-toggle"
-          icon={<Dots />}
-          onClick={handleToggle}
-          label="Menu"
-        />
-        <Box position="relative">
-          {isWebAudioEnabled ? <AudioInputVFControl /> : <AudioInputControl />}
-        </Box>
+      <ControlBar className="controls-menu" layout="undocked-horizontal" showLabels>
+        <ControlBarButton className="mobile-toggle" icon={<Dots />} onClick={handleToggle} label="Menu" />
+        <Box position="relative">{isWebAudioEnabled ? <AudioInputVFControl /> : <AudioInputControl />}</Box>
         <Box position="relative">
           <VideoInputControl />
         </Box>

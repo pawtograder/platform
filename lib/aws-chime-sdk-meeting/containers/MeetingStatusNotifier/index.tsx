@@ -3,78 +3,78 @@ import {
   MeetingStatus,
   Severity,
   useMeetingStatus,
-  useNotificationDispatch,
-} from 'amazon-chime-sdk-component-library-react';
-import React, { useEffect, useState } from 'react';
-import routes from '../../constants/routes';
-import { useRouter } from 'next/navigation';
+  useNotificationDispatch
+} from "amazon-chime-sdk-component-library-react";
+import React, { useEffect, useState } from "react";
+import routes from "../../constants/routes";
+import { useRouter } from "next/navigation";
 
-type DemoMeetingStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'failed';
+type DemoMeetingStatus = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";
 
 const MeetingStatusNotifier: React.FC = () => {
   const meetingStatus = useMeetingStatus();
   const dispatch = useNotificationDispatch();
   const [status, setStatus] = useState<DemoMeetingStatus>();
-  const router = useRouter()
+  const router = useRouter();
 
   const getMeetingStatusPayload = (message: string, severity: Severity) => {
     return {
       severity,
       message,
       autoClose: true,
-      replaceAll: true,
+      replaceAll: true
     };
   };
 
   useEffect(() => {
     switch (meetingStatus) {
       case MeetingStatus.Loading:
-        setStatus('connecting');
+        setStatus("connecting");
         dispatch({
           type: ActionType.ADD,
-          payload: getMeetingStatusPayload('Meeting connecting...', Severity.INFO),
+          payload: getMeetingStatusPayload("Meeting connecting...", Severity.INFO)
         });
         break;
       case MeetingStatus.Succeeded:
-        setStatus('connected');
-        if (status === 'reconnecting') {
+        setStatus("connected");
+        if (status === "reconnecting") {
           dispatch({
             type: ActionType.ADD,
-            payload: getMeetingStatusPayload('Meeting reconnected', Severity.SUCCESS),
+            payload: getMeetingStatusPayload("Meeting reconnected", Severity.SUCCESS)
           });
         } else {
           dispatch({
             type: ActionType.ADD,
-            payload: getMeetingStatusPayload('Meeting connected', Severity.SUCCESS),
+            payload: getMeetingStatusPayload("Meeting connected", Severity.SUCCESS)
           });
         }
         break;
       case MeetingStatus.Reconnecting:
-        setStatus('reconnecting');
+        setStatus("reconnecting");
         dispatch({
           type: ActionType.ADD,
-          payload: getMeetingStatusPayload('Meeting reconnecting...', Severity.WARNING),
+          payload: getMeetingStatusPayload("Meeting reconnecting...", Severity.WARNING)
         });
         break;
       case MeetingStatus.Failed:
-        setStatus('failed');
+        setStatus("failed");
         dispatch({
           type: ActionType.ADD,
           payload: getMeetingStatusPayload(
-            'Meeting failed even after reconnection attempts, redirecting to home',
+            "Meeting failed even after reconnection attempts, redirecting to home",
             Severity.ERROR
-          ),
+          )
         });
         router.push(routes.HOME);
         break;
       case MeetingStatus.TerminalFailure:
-        setStatus('failed');
+        setStatus("failed");
         dispatch({
           type: ActionType.ADD,
           payload: getMeetingStatusPayload(
-            'Meeting will not reconnect due to fatal failure, redirecting to home',
+            "Meeting will not reconnect due to fatal failure, redirecting to home",
             Severity.ERROR
-          ),
+          )
         });
         router.push(routes.HOME);
         break;
@@ -88,11 +88,11 @@ const MeetingStatusNotifier: React.FC = () => {
 
   useEffect(() => {
     let id: NodeJS.Timeout;
-    if (status === 'reconnecting') {
+    if (status === "reconnecting") {
       id = setInterval(() => {
         dispatch({
           type: ActionType.ADD,
-          payload: getMeetingStatusPayload('Meeting reconnecting...', Severity.WARNING),
+          payload: getMeetingStatusPayload("Meeting reconnecting...", Severity.WARNING)
         });
       }, 10 * 1000);
     }

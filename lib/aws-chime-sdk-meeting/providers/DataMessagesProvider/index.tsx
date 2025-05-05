@@ -1,9 +1,9 @@
-import { useAudioVideo, useMeetingManager } from 'amazon-chime-sdk-component-library-react';
-import { DataMessage } from 'amazon-chime-sdk-js';
-import React, { useEffect, useReducer, createContext, useContext, FC, useCallback, PropsWithChildren } from 'react';
-import { DATA_MESSAGE_LIFETIME_MS, DATA_MESSAGE_TOPIC } from '../../constants';
-import { useAppState } from '../AppStateProvider';
-import { DataMessagesActionType, initialState, ChatDataMessage, reducer } from './state';
+import { useAudioVideo, useMeetingManager } from "amazon-chime-sdk-component-library-react";
+import { DataMessage } from "amazon-chime-sdk-js";
+import React, { useEffect, useReducer, createContext, useContext, FC, useCallback, PropsWithChildren } from "react";
+import { DATA_MESSAGE_LIFETIME_MS, DATA_MESSAGE_TOPIC } from "../../constants";
+import { useAppState } from "../AppStateProvider";
+import { DataMessagesActionType, initialState, ChatDataMessage, reducer } from "./state";
 
 interface DataMessagesStateContextType {
   sendMessage: (message: string) => void;
@@ -41,8 +41,8 @@ export const DataMessagesProvider: FC<PropsWithChildren> = ({ children }) => {
               senderAttendeeId: dataMessage.senderAttendeeId,
               timestamp: dataMessage.timestampMs,
               senderName: dataMessage.senderExternalUserId,
-              isSelf: true,
-            },
+              isSelf: true
+            }
           });
         } else {
           const data = dataMessage.json();
@@ -53,12 +53,12 @@ export const DataMessagesProvider: FC<PropsWithChildren> = ({ children }) => {
               senderAttendeeId: dataMessage.senderAttendeeId,
               timestamp: dataMessage.timestampMs,
               senderName: data.senderName,
-              isSelf: false,
-            },
+              isSelf: false
+            }
           });
         }
       } else {
-        console.warn('DataMessage is throttled. Please resend');
+        console.warn("DataMessage is throttled. Please resend");
       }
     },
     [meetingManager]
@@ -93,7 +93,7 @@ export const DataMessagesProvider: FC<PropsWithChildren> = ({ children }) => {
 
   const value = {
     sendMessage,
-    messages: state.messages,
+    messages: state.messages
   };
   return <DataMessagesStateContext.Provider value={value}>{children}</DataMessagesStateContext.Provider>;
 };
@@ -106,7 +106,7 @@ export const useDataMessages = (): {
   const context = useContext(DataMessagesStateContext);
   if (!meetingManager || !context) {
     throw new Error(
-      'Use useDataMessages hook inside DataMessagesProvider. Wrap DataMessagesProvider under MeetingProvider.'
+      "Use useDataMessages hook inside DataMessagesProvider. Wrap DataMessagesProvider under MeetingProvider."
     );
   }
   return context;

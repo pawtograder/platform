@@ -8,15 +8,15 @@ export const setNewPasswordAction = async (formData: FormData) => {
   const password = formData.get("password");
   const supabase = await createClient();
   const { data, error } = await supabase.auth.updateUser({
-    password: password as string,
+    password: password as string
   });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
-  if(data.user) {
+  if (data.user) {
     return encodedRedirect("success", "/course", "Password reset successfully");
   }
-}
+};
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
@@ -28,60 +28,64 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   } else if (action === "reset-password") {
     return resetPasswordAction(email as string);
   }
-}
+};
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
+    redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
   });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });
   }
-    return encodedRedirect("success", "/sign-in", "Password reset email sent", { email });
-}
+  return encodedRedirect("success", "/sign-in", "Password reset email sent", { email });
+};
 export const signInWithEmailAction = async (email: string, password: string) => {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
-    password,
-  })
+    password
+  });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });
   }
   if (data.user) {
     return redirect("/course");
   }
-}
+};
 export const signUpWithEmailAction = async (email: string, password: string) => {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
-      emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
+      emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
     }
-  })
+  });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
-  if(!data.user?.confirmed_at) {
-    return encodedRedirect("success", "/sign-in", "Account created successfully, but must be confirmed. Please check your email for a confirmation link.");
+  if (!data.user?.confirmed_at) {
+    return encodedRedirect(
+      "success",
+      "/sign-in",
+      "Account created successfully, but must be confirmed. Please check your email for a confirmation link."
+    );
   }
   if (data.user) {
     return redirect("/course");
   }
-}
+};
 export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
-  const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`
+  const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
   const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'azure',
+    provider: "azure",
     options: {
-      scopes: 'email',
+      scopes: "email",
       redirectTo
-    },
-  })
+    }
+  });
 
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
@@ -108,12 +112,11 @@ export const linkGitHubAction = async () => {
     return redirect("/sign-in");
   }
   console.log("Linking GitHub");
-  console.log(session)
+  console.log(session);
   const { data, error } = await supabase.auth.linkIdentity({
-    provider: "github",
+    provider: "github"
   });
   console.log(data);
   console.log(error);
-  if (data.url)
-    return redirect(data.url);
-}
+  if (data.url) return redirect(data.url);
+};

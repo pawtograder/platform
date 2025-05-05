@@ -1,19 +1,10 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import {
-  DefaultAudioMixController,
-  TimeoutScheduler,
-} from 'amazon-chime-sdk-js';
+import { DefaultAudioMixController, TimeoutScheduler } from "amazon-chime-sdk-js";
 
 class TestSound {
-  constructor(
-    sinkId: string | null,
-    frequency = 440,
-    durationSec = 1,
-    rampSec = 0.1,
-    maxGainValue = 0.1
-  ) {
+  constructor(sinkId: string | null, frequency = 440, durationSec = 1, rampSec = 0.1, maxGainValue = 0.1) {
     // @ts-ignore
     const audioContext: AudioContext = new (window.AudioContext || window.webkitAudioContext)();
     const gainNode = audioContext.createGain();
@@ -27,24 +18,18 @@ class TestSound {
     const startTime = currentTime + 0.1;
     gainNode.gain.linearRampToValueAtTime(0, startTime);
     gainNode.gain.linearRampToValueAtTime(maxGainValue, startTime + rampSec);
-    gainNode.gain.linearRampToValueAtTime(
-      maxGainValue,
-      startTime + rampSec + durationSec
-    );
-    gainNode.gain.linearRampToValueAtTime(
-      0,
-      startTime + rampSec * 2 + durationSec
-    );
+    gainNode.gain.linearRampToValueAtTime(maxGainValue, startTime + rampSec + durationSec);
+    gainNode.gain.linearRampToValueAtTime(0, startTime + rampSec * 2 + durationSec);
     oscillatorNode.start();
     const audioMixController = new DefaultAudioMixController();
 
     const handlingBindingAsynchronous = async () => {
-      if ('setSinkId' in HTMLAudioElement.prototype) {
+      if ("setSinkId" in HTMLAudioElement.prototype) {
         try {
           // @ts-ignore
           await audioMixController.bindAudioDevice({ deviceId: sinkId });
         } catch (e) {
-          console.error('Failed to bind audio device', e);
+          console.error("Failed to bind audio device", e);
         }
       }
 
@@ -52,7 +37,7 @@ class TestSound {
         // @ts-ignore
         await audioMixController.bindAudioElement(new Audio());
       } catch (e) {
-        console.error('Failed to bind audio element', e);
+        console.error("Failed to bind audio element", e);
       }
     };
 

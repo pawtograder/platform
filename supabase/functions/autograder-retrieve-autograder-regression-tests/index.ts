@@ -10,16 +10,14 @@ async function handleRequest(req: Request) {
   const decoded = await validateOIDCToken(token);
   const adminSupabase = createClient(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  const { data, error } = await adminSupabase.from(
-    "autograder_regression_test_by_grader",
-  )
-    .select("*").eq("grader_repo", decoded.repository);
+  const { data, error } = await adminSupabase
+    .from("autograder_regression_test_by_grader")
+    .select("*")
+    .eq("grader_repo", decoded.repository);
   if (error) {
-    throw new UserVisibleError(
-      `Error retrieving regression tests: ${error.message}`,
-    );
+    throw new UserVisibleError(`Error retrieving regression tests: ${error.message}`);
   }
   return { configs: data.map((d) => ({ id: d.id! })) };
 }

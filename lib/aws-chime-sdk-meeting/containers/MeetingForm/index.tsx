@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { ChangeEvent, useContext, useState } from 'react';
+import React, { ChangeEvent, useContext, useState } from "react";
 import {
   Checkbox,
   DeviceLabels,
@@ -14,28 +14,28 @@ import {
   ModalHeader,
   PrimaryButton,
   Select,
-  useMeetingManager,
-} from 'amazon-chime-sdk-component-library-react';
-import { DefaultBrowserBehavior, MeetingSessionConfiguration } from 'amazon-chime-sdk-js';
+  useMeetingManager
+} from "amazon-chime-sdk-component-library-react";
+import { DefaultBrowserBehavior, MeetingSessionConfiguration } from "amazon-chime-sdk-js";
 
-import { getErrorContext } from '../../providers/ErrorProvider';
-import routes from '../../constants/routes';
-import Card from '../../components/Card';
-import Spinner from '../../components/icons/Spinner';
-import DevicePermissionPrompt from '../DevicePermissionPrompt';
-import RegionSelection from './RegionSelection';
-import { createGetAttendeeCallback, createMeetingAndAttendee } from '../../utils/api';
-import { useAppState } from '../../providers/AppStateProvider';
-import { MeetingMode, VideoFiltersCpuUtilization } from '../../types';
-import { MeetingManagerJoinOptions } from 'amazon-chime-sdk-component-library-react/lib/providers/MeetingProvider/types';
-import meetingConfig from '../../meetingConfig';
-import { useRouter } from 'next/navigation';
+import { getErrorContext } from "../../providers/ErrorProvider";
+import routes from "../../constants/routes";
+import Card from "../../components/Card";
+import Spinner from "../../components/icons/Spinner";
+import DevicePermissionPrompt from "../DevicePermissionPrompt";
+import RegionSelection from "./RegionSelection";
+import { createGetAttendeeCallback, createMeetingAndAttendee } from "../../utils/api";
+import { useAppState } from "../../providers/AppStateProvider";
+import { MeetingMode, VideoFiltersCpuUtilization } from "../../types";
+import { MeetingManagerJoinOptions } from "amazon-chime-sdk-component-library-react/lib/providers/MeetingProvider/types";
+import meetingConfig from "../../meetingConfig";
+import { useRouter } from "next/navigation";
 
 const VIDEO_TRANSFORM_FILTER_OPTIONS = [
-  { value: VideoFiltersCpuUtilization.Disabled, label: 'Disable Video Filter' },
-  { value: VideoFiltersCpuUtilization.CPU10Percent, label: 'Video Filter CPU 10%' },
-  { value: VideoFiltersCpuUtilization.CPU20Percent, label: 'Video Filter CPU 20%' },
-  { value: VideoFiltersCpuUtilization.CPU40Percent, label: 'Video Filter CPU 40%' },
+  { value: VideoFiltersCpuUtilization.Disabled, label: "Disable Video Filter" },
+  { value: VideoFiltersCpuUtilization.CPU10Percent, label: "Video Filter CPU 10%" },
+  { value: VideoFiltersCpuUtilization.CPU20Percent, label: "Video Filter CPU 20%" },
+  { value: VideoFiltersCpuUtilization.CPU40Percent, label: "Video Filter CPU 40%" }
 ];
 
 const MeetingForm: React.FC = () => {
@@ -63,13 +63,13 @@ const MeetingForm: React.FC = () => {
     setRegion,
     setCpuUtilization,
     skipDeviceSelection,
-    toggleMeetingJoinDeviceSelection,
+    toggleMeetingJoinDeviceSelection
   } = useAppState();
   const [meetingErr, setMeetingErr] = useState(false);
   const [nameErr, setNameErr] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { errorMessage, updateErrorMessage } = useContext(getErrorContext());
-  const router = useRouter()
+  const router = useRouter();
   const browserBehavior = new DefaultBrowserBehavior();
 
   const handleJoinMeeting = async (e: React.FormEvent) => {
@@ -106,7 +106,7 @@ const MeetingForm: React.FC = () => {
         meetingConfig.postLogger.metadata = {
           ...existingMetadata,
           meetingId: meetingSessionConfiguration.meetingId,
-          attendeeId: meetingSessionConfiguration.credentials.attendeeId,
+          attendeeId: meetingSessionConfiguration.credentials.attendeeId
         };
       }
 
@@ -119,7 +119,7 @@ const MeetingForm: React.FC = () => {
       const options: MeetingManagerJoinOptions = {
         deviceLabels: meetingMode === MeetingMode.Spectator ? DeviceLabels.None : DeviceLabels.AudioAndVideo,
         enableWebAudio: isWebAudioEnabled,
-        skipDeviceSelection,
+        skipDeviceSelection
       };
 
       await meetingManager.join(meetingSessionConfiguration, options);
@@ -136,9 +136,9 @@ const MeetingForm: React.FC = () => {
   };
 
   const closeError = (): void => {
-    updateErrorMessage('');
-    setMeetingId('');
-    setLocalUserName('');
+    updateErrorMessage("");
+    setMeetingId("");
+    setLocalUserName("");
     setIsLoading(false);
   };
 
@@ -153,8 +153,8 @@ const MeetingForm: React.FC = () => {
         value={meetingId}
         infoText="Anyone with access to the meeting ID can join"
         fieldProps={{
-          name: 'meetingId',
-          placeholder: 'Enter Meeting Id',
+          name: "meetingId",
+          placeholder: "Enter Meeting Id"
         }}
         errorText="Please enter a valid meeting ID"
         error={meetingErr}
@@ -170,8 +170,8 @@ const MeetingForm: React.FC = () => {
         label="Name"
         value={localUserName}
         fieldProps={{
-          name: 'name',
-          placeholder: 'Enter Your Name',
+          name: "name",
+          placeholder: "Enter Your Name"
         }}
         errorText="Please enter a valid name"
         error={nameErr}
@@ -261,7 +261,7 @@ const MeetingForm: React.FC = () => {
         onChange={toggleMeetingJoinDeviceSelection}
         infoText="Please select the devices manually to successfully join a meeting"
       />
-      <Flex container layout="fill-space-centered" style={{ marginTop: '2.5rem' }}>
+      <Flex container layout="fill-space-centered" style={{ marginTop: "2.5rem" }}>
         {isLoading ? <Spinner /> : <PrimaryButton label="Continue" onClick={handleJoinMeeting} />}
       </Flex>
       {errorMessage && (

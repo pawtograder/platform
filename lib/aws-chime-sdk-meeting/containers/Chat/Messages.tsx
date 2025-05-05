@@ -1,7 +1,7 @@
-import React, { useEffect, useRef } from 'react';
-import { ChatBubble } from 'amazon-chime-sdk-component-library-react';
-import { useDataMessages } from '../../providers/DataMessagesProvider';
-import { StyledMessages } from './Styled';
+import React, { useEffect, useRef } from "react";
+import { ChatBubble } from "amazon-chime-sdk-component-library-react";
+import { useDataMessages } from "../../providers/DataMessagesProvider";
+import { StyledMessages } from "./Styled";
 
 export default function Messages() {
   const { messages } = useDataMessages();
@@ -19,7 +19,7 @@ export default function Messages() {
   const renderMessages = () => {
     return messages.map((message) => (
       <ChatBubble
-        variant={message.isSelf ? 'outgoing' : 'incoming'}
+        variant={message.isSelf ? "outgoing" : "incoming"}
         senderName={message.senderName}
         key={message.timestamp}
         showTail={message.isSelf ? true : false}

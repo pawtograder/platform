@@ -1,9 +1,9 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React from 'react';
+import React from "react";
 
-import { SmallText, StyledCard } from './Styled';
+import { SmallText, StyledCard } from "./Styled";
 
 interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   header?: string;
@@ -13,12 +13,7 @@ interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   smallText?: string;
 }
 
-const Card: React.FC<CardProps> = ({
-  header,
-  title,
-  description,
-  smallText,
-}: CardProps) => (
+const Card: React.FC<CardProps> = ({ header, title, description, smallText }: CardProps) => (
   <StyledCard>
     {header && <div className="ch-header">{header}</div>}
     <div className="ch-body">

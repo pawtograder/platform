@@ -7,23 +7,13 @@ import {
   useContentShareState,
   useLocalVideo,
   useMeetingManager,
-  useRosterState,
-} from 'amazon-chime-sdk-component-library-react';
-import {
-  AudioVideoObserver,
-  VideoDownlinkObserver,
-  VideoSource,
-} from 'amazon-chime-sdk-js';
-import React, { PropsWithChildren, createContext, useContext, useEffect, useReducer } from 'react';
-import { Layout } from '../../types';
-import { useAppState } from '../AppStateProvider';
-import {
-  Controls,
-  initialState,
-  reducer,
-  State,
-  VideoTileGridAction,
-} from './state';
+  useRosterState
+} from "amazon-chime-sdk-component-library-react";
+import { AudioVideoObserver, VideoDownlinkObserver, VideoSource } from "amazon-chime-sdk-js";
+import React, { PropsWithChildren, createContext, useContext, useEffect, useReducer } from "react";
+import { Layout } from "../../types";
+import { useAppState } from "../AppStateProvider";
+import { Controls, initialState, reducer, State, VideoTileGridAction } from "./state";
 
 const VideoTileGridStateContext = createContext<State | undefined>(undefined);
 const VideoTileGridControlContext = createContext<Controls | undefined>(undefined);
@@ -42,7 +32,7 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
   useEffect(() => {
     dispatch({
       type: VideoTileGridAction.UpdateAttendeeStates,
-      payload: { roster },
+      payload: { roster }
     });
   }, [roster]);
 
@@ -50,8 +40,8 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
     dispatch({
       type: VideoTileGridAction.UpdateActiveSpeakers,
       payload: {
-        activeSpeakers,
-      },
+        activeSpeakers
+      }
     });
   }, [activeSpeakers]);
 
@@ -60,9 +50,7 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
       return;
     }
 
-    const localAttendeeId =
-      meetingManager.meetingSession?.configuration.credentials?.attendeeId ||
-      null;
+    const localAttendeeId = meetingManager.meetingSession?.configuration.credentials?.attendeeId || null;
 
     const observer: AudioVideoObserver = {
       remoteVideoSourcesDidChange: (videoSources: VideoSource[]): void => {
@@ -70,10 +58,10 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
           type: VideoTileGridAction.UpdateVideoSources,
           payload: {
             videoSources,
-            localAttendeeId,
-          },
+            localAttendeeId
+          }
         });
-      },
+      }
     };
 
     audioVideo.addObserver(observer);
@@ -92,7 +80,7 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
         if (attendeeId) {
           dispatch({
             type: VideoTileGridAction.PauseVideoTile,
-            payload: { attendeeId },
+            payload: { attendeeId }
           });
         }
       },
@@ -101,24 +89,22 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
         if (attendeeId) {
           dispatch({
             type: VideoTileGridAction.UnpauseVideoTile,
-            payload: { attendeeId },
+            payload: { attendeeId }
           });
         }
-      },
+      }
     };
 
     priorityBasedPolicy.addObserver(observer);
-    dispatch( {
+    dispatch({
       type: VideoTileGridAction.SetPriorityBasedPolicy,
-      payload: { policy: priorityBasedPolicy },
+      payload: { policy: priorityBasedPolicy }
     });
     return (): void => priorityBasedPolicy.removeObserver(observer);
   }, [audioVideo]);
 
   useEffect(() => {
-    const localAttendeeId =
-      meetingManager.meetingSession?.configuration.credentials?.attendeeId ||
-      null;
+    const localAttendeeId = meetingManager.meetingSession?.configuration.credentials?.attendeeId || null;
 
     dispatch({
       type: VideoTileGridAction.UpdateLocalSourceState,
@@ -126,22 +112,17 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
         isVideoEnabled,
         localAttendeeId,
         isLocalUserSharing,
-        sharingAttendeeId,
-      },
+        sharingAttendeeId
+      }
     });
-  }, [
-    isLocalUserSharing,
-    isVideoEnabled,
-    meetingManager.meetingSession,
-    sharingAttendeeId,
-  ]);
+  }, [isLocalUserSharing, isVideoEnabled, meetingManager.meetingSession, sharingAttendeeId]);
 
   useEffect(() => {
     dispatch({
       type: VideoTileGridAction.UpdateLayout,
       payload: {
-        layout,
-      },
+        layout
+      }
     });
   }, [layout]);
 
@@ -151,8 +132,8 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
       dispatch({
         type: VideoTileGridAction.UpdateLayout,
         payload: {
-          layout,
-        },
+          layout
+        }
       });
     }
   }, [sharingAttendeeId]);
@@ -163,14 +144,12 @@ const VideoTileGridProvider: React.FC<PropsWithChildren> = ({ children }) => {
 
   const controls: Controls = {
     zoomIn,
-    zoomOut,
+    zoomOut
   };
 
   return (
     <VideoTileGridStateContext.Provider value={state}>
-      <VideoTileGridControlContext.Provider value={controls}>
-        {children}
-      </VideoTileGridControlContext.Provider>
+      <VideoTileGridControlContext.Provider value={controls}>{children}</VideoTileGridControlContext.Provider>
     </VideoTileGridStateContext.Provider>
   );
 };
@@ -179,9 +158,7 @@ const useVideoTileGridState = (): State => {
   const state = useContext(VideoTileGridStateContext);
 
   if (!state) {
-    throw new Error(
-      'useVideoTileGridState must be used within a VideoTileGridProvider'
-    );
+    throw new Error("useVideoTileGridState must be used within a VideoTileGridProvider");
   }
 
   return state;
@@ -190,9 +167,7 @@ const useVideoTileGridControl = (): Controls => {
   const context = useContext(VideoTileGridControlContext);
 
   if (!context) {
-    throw new Error(
-      'useVideoTileGridControl must be used within VideoTileGridProvider'
-    );
+    throw new Error("useVideoTileGridControl must be used within VideoTileGridProvider");
   }
   return context;
 };

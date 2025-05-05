@@ -1,7 +1,7 @@
 // Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React from 'react';
+import React from "react";
 import {
   ControlBar,
   AudioInputControl,
@@ -13,13 +13,13 @@ import {
   Dots,
   useDeviceLabelTriggerStatus,
   DeviceLabelTriggerStatus,
-  DeviceLabels,
-} from 'amazon-chime-sdk-component-library-react';
+  DeviceLabels
+} from "amazon-chime-sdk-component-library-react";
 
-import EndMeetingControl from '../EndMeetingControl';
-import { useNavigation } from '../../providers/NavigationProvider';
-import { StyledControls } from './Styled';
-import DevicePermissionControl from '../DevicePermissionControl/DevicePermissionControl';
+import EndMeetingControl from "../EndMeetingControl";
+import { useNavigation } from "../../providers/NavigationProvider";
+import { StyledControls } from "./Styled";
+import DevicePermissionControl from "../DevicePermissionControl/DevicePermissionControl";
 
 const DynamicMeetingControls = () => {
   const { toggleNavbar, closeRoster, showRoster } = useNavigation();
@@ -36,25 +36,18 @@ const DynamicMeetingControls = () => {
 
   return (
     <StyledControls className="controls" active={!!isUserActive}>
-      <ControlBar
-        className="controls-menu"
-        layout="undocked-horizontal"
-        showLabels
-      >
-        <ControlBarButton
-          className="mobile-toggle"
-          icon={<Dots />}
-          onClick={handleToggle}
-          label="Menu"
-        />
-        {status === DeviceLabelTriggerStatus.GRANTED ?
+      <ControlBar className="controls-menu" layout="undocked-horizontal" showLabels>
+        <ControlBarButton className="mobile-toggle" icon={<Dots />} onClick={handleToggle} label="Menu" />
+        {status === DeviceLabelTriggerStatus.GRANTED ? (
           <>
             <AudioInputControl />
             <VideoInputControl />
             <ContentShareControl />
             <AudioOutputControl />
           </>
-          : <DevicePermissionControl deviceLabels={DeviceLabels.AudioAndVideo} />}
+        ) : (
+          <DevicePermissionControl deviceLabels={DeviceLabels.AudioAndVideo} />
+        )}
 
         <EndMeetingControl />
       </ControlBar>

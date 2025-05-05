@@ -11,4 +11,3 @@ async function handleRequest(req: Request) {
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);
 });
-
