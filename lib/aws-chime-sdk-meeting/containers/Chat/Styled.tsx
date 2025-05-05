@@ -1,13 +1,13 @@
-import styled from 'styled-components';
+import styled from "styled-components";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const StyledChat = styled.aside<any>`
   display: grid;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
-    'chat-header'
-    'messages'
-    'chat-input';
+    "chat-header"
+    "messages"
+    "chat-input";
   width: 100%;
   height: 100%;
   padding-bottom: 1rem;

@@ -1,28 +1,32 @@
-import { useUserProfile } from '@/hooks/useUserProfiles'
-import { Avatar, Box, HStack, Stack, Text } from '@chakra-ui/react'
-import Markdown from 'react-markdown'
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { Avatar, Box, HStack, Stack, Text } from "@chakra-ui/react";
+import Markdown from "react-markdown";
 interface MessageData {
-  user: string
-  updatedAt: string
-  message: string
-  isResolved: boolean
-  isAssigned: boolean
-
+  user: string;
+  updatedAt: string;
+  message: string;
+  isResolved: boolean;
+  isAssigned: boolean;
 }
 
 interface Props {
-  data: MessageData
-  selected?: boolean
+  data: MessageData;
+  selected?: boolean;
 }
 
 export const HelpRequestTeaser = (props: Props) => {
-  const { user, updatedAt, message, isResolved, isAssigned } = props.data
+  const { user, updatedAt, message } = props.data;
   const { selected } = props;
   const userProfile = useUserProfile(user);
   return (
-    <HStack align="flex-start" gap="3" px="4" py="3"
-      _hover={{ bg: 'bg.muted' }} rounded="md"
-      bg={selected ? 'bg.muted' : ''}
+    <HStack
+      align="flex-start"
+      gap="3"
+      px="4"
+      py="3"
+      _hover={{ bg: "bg.muted" }}
+      rounded="md"
+      bg={selected ? "bg.muted" : ""}
     >
       <Box pt="1">
         <Avatar.Root size="sm">
@@ -44,5 +48,5 @@ export const HelpRequestTeaser = (props: Props) => {
         </Box>
       </Stack>
     </HStack>
-  )
-}
+  );
+};

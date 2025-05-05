@@ -1,15 +1,15 @@
-import useUserProfiles, { useUserProfile } from '@/hooks/useUserProfiles'
-import { Avatar, Box, HStack, Stack, Text } from '@chakra-ui/react'
-import { ChatMessage as ChatMessageType } from '@/lib/chat'
-import Markdown from 'react-markdown'
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { Avatar, Box, HStack, Stack, Text } from "@chakra-ui/react";
+import { ChatMessage as ChatMessageType } from "@/lib/chat";
+import Markdown from "react-markdown";
 interface Props {
-  author: string
-  messages: ChatMessageType[]
+  author: string;
+  messages: ChatMessageType[];
 }
 
 export const ChatMessage = (props: Props) => {
-  const { author, messages } = props
-  const userProfile = useUserProfile(author)
+  const { author, messages } = props;
+  const userProfile = useUserProfile(author);
   return (
     <HStack align="flex-start" gap="5">
       <Box pt="1">
@@ -29,5 +29,5 @@ export const ChatMessage = (props: Props) => {
         </Stack>
       </Stack>
     </HStack>
-  )
-}
+  );
+};

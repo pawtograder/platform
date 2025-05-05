@@ -1,32 +1,28 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import { Device, isVideoTransformDevice } from 'amazon-chime-sdk-js';
-import React, { ChangeEvent, useState, useEffect } from 'react';
+import { Device, isVideoTransformDevice } from "amazon-chime-sdk-js";
+import React, { ChangeEvent, useState, useEffect } from "react";
 import {
   useBackgroundBlur,
   useBackgroundReplacement,
   FormField,
   Select,
   useVideoInputs,
-  useMeetingManager,
-} from 'amazon-chime-sdk-component-library-react';
-import { VideoTransformOptions, VideoTransformDropdownOptionType } from '../../../types/index';
+  useMeetingManager
+} from "amazon-chime-sdk-component-library-react";
+import { VideoTransformOptions, VideoTransformDropdownOptionType } from "../../../types/index";
 
 interface Props {
   /* Title for the dropdown, defaults to `Video Transform Dropdown` */
   label?: string;
 }
 
-export const VideoTransformDropdown: React.FC<Props> = ({
-  label = 'Video Transform Dropdown',
-}) => {
+export const VideoTransformDropdown: React.FC<Props> = ({ label = "Video Transform Dropdown" }) => {
   const [transformOption, setTransformOption] = useState(VideoTransformOptions.None);
   // Both hooks are needed because this component uses both blur and replacement filters.
-  const { isBackgroundBlurSupported, createBackgroundBlurDevice } =
-    useBackgroundBlur();
-  const { isBackgroundReplacementSupported, createBackgroundReplacementDevice } =
-    useBackgroundReplacement();
+  const { isBackgroundBlurSupported, createBackgroundBlurDevice } = useBackgroundBlur();
+  const { isBackgroundReplacementSupported, createBackgroundReplacementDevice } = useBackgroundReplacement();
   const [isLoading, setIsLoading] = useState(false);
   const meetingManager = useMeetingManager();
   const { selectedDevice } = useVideoInputs();
@@ -36,22 +32,25 @@ export const VideoTransformDropdown: React.FC<Props> = ({
     if (!isVideoTransformDevice(selectedDevice) && transformOption !== VideoTransformOptions.None) {
       setTransformOption(VideoTransformOptions.None);
     }
-  }, [selectedDevice]);
+  }, [selectedDevice, transformOption]);
 
   // Available background filter options based off if Background Blur and Replacement ware offered/supported.
   const options: VideoTransformDropdownOptionType[] = [
-    {
-      label: VideoTransformOptions.None,
-      value: VideoTransformOptions.None,
-    },
+    { label: VideoTransformOptions.None, value: VideoTransformOptions.None },
     {
       label: VideoTransformOptions.Blur,
-      value: isBackgroundBlurSupported === undefined || isBackgroundBlurSupported === false ? 'Background Blur not supported' : VideoTransformOptions.Blur,
+      value:
+        isBackgroundBlurSupported === undefined || isBackgroundBlurSupported === false
+          ? "Background Blur not supported"
+          : VideoTransformOptions.Blur
     },
     {
       label: VideoTransformOptions.Replacement,
-      value: isBackgroundReplacementSupported === undefined || isBackgroundReplacementSupported === false ? 'Background Replacement not supported' : VideoTransformOptions.Replacement,
-    },
+      value:
+        isBackgroundReplacementSupported === undefined || isBackgroundReplacementSupported === false
+          ? "Background Replacement not supported"
+          : VideoTransformOptions.Replacement
+    }
   ];
 
   // Creates a device based on the selections (None, Blur, Replacement) and uses it as input.
@@ -82,20 +81,14 @@ export const VideoTransformDropdown: React.FC<Props> = ({
       // Update the current selected transform.
       setTransformOption(selectedTransform);
     } catch (e) {
-      console.error('Error trying to apply', selectTransform, e);
+      console.error("Error trying to apply", selectTransform, e);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <FormField
-      field={Select}
-      options={options}
-      onChange={selectTransform}
-      value={transformOption}
-      label={label}
-    />
+    <FormField field={Select} options={options} onChange={selectTransform} value={transformOption} label={label} />
   );
 };
 

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import { useLogger, useMeetingEvent } from 'amazon-chime-sdk-component-library-react';
+import { useLogger, useMeetingEvent } from "amazon-chime-sdk-component-library-react";
 
 const MeetingEventObserver = () => {
   const logger = useLogger();
