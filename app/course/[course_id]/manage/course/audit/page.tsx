@@ -4,14 +4,11 @@ import { AuditEvent, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/
 import { Box, Button, Container, DataList, Heading, HStack, Icon, Input, List, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { useTable, } from "@refinedev/react-table";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { ColumnDef, flexRender, getPaginationRowModel, getCoreRowModel, getFilteredRowModel } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
 
-function DBValue({ value, variant }: { value: any, variant: 'new' | 'old' }) {
-
-}
 function AuditEventDiff({ oldValue, newValue }: { oldValue: any, newValue: any }) {
     if (oldValue === true || oldValue === false) {
         oldValue = oldValue ? "True" : "False";
@@ -48,7 +45,6 @@ function JSONDiff({ oldValue, newValue }: { oldValue: any, newValue: any }) {
             return Object.keys(oldValue);
         }
         const oldProperties = Object.keys(oldValue);
-        const newProperties = Object.keys(newValue);
         return oldProperties.filter(property =>
             isDifferent(oldValue[property], newValue[property])
         );
@@ -87,8 +83,10 @@ function AuditTable() {
             accessorKey: "class_id",
             header: "Class ID",
             enableColumnFilter: true,
-            enableHiding: true
-
+            enableHiding: true,
+            filterFn: (row, id, filterValue) => {
+                return String(row.original.class_id) === String(filterValue);
+            }
         },
         {
             id: "created_at",
@@ -101,7 +99,8 @@ function AuditTable() {
             },
             filterFn: (row, id, filterValue) => {
                 const date = new Date(row.original.created_at);
-                return date.toLocaleString().includes(filterValue);
+                const filterString = String(filterValue);
+                return date.toLocaleString().includes(filterString);
             }
         },
         {
@@ -115,8 +114,8 @@ function AuditTable() {
             },
             filterFn: (row, id, filterValue) => {
                 const name = roster.data?.data.find(r => r.user_id === row.original.user_id)?.profiles?.name;
-                console.log(name, filterValue);
-                return name?.toLocaleLowerCase().includes(filterValue.toLocaleLowerCase()) || false;
+                const filterString = String(filterValue).toLowerCase();
+                return name?.toLocaleLowerCase().includes(filterString) || false;
             }
         },
         {
@@ -125,6 +124,12 @@ function AuditTable() {
             header: "IP Address",
             enableColumnFilter: true,
             enableHiding: true,
+            filterFn: (row, id, filterValue) => {
+                const ip = row.original.ip_addr;
+                if (!ip) return false;
+                const filterString = String(filterValue);
+                return ip.includes(filterString);
+            }
         },
         {
             id: "table",
@@ -132,12 +137,28 @@ function AuditTable() {
             header: "Table",
             enableColumnFilter: true,
             enableHiding: true,
-        }, 
+            filterFn: (row, id, filterValue) => {
+                const table = row.original.table;
+                if (!table) return false;
+                const filterString = String(filterValue).toLowerCase();
+                return table.toLowerCase().includes(filterString);
+            }
+        },
         {id: 'resource_id',
             accessorKey: 'new.id',
             header: "Resource ID",
             enableColumnFilter: true,
             enableHiding: true,
+            filterFn: (row, id, filterValue) => {
+                let resourceId: string | number | undefined | null = null;
+                if (typeof row.original.new === 'object' && row.original.new !== null && 'id' in row.original.new) {
+                    resourceId = row.original.new.id as string | number | undefined | null;
+                }
+                
+                if (resourceId === null || resourceId === undefined) return false;
+                const filterString = String(filterValue);
+                return String(resourceId).includes(filterString);
+            }
         },
         {
             id: 'old',
@@ -159,6 +180,7 @@ function AuditTable() {
             enableHiding: true,
         }
     ], [roster.data?.data]);
+    const [pageCount, setPageCount] = useState(0);
     const {
         getHeaderGroups,
         getRowModel,
@@ -167,15 +189,13 @@ function AuditTable() {
         getCanPreviousPage,
         getPageCount,
         getCanNextPage,
+        getRowCount,
         nextPage,
         previousPage,
         setPageSize,
         getPrePaginationRowModel,
     } = useTable({
         columns,
-        // state:{
-        // columnFilters,
-        // },
         initialState: {
             columnFilters: [{ id: "class_id", value: course_id as string }],
             pagination: {
@@ -184,14 +204,31 @@ function AuditTable() {
             },
             sorting: [{ id: "created_at", desc: true }]
         },
-        // onColumnFiltersChange: setColumnFilters,
+        manualPagination: false,
+        manualFiltering: false,
+        getPaginationRowModel: getPaginationRowModel(),
+        pageCount,
+        getCoreRowModel: getCoreRowModel(),
+        getFilteredRowModel: getFilteredRowModel(),
         refineCoreProps: {
             resource: "audit",
+            pagination: {
+                mode: "off",
+            },
+            filters: {
+                mode: "off",
+            },
             meta: {
                 select: "*,users(*)"
             },
         },
+        filterFromLeafRows: true,
     });
+    const nRows = getRowCount();
+    const pageSize = getState().pagination.pageSize;
+    useEffect(() => {
+        setPageCount(Math.ceil(nRows / pageSize));
+    }, [nRows, pageSize]);
     return (<VStack>
         <VStack paddingBottom="55px">
             <Table.Root striped>
@@ -219,7 +256,7 @@ function AuditTable() {
                                                         (header.column.getFilterValue() as string) ?? ""
                                                     }
                                                     onChange={(e) => {
-                                                        header.column.setFilterValue('' + e.target.value)
+                                                        header.column.setFilterValue(e.target.value)
                                                     }
                                                     }
                                                 />
@@ -287,6 +324,7 @@ function AuditTable() {
                 <VStack>
                     | Go to page:
                     <input
+                        title="Go to page"
                         type="number"
                         defaultValue={getState().pagination.pageIndex + 1}
                         onChange={(e) => {

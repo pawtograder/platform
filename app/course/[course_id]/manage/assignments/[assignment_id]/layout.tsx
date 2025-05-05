@@ -66,7 +66,9 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
                         </NextLink>
                     </Button>
                 ))}
-                <CreateGitHubRepos courseId={Number.parseInt(course_id as string)} assignmentId={Number.parseInt(assignment_id as string)} />
+                <CreateGitHubRepos courseId={Number.parseInt(course_id as string)} assignmentId={Number.parseInt(assignment_id as string)} 
+                releaseDate={assignment?.data?.release_date}
+                />
             </VStack>
         </Box>
         <Box borderColor="border.muted"

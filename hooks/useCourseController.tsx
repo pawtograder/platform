@@ -330,36 +330,41 @@ class CourseController {
 
     handleReadStatusEvent(event: LiveEvent) {
         const processUpdatedStatus = (updatedStatus: DiscussionThreadReadStatus) => {
-            //Is this a root?
             const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
             const existingStatuses = Array.from(this.discussionThreadReadStatuses.values());
+
+            // Fetch current children_count from the teaser cache
+            const getChildrenCount = (threadId: number): number => {
+                return this.discussionThreadTeasers.find(t => t.id === threadId)?.children_count ?? 0;
+            }
+
             if (isRoot) {
-                //Calculate the number of read descendants
                 let numReadDescendants = 0;
-                if (existingStatuses) {
-                    const readDescendants = existingStatuses.filter(status =>
-                        status.discussion_thread_id != status.discussion_thread_root_id &&
-                        status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
-                    for (const status of readDescendants) {
-                        numReadDescendants += status.read_at ? 1 : 0;
-                    }
+                const readDescendants = existingStatuses.filter(status =>
+                    status.discussion_thread_id != status.discussion_thread_root_id &&
+                    status.discussion_thread_root_id === updatedStatus.discussion_thread_id && status.read_at);
+                for (const status of readDescendants) {
+                    numReadDescendants += status.read_at ? 1 : 0;
                 }
+
+                const childrenCount = getChildrenCount(updatedStatus.discussion_thread_id);
                 const newVal = {
                     ...updatedStatus,
-                    numReadDescendants: numReadDescendants
+                    numReadDescendants: numReadDescendants,
+                    current_children_count: childrenCount
                 };
                 this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_id, newVal);
                 this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_id, newVal);
             } else {
-                //Need to update this one, and also its root
-                //First update this one
+                const childrenCount = getChildrenCount(updatedStatus.discussion_thread_id);
                 const newVal = {
                     ...updatedStatus,
-                    numReadDescendants: 0
+                    numReadDescendants: 0, // Non-root threads don't have descendants in this context
+                    current_children_count: childrenCount
                 };
                 this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_id, newVal);
                 this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_id, newVal);
-                //Then root
+
                 const root = this.discussionThreadReadStatuses.get(updatedStatus.discussion_thread_root_id);
                 if (root) {
                     const readDescendants = existingStatuses.filter(status =>
@@ -369,12 +374,15 @@ class CourseController {
                     for (const status of readDescendants) {
                         numReadDescendants += status.read_at ? 1 : 0;
                     }
-                    const newVal = {
+
+                    const rootChildrenCount = getChildrenCount(updatedStatus.discussion_thread_root_id);
+                    const newRootVal = {
                         ...root,
-                        numReadDescendants: numReadDescendants
+                        numReadDescendants: numReadDescendants,
+                        current_children_count: rootChildrenCount
                     };
-                    this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_root_id, newVal);
-                    this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_root_id, newVal);
+                    this.discussionThreadReadStatuses.set(updatedStatus.discussion_thread_root_id, newRootVal);
+                    this.notifyDiscussionThreadReadStatusSubscribers(updatedStatus.discussion_thread_root_id, newRootVal);
                 }
             }
         }
@@ -405,11 +413,18 @@ class CourseController {
     setDiscussionThreadReadStatuses(data: DiscussionThreadReadStatus[]) {
         if (!this._isLoaded) {
             this._isLoaded = true;
+            // Ensure teasers are potentially loaded first or available
+            const currentTeasers = this.discussionThreadTeasers;
             for (const thread of data) {
+                // Find the corresponding teaser to get the children_count
+                const correspondingTeaser = currentTeasers.find(t => t.id === thread.discussion_thread_id);
+                const childrenCount = correspondingTeaser?.children_count ?? 0;
+
                 this.discussionThreadReadStatuses.set(thread.discussion_thread_id, {
                     ...thread,
                     numReadDescendants: data.filter(t => t.discussion_thread_id != t.discussion_thread_root_id &&
-                        t.discussion_thread_root_id === thread.discussion_thread_id && t.read_at).length
+                        t.discussion_thread_root_id === thread.discussion_thread_id && t.read_at).length,
+                    current_children_count: childrenCount
                 });
                 this.notifyDiscussionThreadReadStatusSubscribers(thread.discussion_thread_id, this.discussionThreadReadStatuses.get(thread.discussion_thread_id)!);
             }

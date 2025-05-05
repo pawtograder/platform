@@ -26,11 +26,42 @@ import { useInvalidate, useList, useSubscription, useUpdate } from "@refinedev/c
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { FaBell, FaCheckCircle, FaFile, FaHistory, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
+import { HiOutlineInformationCircle } from "react-icons/hi";
+import { LuMoon, LuSun } from "react-icons/lu";
+import { TbMathFunction } from "react-icons/tb";
+import { RxQuestionMarkCircled } from "react-icons/rx";
+import { FiDownloadCloud, FiRepeat, FiSend } from 'react-icons/fi';
+import { PiSignOut } from "react-icons/pi";
 import { useState } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { CrudFilter } from "@refinedev/core";
+import { GraderResultTestData } from "./results/page";
+
+// Create a mapping of icon names to their components
+const iconMap: { [key: string]: any } = {
+    FaBell,
+    FaCheckCircle,
+    FaFile,
+    FaHistory,
+    FaQuestionCircle,
+    FaTimesCircle,
+    BsFileEarmarkCodeFill,
+    BsThreeDots,
+    HiOutlineInformationCircle,
+    LuMoon,
+    FaInfo,
+    LuSun,
+    TbMathFunction,
+    RxQuestionMarkCircled,
+    FiDownloadCloud,
+    FiRepeat,
+    FiSend,
+    PiSignOut
+};
+
 function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric }) {
     const pathname = usePathname();
     const invalidate = useInvalidate();
@@ -182,10 +213,21 @@ function TestResults() {
     const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
     return <Box>
         <Heading size="md">Automated Check Results ({totalScore}/{totalMaxScore})</Heading>
-        {testResults?.map((test) => <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
-            {test.score == test.max_score ? <Icon as={FaCheckCircle} color="green.500" /> : <Icon as={FaTimesCircle} color="red.500" />}
-            <Link href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results#test-${test.id}`}><Heading size="sm">{test.name} {test.score}/{test.max_score}</Heading></Link>
-        </Box>)}
+        {testResults?.map((test) => {
+            let icon;
+            const extraData = test.extra_data as GraderResultTestData;
+            if(extraData?.icon && iconMap[extraData.icon]){
+                icon = <Icon as={iconMap[extraData.icon]} />
+            } else if(test.score == test.max_score){
+                icon = <Icon as={FaCheckCircle} color="green.500" />
+            } else {
+                icon = <Icon as={FaTimesCircle} color="red.500" />
+            }
+            const showScore = extraData?.hide_score !== 'true';
+            return <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
+                {icon}
+            <Link href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results#test-${test.id}`}><Heading size="sm">{test.name} {showScore ? test.score + "/" + test.max_score : ""}</Heading></Link>
+        </Box>})}
     </Box>
 }
 function ReviewStats() {

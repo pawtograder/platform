@@ -2,20 +2,20 @@
 import { ClassSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Container, Heading, HStack, Icon, Input, List, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
 import { useTable, } from "@refinedev/react-table";
-import { ColumnDef, ColumnFiltersState, flexRender } from "@tanstack/react-table";
+import { ColumnDef, flexRender, getPaginationRowModel, getCoreRowModel, getFilteredRowModel } from "@tanstack/react-table";
 
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import AddSingleStudent from "./addSingleStudent";
 import { useInvalidate, useList } from "@refinedev/core";
 import Link from "next/link";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { FaExternalLinkAlt, FaLink } from "react-icons/fa";
+import { FaLink } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
 function EnrollmentsTable() {
     const { course_id } = useParams();
-    const supabase = createClient();
+    const [pageCount, setPageCount] = useState(0);
 
     const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
         () => [
@@ -24,33 +24,56 @@ function EnrollmentsTable() {
                 accessorKey: "class_id",
                 header: "Class ID",
                 enableColumnFilter: true,
-                enableHiding: true
-
+                enableHiding: true,
+                filterFn: (row, id, filterValue) => {
+                    return String(row.original.class_id) === String(filterValue);
+                }
             },
             {
                 id: "profiles.name",
                 accessorKey: "profiles.name",
                 header: "Name",
-                meta: {
-                    filterOperator: "contains",
-                },
                 enableColumnFilter: true,
+                filterFn: (row, id, filterValue) => {
+                    const name = row.original.profiles?.name;
+                    if (!name) return false;
+                    const filterString = String(filterValue).toLowerCase();
+                    return name.toLowerCase().includes(filterString);
+                }
             },
             {
                 id: "users.email",
                 accessorKey: "users.email",
                 header: "Email",
                 enableColumnFilter: true,
+                filterFn: (row, id, filterValue) => {
+                    const email = row.original.users?.email;
+                    if (!email) return false;
+                    const filterString = String(filterValue).toLowerCase();
+                    return email.toLowerCase().includes(filterString);
+                }
             },
             {
                 id: "role",
                 header: "Role",
                 accessorKey: "role",
+                filterFn: (row, id, filterValue) => {
+                    const role = row.original.role;
+                    if (!role) return false;
+                    const filterString = String(filterValue).toLowerCase();
+                    return role.toLowerCase().includes(filterString);
+                }
             },
             {
                 id: "github_username",
                 header: "Github Username",
                 accessorKey: "users.github_username",
+                filterFn: (row, id, filterValue) => {
+                    const username = row.original.users?.github_username;
+                    if (!username) return false;
+                    const filterString = String(filterValue).toLowerCase();
+                    return username.toLowerCase().includes(filterString);
+                }
             },
             {
                 id: "canvas_id",
@@ -69,6 +92,7 @@ function EnrollmentsTable() {
     const {
         getHeaderGroups,
         getRowModel,
+        getRowCount,
         getState,
         setPageIndex,
         getCanPreviousPage,
@@ -81,24 +105,39 @@ function EnrollmentsTable() {
         refineCore
     } = useTable({
         columns,
-        // state:{
-        // columnFilters,
-        // },
         initialState: {
             columnFilters: [{ id: "class_id", value: course_id as string }],
             pagination: {
                 pageIndex: 0,
-                pageSize: 500,
+                pageSize: 50,
             }
         },
-        // onColumnFiltersChange: setColumnFilters,
+        manualPagination: false,
+        manualFiltering: false,
+        getPaginationRowModel: getPaginationRowModel(),
+        getCoreRowModel: getCoreRowModel(),
+        getFilteredRowModel: getFilteredRowModel(),
+        pageCount,
         refineCoreProps: {
             resource: "user_roles",
+            filters: {
+                mode: "off",
+            },
+            pagination: {
+                mode: "off",
+            },
             meta: {
                 select: "*,profiles!private_profile_id(*), users(*)"
             },
         },
+        filterFromLeafRows: true,
     });
+    const nRows = getRowCount();
+    const pageSize = getState().pagination.pageSize;
+    useEffect(() => {
+        setPageCount(Math.ceil(nRows / pageSize));
+    }, [nRows, pageSize]);
+
     return (<VStack align="start" w="100%">
         <VStack paddingBottom="55px" align="start" w="100%">
             <Table.Root>
@@ -126,7 +165,7 @@ function EnrollmentsTable() {
                                                         (header.column.getFilterValue() as string) ?? ""
                                                     }
                                                     onChange={(e) => {
-                                                        header.column.setFilterValue('' + e.target.value)
+                                                        header.column.setFilterValue(e.target.value)
                                                     }
                                                     }
                                                 />
@@ -194,6 +233,7 @@ function EnrollmentsTable() {
                 <VStack>
                     | Go to page:
                     <input
+                        title="Go to page"
                         type="number"
                         defaultValue={getState().pagination.pageIndex + 1}
                         onChange={(e) => {

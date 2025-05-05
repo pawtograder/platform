@@ -34,7 +34,7 @@ async function handleRequest(req: Request) {
     .lte("release_date", new Date().toISOString())
     .eq("class_id", courseId).single();
   if (!assignment) {
-    throw new Error("Assignment not found");
+    throw new UserVisibleError("Assignment not found. Please be sure that the release date has passed.");
   }
   // Select all existing repos for the assignment
   const { data: existingRepos } = await adminSupabase.from("repositories").select(
