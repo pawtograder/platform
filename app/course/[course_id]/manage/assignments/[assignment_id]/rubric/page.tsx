@@ -16,7 +16,7 @@ function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataTyp
     if (!check.data) {
         return undefined;
     }
-    if(check.data.options?.length === 1) {
+    if (check.data.options?.length === 1) {
         throw new Error('Checks may not have only one option - they must have at least two options, or can have none');
     }
     for (const option of check.data.options) {
@@ -43,6 +43,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
         max_annotations: valOrUndefined(check.max_annotations),
         points: check.points,
         data: valOrUndefined(check.data),
+        annotation_target: valOrUndefined(check.annotation_target) as 'file' | 'artifact' | undefined,
     }));
 }
 function valOrUndefined<T>(value: T | null | undefined): T | undefined {
@@ -83,7 +84,7 @@ function valOrNull<T>(value: T | null | undefined): T | null {
     return value === undefined ? null : value;
 }
 function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubricCheck[] {
-    if(checks.length === 0) {
+    if (checks.length === 0) {
         throw new Error('Criteria must have at least one check');
     }
     return checks.map((check, index) => ({
@@ -104,6 +105,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
         max_annotations: valOrNull(check.max_annotations),
         points: check.points,
         is_required: check.is_required,
+        annotation_target: valOrNull(check.annotation_target),
     }));
 }
 function YamlCriteriaToHydratedCriteria(part_id: number, criteria: YmlRubricCriteriaType[]): HydratedRubricCriteria[] {
@@ -221,6 +223,7 @@ export default function RubricPage() {
         })
     }
     const existingRubric = assignment.data?.data.rubrics;
+    const [isSaving, setIsSaving] = useState<boolean>(false);
     const [value, setValue] = useState(existingRubric ? YAML.stringify(HydratedRubricToYamlRubric(existingRubric)) : '');
     const [rubric, setRubric] = useState<HydratedRubric | undefined>(existingRubric);
     const [error, setError] = useState<string | undefined>(undefined);
@@ -230,7 +233,7 @@ export default function RubricPage() {
     const { mutateAsync: deleteResource } = useDelete({});
     const { mutateAsync: createResource } = useCreate({})
     const debounceTimeoutRef = useRef<NodeJS.Timeout>();
-    const [ updatePaused, setUpdatePaused ] = useState<boolean>(false);
+    const [updatePaused, setUpdatePaused] = useState<boolean>(false);
     const [canLoadDemo, setCanLoadDemo] = useState<boolean>(false);
 
     const debouncedParseYaml = useCallback((value: string) => {
@@ -239,7 +242,6 @@ export default function RubricPage() {
                 setRubric(YamlRubricToHydratedRubric(YAML.parse(value)));
                 setError(undefined);
             } catch (error) {
-                console.log(error);
                 setError(error instanceof Error ? error.message : 'Unknown error');
             }
         }
@@ -264,7 +266,7 @@ export default function RubricPage() {
         setRubric(existingRubric);
     }, [existingRubric]);
     useEffect(() => {
-        if(rubric && rubric.rubric_parts.length === 0) {
+        if (rubric && rubric.rubric_parts.length === 0) {
             setCanLoadDemo(true);
         } else {
             setCanLoadDemo(false);
@@ -279,12 +281,15 @@ export default function RubricPage() {
         if (updatedPropertyNames.length === 0) {
             return;
         }
+        const values = updatedPropertyNames.reduce((acc, curr) => ({
+            ...acc,
+            [curr]: part[curr]
+        }), {});
+        console.log(values);
         await updateResource({
             id: part.id,
             resource: 'rubric_parts',
-            values: updatedPropertyNames.map(propertyName => ({
-                [propertyName]: part[propertyName]
-            }))
+            values
         });
     }, [updateResource]);
     const updateCriteriaIfChanged = useCallback(async (criteria: HydratedRubricCriteria, existingCriteria: HydratedRubricCriteria) => {
@@ -299,7 +304,6 @@ export default function RubricPage() {
             ...acc,
             [curr]: criteria[curr]
         }), {});
-        console.log(values);
         await updateResource({
             id: criteria.id,
             resource: 'rubric_criteria',
@@ -324,9 +328,9 @@ export default function RubricPage() {
             values
         });
     }, [updateResource]);
-    const saveRubric = useCallback(async () => {
+    const saveRubric = useCallback(async (value: string) => {
+        const rubric = YamlRubricToHydratedRubric(YAML.parse(value));
         if (!rubric || !existingRubric) return;
-
         const findChanges = <T extends { id: number | undefined }>(newItems: T[], existingItems: T[]): {
             toCreate: T[];
             toUpdate: T[];
@@ -365,16 +369,9 @@ export default function RubricPage() {
             }
         })));
 
-        await Promise.all(criteriaChanges.toDelete.map(id => deleteResource({
-            id,
-            resource: 'rubric_criteria'
-        })));
 
         await Promise.all(partChanges.toUpdate.map(part => updatePartIfChanged(part, existingRubric.rubric_parts.find(p => p.id === part.id) as HydratedRubricPart)));
-        await Promise.all(partChanges.toDelete.map(id => deleteResource({
-            id,
-            resource: 'rubric_parts'
-        })));
+
         await Promise.all(partChanges.toCreate.map(async part => {
             const partCopy = { ...part };
             partCopy.class_id = assignment.data?.data.class_id || 0;
@@ -443,10 +440,20 @@ export default function RubricPage() {
             }
             check.id = createdCheck.data.id as number;
         }));
-    }, [rubric, existingRubric, assignment.data?.data.class_id, assignment.data?.data.rubrics.id]);
 
-    return (<Flex w="100%">
-        <Box w="100%">
+
+        await Promise.all(criteriaChanges.toDelete.map(id => deleteResource({
+            id,
+            resource: 'rubric_criteria'
+        })));
+        await Promise.all(partChanges.toDelete.map(id => deleteResource({
+            id,
+            resource: 'rubric_parts'
+        })));
+    }, [existingRubric, assignment.data?.data.class_id, assignment.data?.data.rubrics.id]);
+
+    return (<Flex w="100%" minW="0">
+        <Box w="100%" minW="0">
             <VStack w="100%">
                 <HStack w="100%" mt={2} mb={2} justifyContent="space-between">
                     <Toaster />
@@ -462,9 +469,10 @@ export default function RubricPage() {
                             onClick={() => {
                                 window.history.back();
                             }}>Cancel</Button>
-                        <Button colorPalette="green" onClick={async () => {
+                        <Button colorPalette="green" loading={isSaving} onClick={async () => {
                             try {
-                                await saveRubric();
+                                setIsSaving(true);
+                                await saveRubric(value);
                                 toaster.create({
                                     title: 'Rubric saved',
                                     description: 'The rubric has been saved successfully',
@@ -474,11 +482,22 @@ export default function RubricPage() {
                                 await assignment.refetch();
                                 setValue(YAML.stringify(HydratedRubricToYamlRubric(assignment.data?.data.rubrics!)));
                             } catch (error) {
-                                toaster.create({
-                                    title: 'Failed to save rubric',
-                                    description: 'The rubric could not be saved because of an error: ' + error,
-                                    type: 'error'
-                                })
+                                const _error = error as any;
+                                if ('details' in _error && 'message' in _error) {
+                                    toaster.create({
+                                        title: 'Failed to save rubric',
+                                        description: 'The rubric could not be saved because of an error. Please report this to the developers: ' + _error.message + " " + (_error.details || ''),
+                                        type: 'error'
+                                    })
+                                } else {
+                                    toaster.create({
+                                        title: 'Failed to save rubric',
+                                        description: 'The rubric could not be saved because of an error: ' + JSON.stringify(_error),
+                                        type: 'error'
+                                    })
+                                }
+                            } finally {
+                                setIsSaving(false);
                             }
                         }}>Save</Button>
                     </HStack>

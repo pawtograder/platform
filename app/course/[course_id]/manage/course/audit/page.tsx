@@ -354,21 +354,6 @@ function AuditTable() {
             </HStack>
             <div>{getPrePaginationRowModel().rows.length} Rows</div>
         </VStack>
-        <Box
-            p="2"
-            border="1px solid"
-            borderColor="border.muted"
-            backgroundColor="bg.subtle"
-            height="55px"
-            style={{
-                position: "fixed",
-                bottom: 0,
-                right: 0,
-                width: "100%",
-            }}>
-            <HStack>
-            </HStack>
-        </Box>
     </VStack>
     );
 }

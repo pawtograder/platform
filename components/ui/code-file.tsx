@@ -147,7 +147,6 @@ export default function CodeFile({
         };
     return <Box border="1px solid" borderColor="border.emphasized" p={0}
         m={2}
-        minW="4xl"
         w="100%"
         css={{
             ...commentsCSS,
@@ -429,7 +428,7 @@ export type RubricCheckSubOptions = {
     readonly points: number;
     readonly check: RubricCheckSelectOption;
 }
-function formatPoints(option: { check?: HydratedRubricCheck, criteria?: HydratedRubricCriteria, points: number }) {
+export function formatPoints(option: { check?: HydratedRubricCheck, criteria?: HydratedRubricCriteria, points: number }) {
     if (option.check && option.criteria) {
         return `Points: ${option.criteria.is_additive ? "+" : "-"}${option.check.points}`;
     }
@@ -495,7 +494,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, onClose, mode 
         return null;
     }
     //Only show criteria that have annotation checks
-    const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) => criteria.rubric_checks.some((check) => check.is_annotation));
+    const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) => criteria.rubric_checks.some((check) => check.is_annotation && (check.annotation_target === 'file' || check.annotation_target === null)));
     const criteria: RubricCriteriaSelectGroupOption[] = criteriaWithAnnotationChecks?.map((criteria) => ({
         label: criteria.name,
         value: criteria.id.toString(),

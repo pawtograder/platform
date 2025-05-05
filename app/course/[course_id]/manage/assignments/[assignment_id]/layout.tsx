@@ -75,6 +75,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
             borderWidth="2px"
             borderRadius="md"
             p={4}
+            minW="0"
             flexGrow={1}
         >
             <Heading size="lg">Assignment: {assignment ? assignment.data?.title : "Loading..."}</Heading>

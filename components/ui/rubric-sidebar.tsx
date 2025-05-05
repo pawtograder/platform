@@ -17,8 +17,10 @@ import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
-import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
+import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
+import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { usePathname } from "next/navigation";
 export function CommentActions({ comment, setIsEditing }: { comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment, setIsEditing: (isEditing: boolean) => void }) {
     const { private_profile_id } = useClassProfiles();
     const { mutateAsync: updateComment } = useUpdate({
@@ -63,21 +65,23 @@ export function isArtifactComment(comment: SubmissionFileComment | SubmissionCom
 }
 export function SubmissionArtifactCommentLink({ comment }: { comment: SubmissionArtifactComment }) {
     const submission = useSubmissionMaybe();
+    const pathname = usePathname();
     const artifact = submission?.submission_artifacts.find((artifact) => artifact.id === comment.submission_artifact_id);
     if (!artifact || !submission) {
         return <></>;
     }
     const shortFileName = path.basename(artifact.name);
-    return <Link href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?artifact_id=${comment.submission_artifact_id}`}>@ {shortFileName}</Link>
+    return <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${comment.submission_artifact_id}`}>@ {shortFileName}</Link>
 }
 export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
     const submission = useSubmissionMaybe();
+    const pathname = usePathname();
     const file = submission?.submission_files.find((file) => file.id === comment.submission_file_id);
     if (!file || !submission) {
         return <></>;
     }
     const shortFileName = path.basename(file.name);
-    return <Link href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?file_id=${comment.submission_file_id}#L${comment.line}`}>@ {shortFileName}:{comment.line}</Link>
+    return <Link href={linkToSubPage(pathname, "files") + `?file_id=${comment.submission_file_id}#L${comment.line}`}>@ {shortFileName}:{comment.line}</Link>
 }
 export function RubricCheckComment({ comment, criteria }: { comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment, criteria: HydratedRubricCriteria }) {
     const author = useUserProfile(comment.author);
@@ -126,10 +130,11 @@ export function RubricCheckAnnotation({ check, criteria }: { check: HydratedRubr
     const review = useSubmissionReview();
     const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, review?.id);
     const gradingIsRequired = review && check.is_required && rubricCheckComments.length == 0;
+    const annotationTarget = check.annotation_target || 'file';
     return <Box border="1px solid" borderColor={gradingIsRequired ? "border.error" : "border.emphasized"} borderRadius="md" p={1} w="100%">
         <HStack>
-            <Tooltip content="This check is an annotation, it can only be applied by clicking on a specific line of code.">
-                <Icon as={BsFileEarmarkCodeFill} size="xs" />
+            <Tooltip content={`This check is an annotation, it can only be applied by ${annotationTarget === 'file' || annotationTarget === null ? "clicking on a specific line of code" : "clicking on an artifact"}`}>
+                <Icon as={annotationTarget === 'file' ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
             </Tooltip>
             <Text>{check.name}</Text>
         </HStack>
@@ -148,6 +153,7 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
     const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
     const submission = useSubmissionMaybe();
 
+    const pathname = usePathname();
     const linkedAritfactId = check.artifact ? submission?.submission_artifacts.find((artifact) => artifact.name === check.artifact)?.id : undefined;
     const linkedFileId = check.file ? submission?.submission_files.find((file) => file.name === check.file)?.id : undefined;
 
@@ -173,12 +179,14 @@ export function RubricCheckGlobal({ check, criteria, isSelected }: { check: Hydr
             borderWidth={gradingIsRequired ? "1px" : "0px"}
             borderRadius="md"
             p={1}
+            wordBreak="break-all"
             >
                 <Text fontSize="sm">{check.name}</Text>
-                {(linkedFileId && submission) && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}>File: {check.file}</Link>}
-                {(linkedAritfactId && submission) && <Link href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
+                {(linkedFileId && submission) && <Link href={linkToSubPage(pathname, "files") + `?file_id=${linkedFileId}`}>File: {check.file}</Link>}
+                {(linkedAritfactId && submission) && <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${linkedAritfactId}`}>Artifact: {check.artifact}</Link>}
                 {gradingIsRequired && <Text fontSize="xs" color="fg.error">Select one:</Text>}
                 <RadioGroup.Root
+                    w="100%"
                     value={selectedOptionIndex?.toString()}
                     onValueChange={(value) => {
                         const selectedOption = check.data!.options[parseInt(value.value)];
@@ -222,7 +230,7 @@ function SubmissionCommentForm({ check, criteria, selectedOptionIndex, linkedArt
     const review = useSubmissionReview();
     const submission = useSubmissionMaybe();
     const { mutateAsync: createComment } = useCreate({
-        resource: check.artifact ? "submission_artifact_comments" : "submission_file_comments",
+        resource: check.is_annotation && check.annotation_target === 'artifact' ? "submission_artifact_comments" : check.is_annotation ? "submission_file_comments" : "submission_comments",
     })
     if (!submission) {
         return <></>;
@@ -271,7 +279,7 @@ function SubmissionCommentForm({ check, criteria, selectedOptionIndex, linkedArt
     </Box>
 }
 function RubricCheck({ criteria, check, isSelected }: { criteria: HydratedRubricCriteria, check: HydratedRubricCheck, isSelected: boolean }) {
-    return <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%"
+    return <Box p={1} w="100%"
     >
         {check.is_annotation ? <RubricCheckAnnotation check={check} criteria={criteria} /> :
                                 <RubricCheckGlobal check={check} criteria={criteria} isSelected={isSelected} />}
@@ -306,9 +314,9 @@ export function RubricCriteria({ criteria }: { criteria: HydratedRubricCriteria 
         instructions = `Select at most ${criteria.max_checks_per_submission} checks`;
     }
     const singleCheck = criteria.max_checks_per_submission === 1 && comments.length === 1 ? comments[0].rubric_check_id?.toString() : undefined;
-    return <Box border="1px solid" borderColor={gradingIsRequired ? "border.error" : "border.emphasized"} borderRadius="md" p={2} w="100%"
+    return <Box border="1px solid" borderColor={gradingIsRequired ? "border.error" : "border.muted"} borderRadius="md" p={2} w="100%"
     >
-        <Heading size="md">{criteria.name} {pointsText}</Heading>
+        <Heading size="sm">{criteria.name} {pointsText}</Heading>
         <Markdown style={{
             fontSize: "0.8rem",
         }}>{criteria.description}</Markdown>
@@ -316,6 +324,7 @@ export function RubricCriteria({ criteria }: { criteria: HydratedRubricCriteria 
             <Heading size="sm">Checks</Heading>
             <Text fontSize="sm" color={gradingIsRequired ? "fg.error" : "fg.muted"}>{instructions}</Text>
             <RadioGroup.Root
+                w="100%"
                 value={singleCheck}
                 onValueChange={(value) => {
                     setSelectedCheck(criteria.rubric_checks.find((check) => check.id.toString() === value.value));
@@ -330,7 +339,7 @@ export function RubricPart({ part }: { part: HydratedRubricPart }) {
     return <Box>
         <Heading size="md">{part.name}</Heading>
         <Markdown>{part.description}</Markdown>
-        <VStack align="start" w="md">
+        <VStack align="start" w="100%">
             {part.rubric_criteria.sort((a, b) => a.ordinal - b.ordinal).map((criteria, index) => <RubricCriteria key={`criteria-${criteria.id}-${index}`} criteria={criteria} />)}
         </VStack>
     </Box>
@@ -342,11 +351,13 @@ export function RubricSidebar({ rubric, }: { rubric: HydratedRubric }) {
         borderColor="border.emphasized"
         p={2}
         ml={0}
-        w="lg"
+        minW="md"
+        maxW="lg"
         height="100vh"
         overflowY="auto"
+        overflowX="hidden"
     >
-        <VStack align="start" w="md">
+        <VStack align="start" w="100%">
             <Heading size="xl">Grading Summary</Heading>
             {rubric.rubric_parts.sort((a, b) => a.ordinal - b.ordinal).map((part) => <RubricPart key={part.name + "-" + part.id} part={part} />)}
         </VStack>

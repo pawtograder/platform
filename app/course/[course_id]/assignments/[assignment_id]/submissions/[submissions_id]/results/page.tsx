@@ -20,6 +20,7 @@ function format_result_output(result: { output: string | null | undefined, outpu
     if (result.output_format === "text" || result.output_format === null) {
         return <Box
             fontSize="sm"
+            overflowX="auto"
         >
             <pre>{result.output}</pre>
         </Box>
@@ -27,6 +28,7 @@ function format_result_output(result: { output: string | null | undefined, outpu
     if (result.output_format === "markdown") {
         return <Box
             fontSize="sm"
+            overflowX="auto"
         >
             <Markdown
             >{result.output}</Markdown>

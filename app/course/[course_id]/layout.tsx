@@ -17,12 +17,12 @@ const ProtectedLayout = async ({ children, params }: Readonly<{
     const {course_id} = await params;
     // const {open, onOpen, onClose} = useDisclosure()
     return (
-        <Box minH="100vh">
+        <Box minH="100vh" width="100%" minWidth="0">
             <CourseControllerProvider course_id={Number.parseInt(course_id)}>
                 <DynamicCourseNav />
                 {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
                 {/* mobilenav */}
-                <Box pt="0" pl="4" pr="4">
+                <Box p="0" width="100%" minWidth="0">
                     {children}
                 </Box>
             </CourseControllerProvider>
