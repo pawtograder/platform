@@ -195,7 +195,6 @@ function AuditTable() {
         getState,
         setPageIndex,
         getCanPreviousPage,
-        getPageCount,
         getCanNextPage,
         getRowCount,
         nextPage,

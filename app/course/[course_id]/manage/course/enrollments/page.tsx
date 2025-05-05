@@ -96,7 +96,6 @@ function EnrollmentsTable() {
         getState,
         setPageIndex,
         getCanPreviousPage,
-        getPageCount,
         getCanNextPage,
         nextPage,
         previousPage,

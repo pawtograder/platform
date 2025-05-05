@@ -112,7 +112,6 @@ export default function AssignmentsTable() {
         getRowCount,
         setPageIndex,
         getCanPreviousPage,
-        getPageCount,
         getCanNextPage,
         nextPage,
         previousPage,
@@ -130,6 +129,7 @@ export default function AssignmentsTable() {
         },
         manualPagination: false,
         manualFiltering: false,
+        manualSorting: false,
         getPaginationRowModel:  getPaginationRowModel(),
         pageCount,
         getCoreRowModel: getCoreRowModel(),
@@ -242,7 +242,7 @@ export default function AssignmentsTable() {
                     {">"}
                 </Button>
                 <Button
-                    onClick={() => setPageIndex(getPageCount() - 1)}
+                    onClick={() => setPageIndex(pageCount - 1)}
                     disabled={!getCanNextPage()}
                 >
                     {">>"}
@@ -250,7 +250,7 @@ export default function AssignmentsTable() {
                 <VStack>
                     <Text>Page</Text>
                     <Text>
-                        {getState().pagination.pageIndex + 1} of {getPageCount()}
+                        {getState().pagination.pageIndex + 1} of {pageCount}
                     </Text>
                 </VStack>
                 <VStack>
