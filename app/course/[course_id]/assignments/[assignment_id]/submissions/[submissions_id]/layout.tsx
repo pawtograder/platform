@@ -13,6 +13,7 @@ import {
 import { Box, Flex, Heading, HStack, List, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
+import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
@@ -31,26 +32,34 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
+import { useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
+import {
+  FaBell,
+  FaCheckCircle,
+  FaFile,
+  FaHistory,
+  FaInfo,
+  FaQuestionCircle,
+  FaRegCheckCircle,
+  FaTimesCircle
+} from "react-icons/fa";
+import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { HiOutlineInformationCircle } from "react-icons/hi";
 import { LuMoon, LuSun } from "react-icons/lu";
-import { TbMathFunction } from "react-icons/tb";
-import { RxQuestionMarkCircled } from "react-icons/rx";
-import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { PiSignOut } from "react-icons/pi";
-import { useState } from "react";
-import AskForHelpButton from "@/components/ui/ask-for-help-button";
-import { CrudFilter } from "@refinedev/core";
+import { RxQuestionMarkCircled } from "react-icons/rx";
+import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
-import type { IconType } from "react-icons";
+import { linkToSubPage } from "./utils";
 
 // Create a mapping of icon names to their components
-const iconMap: { [key: string]: IconType } = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const iconMap: { [key: string]: any } = {
   FaBell,
   FaCheckCircle,
   FaFile,
@@ -77,18 +86,48 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const router = useRouter();
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
-    ? { field: "assignment_group_id", operator: "eq", value: submission.assignment_group_id }
-    : { field: "profile_id", operator: "eq", value: submission.profile_id };
+    ? {
+        field: "assignment_group_id",
+        operator: "eq",
+        value: submission.assignment_group_id
+      }
+    : {
+        field: "profile_id",
+        operator: "eq",
+        value: submission.profile_id
+      };
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
-    meta: { select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
-    filters: [{ field: "assignment_id", operator: "eq", value: submission.assignments.id }, groupOrProfileFilter],
-    sorters: [{ field: "created_at", order: "desc" }]
+    meta: {
+      select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)"
+    },
+    filters: [
+      {
+        field: "assignment_id",
+        operator: "eq",
+        value: submission.assignments.id
+      },
+      groupOrProfileFilter
+    ],
+    sorters: [
+      {
+        field: "created_at",
+        order: "desc"
+      }
+    ]
   });
   useList<Submission>({
     resource: "submissions",
-    meta: { select: "*" },
-    filters: [{ field: "assignment_id", operator: "eq", value: submission.assignments.id }],
+    meta: {
+      select: "*"
+    },
+    filters: [
+      {
+        field: "assignment_id",
+        operator: "eq",
+        value: submission.assignments.id
+      }
+    ],
     liveMode: "manual",
     onLiveEvent: (event) => {
       const newSubmission = event.payload as Submission;
@@ -102,6 +141,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
     }
   });
   const supabase = createClient();
+  const isGraderInterface = pathname.includes("/grade");
   if (isLoading || !submission.assignments) {
     return <Skeleton height="20px" />;
   }
@@ -122,10 +162,20 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
             maxHeight="400px"
             overflowY="auto"
             css={{
-              "&::-webkit-scrollbar": { width: "8px" },
-              "&::-webkit-scrollbar-track": { background: "#f1f1f1", borderRadius: "4px" },
-              "&::-webkit-scrollbar-thumb": { background: "#888", borderRadius: "4px" },
-              "&::-webkit-scrollbar-thumb:hover": { background: "#555" }
+              "&::-webkit-scrollbar": {
+                width: "8px"
+              },
+              "&::-webkit-scrollbar-track": {
+                background: "#f1f1f1",
+                borderRadius: "4px"
+              },
+              "&::-webkit-scrollbar-thumb": {
+                background: "#888",
+                borderRadius: "4px"
+              },
+              "&::-webkit-scrollbar-thumb:hover": {
+                background: "#555"
+              }
             }}
           >
             <Table.Root>
@@ -140,7 +190,9 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
               </Table.Header>
               <Table.Body>
                 {data?.data.map((historical_submission) => {
-                  const link = `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
+                  const link = isGraderInterface
+                    ? `/course/${historical_submission.class_id}/grade/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`
+                    : `/course/${historical_submission.class_id}/assignments/${historical_submission.assignment_id}/submissions/${historical_submission.id}`;
                   return (
                     <Table.Row
                       key={historical_submission.id}
@@ -204,6 +256,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
 
 function TestResults() {
   const submission = useSubmission();
+  const pathname = usePathname();
   const testResults = submission.grader_results?.grader_result_tests;
   const totalScore = testResults?.reduce((acc, test) => acc + (test.score || 0), 0);
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
@@ -226,9 +279,7 @@ function TestResults() {
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
             {icon}
-            <Link
-              href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results#test-${test.id}`}
-            >
+            <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
               <Heading size="sm">
                 {test.name} {showScore ? test.score + "/" + test.max_score : ""}
               </Heading>
@@ -294,8 +345,14 @@ function incompleteRubricChecks(
 ): {
   required_checks: HydratedRubricCheck[];
   optional_checks: HydratedRubricCheck[];
-  required_criteria: { criteria: HydratedRubricCriteria; check_count_applied: number }[];
-  optional_criteria: { criteria: HydratedRubricCriteria; check_count_applied: number }[];
+  required_criteria: {
+    criteria: HydratedRubricCriteria;
+    check_count_applied: number;
+  }[];
+  optional_criteria: {
+    criteria: HydratedRubricCriteria;
+    check_count_applied: number;
+  }[];
 } {
   const required_checks = rubric.rubric_criteria.flatMap((criteria) =>
     criteria.rubric_checks.filter(
@@ -323,7 +380,12 @@ function incompleteRubricChecks(
   const optional_criteria = criteria.filter(
     (criteria) => criteria.criteria.min_checks_per_submission === null && criteria.check_count_applied === 0
   );
-  return { required_checks, optional_checks, required_criteria, optional_criteria };
+  return {
+    required_checks,
+    optional_checks,
+    required_criteria,
+    optional_criteria
+  };
 }
 function CompleteRubricButton() {
   const review = useSubmissionReview();
@@ -354,12 +416,16 @@ function CompleteRubricButton() {
   //             }
   const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
   const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
-  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({ resource: "submission_reviews" });
+  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
+    resource: "submission_reviews"
+  });
   const { private_profile_id } = useClassProfiles();
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="surface">Mark as Graded</Button>
+        <Button variant="surface">
+          Graded <Icon as={FaRegCheckCircle} />
+        </Button>
       </Popover.Trigger>
       <Popover.Positioner>
         <Popover.Content>
@@ -442,7 +508,9 @@ function CompleteRubricButton() {
 function ReviewActions() {
   const review = useSubmissionReview();
   const { private_profile_id } = useClassProfiles();
-  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({ resource: "submission_reviews" });
+  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
+    resource: "submission_reviews"
+  });
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -531,7 +599,6 @@ function RubricView() {
   const review = useSubmissionReview();
   const showHandGrading = isGraderOrInstructor || review?.released;
   const criteria = submission.assignments.rubrics?.rubric_criteria as HydratedRubricCriteria[];
-  // rubrics.sort((a, b) => a.name.localeCompare(b.name));
   return (
     <Box
       position="sticky"
@@ -540,10 +607,12 @@ function RubricView() {
       borderColor="border.emphasized"
       p={2}
       ml={0}
+      minW="md"
+      maxW="lg"
       height="100vh"
       overflowY="auto"
     >
-      <VStack align="start" w="md">
+      <VStack align="start">
         {review && (
           <Heading size="xl">
             Grading Summary ({review?.total_score}/{submission.assignments.total_points})
@@ -564,8 +633,8 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
   return (
-    <Flex direction="column" borderColor="border.muted" borderWidth="2px" borderRadius="md">
-      <HStack pl={4} pr={4} alignItems="center" justify="space-between" align="center">
+    <Flex direction="column" borderColor="border.muted" borderWidth="2px" borderRadius="md" minW="0px">
+      <HStack pl={4} pr={4} pt={2} alignItems="center" justify="space-between" align="center">
         <Box>
           <Heading size="lg">
             {submission.assignments.title} - Submission #{submission.ordinal}
@@ -600,7 +669,6 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           <SubmissionHistory submission={submission} />
         </HStack>
       </HStack>
-      <Text textStyle="sm" color="text.muted"></Text>
       <Box
         p={0}
         m={0}
@@ -609,19 +677,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         bg="bg.muted"
         defaultValue="results"
       >
-        <NextLink
-          prefetch={true}
-          href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/results`}
-        >
+        <NextLink prefetch={true} href={linkToSubPage(pathname, "results")}>
           <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
-        <NextLink
-          prefetch={true}
-          href={`/course/${submission.class_id}/assignments/${submission.assignments.id}/submissions/${submission.id}/files`}
-        >
+        <NextLink prefetch={true} href={linkToSubPage(pathname, "files")}>
           <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files
@@ -630,10 +692,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
       </Box>
       <Box flex={1}>
         <Flex>
-          <Box flex={10} pr={4}>
+          <Box flex={10} pr={4} minW="0">
             {children}
           </Box>
-          <Box flex={0}>
+          <Box flex={1} minW="md" maxW="lg">
             <RubricView />
           </Box>
         </Flex>

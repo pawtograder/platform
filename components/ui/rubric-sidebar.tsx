@@ -32,8 +32,10 @@ import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
-import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
+import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
+import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { usePathname } from "next/navigation";
 export function CommentActions({
   comment,
   setIsEditing
@@ -55,7 +57,13 @@ export function CommentActions({
         if (value.value === "edit") {
           setIsEditing(true);
         } else if (value.value === "delete") {
-          await updateComment({ id: comment.id, values: { edited_by: private_profile_id, deleted_at: new Date() } });
+          await updateComment({
+            id: comment.id,
+            values: {
+              edited_by: private_profile_id,
+              deleted_at: new Date()
+            }
+          });
         }
       }}
     >
@@ -86,30 +94,28 @@ export function isArtifactComment(
 }
 export function SubmissionArtifactCommentLink({ comment }: { comment: SubmissionArtifactComment }) {
   const submission = useSubmissionMaybe();
+  const pathname = usePathname();
   const artifact = submission?.submission_artifacts.find((artifact) => artifact.id === comment.submission_artifact_id);
   if (!artifact || !submission) {
     return <></>;
   }
   const shortFileName = path.basename(artifact.name);
   return (
-    <Link
-      href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?artifact_id=${comment.submission_artifact_id}`}
-    >
+    <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${comment.submission_artifact_id}`}>
       @ {shortFileName}
     </Link>
   );
 }
 export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
   const submission = useSubmissionMaybe();
+  const pathname = usePathname();
   const file = submission?.submission_files.find((file) => file.id === comment.submission_file_id);
   if (!file || !submission) {
     return <></>;
   }
   const shortFileName = path.basename(file.name);
   return (
-    <Link
-      href={`/course/${comment.class_id}/assignments/${submission.assignment_id}/submissions/${comment.submission_id}/files/?file_id=${comment.submission_file_id}#L${comment.line}`}
-    >
+    <Link href={linkToSubPage(pathname, "files") + `?file_id=${comment.submission_file_id}#L${comment.line}`}>
       @ {shortFileName}:{comment.line}
     </Link>
   );
@@ -166,7 +172,10 @@ export function RubricCheckComment({
             }}
             sendButtonText="Save"
             sendMessage={async (message) => {
-              await updateComment({ id: comment.id, values: { comment: message } });
+              await updateComment({
+                id: comment.id,
+                values: { comment: message }
+              });
               setIsEditing(false);
             }}
           />
@@ -188,6 +197,7 @@ export function RubricCheckAnnotation({
   const review = useSubmissionReview();
   const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, review?.id);
   const gradingIsRequired = review && check.is_required && rubricCheckComments.length == 0;
+  const annotationTarget = check.annotation_target || "file";
   return (
     <Box
       border="1px solid"
@@ -197,12 +207,20 @@ export function RubricCheckAnnotation({
       w="100%"
     >
       <HStack>
-        <Tooltip content="This check is an annotation, it can only be applied by clicking on a specific line of code.">
-          <Icon as={BsFileEarmarkCodeFill} size="xs" />
+        <Tooltip
+          content={`This check is an annotation, it can only be applied by ${annotationTarget === "file" || annotationTarget === null ? "clicking on a specific line of code" : "clicking on an artifact"}`}
+        >
+          <Icon as={annotationTarget === "file" ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
         </Tooltip>
         <Text>{check.name}</Text>
       </HStack>
-      <Markdown style={{ fontSize: "0.8rem" }}>{check.description}</Markdown>
+      <Markdown
+        style={{
+          fontSize: "0.8rem"
+        }}
+      >
+        {check.description}
+      </Markdown>
       {rubricCheckComments.map((comment) => (
         <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} />
       ))}
@@ -229,6 +247,7 @@ export function RubricCheckGlobal({
   const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
   const submission = useSubmissionMaybe();
 
+  const pathname = usePathname();
   const linkedAritfactId = check.artifact
     ? submission?.submission_artifacts.find((artifact) => artifact.name === check.artifact)?.id
     : undefined;
@@ -272,19 +291,14 @@ export function RubricCheckGlobal({
             borderWidth={gradingIsRequired ? "1px" : "0px"}
             borderRadius="md"
             p={1}
+            wordBreak="break-all"
           >
             <Text fontSize="sm">{check.name}</Text>
             {linkedFileId && submission && (
-              <Link
-                href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}
-              >
-                File: {check.file}
-              </Link>
+              <Link href={linkToSubPage(pathname, "files") + `?file_id=${linkedFileId}`}>File: {check.file}</Link>
             )}
             {linkedAritfactId && submission && (
-              <Link
-                href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}
-              >
+              <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${linkedAritfactId}`}>
                 Artifact: {check.artifact}
               </Link>
             )}
@@ -294,6 +308,7 @@ export function RubricCheckGlobal({
               </Text>
             )}
             <RadioGroup.Root
+              w="100%"
               value={selectedOptionIndex?.toString()}
               onValueChange={(value) => {
                 const selectedOption = check.data!.options[parseInt(value.value)];
@@ -356,11 +371,16 @@ export function RubricCheckGlobal({
           </Radio>
         )}
       </HStack>
-      <Markdown style={{ fontSize: "0.8rem" }}>{check.description}</Markdown>
+      <Markdown
+        style={{
+          fontSize: "0.8rem"
+        }}
+      >
+        {check.description}
+      </Markdown>
       {isEditing && (
         <SubmissionCommentForm
           check={check}
-          criteria={criteria}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
         />
@@ -377,7 +397,6 @@ function SubmissionCommentForm({
   linkedArtifactId
 }: {
   check: HydratedRubricCheck;
-  criteria: HydratedRubricCriteria;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
 }) {
@@ -385,7 +404,12 @@ function SubmissionCommentForm({
   const review = useSubmissionReview();
   const submission = useSubmissionMaybe();
   const { mutateAsync: createComment } = useCreate({
-    resource: check.artifact ? "submission_artifact_comments" : "submission_file_comments"
+    resource:
+      check.is_annotation && check.annotation_target === "artifact"
+        ? "submission_artifact_comments"
+        : check.is_annotation
+          ? "submission_file_comments"
+          : "submission_comments"
   });
 
   useEffect(() => {
@@ -408,7 +432,6 @@ function SubmissionCommentForm({
         </Text>
       </Box>
       <MessageInput
-        textAreaRef={messageInputRef}
         placeholder={"Comment"}
         sendButtonText="Add Check"
         sendMessage={async (message, profile_id) => {
@@ -416,7 +439,11 @@ function SubmissionCommentForm({
           if (selectedOptionIndex !== undefined) {
             comment = selectedOption?.label + "\n" + comment;
           }
-          const artifactInfo = check.artifact ? { submission_artifact_id: linkedArtifactId } : {};
+          const artifactInfo = check.artifact
+            ? {
+                submission_artifact_id: linkedArtifactId
+              }
+            : {};
           const values = {
             comment,
             rubric_check_id: check.id,
@@ -446,7 +473,7 @@ function RubricCheck({
   isSelected: boolean;
 }) {
   return (
-    <Box border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
+    <Box p={1} w="100%">
       {check.is_annotation ? (
         <RubricCheckAnnotation check={check} criteria={criteria} />
       ) : (
@@ -493,21 +520,28 @@ export function RubricCriteria({ criteria }: { criteria: HydratedRubricCriteria 
   return (
     <Box
       border="1px solid"
-      borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+      borderColor={gradingIsRequired ? "border.error" : "border.muted"}
       borderRadius="md"
       p={2}
       w="100%"
     >
-      <Heading size="md">
+      <Heading size="sm">
         {criteria.name} {pointsText}
       </Heading>
-      <Markdown style={{ fontSize: "0.8rem" }}>{criteria.description}</Markdown>
+      <Markdown
+        style={{
+          fontSize: "0.8rem"
+        }}
+      >
+        {criteria.description}
+      </Markdown>
       <VStack align="flex-start" w="100%" gap={0}>
         <Heading size="sm">Checks</Heading>
         <Text fontSize="sm" color={gradingIsRequired ? "fg.error" : "fg.muted"}>
           {instructions}
         </Text>
         <RadioGroup.Root
+          w="100%"
           value={singleCheck}
           onValueChange={(value) => {
             setSelectedCheck(criteria.rubric_checks.find((check) => check.id.toString() === value.value));
@@ -532,7 +566,7 @@ export function RubricPart({ part }: { part: HydratedRubricPart }) {
     <Box>
       <Heading size="md">{part.name}</Heading>
       <Markdown>{part.description}</Markdown>
-      <VStack align="start" w="md">
+      <VStack align="start" w="100%">
         {part.rubric_criteria
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((criteria, index) => (
@@ -545,8 +579,18 @@ export function RubricPart({ part }: { part: HydratedRubricPart }) {
 
 export function RubricSidebar({ rubric }: { rubric: HydratedRubric }) {
   return (
-    <Box borderLeftWidth="1px" borderColor="border.emphasized" p={2} ml={0} w="lg" height="100vh" overflowY="auto">
-      <VStack align="start" w="md">
+    <Box
+      borderLeftWidth="1px"
+      borderColor="border.emphasized"
+      p={2}
+      ml={0}
+      minW="md"
+      maxW="lg"
+      height="100vh"
+      overflowY="auto"
+      overflowX="hidden"
+    >
+      <VStack align="start" w="100%">
         <Heading size="xl">Grading Summary</Heading>
         {rubric.rubric_parts
           .sort((a, b) => a.ordinal - b.ordinal)

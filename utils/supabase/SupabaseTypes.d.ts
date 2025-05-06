@@ -2085,6 +2085,7 @@ export type Database = {
       };
       rubric_checks: {
         Row: {
+          annotation_target: string | null;
           artifact: string | null;
           class_id: number;
           created_at: string;
@@ -2103,6 +2104,7 @@ export type Database = {
           rubric_criteria_id: number;
         };
         Insert: {
+          annotation_target?: string | null;
           artifact?: string | null;
           class_id: number;
           created_at?: string;
@@ -2121,6 +2123,7 @@ export type Database = {
           rubric_criteria_id: number;
         };
         Update: {
+          annotation_target?: string | null;
           artifact?: string | null;
           class_id?: number;
           created_at?: string;

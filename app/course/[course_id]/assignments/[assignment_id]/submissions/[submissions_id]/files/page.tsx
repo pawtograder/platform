@@ -1,10 +1,16 @@
 "use client";
 
-import CodeFile from "@/components/ui/code-file";
+import CodeFile, {
+  formatPoints,
+  RubricCheckSelectOption,
+  RubricCheckSubOptions,
+  RubricCriteriaSelectGroupOption
+} from "@/components/ui/code-file";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import PersonAvatar from "@/components/ui/person-avatar";
+import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { CommentActions } from "@/components/ui/rubric-sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -20,6 +26,8 @@ import {
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
 import {
+  HydratedRubricCheck,
+  HydratedRubricCriteria,
   SubmissionArtifact,
   SubmissionArtifactComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
@@ -32,6 +40,7 @@ import {
   Heading,
   HStack,
   Icon,
+  Separator,
   Spinner,
   Table,
   Tag,
@@ -39,14 +48,13 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
+import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
 import JSZip from "jszip";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 import zipToHTMLBlobs from "./zipToHTMLBlobs";
-import Image from "next/image";
-
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -56,14 +64,27 @@ function FilePicker({ curFile }: { curFile: number }) {
     <Box
       maxH="250px"
       overflowY="auto"
+      w="100%"
+      m={2}
       css={{
-        "&::-webkit-scrollbar": { width: "8px", display: "block" },
-        "&::-webkit-scrollbar-track": { background: "#f1f1f1", borderRadius: "4px" },
-        "&::-webkit-scrollbar-thumb": { background: "#888", borderRadius: "4px" },
-        "&::-webkit-scrollbar-thumb:hover": { background: "#555" }
+        "&::-webkit-scrollbar": {
+          width: "8px",
+          display: "block"
+        },
+        "&::-webkit-scrollbar-track": {
+          background: "#f1f1f1",
+          borderRadius: "4px"
+        },
+        "&::-webkit-scrollbar-thumb": {
+          background: "#888",
+          borderRadius: "4px"
+        },
+        "&::-webkit-scrollbar-thumb:hover": {
+          background: "#555"
+        }
       }}
     >
-      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="4xl" m={2} borderRadius="md">
+      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
         <Table.Header>
           <Table.Row bg="bg.subtle">
             <Table.ColumnHeader>File</Table.ColumnHeader>
@@ -102,15 +123,28 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
   return (
     <Box
       maxH="250px"
+      w="100%"
+      m={2}
       overflowY="auto"
       css={{
-        "&::-webkit-scrollbar": { width: "8px", display: "block" },
-        "&::-webkit-scrollbar-track": { background: "#f1f1f1", borderRadius: "4px" },
-        "&::-webkit-scrollbar-thumb": { background: "#888", borderRadius: "4px" },
-        "&::-webkit-scrollbar-thumb:hover": { background: "#555" }
+        "&::-webkit-scrollbar": {
+          width: "8px",
+          display: "block"
+        },
+        "&::-webkit-scrollbar-track": {
+          background: "#f1f1f1",
+          borderRadius: "4px"
+        },
+        "&::-webkit-scrollbar-thumb": {
+          background: "#888",
+          borderRadius: "4px"
+        },
+        "&::-webkit-scrollbar-thumb:hover": {
+          background: "#555"
+        }
       }}
     >
-      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="4xl" m={2} borderRadius="md">
+      <Table.Root borderWidth="1px" borderColor="border.emphasized" w="100%" borderRadius="md">
         <Table.Header>
           <Table.Row bg="bg.subtle">
             <Table.ColumnHeader>Artifact</Table.ColumnHeader>
@@ -141,139 +175,15 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
   );
 }
 
-// function RubricItem({ rubric }: { rubric: Rubric }) {
-//   const {
-//     register,
-//     control,
-//     getValues,
-//     handleSubmit,
-//     refineCore,
-//     formState: { errors }
-//   } = useForm<Rubric>({ refineCoreProps: { action: "edit", resource: "rubrics", id: rubric.id } });
-
-//   if (refineCore.query?.isLoading || refineCore.query?.isFetching) {
-//     return <Skeleton height="48px" width="full" />;
-//   }
-//   return (
-//     <Box>
-//       <form onSubmit={handleSubmit(refineCore.onFinish)}>
-//         <Editable.Root
-//           {...register("name")}
-//           placeholder="Click to enter a comment"
-//           submitMode="both"
-//           onValueCommit={() => {
-//             handleSubmit(refineCore.onFinish)();
-//           }}
-//         >
-//           <Editable.Preview minH="48px" alignItems="flex-start" width="full">
-//             {getValues("name")}
-//           </Editable.Preview>
-//           <Editable.Input />
-//           <Editable.Control>
-//             <Editable.EditTrigger asChild>
-//               <IconButton variant="ghost" size="xs">
-//                 <LuPencilLine />
-//               </IconButton>
-//             </Editable.EditTrigger>
-//             <Editable.CancelTrigger asChild>
-//               <IconButton variant="outline" size="xs">
-//                 <LuX />
-//               </IconButton>
-//             </Editable.CancelTrigger>
-//             <Editable.SubmitTrigger asChild>
-//               <IconButton variant="outline" size="xs">
-//                 <LuCheck />
-//               </IconButton>
-//             </Editable.SubmitTrigger>
-//           </Editable.Control>
-//         </Editable.Root>
-//         <Field.Root invalid={!!errors.deduction} orientation="horizontal">
-//           <Field.Label>Deduction</Field.Label>
-//           <Controller
-//             name="deduction"
-//             control={control}
-//             render={({ field }) => (
-//               <NumberInput.Root
-//                 name={field.name}
-//                 value={field.value}
-//                 onValueChange={({ value }) => {
-//                   field.onChange(value);
-//                   handleSubmit(refineCore.onFinish)();
-//                 }}
-//               >
-//                 <NumberInput.Control />
-//                 <NumberInput.Input onBlur={field.onBlur} />
-//               </NumberInput.Root>
-//             )}
-//           />
-//         </Field.Root>
-//       </form>
-//     </Box>
-//   );
-// }
-// function RubricView() {
-//   const invalidateQuery = useInvalidate();
-//   const submission = useSubmission();
-//   const { data: rubrics } = useList<Rubric>({
-//     resource: "rubrics",
-//     filters: [{ field: "class_id", operator: "eq", value: submission.assignments.class_id }],
-//     sorters: [{ field: "ordinal", order: "asc" }],
-//     meta: { select: "*" }
-//   });
-//   const { mutate: addRubric } = useCreate<Rubric>({
-//     resource: "rubrics",
-//     mutationOptions: {
-//       onSuccess: () => {
-//         invalidateQuery({ resource: "rubrics", invalidates: ["all"] });
-//       }
-//     }
-//   });
-//   return (
-//     <Box
-//       position="sticky"
-//       top="0"
-//       borderLeftWidth="1px"
-//       borderColor="border.emphasized"
-//       p={4}
-//       ml={7}
-//       w="md"
-//       height="100vh"
-//       overflowY="auto"
-//     >
-//       <Heading size="xl">Rubric</Heading>
-//       <Box>
-//         <Heading size="lg">Criteria</Heading>
-//         {rubrics?.data.map((rubric) => (
-//           <Box key={rubric.id}>
-//             <RubricItem rubric={rubric} />
-//           </Box>
-//         ))}
-//         <Button
-//           onClick={() => {
-//             addRubric({
-//               values: {
-//                 class_id: submission.assignments.class_id,
-//                 name: "New Rubric Item",
-//                 deduction: 0,
-//                 ordinal: rubrics?.data.length || 0
-//               }
-//             });
-//           }}
-//         >
-//           Add Rubric Item
-//         </Button>
-//       </Box>
-//     </Box>
-//   );
-// }
-
 function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
-  const gradingReview = useSubmissionReview(comment.submission_review_id);
   const commentAuthor = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({ resource: "submission_artifact_comments" });
+  const { mutateAsync: updateComment } = useUpdate({
+    resource: "submission_artifact_comments"
+  });
+  const gradingReview = useSubmissionReview(comment.submission_review_id);
 
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
@@ -281,6 +191,7 @@ function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment })
   const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
 
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
+
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -294,7 +205,7 @@ function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment })
           borderColor="border.info"
           borderRadius="md"
         >
-          <Box bg="bg.info" pl={1} pr={1} borderRadius="md">
+          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
               <HStack>
                 {!comment.released && (
@@ -359,7 +270,9 @@ function ArtifactComment({
     submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({ resource: "submission_artifact_comments" });
+  const { mutateAsync: updateComment } = useUpdate({
+    resource: "submission_artifact_comments"
+  });
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -422,6 +335,217 @@ function ArtifactComment({
   );
 }
 
+function AritfactCheckEntry({
+  artifact,
+  setIsOpen
+}: {
+  artifact: SubmissionArtifact;
+  setIsOpen: (isOpen: boolean) => void;
+}) {
+  const submission = useSubmission();
+  const review = useSubmissionReview();
+  const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
+  const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
+  const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const { mutateAsync: createComment } = useCreate<SubmissionArtifactComment>({
+    resource: "submission_artifact_comments"
+  });
+  useEffect(() => {
+    if (messageInputRef.current) {
+      messageInputRef.current.focus();
+    }
+  }, [selectedCheckOption]);
+  useEffect(() => {
+    if (selectRef.current && !selectedCheckOption) {
+      selectRef.current.focus();
+    }
+  }, [selectedCheckOption, artifact.id]);
+  //Only show criteria that have annotation checks
+  const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) =>
+    criteria.rubric_checks.some((check) => check.is_annotation && check.annotation_target === "artifact")
+  );
+  const criteria: RubricCriteriaSelectGroupOption[] =
+    (criteriaWithAnnotationChecks?.map((criteria) => ({
+      label: criteria.name,
+      value: criteria.id.toString(),
+      criteria: criteria as HydratedRubricCriteria,
+      options: (criteria.rubric_checks.filter((check) => check.is_annotation) as HydratedRubricCheck[]).map((check) => {
+        const option: RubricCheckSelectOption = {
+          label: check.name,
+          value: check.id.toString(),
+          check,
+          criteria: criteria as HydratedRubricCriteria,
+          options: []
+        };
+        if (check.data?.options) {
+          option.options = check.data.options.map((subOption, index) => ({
+            label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
+            comment: subOption.label,
+            index: index.toString(),
+            points: subOption.points,
+            check: option
+          }));
+        }
+        return option;
+      })
+    })) as RubricCriteriaSelectGroupOption[]) || [];
+  criteria.push({
+    label: "Leave a comment",
+    value: "comment",
+    options: [
+      {
+        label: "Leave a comment",
+        value: "comment"
+      }
+    ]
+  });
+  const numChecks = criteria.reduce((acc, curr) => acc + curr.options.length, 0);
+  const components: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
+    GroupHeading: (props) => {
+      return (
+        <chakraComponents.GroupHeading {...props}>
+          {props.data.criteria ? (
+            <>
+              Criteria: {props.data.label} ({props.data.criteria.total_points} points total)
+            </>
+          ) : (
+            <>
+              <Separator />
+            </>
+          )}
+        </chakraComponents.GroupHeading>
+      );
+    },
+    SingleValue: (props) => {
+      const points =
+        props.data.criteria &&
+        props.data.check?.points &&
+        "(" + (props.data.criteria.is_additive ? "+" : "-" + props.data.check?.points?.toString()) + ")";
+      return (
+        <chakraComponents.SingleValue {...props}>
+          {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
+          {props.data.check?.data?.options ? `(Select an option)` : points ? `${points} points` : ""}
+        </chakraComponents.SingleValue>
+      );
+    },
+    Option: (props) => {
+      const points =
+        props.data.criteria &&
+        "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")";
+      return (
+        <chakraComponents.Option {...props}>
+          {props.data.label} {points}
+        </chakraComponents.Option>
+      );
+    }
+  };
+  if (numChecks === 0) {
+    return (
+      <Box>
+        <Text fontSize="sm" color="fg.muted">
+          No checks available for this artifact
+        </Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box
+      bg="bg.subtle"
+      w="lg"
+      p={2}
+      border="1px solid"
+      borderColor="border.emphasized"
+      borderRadius="md"
+      ref={popupRef}
+    >
+      <Box>
+        <Text fontSize="sm" color="fg.muted">
+          Annotate artifact with a check:
+        </Text>
+        <Select
+          ref={selectRef}
+          options={criteria}
+          defaultMenuIsOpen={selectedCheckOption === null}
+          escapeClearsValue={true}
+          components={components}
+          value={selectedCheckOption}
+          onChange={(e: RubricCheckSelectOption | null) => {
+            if (e) {
+              setSelectedCheckOption(e);
+            }
+          }}
+        />
+        {selectedCheckOption && (
+          <>
+            {selectedCheckOption.check?.data?.options && (
+              <Select
+                options={selectedCheckOption.check.data.options.map(
+                  (option, index) =>
+                    ({
+                      label: option.label,
+                      comment: option.label,
+                      value: index.toString(),
+                      index: index.toString(),
+                      points: option.points,
+                      check: selectedCheckOption
+                    }) as RubricCheckSubOptions
+                )}
+                value={selectedSubOption}
+                onChange={(e: RubricCheckSubOptions | null) => {
+                  setSelectedSubOption(e);
+                }}
+              />
+            )}
+            {!selectedSubOption && selectedCheckOption.check && (
+              <Text fontSize="sm" color="fg.muted">
+                {formatPoints(selectedCheckOption.check)}
+              </Text>
+            )}
+            <MessageInput
+              textAreaRef={messageInputRef}
+              enableGiphyPicker={true}
+              placeholder={
+                !selectedCheckOption.check
+                  ? "Add a comment about this line and press enter to submit..."
+                  : selectedCheckOption.check.is_comment_required
+                    ? "Add a comment about this check and press enter to submit..."
+                    : "Optionally add a comment, or just press enter to submit..."
+              }
+              allowEmptyMessage={selectedCheckOption.check && !selectedCheckOption.check.is_comment_required}
+              defaultSingleLine={true}
+              sendMessage={async (message, profile_id) => {
+                let points = selectedCheckOption.check?.points;
+                if (selectedSubOption !== null) {
+                  points = selectedSubOption.points;
+                }
+                let comment = message || "";
+                if (selectedSubOption) {
+                  comment = selectedSubOption.comment + "\n" + comment;
+                }
+                const values = {
+                  comment,
+                  rubric_check_id: selectedCheckOption.check?.id,
+                  class_id: artifact.class_id,
+                  submission_artifact_id: artifact.id,
+                  submission_id: submission.id,
+                  author: profile_id,
+                  released: review ? false : true,
+                  points,
+                  submission_review_id: review?.id
+                };
+                await createComment({ values });
+                setIsOpen(false);
+              }}
+            />
+          </>
+        )}
+      </Box>
+    </Box>
+  );
+}
 function AritfactComments({ artifact }: { artifact: SubmissionArtifact }) {
   const comments = useSubmissionArtifactComments({}).filter(
     (comment) => comment.deleted_at === null && comment.submission_artifact_id === artifact.id
@@ -484,16 +608,6 @@ function AritfactComments({ artifact }: { artifact: SubmissionArtifact }) {
     </Box>
   );
 }
-// type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
-// type RubricOption = {
-//   readonly label: string;
-//   readonly value: string;
-//   readonly points: number;
-//   readonly description?: string;
-//   readonly isOther?: boolean;
-//   readonly rubric_id: number;
-// };
-
 function ArtifactCommentsForm({
   submission,
   artifact,
@@ -524,10 +638,16 @@ function ArtifactCommentsForm({
         submission_review_id: review?.id,
         released: review ? false : true
       };
-      await createComment({ values: values });
-      invalidateQuery({ resource: "submission_artifacts", id: artifact.id, invalidates: ["all"] });
+      await createComment({
+        values: values
+      });
+      invalidateQuery({
+        resource: "submission_artifacts",
+        id: artifact.id,
+        invalidates: ["all"]
+      });
     },
-    [submission, artifact, createComment, invalidateQuery, private_profile_id, review]
+    [submission, artifact, createComment, private_profile_id, invalidateQuery, review]
   );
 
   return (
@@ -540,7 +660,28 @@ function ArtifactCommentsForm({
     />
   );
 }
-
+function ArtifactCheckPopover({ artifact }: { artifact: SubmissionArtifact }) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <PopoverRoot
+      open={isOpen}
+      onOpenChange={(details) => {
+        setIsOpen(details.open);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button variant="subtle" colorPalette="green" w="100%">
+          Add Check
+        </Button>
+      </PopoverTrigger>
+      <PopoverBody>
+        <PopoverContent>
+          <AritfactCheckEntry artifact={artifact} setIsOpen={setIsOpen} />
+        </PopoverContent>
+      </PopoverBody>
+    </PopoverRoot>
+  );
+}
 function ArtifactWithComments({ artifact }: { artifact: SubmissionArtifact }) {
   return (
     <Box borderWidth="1px" borderColor="border.emphasized" borderRadius="md" m={2}>
@@ -570,6 +711,7 @@ function ArtifactWithComments({ artifact }: { artifact: SubmissionArtifact }) {
         </HStack>
       </Box>
       <ArtifactView artifact={artifact} />
+      <ArtifactCheckPopover artifact={artifact} />
       <AritfactComments artifact={artifact} />
     </Box>
   );
@@ -588,8 +730,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         setArtifactData(data.data);
         if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
           try {
-            //TODO fix nested rewriting
-            // Use JSZip to unzip the file
+            //TODO this will NEVER work in safari, we need to just unzip it on a server and serve the files
             const zip = await JSZip.loadAsync(data.data);
             const { rewrittenHTMLFiles, topLevelDir } = await zipToHTMLBlobs(data.data);
             const listener = async (event: MessageEvent) => {
@@ -618,7 +759,13 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
                   })
                 );
                 // Send all file contents to the iframe
-                event.source?.postMessage({ type: "FILE_CONTENTS_RESPONSE", fileContents }, { targetOrigin: "*" });
+                event.source?.postMessage(
+                  {
+                    type: "FILE_CONTENTS_RESPONSE",
+                    fileContents
+                  },
+                  { targetOrigin: "*" }
+                );
               }
             };
             window.addEventListener("message", listener);
@@ -647,14 +794,10 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         cleanup();
       }
     };
-  }, [artifactKey, artifact.data.format, artifact.data.display]);
+  }, [artifactKey, artifact.data?.display, artifact.data?.format]);
   if (artifact.data.format === "png") {
     if (artifactData) {
-      return (
-        <Box position="relative" width="100%" height="400px">
-          <Image src={URL.createObjectURL(artifactData)} alt={artifact.name} fill unoptimized />
-        </Box>
-      );
+      return <img src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
     } else {
       return <Spinner />;
     }

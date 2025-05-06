@@ -5,6 +5,10 @@
     "YmlRubricChecksType": {
       "additionalProperties": false,
       "properties": {
+        "annotation_target": {
+          "enum": ["artifact", "file"],
+          "type": "string"
+        },
         "artifact": {
           "type": "string"
         },

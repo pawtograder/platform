@@ -55,7 +55,8 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
       artifact: valOrUndefined(check.artifact),
       max_annotations: valOrUndefined(check.max_annotations),
       points: check.points,
-      data: valOrUndefined(check.data)
+      data: valOrUndefined(check.data),
+      annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined
     }));
 }
 function valOrUndefined<T>(value: T | null | undefined): T | undefined {
@@ -116,7 +117,8 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
     is_comment_required: check.is_comment_required,
     max_annotations: valOrNull(check.max_annotations),
     points: check.points,
-    is_required: check.is_required
+    is_required: check.is_required,
+    annotation_target: valOrNull(check.annotation_target)
   }));
 }
 function YamlCriteriaToHydratedCriteria(part_id: number, criteria: YmlRubricCriteriaType[]): HydratedRubricCriteria[] {
@@ -184,7 +186,9 @@ function YamlRubricToHydratedRubric(yaml: YmlRubricType): HydratedRubric {
   };
 }
 
-type AssignmentWithRubric = Assignment & { rubrics: HydratedRubric };
+type AssignmentWithRubric = Assignment & {
+  rubrics: HydratedRubric;
+};
 
 function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T): (keyof T)[] {
   return Object.keys(newItem)
@@ -206,7 +210,9 @@ export default function RubricPage() {
   const { query: assignment } = useShow<AssignmentWithRubric>({
     resource: "assignments",
     id: assignment_id as string,
-    meta: { select: "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))" }
+    meta: {
+      select: "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
+    }
   });
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
@@ -235,6 +241,7 @@ export default function RubricPage() {
     });
   }
   const existingRubric = assignment.data?.data.rubrics;
+  const [isSaving, setIsSaving] = useState<boolean>(false);
   const [value, setValue] = useState(existingRubric ? YAML.stringify(HydratedRubricToYamlRubric(existingRubric)) : "");
   const [rubric, setRubric] = useState<HydratedRubric | undefined>(existingRubric);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -254,7 +261,6 @@ export default function RubricPage() {
           setRubric(YamlRubricToHydratedRubric(YAML.parse(value)));
           setError(undefined);
         } catch (error) {
-          console.log(error);
           setError(error instanceof Error ? error.message : "Unknown error");
         }
       }
@@ -300,10 +306,17 @@ export default function RubricPage() {
       if (updatedPropertyNames.length === 0) {
         return;
       }
+      const values = updatedPropertyNames.reduce(
+        (acc, curr) => ({
+          ...acc,
+          [curr]: part[curr]
+        }),
+        {}
+      );
       await updateResource({
         id: part.id,
         resource: "rubric_parts",
-        values: updatedPropertyNames.map((propertyName) => ({ [propertyName]: part[propertyName] }))
+        values
       });
     },
     [updateResource]
@@ -317,9 +330,18 @@ export default function RubricPage() {
       if (updatedPropertyNames.length === 0) {
         return;
       }
-      const values = updatedPropertyNames.reduce((acc, curr) => ({ ...acc, [curr]: criteria[curr] }), {});
-      console.log(values);
-      await updateResource({ id: criteria.id, resource: "rubric_criteria", values });
+      const values = updatedPropertyNames.reduce(
+        (acc, curr) => ({
+          ...acc,
+          [curr]: criteria[curr]
+        }),
+        {}
+      );
+      await updateResource({
+        id: criteria.id,
+        resource: "rubric_criteria",
+        values
+      });
     },
     [updateResource]
   );
@@ -332,182 +354,206 @@ export default function RubricPage() {
       if (updatedPropertyNames.length === 0) {
         return;
       }
-      const values = updatedPropertyNames.reduce((acc, curr) => ({ ...acc, [curr]: check[curr] }), {});
-      await updateResource({ id: check.id, resource: "rubric_checks", values });
+      const values = updatedPropertyNames.reduce(
+        (acc, curr) => ({
+          ...acc,
+          [curr]: check[curr]
+        }),
+        {}
+      );
+      await updateResource({
+        id: check.id,
+        resource: "rubric_checks",
+        values
+      });
     },
     [updateResource]
   );
-  const saveRubric = useCallback(async () => {
-    if (!rubric || !existingRubric) return;
+  const saveRubric = useCallback(
+    async (value: string) => {
+      const rubric = YamlRubricToHydratedRubric(YAML.parse(value));
+      if (!rubric || !existingRubric) return;
+      const findChanges = <T extends { id: number | undefined }>(
+        newItems: T[],
+        existingItems: T[]
+      ): {
+        toCreate: T[];
+        toUpdate: T[];
+        toDelete: number[];
+      } => {
+        const existingIds = new Set(
+          existingItems.map((item) => item.id).filter((id): id is number => id !== undefined)
+        );
+        const newIds = new Set(newItems.map((item) => item.id).filter((id): id is number => id !== undefined));
 
-    const findChanges = <T extends { id: number | undefined }>(
-      newItems: T[],
-      existingItems: T[]
-    ): { toCreate: T[]; toUpdate: T[]; toDelete: number[] } => {
-      const existingIds = new Set(existingItems.map((item) => item.id).filter((id): id is number => id !== undefined));
-      const newIds = new Set(newItems.map((item) => item.id).filter((id): id is number => id !== undefined));
-
-      return {
-        toCreate: newItems.filter((item) => !item.id || !existingIds.has(item.id)),
-        toUpdate: newItems.filter((item) => item.id && existingIds.has(item.id)),
-        toDelete: Array.from(existingIds).filter((id) => !newIds.has(id))
+        return {
+          toCreate: newItems.filter((item) => !item.id || !existingIds.has(item.id)),
+          toUpdate: newItems.filter((item) => item.id && existingIds.has(item.id)),
+          toDelete: Array.from(existingIds).filter((id) => !newIds.has(id))
+        };
       };
-    };
 
-    const partChanges = findChanges(rubric.rubric_parts, existingRubric.rubric_parts);
+      const partChanges = findChanges(rubric.rubric_parts, existingRubric.rubric_parts);
 
-    const allExistingCriteria = existingRubric.rubric_parts.flatMap((part) => part.rubric_criteria);
-    const allNewCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria);
-    const criteriaChanges = findChanges(allNewCriteria, allExistingCriteria);
+      const allExistingCriteria = existingRubric.rubric_parts.flatMap((part) => part.rubric_criteria);
+      const allNewCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria);
+      const criteriaChanges = findChanges(allNewCriteria, allExistingCriteria);
 
-    const allExistingChecks = allExistingCriteria.flatMap((criteria) => criteria.rubric_checks);
-    const allNewChecks = allNewCriteria.flatMap((criteria) => criteria.rubric_checks);
-    const checkChanges = findChanges(allNewChecks, allExistingChecks);
+      const allExistingChecks = allExistingCriteria.flatMap((criteria) => criteria.rubric_checks);
+      const allNewChecks = allNewCriteria.flatMap((criteria) => criteria.rubric_checks);
+      const checkChanges = findChanges(allNewChecks, allExistingChecks);
 
-    await Promise.all(
-      checkChanges.toDelete.map((id) =>
-        deleteResource({
-          id,
-          resource: "rubric_checks",
-          errorNotification: (error) => {
-            toaster.create({
-              title: "Failed to delete check",
-              description: "The check could not be deleted because of an error: " + error,
-              type: "error"
-            });
-            return false;
-          }
-        })
-      )
-    );
-
-    await Promise.all(criteriaChanges.toDelete.map((id) => deleteResource({ id, resource: "rubric_criteria" })));
-
-    await Promise.all(
-      partChanges.toUpdate.map((part) =>
-        updatePartIfChanged(part, existingRubric.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart)
-      )
-    );
-    await Promise.all(partChanges.toDelete.map((id) => deleteResource({ id, resource: "rubric_parts" })));
-    await Promise.all(
-      partChanges.toCreate.map(async (part) => {
-        const partToCreate = {
-          name: part.name,
-          description: part.description,
-          ordinal: part.ordinal,
-          data: part.data,
-          class_id: assignment.data?.data.class_id || 0,
-          rubric_id: assignment.data?.data.rubrics.id || 0
-        };
-        const createdPart = await createResource({ resource: "rubric_parts", values: partToCreate });
-        if (!createdPart.data.id) {
-          throw new Error("Failed to create part");
-        }
-        part.id = createdPart.data.id as number;
-      })
-    );
-
-    //Update the IDs of the criteria
-    rubric.rubric_parts.forEach((part) => {
-      part.rubric_criteria.forEach((criteria) => {
-        criteria.rubric_part_id = part.id;
-        criteria.class_id = part.class_id;
-        criteria.rubric_id = part.rubric_id;
-      });
-    });
-
-    await Promise.all(
-      criteriaChanges.toUpdate.map((criteria) =>
-        updateCriteriaIfChanged(
-          criteria,
-          existingRubric.rubric_parts
-            .find((p) => p.id === criteria.rubric_part_id)
-            ?.rubric_criteria.find((c) => c.id === criteria.id) as HydratedRubricCriteria
+      await Promise.all(
+        checkChanges.toDelete.map((id) =>
+          deleteResource({
+            id,
+            resource: "rubric_checks",
+            errorNotification: (error) => {
+              toaster.create({
+                title: "Failed to delete check",
+                description: "The check could not be deleted because of an error: " + error,
+                type: "error"
+              });
+              return false;
+            }
+          })
         )
-      )
-    );
-    await Promise.all(
-      criteriaChanges.toCreate.map(async (criteria) => {
-        const criteriaToCreate = {
-          name: criteria.name,
-          description: criteria.description,
-          ordinal: criteria.ordinal,
-          data: criteria.data,
-          rubric_part_id: criteria.rubric_part_id,
-          is_additive: criteria.is_additive,
-          total_points: criteria.total_points,
-          max_checks_per_submission: criteria.max_checks_per_submission,
-          min_checks_per_submission: criteria.min_checks_per_submission,
-          class_id: criteria.class_id,
-          rubric_id: criteria.rubric_id
-        };
-        const createdCriteria = await createResource({ resource: "rubric_criteria", values: criteriaToCreate });
-        if (!createdCriteria.data.id) {
-          throw new Error("Failed to create criteria");
-        }
-        criteria.id = createdCriteria.data.id as number;
-      })
-    );
+      );
 
-    //Update the IDs of the checks
-    allNewCriteria.forEach((criteria) => {
-      criteria.rubric_checks.forEach((check) => {
-        check.rubric_criteria_id = criteria.id;
-        check.class_id = assignment.data?.data.class_id || -1;
+      await Promise.all(
+        partChanges.toUpdate.map((part) =>
+          updatePartIfChanged(part, existingRubric.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart)
+        )
+      );
+
+      await Promise.all(
+        partChanges.toCreate.map(async (part) => {
+          const partCopy = { ...part };
+          partCopy.class_id = assignment.data?.data.class_id || 0;
+          partCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (partCopy as any).rubric_criteria = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (partCopy as any).id = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (partCopy as any).created_at = undefined;
+          const createdPart = await createResource({
+            resource: "rubric_parts",
+            values: partCopy
+          });
+          if (!createdPart.data.id) {
+            throw new Error("Failed to create part");
+          }
+          part.id = createdPart.data.id as number;
+        })
+      );
+
+      //Update the IDs of the criteria
+      rubric.rubric_parts.forEach((part) => {
+        part.rubric_criteria.forEach((criteria) => {
+          criteria.rubric_part_id = part.id;
+          criteria.class_id = part.class_id;
+          criteria.rubric_id = part.rubric_id;
+        });
       });
-    });
 
-    await Promise.all(
-      checkChanges.toUpdate.map((check) =>
-        updateCheckIfChanged(check, allExistingChecks.find((c) => c.id === check.id) as HydratedRubricCheck)
-      )
-    );
-    await Promise.all(
-      checkChanges.toCreate.map(async (check) => {
-        const checkToCreate = {
-          name: check.name,
-          description: check.description,
-          ordinal: check.ordinal,
-          data: check.data,
-          rubric_criteria_id: check.rubric_criteria_id,
-          file: check.file,
-          artifact: check.artifact,
-          group: check.group,
-          is_annotation: check.is_annotation,
-          is_comment_required: check.is_comment_required,
-          max_annotations: check.max_annotations,
-          points: check.points,
-          is_required: check.is_required,
-          class_id: check.class_id
-        };
-        const createdCheck = await createResource({ resource: "rubric_checks", values: checkToCreate });
-        if (!createdCheck.data.id) {
-          throw new Error("Failed to create check");
-        }
-        check.id = createdCheck.data.id as number;
-      })
-    );
+      await Promise.all(
+        criteriaChanges.toUpdate.map((criteria) =>
+          updateCriteriaIfChanged(
+            criteria,
+            existingRubric.rubric_parts
+              .find((p) => p.id === criteria.rubric_part_id)
+              ?.rubric_criteria.find((c) => c.id === criteria.id) as HydratedRubricCriteria
+          )
+        )
+      );
+      await Promise.all(
+        criteriaChanges.toCreate.map(async (criteria) => {
+          const criteriaCopy = { ...criteria };
+          criteriaCopy.class_id = assignment.data?.data.class_id || 0;
+          criteriaCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (criteriaCopy as any).id = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (criteriaCopy as any).created_at = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (criteriaCopy as any).rubric_checks = undefined;
+          const createdCriteria = await createResource({
+            resource: "rubric_criteria",
+            values: criteriaCopy
+          });
+          if (!createdCriteria.data.id) {
+            throw new Error("Failed to create criteria");
+          }
+          criteria.id = createdCriteria.data.id as number;
+        })
+      );
 
-    await assignment.refetch();
-    const updatedRubric = assignment.data?.data.rubrics;
-    if (!updatedRubric) {
-      throw new Error("Rubric data not found after refetch.");
-    }
-    setValue(YAML.stringify(HydratedRubricToYamlRubric(updatedRubric)));
-  }, [
-    rubric,
-    existingRubric,
-    createResource,
-    deleteResource,
-    updateCheckIfChanged,
-    updateCriteriaIfChanged,
-    updatePartIfChanged,
-    assignment
-  ]);
+      //Update the IDs of the checks
+      allNewCriteria.forEach((criteria) => {
+        criteria.rubric_checks.forEach((check) => {
+          check.rubric_criteria_id = criteria.id;
+          check.class_id = assignment.data?.data.class_id || -1;
+        });
+      });
+
+      await Promise.all(
+        checkChanges.toUpdate.map((check) =>
+          updateCheckIfChanged(check, allExistingChecks.find((c) => c.id === check.id) as HydratedRubricCheck)
+        )
+      );
+      await Promise.all(
+        checkChanges.toCreate.map(async (check) => {
+          const checkCopy = { ...check };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (checkCopy as any).id = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (checkCopy as any).created_at = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (checkCopy as any).rubric_id = undefined;
+          const createdCheck = await createResource({
+            resource: "rubric_checks",
+            values: checkCopy
+          });
+          if (!createdCheck.data.id) {
+            throw new Error("Failed to create check");
+          }
+          check.id = createdCheck.data.id as number;
+        })
+      );
+
+      await Promise.all(
+        criteriaChanges.toDelete.map((id) =>
+          deleteResource({
+            id,
+            resource: "rubric_criteria"
+          })
+        )
+      );
+      await Promise.all(
+        partChanges.toDelete.map((id) =>
+          deleteResource({
+            id,
+            resource: "rubric_parts"
+          })
+        )
+      );
+    },
+    [
+      existingRubric,
+      assignment.data?.data.class_id,
+      assignment.data?.data.rubrics.id,
+      deleteResource,
+      createResource,
+      updateCriteriaIfChanged,
+      updatePartIfChanged,
+      updateCheckIfChanged
+    ]
+  );
 
   return (
-    <Flex w="100%">
-      <Box w="100%">
+    <Flex w="100%" minW="0">
+      <Box w="100%" minW="0">
         <VStack w="100%">
           <HStack w="100%" mt={2} mb={2} justifyContent="space-between">
             <Toaster />
@@ -538,20 +584,43 @@ export default function RubricPage() {
               </Button>
               <Button
                 colorPalette="green"
+                loading={isSaving}
                 onClick={async () => {
                   try {
-                    await saveRubric();
+                    setIsSaving(true);
+                    await saveRubric(value);
                     toaster.create({
                       title: "Rubric saved",
                       description: "The rubric has been saved successfully",
                       type: "success"
                     });
+                    //Reload the rubric so that we have ID's on newly created items
+                    await assignment.refetch();
+                    if (assignment.data?.data.rubrics) {
+                      setValue(YAML.stringify(HydratedRubricToYamlRubric(assignment.data?.data.rubrics)));
+                    }
                   } catch (error) {
-                    toaster.create({
-                      title: "Failed to save rubric",
-                      description: "The rubric could not be saved because of an error: " + error,
-                      type: "error"
-                    });
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const _error = error as any;
+                    if ("details" in _error && "message" in _error) {
+                      toaster.create({
+                        title: "Failed to save rubric",
+                        description:
+                          "The rubric could not be saved because of an error. Please report this to the developers: " +
+                          _error.message +
+                          " " +
+                          (_error.details || ""),
+                        type: "error"
+                      });
+                    } else {
+                      toaster.create({
+                        title: "Failed to save rubric",
+                        description: "The rubric could not be saved because of an error: " + JSON.stringify(_error),
+                        type: "error"
+                      });
+                    }
+                  } finally {
+                    setIsSaving(false);
                   }
                 }}
               >

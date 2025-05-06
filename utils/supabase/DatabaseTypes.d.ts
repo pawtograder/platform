@@ -477,12 +477,14 @@ export type YmlRubricChecksType = Omit<
   | "file"
   | "max_annotations"
   | "artifact"
+  | "annotation_target"
 > & {
   id?: number;
   description?: string;
   file?: string;
   artifact?: string;
   max_annotations?: number;
+  annotation_target?: "file" | "artifact";
 };
 
 export type AssignmentDueDateException = GetResult<

@@ -21,7 +21,7 @@ import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
-import { ElementContent, Root } from "hast";
+import { Element, ElementContent, Root, RootContent } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { createContext, Dispatch, SetStateAction, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } from "react-icons/fa";
@@ -124,7 +124,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     jsx,
     jsxs,
     components: {
-      // @ts-expect-error - Custom component passed to hast-util-to-jsx-runtime
+      // @ts-expect-error - This is a valid type I guess?
       CodeLineComments: CodeLineComments,
       LineNumber: LineNumber
     }
@@ -135,18 +135,28 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           cursor: "pointer",
           display: "flex",
           flexDirection: "row",
-          "&:hover": { bg: "yellow.subtle", width: "100%", cursor: "cell" }
+          "&:hover": {
+            bg: "yellow.subtle",
+            width: "100%",
+            cursor: "cell"
+          }
         },
-        "& .selected": { bg: "yellow.subtle" }
+        "& .selected": {
+          bg: "yellow.subtle"
+        }
       }
-    : { "& .source-code-line": { display: "flex", flexDirection: "row" } };
+    : {
+        "& .source-code-line": {
+          display: "flex",
+          flexDirection: "row"
+        }
+      };
   return (
     <Box
       border="1px solid"
       borderColor="border.emphasized"
       p={0}
       m={2}
-      minW="4xl"
       w="100%"
       css={{
         ...commentsCSS,
@@ -157,9 +167,14 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           marginRight: "10px",
           borderRight: "1px solid #ccc"
         },
-        "& .source-code-line-container": { width: "100%" },
+        "& .source-code-line-container": {
+          width: "100%"
+        },
         "& .source-code-line-content": {},
-        "& pre": { whiteSpace: "pre-wrap", wordWrap: "break-word" }
+        "& pre": {
+          whiteSpace: "pre-wrap",
+          wordWrap: "break-word"
+        }
       }}
     >
       <Flex
@@ -235,7 +250,12 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
             ev.stopPropagation();
             setLineActionPopup((prev) => {
               prev.onClose?.();
-              return { ...prev, visible: false, onClose: undefined, close: () => {} };
+              return {
+                ...prev,
+                visible: false,
+                onClose: undefined,
+                close: () => {}
+              };
             });
           }}
         >
@@ -257,8 +277,7 @@ export function starryNightGutter(
   setExpanded: Dispatch<SetStateAction<number[]>>,
   setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>
 ) {
-  /** @type {Array<RootContent>} */
-  const replacement = [];
+  const replacement: RootContent[] = [];
   const search = /\r?\n|\r/g;
   let index = -1;
   let start = 0;
@@ -284,12 +303,15 @@ export function starryNightGutter(
 
         // Append text from this text.
         if (match.index > textStart) {
-          line.push({ type: "text", value: child.value.slice(textStart, match.index) });
+          line.push({
+            type: "text",
+            value: child.value.slice(textStart, match.index)
+          });
         }
 
         // Add a line, and the eol.
         lineNumber += 1;
-        // @ts-expect-error - `replacement` type expects RootContent, `createLine` returns Element
+        // @ts-expect-error - This is a valid type I guess?
         replacement.push(createLine(line, lineNumber, setExpanded, setLineActionPopup), {
           type: "text",
           value: match[0]
@@ -316,27 +338,28 @@ export function starryNightGutter(
 
   if (line.length > 0) {
     lineNumber += 1;
-    // @ts-expect-error - `replacement` type expects RootContent, `createLine` returns Element
+    // @ts-expect-error - This is a valid type I guess?
     replacement.push(createLine(line, lineNumber, setExpanded));
   }
 
   // Replace children with new array.
-  // @ts-expect-error - Type mismatch between inferred type of `replacement` and `tree.children`
   tree.children = replacement;
 }
 function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
-  const gradingReview = useSubmissionReview(comment.submission_review_id);
   const commentAuthor = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({ resource: "submission_file_comments" });
+  const { mutateAsync: updateComment } = useUpdate({
+    resource: "submission_file_comments"
+  });
+  const gradingReview = useSubmissionReview(comment.submission_review_id);
 
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
   }
-
   const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
+
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
 
   return (
@@ -417,7 +440,9 @@ function CodeLineComment({
     submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({ resource: "submission_file_comments" });
+  const { mutateAsync: updateComment } = useUpdate({
+    resource: "submission_file_comments"
+  });
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -510,7 +535,11 @@ export type RubricCheckSubOptions = {
   readonly points: number;
   readonly check: RubricCheckSelectOption;
 };
-function formatPoints(option: { check?: HydratedRubricCheck; criteria?: HydratedRubricCriteria; points: number }) {
+export function formatPoints(option: {
+  check?: HydratedRubricCheck;
+  criteria?: HydratedRubricCriteria;
+  points: number;
+}) {
   if (option.check && option.criteria) {
     return `Points: ${option.criteria.is_additive ? "+" : "-"}${option.check.points}`;
   }
@@ -524,11 +553,12 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
   const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const [, setPoints] = useState<string>();
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
 
-  const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({ resource: "submission_file_comments" });
+  const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
+    resource: "submission_file_comments"
+  });
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -548,11 +578,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
     setSelectedCheckOption(null);
   }, [lineNumber]);
   useEffect(() => {
-    if (selectedCheckOption) {
-      if (selectedCheckOption.check) {
-        setPoints(selectedCheckOption.check.points.toString());
-      }
-    }
     if (messageInputRef.current) {
       messageInputRef.current.focus();
     }
@@ -575,7 +600,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
   }
   //Only show criteria that have annotation checks
   const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) =>
-    criteria.rubric_checks.some((check) => check.is_annotation)
+    criteria.rubric_checks.some(
+      (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+    )
   );
   const criteria: RubricCriteriaSelectGroupOption[] =
     (criteriaWithAnnotationChecks?.map((criteria) => ({
@@ -605,7 +632,12 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
   criteria.push({
     label: "Leave a comment",
     value: "comment",
-    options: [{ label: "Leave a comment", value: "comment" }]
+    options: [
+      {
+        label: "Leave a comment",
+        value: "comment"
+      }
+    ]
   });
   const numChecks = criteria.reduce((acc, curr) => acc + curr.options.length, 0);
   if (currentMode === "marking" && numChecks > 1) {
@@ -850,11 +882,13 @@ function createLine(
   line: number,
   setExpanded: Dispatch<SetStateAction<number[]>>,
   setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>
-) {
+): Element {
   return {
     type: "element",
     tagName: "div",
-    properties: { className: "source-code-line-container" },
+    properties: {
+      className: "source-code-line-container"
+    },
     children: [
       {
         type: "element",
@@ -862,6 +896,8 @@ function createLine(
         properties: {
           className: "source-code-line",
           id: `L${line}`,
+
+          //@ts-expect-error - This is a valid type I guess?
           onMouseDown: (ev: MouseEvent) => {
             if (ev.button !== 0) {
               return;
@@ -892,6 +928,7 @@ function createLine(
               };
             });
           },
+          //@ts-expect-error - This is a valid type I guess?
           oncontextmenu: (ev: MouseEvent) => {
             ev.preventDefault();
             ev.stopPropagation();
@@ -928,11 +965,28 @@ function createLine(
           }
         },
         children: [
-          { type: "element", tagName: "LineNumber", properties: { lineNumber: line }, children: [] },
-          { type: "element", tagName: "div", properties: { className: "source-code-line-content" }, children: children }
+          {
+            type: "element",
+            tagName: "LineNumber",
+            properties: { lineNumber: line },
+            children: []
+          },
+          {
+            type: "element",
+            tagName: "div",
+            properties: {
+              className: "source-code-line-content"
+            },
+            children: children
+          }
         ]
       },
-      { type: "element", tagName: "CodeLineComments", properties: { lineNumber: line }, children: [] }
+      {
+        type: "element",
+        tagName: "CodeLineComments",
+        properties: { lineNumber: line },
+        children: []
+      }
     ]
   };
 }
