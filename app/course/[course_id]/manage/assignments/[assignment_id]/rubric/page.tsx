@@ -313,7 +313,6 @@ export default function RubricPage() {
         }),
         {}
       );
-      console.log(values);
       await updateResource({
         id: part.id,
         resource: "rubric_parts",
