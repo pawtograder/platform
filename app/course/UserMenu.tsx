@@ -130,7 +130,7 @@ const DropBoxAvatar = ({
       if (file.type === "image/jpeg" || file.type === "image/png") {
         completeAvatarUpload(file);
       } else {
-        alert("Please upload a valid PDF file.");
+        alert("Please upload a valid JPEG or PNG image file.");
       }
     },
     [completeAvatarUpload]
