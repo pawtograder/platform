@@ -2,11 +2,11 @@
 
 import SubmissionsLayoutWrapper from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/layout";
 import Link from "@/components/ui/link";
-import { Box, Heading } from "@chakra-ui/react";
+import { Box } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 
 export default function GradeLayout({ children }: { children: React.ReactNode }) {
-  const { course_id, assignment_id, submissions_id } = useParams();
+  const { course_id, assignment_id } = useParams();
   return (
     <Box>
       <SubmissionsLayoutWrapper>{children}</SubmissionsLayoutWrapper>

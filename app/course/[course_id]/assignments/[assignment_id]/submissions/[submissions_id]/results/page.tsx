@@ -2,7 +2,7 @@
 import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
-import { GraderResultOutput, GraderResultTest, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
+import { GraderResultOutput, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
 import { Box, CardBody, CardHeader, CardRoot, Container, Heading, Skeleton, Table, Tabs, Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
@@ -40,7 +40,6 @@ function format_result_output(result: { output: string | null | undefined; outpu
 function format_output(output: GraderResultOutput) {
   return format_result_output({ output: output.output, output_format: output.format as "text" | "markdown" });
 }
-function format_test_result_name(result: GraderResultTest) {}
 
 export default function GraderResults() {
   const { submissions_id } = useParams();

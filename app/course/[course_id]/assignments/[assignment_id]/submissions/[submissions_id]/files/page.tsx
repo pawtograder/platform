@@ -10,6 +10,7 @@ import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import PersonAvatar from "@/components/ui/person-avatar";
+import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { CommentActions } from "@/components/ui/rubric-sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -27,7 +28,6 @@ import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
-  Rubric,
   SubmissionArtifact,
   SubmissionArtifactComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
@@ -36,14 +36,10 @@ import {
   Box,
   Button,
   ClientOnly,
-  Editable,
-  Field,
   Flex,
   Heading,
   HStack,
   Icon,
-  IconButton,
-  NumberInput,
   Separator,
   Spinner,
   Table,
@@ -52,18 +48,14 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
-import { useForm } from "@refinedev/react-hook-form";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
-import JSZip, { file } from "jszip";
-import { useParams, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Controller } from "react-hook-form";
-import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
-import { LuCheck, LuPencilLine, LuX } from "react-icons/lu";
-import zipToHTMLBlobs from "./zipToHTMLBlobs";
 import { format } from "date-fns";
-import { PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
-function FilePicker({ curFile, setCurFile }: { curFile: number; setCurFile: (file: number) => void }) {
+import JSZip from "jszip";
+import { useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
+import zipToHTMLBlobs from "./zipToHTMLBlobs";
+function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const comments = useSubmissionFileComments({});
@@ -183,99 +175,23 @@ function ArtifactPicker({ curArtifact }: { curArtifact: number }) {
   );
 }
 
-function RubricItem({ rubric }: { rubric: Rubric }) {
-  const invalidateQuery = useInvalidate();
-  const {
-    register,
-    control,
-    getValues,
-    handleSubmit,
-    refineCore,
-    formState: { errors, isSubmitting, isLoading }
-  } = useForm<Rubric>({
-    refineCoreProps: {
-      action: "edit",
-      resource: "rubrics",
-      id: rubric.id
-    }
-  });
-
-  if (refineCore.query?.isLoading || refineCore.query?.isFetching) {
-    return <Skeleton height="48px" width="full" />;
-  }
-  return (
-    <Box>
-      <form onSubmit={handleSubmit(refineCore.onFinish)}>
-        <Editable.Root
-          {...register("name")}
-          placeholder="Click to enter a comment"
-          submitMode="both"
-          onValueCommit={(details) => {
-            handleSubmit(refineCore.onFinish)();
-          }}
-        >
-          <Editable.Preview minH="48px" alignItems="flex-start" width="full">
-            {getValues("name")}
-          </Editable.Preview>
-          <Editable.Input />
-          <Editable.Control>
-            <Editable.EditTrigger asChild>
-              <IconButton variant="ghost" size="xs">
-                <LuPencilLine />
-              </IconButton>
-            </Editable.EditTrigger>
-            <Editable.CancelTrigger asChild>
-              <IconButton variant="outline" size="xs">
-                <LuX />
-              </IconButton>
-            </Editable.CancelTrigger>
-            <Editable.SubmitTrigger asChild>
-              <IconButton variant="outline" size="xs">
-                <LuCheck />
-              </IconButton>
-            </Editable.SubmitTrigger>
-          </Editable.Control>
-        </Editable.Root>
-        <Field.Root invalid={!!errors.deduction} orientation="horizontal">
-          <Field.Label>Deduction</Field.Label>
-          <Controller
-            name="deduction"
-            control={control}
-            render={({ field }) => (
-              <NumberInput.Root
-                name={field.name}
-                value={field.value}
-                onValueChange={({ value }) => {
-                  field.onChange(value);
-                  handleSubmit(refineCore.onFinish)();
-                }}
-              >
-                <NumberInput.Control />
-                <NumberInput.Input onBlur={field.onBlur} />
-              </NumberInput.Root>
-            )}
-          />
-        </Field.Root>
-      </form>
-    </Box>
-  );
-}
-
 function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
-  if (!rubricCheck || !rubricCriteria) {
-    return <Skeleton height="100px" width="100%" />;
-  }
-  const gradingReview = useSubmissionReview(comment.submission_review_id);
-  const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
-
-  const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
   const commentAuthor = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_artifact_comments"
   });
+  const gradingReview = useSubmissionReview(comment.submission_review_id);
+
+  if (!rubricCheck || !rubricCriteria) {
+    return <Skeleton height="100px" width="100%" />;
+  }
+  const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
+
+  const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
+
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -327,7 +243,7 @@ function ArtifactAnnotation({ comment }: { comment: SubmissionArtifactComment })
                 onClose={() => {
                   setIsEditing(false);
                 }}
-                sendMessage={async (message, profile_id) => {
+                sendMessage={async (message) => {
                   await updateComment({ id: comment.id, values: { comment: message } });
                   setIsEditing(false);
                 }}
@@ -404,7 +320,7 @@ function ArtifactComment({
                 onClose={() => {
                   setIsEditing(false);
                 }}
-                sendMessage={async (message, profile_id) => {
+                sendMessage={async (message) => {
                   await updateComment({ id: comment.id, values: { comment: message } });
                   setIsEditing(false);
                 }}
@@ -432,17 +348,11 @@ function AritfactCheckEntry({
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
   const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const [points, setPoints] = useState<string>();
   const popupRef = useRef<HTMLDivElement>(null);
   const { mutateAsync: createComment } = useCreate<SubmissionArtifactComment>({
     resource: "submission_artifact_comments"
   });
   useEffect(() => {
-    if (selectedCheckOption) {
-      if (selectedCheckOption.check) {
-        setPoints(selectedCheckOption.check.points.toString());
-      }
-    }
     if (messageInputRef.current) {
       messageInputRef.current.focus();
     }
@@ -731,7 +641,6 @@ function ArtifactCommentsForm({
   const invalidateQuery = useInvalidate();
   const { private_profile_id } = useClassProfiles();
   const selectRef = useRef<SelectInstance<RubricOption, false, GroupedRubricOptions>>(null);
-  const pointsRef = useRef<HTMLInputElement>(null);
 
   const postComment = useCallback(
     async (message: string) => {
@@ -826,9 +735,6 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   //Load the artifact data from supabase
   const [artifactData, setArtifactData] = useState<Blob | null>(null);
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
-  const comments = useSubmissionArtifactComments({}).filter(
-    (comment) => comment.deleted_at === null && comment.submission_artifact_id === artifact.id
-  );
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   useEffect(() => {
     let cleanup: (() => void) | undefined = undefined;
@@ -940,16 +846,12 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
 }
 
 export default function FilesView() {
-  const { submissions_id } = useParams();
-  const { role } = useClassProfiles();
-  const isInstructor = role?.role === "instructor";
   const [curFile, setCurFile] = useState<number>(0);
   const [curArtifact, setCurArtifact] = useState<number>(0);
   const [currentView, setCurrentView] = useState<"file" | "artifact">("file");
   const searchParams = useSearchParams();
   const file_id = searchParams.get("file_id");
   const artifact_id = searchParams.get("artifact_id");
-  const line = searchParams.get("line");
   const submission = useSubmission();
   const submissionController = useSubmissionController();
   useEffect(() => {
@@ -976,7 +878,7 @@ export default function FilesView() {
     <Box pt={4} w="100%">
       <Flex w="100%">
         <Box w="100%">
-          <FilePicker curFile={curFile} setCurFile={setCurFile} />
+          <FilePicker curFile={curFile} />
           <ArtifactPicker curArtifact={curArtifact} />
           {currentView === "file" && submission.submission_files[curFile] && (
             <CodeFile file={submission.submission_files[curFile]} />

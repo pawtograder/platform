@@ -269,7 +269,7 @@ export default function RubricPage() {
   );
 
   const handleEditorChange = useCallback(
-    (value: string | undefined, event: any) => {
+    (value: string | undefined) => {
       if (value) {
         setValue(value);
         if (debounceTimeoutRef.current) {
@@ -432,8 +432,11 @@ export default function RubricPage() {
           const partCopy = { ...part };
           partCopy.class_id = assignment.data?.data.class_id || 0;
           partCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (partCopy as any).rubric_criteria = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (partCopy as any).id = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (partCopy as any).created_at = undefined;
           const createdPart = await createResource({
             resource: "rubric_parts",
@@ -470,8 +473,11 @@ export default function RubricPage() {
           const criteriaCopy = { ...criteria };
           criteriaCopy.class_id = assignment.data?.data.class_id || 0;
           criteriaCopy.rubric_id = assignment.data?.data.rubrics.id || 0;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (criteriaCopy as any).id = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (criteriaCopy as any).created_at = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (criteriaCopy as any).rubric_checks = undefined;
           const createdCriteria = await createResource({
             resource: "rubric_criteria",
@@ -500,8 +506,11 @@ export default function RubricPage() {
       await Promise.all(
         checkChanges.toCreate.map(async (check) => {
           const checkCopy = { ...check };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (checkCopy as any).id = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (checkCopy as any).created_at = undefined;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (checkCopy as any).rubric_id = undefined;
           const createdCheck = await createResource({
             resource: "rubric_checks",
@@ -579,8 +588,11 @@ export default function RubricPage() {
                     });
                     //Reload the rubric so that we have ID's on newly created items
                     await assignment.refetch();
-                    setValue(YAML.stringify(HydratedRubricToYamlRubric(assignment.data?.data.rubrics!)));
+                    if (assignment.data?.data.rubrics) {
+                      setValue(YAML.stringify(HydratedRubricToYamlRubric(assignment.data?.data.rubrics)));
+                    }
                   } catch (error) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const _error = error as any;
                     if ("details" in _error && "message" in _error) {
                       toaster.create({

@@ -171,7 +171,7 @@ export function RubricCheckComment({
               setIsEditing(false);
             }}
             sendButtonText="Save"
-            sendMessage={async (message, profile_id) => {
+            sendMessage={async (message) => {
               await updateComment({
                 id: comment.id,
                 values: { comment: message }
@@ -381,7 +381,6 @@ export function RubricCheckGlobal({
       {isEditing && (
         <SubmissionCommentForm
           check={check}
-          criteria={criteria}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
         />
@@ -394,12 +393,10 @@ export function RubricCheckGlobal({
 }
 function SubmissionCommentForm({
   check,
-  criteria,
   selectedOptionIndex,
   linkedArtifactId
 }: {
   check: HydratedRubricCheck;
-  criteria: HydratedRubricCriteria;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
 }) {
@@ -414,14 +411,17 @@ function SubmissionCommentForm({
           ? "submission_file_comments"
           : "submission_comments"
   });
-  if (!submission) {
-    return <></>;
-  }
+
   useEffect(() => {
     if (messageInputRef.current) {
       messageInputRef.current.focus();
     }
   }, []);
+
+  if (!submission) {
+    return <></>;
+  }
+
   const selectedOption = selectedOptionIndex !== undefined ? check.data!.options[selectedOptionIndex] : undefined;
   return (
     <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%" fontSize="sm">

@@ -13,6 +13,7 @@ import {
 import { Box, Flex, Heading, HStack, List, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
+import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
@@ -31,10 +32,12 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
-import { useInvalidate, useList, useSubscription, useUpdate } from "@refinedev/core";
+import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
+import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
   FaCheckCircle,
@@ -45,21 +48,17 @@ import {
   FaRegCheckCircle,
   FaTimesCircle
 } from "react-icons/fa";
-import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
+import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { HiOutlineInformationCircle } from "react-icons/hi";
 import { LuMoon, LuSun } from "react-icons/lu";
-import { TbMathFunction } from "react-icons/tb";
-import { RxQuestionMarkCircled } from "react-icons/rx";
-import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { PiSignOut } from "react-icons/pi";
-import { useState } from "react";
-import { Tooltip } from "@/components/ui/tooltip";
-import AskForHelpButton from "@/components/ui/ask-for-help-button";
-import { CrudFilter } from "@refinedev/core";
+import { RxQuestionMarkCircled } from "react-icons/rx";
+import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
 
 // Create a mapping of icon names to their components
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const iconMap: { [key: string]: any } = {
   FaBell,
   FaCheckCircle,
@@ -389,7 +388,6 @@ function incompleteRubricChecks(
   };
 }
 function CompleteRubricButton() {
-  const submission = useSubmission();
   const review = useSubmissionReview();
   const rubric = useSubmissionRubric();
   const comments = useAllRubricCheckInstances(review?.id);
@@ -421,7 +419,6 @@ function CompleteRubricButton() {
   const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
     resource: "submission_reviews"
   });
-  const review_id = review?.id;
   const { private_profile_id } = useClassProfiles();
   return (
     <Popover.Root>
@@ -602,8 +599,6 @@ function RubricView() {
   const review = useSubmissionReview();
   const showHandGrading = isGraderOrInstructor || review?.released;
   const criteria = submission.assignments.rubrics?.rubric_criteria as HydratedRubricCriteria[];
-  const comments = useAllRubricCheckInstances(review?.id);
-  // rubrics.sort((a, b) => a.name.localeCompare(b.name));
   return (
     <Box
       position="sticky"
