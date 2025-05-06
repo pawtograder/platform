@@ -14,7 +14,6 @@ WITH CHECK (
   (auth.uid() = owner)
 );
 
--- Create policy to allow users to view their own avatars
 CREATE POLICY "Allow users to view their own avatars"
 ON storage.objects
 FOR SELECT
@@ -24,7 +23,6 @@ USING (
   (auth.uid() = owner)
 );
 
--- Create policy to allow users to update their own avatars
 CREATE POLICY "Allow users to update their own avatars"
 ON storage.objects
 FOR UPDATE
@@ -34,7 +32,6 @@ USING (
   (auth.uid() = owner)
 );
 
--- Create policy to allow users to delete their own avatars
 CREATE POLICY "Allow users to delete their own avatars"
 ON storage.objects
 FOR DELETE
@@ -44,7 +41,6 @@ USING (
   (auth.uid() = owner)
 );
 
--- For public read access
 CREATE POLICY "Allow public read access to avatars"
 ON storage.objects
 FOR SELECT
@@ -53,5 +49,7 @@ USING (
   bucket_id = 'avatars'
 );
 
-
-
+CREATE POLICY "Allow users to update only avatar_url of their profiles"
+ON public.profiles
+FOR UPDATE
+TO anon

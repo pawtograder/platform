@@ -13,13 +13,11 @@ import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { FaGithub, FaUnlink, FaQuestionCircle } from "react-icons/fa";
+import { Dispatch, SetStateAction, use, useCallback, useEffect, useState } from "react";
+import { FaGithub, FaUnlink } from "react-icons/fa";
 import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
 import { useDropzone } from 'react-dropzone';
-import { setDefaultAutoSelectFamily } from "net";
-import { imageOptimizer } from "next/dist/server/image-optimizer";
 
 
 
@@ -60,101 +58,54 @@ function SupportMenu()  {
     </Menu.Root>
 }
 
-/**
- * Modal that handles user profile updates, currently only avatar changes.
- */
-const ProfileChangesMenu = ({
+const DropBoxAvatar = ({
+    avatarLink,
+    setAvatarLink,
+    avatarType,
     profile
 } : {
-    profile:UserProfile|null
+    avatarLink: string | null | undefined,
+    setAvatarLink: Dispatch<SetStateAction<string | null | undefined>>,
+    avatarType: string,
+    profile: UserProfile | null
 }) =>{
-    const [avatarLink, setAvatarLink] = useState<string | undefined | null>(null);
     const [isHovered, setIsHovered] = useState<boolean>(false);
     const supabase = createClient();
     const { course_id } = useParams();
-
+    const {user} = useAuthState()
+    
     /**
      * Uploads user image to avatar storage bucket under avatars/[userid]/[courseid]/uuid.extension 
      * @param file jpg or png image file for new avatar
      */
     const completeAvatarUpload = async (file: File) => {
-        if(!profile) {
-            console.log("Profile required to complete avatar upload");
+        if(!profile || !user) {
+            console.log("Profile and active user required to complete avatar upload");
             return;
         }
         const uuid = crypto.randomUUID();
         const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, '_');
         const fileExtension = fileName.split('.').pop();
-        const { data, error } = await supabase.storage.from('avatars').upload(`${profile.id}/${course_id}/${uuid}.${fileExtension}`, file);
+        const { data, error } = await supabase.storage.from('avatars').upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
 
         if(!data || error) {
-            console.log("Error uploading avatar image with error " + error);
+            console.log("Error uploading avatar image with " + error);
         }
         else {
-            setAvatarLink(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${profile.id}/${course_id}/${uuid}.${fileExtension}`);
+            setAvatarLink(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`);
         }
     }
 
-    /**
-     * Handles user file drops to accept only the first png or img file chosen.  Prompts file to be uploaded to storage.
-     */
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    if (!acceptedFiles || acceptedFiles.length === 0) return;
-
-    const file = acceptedFiles[0];
-    if (file.type === 'image/jpeg' || file.type === 'image/png') {
-      completeAvatarUpload(file);
-    } else {
-      alert('Please upload a valid PDF file.');
-    }
-  }, [completeAvatarUpload],)
-
-  /**
-   * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar 
-   * storage bucket.
-   */
-  const updateProfile = async () => {
-    if(!avatarLink || !profile?.id) {
-        return;
-    }
-    /**
-     * TO DO:
-     * - Ensure correct accessibility for avatar images.  Users should be able to view and update these images. Everyone should be able to view 
-     * these images
-     * - Ensure RLS is configured correctly s/t users can update only their avatar_url
-     * - After the user saves their avatar, excess files should be removed from storage 
-     * - Clarify the relationship between public and private profile photos
-     * 
-     * Nice to have: users should be able to rearrange / preview what their photos will look like inside the circle 
-     */
-    //removeUnusedImages();
-    const {data, error} = await supabase.from('profiles').update({avatar_url:avatarLink}).eq("id", profile?.id).single();
-    if(!data || error) {
-        console.log("Error updating user profile");
-    }
-  }
-
-  /**
-   * Removes extra images from storage that may have been populated if the user attempted to open the menu and reselect multiple times.
-   */
-  const removeUnusedImages = async () => {
-    if(!avatarLink || !profile?.id) {
-        return;
-    }
-    // determine from the database 
-    const {data, error} = await supabase.storage.from('avatars').list(`${profile.id}/${course_id}`);
-    if(!data || error) {
-        console.log("failed to find profile photo to update");
-        return;
-    }
-    // transform data to a list of file paths that should be removed from avatars
-    const pathsToRemove = data.filter((image) => (!avatarLink.includes(image.id))).map((imageToRemove) => `${profile.id}/${course_id}/${imageToRemove}.${ imageToRemove.name.split('.').pop()}`);
-    const {data:removeData, error:removeError} = await supabase.storage.from('avatars').remove(pathsToRemove);
-    if(error) {
-        console.log("Error removing extra files: " + error);
-    }
-  }
-
+    const onDrop = useCallback((acceptedFiles: File[]) => {
+        if (!acceptedFiles || acceptedFiles.length === 0) return;
+        const file = acceptedFiles[0];
+        if (file.type === 'image/jpeg' || file.type === 'image/png') {
+          completeAvatarUpload(file);
+        } else {
+          alert('Please upload a valid PDF file.');
+        }
+      }, [completeAvatarUpload],)
+    
     const {    
         acceptedFiles,
         fileRejections,
@@ -168,13 +119,143 @@ const ProfileChangesMenu = ({
       }
   });
 
-  // when profile is changed, change current avatar to match
-  useEffect(() => {
-    if(!profile) {
+
+    return <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px" {...getRootProps()}>
+            <Text fontWeight={"700"}>{avatarType} Avatar</Text>
+            <Box position="relative" width="100px" height="100px" >
+                        <input {...getInputProps()}/>
+                        <Avatar position="absolute" width="100%" height="100%" src={avatarLink || undefined} size="sm"
+                        _hover={
+                            {
+                                    boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
+                                    background: "rgba(0, 0, 0, 0.5)",
+                                    opacity: 0.2,
+                                    zIndex:10
+                        }}
+                        
+                        onMouseEnter={() => setIsHovered(true)}
+                        onMouseLeave={() => setIsHovered(false)}
+                        />
+                        {isHovered && <Flex
+                            position="absolute"
+                            w="100%"
+                            h="100%"
+                            top="0"
+                            alignItems="center"
+                            justifyContent="center"
+                            color="black"
+                            fontWeight={700}
+                            _hover={{
+                                opacity: 1,
+                                zIndex:20
+                            }}
+                            >
+                                <Text textAlign={"center"}>Edit</Text>
+                    </Flex>}
+                    </Box>
+            </Flex>
+
+}
+
+/**
+ * Modal that handles user profile updates, currently only avatar changes.
+ */
+const ProfileChangesMenu = () =>{
+    const [publicAvatarLink, setPublicAvatarLink] = useState<string | undefined | null>(null);
+    const [privateAvatarLink, setPrivateAvatarLink] = useState<string | undefined | null>(null);
+    const [privateProfile, setPrivateProfile] = useState<UserProfile | null>(null);
+    const [publicProfile, setPublicProfile] = useState<UserProfile | null>(null); 
+    const supabase = createClient();  
+    const { course_id } = useParams(); 
+    const { user } = useAuthState();
+
+  /**
+   * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar 
+   * storage bucket.
+   */
+  const updateProfile = async () => {
+    removeUnusedImages();
+    if(publicAvatarLink && publicProfile) {
+        const {data, error} = await supabase.from('profiles').update({avatar_url:publicAvatarLink}).eq("id", publicProfile.id).single();
+        if(!data || error) {
+            console.log("Error updating user public profile");
+        }
+    }
+    if(privateAvatarLink && privateProfile) {
+        const {data, error} = await supabase.from('profiles').update({avatar_url:privateAvatarLink}).eq("id", privateProfile.id).single();
+        if(!data || error) {
+            console.log("Error updating user private profile");
+        }
+    }
+  }
+  /**
+   * Removes extra images from storage that may have been populated if the user attempted to open the menu and reselect multiple times.
+   */
+  const removeUnusedImages = async () => {
+    const {data, error} = await supabase.storage.from('avatars').list(`${user?.id}/${course_id}`);
+    if(!data || error) {
+        console.log("Failed to find profile photo to update");
         return;
     }
-    setAvatarLink(profile.avatar_url);
-  }, [profile]);
+    const pathsToRemove = data.filter((image) => (!publicAvatarLink?.includes(image.id) || !privateAvatarLink?.includes(image.id))).map((imageToRemove) => `${user?.id}/${course_id}/${imageToRemove.name}`);
+    const {error:removeError} = await supabase.storage.from('avatars').remove(pathsToRemove);
+    if(removeError) {
+        console.log("Error removing extra files");
+    }
+  }
+  
+  useEffect(() => {
+    const fetchPrivateProfile = async () => {
+        if (course_id) {
+            const { data, error } = await supabase.from('user_roles').select('profiles!private_profile_id(*), users(*)').
+                eq('user_id', user!.id).eq('class_id', Number(course_id)).single();
+            if (error) {
+                console.error(error)
+            }
+            if (data) {
+                setPrivateProfile(data.profiles!)
+                setPrivateAvatarLink(data.profiles!.avatar_url)
+            }
+        } else {
+            const { data, error } = await supabase.from('user_roles').select('profiles!private_profile_id(*), users(*)').
+                eq('user_id', user!.id).limit(1).single();
+            if (error) {
+                console.error(error)
+            }
+            if (data) {
+                setPrivateProfile(data.profiles!)
+                setPrivateAvatarLink(data.profiles!.avatar_url)
+            }
+        }
+    };
+    fetchPrivateProfile()
+}, [course_id, user])
+    useEffect(() => {
+        const fetchPublicProfile = async () => {
+            if (course_id) {
+                const { data, error } = await supabase.from('user_roles').select('profiles!public_profile_id(*), users(*)').
+                    eq('user_id', user!.id).eq('class_id', Number(course_id)).single();
+                if (error) {
+                    console.error(error)
+                }
+                if (data) {
+                    setPublicProfile(data.profiles!)
+                    setPublicAvatarLink(data.profiles!.avatar_url)
+                }
+            } else {
+                const { data, error } = await supabase.from('user_roles').select('profiles!public_profile_id(*), users(*)').
+                    eq('user_id', user!.id).limit(1).single();
+                if (error) {
+                    console.error(error)
+                }
+                if (data) {
+                    setPublicProfile(data.profiles!)
+                    setPublicAvatarLink(data.profiles!.avatar_url)
+                }
+            }
+        };
+        fetchPublicProfile()
+    }, [course_id, user])
 
 
     return <Dialog.Root size={"md"} placement={"center"}>
@@ -188,41 +269,15 @@ const ProfileChangesMenu = ({
     <Dialog.Positioner >
         <Dialog.Content>
         <Dialog.Header>
-            <Dialog.Title>{profile?.name}</Dialog.Title>
+            <Dialog.Title>Edit {privateProfile?.name}</Dialog.Title>
         </Dialog.Header>
         <Dialog.Body>
-            <Flex alignItems="center" justifyContent={"center"} {...getRootProps()}>
-            <Box position="relative" width="100px" height="100px" >
-                <input {...getInputProps()}/>
-                <Avatar position="absolute" width="100%" height="100%" src={avatarLink || undefined} size="sm" 
-                _hover={
-                    {
-                            boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
-                            background: "rgba(0, 0, 0, 0.5)",
-                            opacity: 0.2,
-                            zIndex:10
-                }}
-                
-                onMouseEnter={() => setIsHovered(true)}
-                onMouseLeave={() => setIsHovered(false)}
-                />
-                {isHovered && <Flex
-                    position="absolute"
-                    w="100%"
-                    h="100%"
-                    top="0"
-                    alignItems="center"
-                    justifyContent="center"
-                    color="black"
-                    fontWeight={700}
-                    _hover={{
-                        opacity: 1,
-                        zIndex:20
-                    }}
-                    >
-                    <Text>Edit Avatar</Text>
-            </Flex>}
-            </Box>
+            <Flex flexDirection={"column"} gap="30px" >
+            <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
+                    <DropBoxAvatar avatarLink={publicAvatarLink} setAvatarLink={setPublicAvatarLink} avatarType="Public" profile={publicProfile}/>
+                <DropBoxAvatar avatarLink={privateAvatarLink} setAvatarLink={setPrivateAvatarLink} avatarType="Private" profile={privateProfile}/>
+            </Flex>
+            <Text fontStyle={"italic"}>Remember, your public avatar will be visible on anonymous posts.</Text>
             </Flex>
         </Dialog.Body>
         <Dialog.Footer>
@@ -349,7 +404,7 @@ function UserSettingsMenu() {
                                     </>
                                     }
                                 </HStack>
-                                <ProfileChangesMenu profile={profile}/>
+                                <ProfileChangesMenu/>
                                 
                                <Button variant="ghost"
                                     pl={0}
