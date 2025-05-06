@@ -356,12 +356,12 @@ function AritfactCheckEntry({
     if (messageInputRef.current) {
       messageInputRef.current.focus();
     }
-  }, [selectedCheckOption, messageInputRef.current]);
+  }, [selectedCheckOption]);
   useEffect(() => {
     if (selectRef.current && !selectedCheckOption) {
       selectRef.current.focus();
     }
-  }, [selectRef.current, selectedCheckOption, artifact.id]);
+  }, [selectedCheckOption, artifact.id]);
   //Only show criteria that have annotation checks
   const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) =>
     criteria.rubric_checks.some((check) => check.is_annotation && check.annotation_target === "artifact")
@@ -608,19 +608,6 @@ function AritfactComments({ artifact }: { artifact: SubmissionArtifact }) {
     </Box>
   );
 }
-type GroupedRubricOptions = {
-  readonly label: string;
-  readonly options: readonly RubricOption[];
-};
-type RubricOption = {
-  readonly label: string;
-  readonly value: string;
-  readonly points: number;
-  readonly description?: string;
-  readonly isOther?: boolean;
-  readonly rubric_id: number;
-};
-
 function ArtifactCommentsForm({
   submission,
   artifact,
@@ -636,11 +623,9 @@ function ArtifactCommentsForm({
   const { mutateAsync: createComment } = useCreate<SubmissionArtifactComment>({
     resource: "submission_artifact_comments"
   });
-  const supabase = createClient();
   const review = useSubmissionReview();
   const invalidateQuery = useInvalidate();
   const { private_profile_id } = useClassProfiles();
-  const selectRef = useRef<SelectInstance<RubricOption, false, GroupedRubricOptions>>(null);
 
   const postComment = useCallback(
     async (message: string) => {
@@ -662,7 +647,7 @@ function ArtifactCommentsForm({
         invalidates: ["all"]
       });
     },
-    [submission, artifact, supabase, createComment, private_profile_id, selectRef]
+    [submission, artifact, createComment, private_profile_id, invalidateQuery, review]
   );
 
   return (
@@ -809,7 +794,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         cleanup();
       }
     };
-  }, [artifactKey]);
+  }, [artifactKey, artifact.data?.display, artifact.data?.format]);
   if (artifact.data.format === "png") {
     if (artifactData) {
       return <img src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
@@ -859,7 +844,7 @@ export default function FilesView() {
       setCurrentView("file");
       setCurFile(submission.submission_files.findIndex((file) => file.id === Number.parseInt(file_id)));
     }
-  }, [file_id]);
+  }, [file_id, submission.submission_files]);
   useEffect(() => {
     if (artifact_id) {
       setCurrentView("artifact");
@@ -867,13 +852,13 @@ export default function FilesView() {
         submission.submission_artifacts.findIndex((artifact) => artifact.id === Number.parseInt(artifact_id))
       );
     }
-  }, [artifact_id]);
+  }, [artifact_id, submission.submission_artifacts]);
   useEffect(() => {
     submissionController.file = submission.submission_files[curFile];
-  }, [curFile]);
+  }, [curFile, submission.submission_files, submissionController]);
   useEffect(() => {
     submissionController.artifact = submission.submission_artifacts[curArtifact] as SubmissionArtifact;
-  }, [curArtifact]);
+  }, [curArtifact, submission.submission_artifacts, submissionController]);
   return (
     <Box pt={4} w="100%">
       <Flex w="100%">

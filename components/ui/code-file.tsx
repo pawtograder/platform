@@ -581,12 +581,12 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
     if (messageInputRef.current) {
       messageInputRef.current.focus();
     }
-  }, [selectedCheckOption, messageInputRef.current]);
+  }, [selectedCheckOption]);
   useEffect(() => {
     if (selectRef.current && !selectedCheckOption) {
       selectRef.current.focus();
     }
-  }, [selectRef.current, selectedCheckOption, lineNumber]);
+  }, [selectedCheckOption, lineNumber]);
   useEffect(() => {
     setCurrentMode(mode);
   }, [mode]);
@@ -896,6 +896,8 @@ function createLine(
         properties: {
           className: "source-code-line",
           id: `L${line}`,
+
+          //@ts-expect-error - This is a valid type I guess?
           onMouseDown: (ev: MouseEvent) => {
             if (ev.button !== 0) {
               return;
@@ -926,6 +928,7 @@ function createLine(
               };
             });
           },
+          //@ts-expect-error - This is a valid type I guess?
           oncontextmenu: (ev: MouseEvent) => {
             ev.preventDefault();
             ev.stopPropagation();

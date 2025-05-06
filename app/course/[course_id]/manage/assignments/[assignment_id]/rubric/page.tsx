@@ -540,7 +540,7 @@ export default function RubricPage() {
         )
       );
     },
-    [existingRubric, assignment.data?.data.class_id, assignment.data?.data.rubrics.id]
+    [existingRubric, assignment.data?.data.class_id, assignment.data?.data.rubrics.id, deleteResource, createResource, updateCriteriaIfChanged, updatePartIfChanged, updateCheckIfChanged]
   );
 
   return (
