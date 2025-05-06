@@ -1,15 +1,16 @@
 import LinkAccount from "@/components/github/link-account";
+import { Alert } from "@/components/ui/alert";
+import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
+import Link from "@/components/ui/link";
+import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import {
-  AssignmentWithRepositoryAndSubmissionsAndGraderResults,
-  AssignmentGroupMember,
   AssignmentGroup,
+  AssignmentGroupMember,
+  AssignmentWithRepositoryAndSubmissionsAndGraderResults,
   Repo
 } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
 import { Container, Heading, Table } from "@chakra-ui/react";
-import Link from "@/components/ui/link";
-import { Alert } from "@/components/ui/alert";
-import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import { PostgrestError } from "@supabase/supabase-js";
 
 // Define the type for the groups query result
@@ -73,8 +74,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       return !hasIndividualRepo;
     });
     if (assignmentsWithoutRepos?.length) {
-      console.log("Creating GitHub repos for student, needs:");
-      console.log(assignmentsWithoutRepos.map((a) => a.title));
+      await autograderCreateReposForStudent(client);
       assignments = await client
         .from("assignments")
         .select("*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))")
