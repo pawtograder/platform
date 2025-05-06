@@ -5,10 +5,10 @@ import { ClientOnly, IconButton, Skeleton } from "@chakra-ui/react";
 import type { ThemeProviderProps } from "next-themes";
 import { ThemeProvider, useTheme } from "next-themes";
 import * as React from "react";
-import { LuMoon, LuSun } from "react-icons/lu";
 import { useEffect } from "react";
+import { LuMoon, LuSun } from "react-icons/lu";
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface ColorModeProviderProps extends ThemeProviderProps {}
+export interface ColorModeProviderProps extends ThemeProviderProps { }
 
 export function ColorModeProvider(props: ColorModeProviderProps) {
   return <ThemeProvider attribute="class" disableTransitionOnChange {...props} />;
@@ -18,10 +18,7 @@ export function ColorModeWatcher() {
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = (e: MediaQueryListEvent) => {
-      const currentTheme = document.documentElement.getAttribute("data-theme");
-      if (!currentTheme) {
-        setColorMode(e.matches ? "dark" : "light");
-      }
+      setColorMode(e.matches ? "dark" : "light");
     };
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
@@ -32,7 +29,8 @@ export function ColorModeWatcher() {
     if (!currentTheme) {
       setColorMode(mediaQuery.matches ? "dark" : "light");
     }
-  }, [setColorMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps This is intentional, if you want to add setColorMode, also make sure that it is indeed possible to change the color mode in the GUI :)
+  }, []);
   return <></>;
 }
 export function useColorMode() {
@@ -53,7 +51,7 @@ export function ColorModeIcon() {
   return colorMode === "light" ? <LuSun /> : <LuMoon />;
 }
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-interface ColorModeButtonProps extends Omit<IconButtonProps, "aria-label"> {}
+interface ColorModeButtonProps extends Omit<IconButtonProps, "aria-label"> { }
 
 export const ColorModeButton = React.forwardRef<HTMLButtonElement, ColorModeButtonProps>(
   function ColorModeButton(props, ref) {
