@@ -11,7 +11,7 @@ export interface State {
 }
 
 export enum DataMessagesActionType {
-  ADD,
+  ADD
 }
 
 export interface AddAction {
@@ -20,7 +20,7 @@ export interface AddAction {
 }
 
 export const initialState: State = {
-  messages: [],
+  messages: []
 };
 
 export type Action = AddAction;
@@ -31,6 +31,6 @@ export function reducer(state: State, action: Action): State {
     case DataMessagesActionType.ADD:
       return { messages: [...state.messages, payload] };
     default:
-      throw new Error('Incorrect action in DataMessagesProvider reducer');
+      throw new Error("Incorrect action in DataMessagesProvider reducer");
   }
 }

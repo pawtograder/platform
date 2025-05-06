@@ -17,77 +17,78 @@ type RequestBody = {
 async function handleRequest(req: Request) {
   const { assignment_id, new_repo, watch_type }: RequestBody = await req.json();
   //Validate that the user is an instructor
-  const supabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    {
-      global: {
-        headers: { Authorization: req.headers.get("Authorization")! },
-      },
-    },
-  );
+  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: {
+      headers: { Authorization: req.headers.get("Authorization")! }
+    }
+  });
 
   const token = req.headers.get("Authorization")!.replace("Bearer ", "");
   const {
-      data: { user },
-      error,
+    data: { user },
+    error
   } = await supabase.auth.getUser(token);
   if (error) {
-      console.error(error);
+    console.error(error);
   }
   if (!user) {
-      throw new SecurityError("User not found");
+    throw new SecurityError("User not found");
   }
 
   // Fetch from supabase
-  const { data: autograder, error: autograder_error } = await supabase.from(
-    "autograder",
-  ).select("*,assignments(*)").eq(
-    "id",
-    assignment_id,
-  ).single();
+  const { data: autograder, error: autograder_error } = await supabase
+    .from("autograder")
+    .select("*,assignments(*)")
+    .eq("id", assignment_id)
+    .single();
   if (autograder_error) {
     console.error(autograder_error);
     throw new UserVisibleError("Autograder not found");
   }
   //Make sure that we are an instructor in this class
-  const { data: roles } = await supabase.from("user_roles").select("*").eq(
-    "role",
-    "instructor",
-  ).eq("class_id", autograder.assignments.class_id!).
-  eq("user_id", user.id).single();
+  const { data: roles } = await supabase
+    .from("user_roles")
+    .select("*")
+    .eq("role", "instructor")
+    .eq("class_id", autograder.assignments.class_id!)
+    .eq("user_id", user.id)
+    .single();
   if (!roles) {
     throw new SecurityError("Unauthorized");
   }
-  if (watch_type === 'template_repo') {
+  if (watch_type === "template_repo") {
     try {
       await updateAutograderWorkflowHash(new_repo);
     } catch (e) {
       console.error(e);
       if (e instanceof Error && e.message.includes("Not Found")) {
         return {
-          message: "Repository not found",
+          message: "Repository not found"
         };
       } else {
         throw e;
       }
     }
-  } else if (watch_type === 'grader_solution') {
+  } else if (watch_type === "grader_solution") {
     // Pull the autograder config from the repo, store to supabase
     console.log("Getting autograder config from repo", new_repo);
     const graderConfig = await getFileFromRepo(new_repo, "pawtograder.yml");
-    const asObj = await parse(graderConfig.content) as Json;
-    const { error } = await supabase.from("autograder").update({
-      config: asObj,
-    }).eq("id", autograder.id).single();
+    const asObj = (await parse(graderConfig.content)) as Json;
+    const { error } = await supabase
+      .from("autograder")
+      .update({
+        config: asObj
+      })
+      .eq("id", autograder.id)
+      .single();
     if (error) {
       return {
-        message: "Error updating autograder config",
+        message: "Error updating autograder config"
       };
     }
   } else {
     return {
-      message: "Webhook already configured",
+      message: "Webhook already configured"
     };
   }
 }

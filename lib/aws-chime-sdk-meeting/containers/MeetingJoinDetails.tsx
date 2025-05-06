@@ -1,8 +1,8 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   PrimaryButton,
   Flex,
@@ -10,18 +10,18 @@ import {
   useMeetingManager,
   Modal,
   ModalBody,
-  ModalHeader,
-} from 'amazon-chime-sdk-component-library-react';
+  ModalHeader
+} from "amazon-chime-sdk-component-library-react";
 
-import routes from '../constants/routes';
-import Card from '../components/Card';
-import { useAppState } from '../providers/AppStateProvider';
+import routes from "../constants/routes";
+import Card from "../components/Card";
+import { useAppState } from "../providers/AppStateProvider";
 
 const MeetingJoinDetails = () => {
   const meetingManager = useMeetingManager();
-  const router = useRouter()
+  const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const { meetingId, localUserName } = useAppState();
 
   const handleJoinMeeting = async () => {
@@ -40,16 +40,13 @@ const MeetingJoinDetails = () => {
   return (
     <>
       <Flex container alignItems="center" flexDirection="column">
-        <PrimaryButton
-          label={isLoading ? 'Loading...' : 'Join meeting'}
-          onClick={handleJoinMeeting}
-        />
-        <Label style={{ margin: '.75rem 0 0 0' }}>
+        <PrimaryButton label={isLoading ? "Loading..." : "Join meeting"} onClick={handleJoinMeeting} />
+        <Label style={{ margin: ".75rem 0 0 0" }}>
           Joining meeting <b>{meetingId}</b> as <b>{localUserName}</b>
         </Label>
       </Flex>
       {error && (
-        <Modal size="md" onClose={(): void => setError('')}>
+        <Modal size="md" onClose={(): void => setError("")}>
           <ModalHeader title={`Meeting ID: ${meetingId}`} />
           <ModalBody>
             <Card

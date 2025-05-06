@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import routes from '../constants/routes';
+import routes from "../constants/routes";
 
 export const BASE_URL = routes.HOME;
 
@@ -37,15 +37,15 @@ export async function createMeetingAndAttendee(
     title: encodeURIComponent(title),
     attendeeName: encodeURIComponent(attendeeName),
     region: encodeURIComponent(region),
-    ns_es: String(echoReductionCapability),
+    ns_es: String(echoReductionCapability)
   };
 
-  const res = await fetch(BASE_URL + 'join', {
-    method: 'POST',
+  const res = await fetch(BASE_URL + "join", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json"
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
   const data = await res.json();
@@ -60,42 +60,43 @@ export async function createMeetingAndAttendee(
 export async function getAttendee(title: string, attendeeId: string): Promise<GetAttendeeResponse> {
   const params = {
     title: encodeURIComponent(title),
-    attendeeId: encodeURIComponent(attendeeId),
+    attendeeId: encodeURIComponent(attendeeId)
   };
 
-  const res = await fetch(BASE_URL + 'attendee?' + new URLSearchParams(params), {
-    method: 'GET',
+  const res = await fetch(BASE_URL + "attendee?" + new URLSearchParams(params), {
+    method: "GET"
   });
 
   if (!res.ok) {
-    throw new Error('Invalid server response');
+    throw new Error("Invalid server response");
   }
 
   const data = await res.json();
 
   return {
-    name: data.Name,
+    name: data.Name
   };
 }
 
 export async function endMeeting(title: string): Promise<void> {
   const body = {
-    title: encodeURIComponent(title),
+    title: encodeURIComponent(title)
   };
 
-  const res = await fetch(BASE_URL + 'end', {
-    method: 'POST',
+  const res = await fetch(BASE_URL + "end", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json"
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
   if (!res.ok) {
-    throw new Error('Server error ending meeting');
+    throw new Error("Server error ending meeting");
   }
 }
 
-export const createGetAttendeeCallback = (meetingId: string) => (
-  chimeAttendeeId: string
-): Promise<GetAttendeeResponse> => getAttendee(meetingId, chimeAttendeeId);
+export const createGetAttendeeCallback =
+  (meetingId: string) =>
+  (chimeAttendeeId: string): Promise<GetAttendeeResponse> =>
+    getAttendee(meetingId, chimeAttendeeId);

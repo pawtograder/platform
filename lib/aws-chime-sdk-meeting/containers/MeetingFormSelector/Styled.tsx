@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import styled from 'styled-components';
+import styled from "styled-components";
 
 export const StyledWrapper = styled.div`
   width: 100%;
@@ -12,7 +12,8 @@ export const StyledWrapper = styled.div`
     min-height: 35.75rem;
     max-width: 30rem;
     border-radius: 0.25rem;
-    box-shadow: 0 0.25rem 0.5rem 0 rgba(0, 0, 0, 0.2),
+    box-shadow:
+      0 0.25rem 0.5rem 0 rgba(0, 0, 0, 0.2),
       0 0.375rem 1.25rem 0 rgba(0, 0, 0, 0.2);
   }
 `;

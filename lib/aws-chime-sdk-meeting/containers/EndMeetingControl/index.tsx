@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
   ControlBarButton,
   Phone,
@@ -10,21 +10,21 @@ import {
   ModalHeader,
   ModalButton,
   ModalButtonGroup,
-  useLogger,
-} from 'amazon-chime-sdk-component-library-react';
+  useLogger
+} from "amazon-chime-sdk-component-library-react";
 
-import { endMeeting } from '../../utils/api';
-import { StyledP } from './Styled';
-import { useAppState } from '../../providers/AppStateProvider';
-import routes from '../../constants/routes';
-import { useRouter } from 'next/navigation';
+import { endMeeting } from "../../utils/api";
+import { StyledP } from "./Styled";
+import { useAppState } from "../../providers/AppStateProvider";
+import routes from "../../constants/routes";
+import { useRouter } from "next/navigation";
 
 const EndMeetingControl: React.FC = () => {
   const logger = useLogger();
   const [showModal, setShowModal] = useState(false);
   const toggleModal = (): void => setShowModal(!showModal);
   const { meetingId } = useAppState();
-  const router = useRouter()
+  const router = useRouter();
 
   const leaveMeeting = async (): Promise<void> => {
     router.push(routes.HOME);
@@ -49,8 +49,7 @@ const EndMeetingControl: React.FC = () => {
           <ModalHeader title="End Meeting" />
           <ModalBody>
             <StyledP>
-              Leave meeting or you can end the meeting for all. The meeting
-              cannot be used once it ends.
+              Leave meeting or you can end the meeting for all. The meeting cannot be used once it ends.
             </StyledP>
           </ModalBody>
           <ModalButtonGroup
@@ -69,7 +68,7 @@ const EndMeetingControl: React.FC = () => {
                 label="Leave Meeting"
                 closesModal
               />,
-              <ModalButton key="cancel-meeting-ending" variant="secondary" label="Cancel" closesModal />,
+              <ModalButton key="cancel-meeting-ending" variant="secondary" label="Cancel" closesModal />
             ]}
           />
         </Modal>

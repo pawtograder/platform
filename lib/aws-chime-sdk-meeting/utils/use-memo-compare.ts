@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
 function useMemoCompare<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

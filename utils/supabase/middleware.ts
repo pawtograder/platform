@@ -8,8 +8,8 @@ export const updateSession = async (request: NextRequest) => {
     // Create an unmodified response
     let response = NextResponse.next({
       request: {
-        headers: request.headers,
-      },
+        headers: request.headers
+      }
     });
 
     const supabase = createServerClient(
@@ -21,18 +21,14 @@ export const updateSession = async (request: NextRequest) => {
             return request.cookies.getAll();
           },
           setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value }) =>
-              request.cookies.set(name, value),
-            );
+            cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
             response = NextResponse.next({
-              request,
+              request
             });
-            cookiesToSet.forEach(({ name, value, options }) =>
-              response.cookies.set(name, value, options),
-            );
-          },
-        },
-      },
+            cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+          }
+        }
+      }
     );
 
     // This will refresh session if expired - required for Server Components
@@ -45,7 +41,7 @@ export const updateSession = async (request: NextRequest) => {
     }
     // const urlError = request.nextUrl.searchParams.get("error");
     // if (urlError && request.nextUrl.pathname !== "/error" && request.nextUrl.pathname !== "/sign-in") {
-      // return NextResponse.redirect(new URL(`/error?${request.nextUrl.searchParams.toString()}`, request.url));
+    // return NextResponse.redirect(new URL(`/error?${request.nextUrl.searchParams.toString()}`, request.url));
     // }
     if (request.nextUrl.pathname === "/" && !user.error) {
       return NextResponse.redirect(new URL("/course", request.url));
@@ -58,8 +54,8 @@ export const updateSession = async (request: NextRequest) => {
     // Check out http://localhost:3000 for Next Steps.
     return NextResponse.next({
       request: {
-        headers: request.headers,
-      },
+        headers: request.headers
+      }
     });
   }
 };
