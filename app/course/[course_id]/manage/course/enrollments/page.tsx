@@ -113,8 +113,7 @@ function EnrollmentsTable() {
     nextPage,
     previousPage,
     setPageSize,
-    getPrePaginationRowModel,
-    refineCore
+    getPrePaginationRowModel
   } = useTable({
     columns,
     initialState: {
@@ -241,9 +240,10 @@ function EnrollmentsTable() {
             />
           </VStack>
           <VStack>
-            <Text>Show</Text>
-            <NativeSelect.Root title="Select page size">
+            <Text id="page-size-label">Show</Text>
+            <NativeSelect.Root>
               <NativeSelect.Field
+                aria-labelledby="page-size-label"
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
                   console.log(event.target.value);

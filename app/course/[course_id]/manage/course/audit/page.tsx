@@ -29,29 +29,50 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
 
-function AuditEventDiff({ oldValue, newValue }: { oldValue: any, newValue: any }) {
-    if (oldValue === true || oldValue === false) {
-        oldValue = oldValue ? "True" : "False";
-    }
-    if (newValue === true || newValue === false) {
-        newValue = newValue ? "True" : "False";
-    }
+type JsonPrimitive = string | number | boolean | null;
 
-    const formatValue = (value: any) => {
-        if (value === null || value === undefined) return "";
-        if (typeof value === 'object') return JSON.stringify(value);
-        return String(value);
-    }
+function AuditEventDiff({
+  oldValue,
+  newValue
+}: {
+  oldValue: JsonPrimitive | undefined;
+  newValue: JsonPrimitive | undefined;
+}) {
+  if (oldValue === true || oldValue === false) {
+    oldValue = oldValue ? "True" : "False";
+  }
+  if (newValue === true || newValue === false) {
+    newValue = newValue ? "True" : "False";
+  }
 
-    if (!oldValue && newValue) {
-        return <Text textStyle="sm" color="text.muted">{formatValue(newValue)}</Text>
-    }
-    if (oldValue && !newValue) {
-        return <Text textStyle="sm" color="text.muted">Removed</Text>
-    }
-    return <Box maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
-        <Text textStyle="sm" color="text.muted">Was: {formatValue(oldValue)}</Text>
-        <Text textStyle="sm" color="text.muted">Now: {formatValue(newValue)}</Text>
+  const formatValue = (value: JsonPrimitive | undefined | object) => {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  };
+
+  if (!oldValue && newValue) {
+    return (
+      <Text textStyle="sm" color="text.muted">
+        {formatValue(newValue)}
+      </Text>
+    );
+  }
+  if (oldValue && !newValue) {
+    return (
+      <Text textStyle="sm" color="text.muted">
+        Removed
+      </Text>
+    );
+  }
+  return (
+    <Box maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+      <Text textStyle="sm" color="text.muted">
+        Was: {formatValue(oldValue)}
+      </Text>
+      <Text textStyle="sm" color="text.muted">
+        Now: {formatValue(newValue)}
+      </Text>
     </Box>
   );
 }
@@ -106,8 +127,8 @@ function JSONDiff({
               <DataList.ItemLabel>{property}</DataList.ItemLabel>
               <DataList.ItemValue>
                 <AuditEventDiff
-                  oldValue={oldValue?.[property] as JsonPrimitive}
-                  newValue={newValue?.[property] as JsonPrimitive}
+                  oldValue={oldValue?.[property] as JsonPrimitive | undefined}
+                  newValue={newValue?.[property] as JsonPrimitive | undefined}
                 />
               </DataList.ItemValue>
             </DataList.Item>
@@ -118,322 +139,331 @@ function JSONDiff({
   );
 }
 function AuditTable() {
-    const { course_id } = useParams();
-    const roster = useList<UserRoleWithPrivateProfileAndUser>(
-        {
-            resource: "user_roles",
-            meta: {
-                select: "*,profiles!private_profile_id(*)"
-            }, filters: [{
-                field: "class_id",
-                operator: "eq",
-                value: course_id as string
-            }]
+  const { course_id } = useParams();
+  const roster = useList<UserRoleWithPrivateProfileAndUser>({
+    resource: "user_roles",
+    meta: {
+      select: "*,profiles!private_profile_id(*)"
+    },
+    filters: [
+      {
+        field: "class_id",
+        operator: "eq",
+        value: course_id as string
+      }
+    ]
+  });
+  const [pageCount, setPageCount] = useState(0);
+
+  const columns = useMemo<ColumnDef<AuditEvent>[]>(
+    () => [
+      {
+        id: "class_id",
+        accessorKey: "class_id",
+        header: "Class ID",
+        enableColumnFilter: true,
+        enableHiding: true,
+        filterFn: (row, id, filterValue) => {
+          return String(row.original.class_id) === String(filterValue);
         }
-    )
-    const [pageCount, setPageCount] = useState(0);
-
-    const columns = useMemo<ColumnDef<AuditEvent>[]>(() => [
-        {
-            id: "class_id",
-            accessorKey: "class_id",
-            header: "Class ID",
-            enableColumnFilter: true,
-            enableHiding: true,
-            filterFn: (row, id, filterValue) => {
-                return String(row.original.class_id) === String(filterValue);
-            }
+      },
+      {
+        id: "created_at",
+        accessorKey: "created_at",
+        header: "Date",
+        enableColumnFilter: true,
+        enableHiding: true,
+        cell: (props) => {
+          return <Text>{new Date(props.getValue() as string).toLocaleString()}</Text>;
         },
-        {
-            id: "created_at",
-            accessorKey: "created_at",
-            header: "Date",
-            enableColumnFilter: true,
-            enableHiding: true,
-            cell: (props) => {
-                return <Text>{new Date(props.getValue() as string).toLocaleString()}</Text>
-            },
-            filterFn: (row, id, filterValue) => {
-                const date = new Date(row.original.created_at);
-                const filterString = String(filterValue);
-                return date.toLocaleString().includes(filterString);
-            }
-        },
-        {
-            id: "user_id",
-            accessorKey: "user_id",
-            header: "Student Name",
-            enableColumnFilter: true,
-            enableHiding: true,
-            cell: (props) => {
-                return <Text>{roster.data?.data.find(r => r.user_id === props.getValue() as string)?.profiles?.name}</Text>
-            },
-            filterFn: (row, id, filterValue) => {
-                const name = roster.data?.data.find(r => r.user_id === row.original.user_id)?.profiles?.name;
-                const filterString = String(filterValue).toLowerCase();
-                return name?.toLocaleLowerCase().includes(filterString) || false;
-            }
-        },
-        {
-            id: "ip_addr",
-            accessorKey: "ip_addr",
-            header: "IP Address",
-            enableColumnFilter: true,
-            enableHiding: true,
-            filterFn: (row, id, filterValue) => {
-                const ip = row.original.ip_addr;
-                if (!ip) return false;
-                const filterString = String(filterValue);
-                return ip.includes(filterString);
-            }
-        },
-        {
-            id: "table",
-            accessorKey: "table",
-            header: "Table",
-            enableColumnFilter: true,
-            enableHiding: true,
-            filterFn: (row, id, filterValue) => {
-                const table = row.original.table;
-                if (!table) return false;
-                const filterString = String(filterValue).toLowerCase();
-                return table.toLowerCase().includes(filterString);
-            }
-        },
-        {id: 'resource_id',
-            accessorKey: 'new.id',
-            header: "Resource ID",
-            enableColumnFilter: true,
-            enableHiding: true,
-            filterFn: (row, id, filterValue) => {
-                let resourceId: string | number | undefined | null = null;
-                if (typeof row.original.new === 'object' && row.original.new !== null && 'id' in row.original.new) {
-                    resourceId = row.original.new.id as string | number | undefined | null;
-                }
-                
-                if (resourceId === null || resourceId === undefined) return false;
-                const filterString = String(filterValue);
-                return String(resourceId).includes(filterString);
-            }
-        },
-        {
-            id: 'old',
-            accessorKey: 'old',
-            header: 'Change',
-            enableColumnFilter: true,
-            enableHiding: true,
-            cell: (props) => {
-                return <JSONDiff
-                    oldValue={props.getValue()}
-                    newValue={props.row.original.new}
-                />
-            }
-        }, {
-            id: 'new',
-            accessorKey: 'new',
-            header: 'New Value',
-            enableColumnFilter: true,
-            enableHiding: true,
+        filterFn: (row, id, filterValue) => {
+          const date = new Date(row.original.created_at);
+          const filterString = String(filterValue);
+          return date.toLocaleString().toLowerCase().includes(filterString.toLowerCase());
         }
-    ], [roster.data?.data]);
-    const {
-        getHeaderGroups,
-        getRowModel,
-        getState,
-        setPageIndex,
-        getCanPreviousPage,
-        getCanNextPage,
-        getRowCount,
-        nextPage,
-        previousPage,
-        setPageSize,
-        getPrePaginationRowModel,
-        refineCore: {
-            tableQuery,
+      },
+      {
+        id: "user_id",
+        accessorKey: "user_id",
+        header: "Student Name",
+        enableColumnFilter: true,
+        enableHiding: true,
+        cell: (props) => {
+          return (
+            <Text>{roster.data?.data.find((r) => r.user_id === (props.getValue() as string))?.profiles?.name}</Text>
+          );
+        },
+        filterFn: (row, id, filterValue) => {
+          const name = roster.data?.data.find((r) => r.user_id === row.original.user_id)?.profiles?.name;
+          const filterString = String(filterValue).toLowerCase();
+          return name?.toLocaleLowerCase().includes(filterString) || false;
         }
-    } = useTable({
-        columns,
-        initialState: {
-            columnFilters: [{ id: "class_id", value: course_id as string }],
-            pagination: {
-                pageIndex: 0,
-                pageSize: 50,
-            },
-            sorting: [{ id: "created_at", desc: true }]
-        },
-        getPaginationRowModel: getPaginationRowModel(),
-        getCoreRowModel: getCoreRowModel(),
-        getFilteredRowModel: getFilteredRowModel(),
-        refineCoreProps: {
-            resource: "audit",
-            pagination: {
-                mode: "off",
-            },
-            filters: {
-                mode: "off",
-            },
-            sorters: {
-                mode: "off",
-            },
-            meta: {
-                select: "*"
-            },
-        },
-        manualPagination: false,
-        manualFiltering: false,
-        manualSorting: false,
-        pageCount,
-        filterFromLeafRows: true,
-    });
+      },
+      {
+        id: "ip_addr",
+        accessorKey: "ip_addr",
+        header: "IP Address",
+        enableColumnFilter: true,
+        enableHiding: true,
+        filterFn: (row, id, filterValue) => {
+          const ip = row.original.ip_addr;
+          if (!ip) return false;
+          const filterString = String(filterValue);
+          return ip.includes(filterString);
+        }
+      },
+      {
+        id: "table",
+        accessorKey: "table",
+        header: "Table",
+        enableColumnFilter: true,
+        enableHiding: true,
+        filterFn: (row, id, filterValue) => {
+          const table = row.original.table;
+          if (!table) return false;
+          const filterString = String(filterValue).toLowerCase();
+          return table.toLowerCase().includes(filterString);
+        }
+      },
+      {
+        id: "resource_id",
+        accessorKey: "new.id",
+        header: "Resource ID",
+        enableColumnFilter: true,
+        enableHiding: true,
+        filterFn: (row, id, filterValue) => {
+          let resourceId: string | number | undefined | null = null;
+          if (typeof row.original.new === "object" && row.original.new !== null && "id" in row.original.new) {
+            resourceId = row.original.new.id as string | number | undefined | null;
+          }
 
-    const nRows = getRowCount();
-    const pageSize = getState().pagination.pageSize;
-    useEffect(() => {
-        setPageCount(Math.ceil(nRows / pageSize));
-    }, [nRows, pageSize]);
+          if (resourceId === null || resourceId === undefined) return false;
+          const filterString = String(filterValue);
+          return String(resourceId).includes(filterString);
+        }
+      },
+      {
+        id: "old",
+        accessorKey: "old",
+        header: "Change",
+        enableColumnFilter: true,
+        enableHiding: true,
+        cell: (props) => {
+          const oldValue = props.getValue();
+          const newValue = props.row.original.new;
+          const isOldObjectOrNull = typeof oldValue === "object" || oldValue === null;
+          const isNewObjectOrNull = typeof newValue === "object" || newValue === null;
 
-    return (<VStack>
-        <VStack paddingBottom="55px">
-            <Table.Root striped>
-                <Table.Header>
-                    {getHeaderGroups().map((headerGroup) => (
-                        <Table.Row bg="bg.subtle" key={headerGroup.id}>
-                            {headerGroup.headers.filter(h => h.id !== "class_id" && h.id !== "new").map((header) => {
-                                return (
-                                    <Table.ColumnHeader key={header.id}>
-                                        {header.isPlaceholder ? null : (
-                                            <>
-                                                <Text onClick={header.column.getToggleSortingHandler()}>
-                                                    {flexRender(
-                                                        header.column.columnDef.header,
-                                                        header.getContext(),
-                                                    )}
-                                                    {{
-                                                        asc: <Icon size="md"><FaSortUp /></Icon>,
-                                                        desc: <Icon size="md"><FaSortDown /></Icon>,
-                                                    }[header.column.getIsSorted() as string] ?? <Icon size="md"><FaSort /></Icon>}
-                                                </Text>
-                                                <Input
-                                                    id={header.id}
-                                                    value={
-                                                        (header.column.getFilterValue() as string) ?? ""
-                                                    }
-                                                    onChange={(e) => {
-                                                        header.column.setFilterValue(e.target.value)
-                                                    }
-                                                    }
-                                                />
-                                            </>
-                                        )}
-                                    </Table.ColumnHeader>
-                                );
-                            })}
-                        </Table.Row>
-                    ))}
-                </Table.Header>
-                <Table.Body>
-                    {getRowModel().rows//.filter(row => row.getValue("profiles.name") !== undefined)
-                        .map((row) => {
-                            return (
-                                <Table.Row key={row.id}>
-                                    {row.getVisibleCells().filter(c => c.column.id !== "class_id" && c.column.id !== "new").map((cell) => {
-                                        return (
-                                            <Table.Cell key={cell.id}>
-                                                {flexRender(
-                                                    cell.column.columnDef.cell,
-                                                    cell.getContext(),
-                                                )}
-                                            </Table.Cell>
-                                        );
-                                    })}
-                                </Table.Row>
-                            );
-                        })}
-                </Table.Body>
-            </Table.Root>
-            <HStack>
-                <Button
-                    onClick={() => setPageIndex(0)}
-                    disabled={!getCanPreviousPage()}
-                >
-                    {"<<"}
-                </Button>
-                <Button
-                    id="previous-button"
-                    onClick={() => previousPage()}
-                    disabled={!getCanPreviousPage()}
-                >
-                    {"<"}
-                </Button>
-                <Button
-                    id="next-button"
-                    onClick={() => nextPage()}
-                    disabled={!getCanNextPage()}
-                >
-                    {">"}
-                </Button>
-                <Button
-                    onClick={() => setPageIndex(pageCount - 1)}
-                    disabled={!getCanNextPage()}
-                >
-                    {">>"}
-                </Button>
-                <VStack>
-                    <Text>Page</Text>
-                    <Text>
-                        {getState().pagination.pageIndex + 1} of {pageCount}
-                    </Text>
-                </VStack>
-                <VStack>
-                    | Go to page:
-                    <input
-                        title="Go to page"
-                        type="number"
-                        defaultValue={getState().pagination.pageIndex + 1}
-                        onChange={(e) => {
-                            const page = e.target.value ? Number(e.target.value) - 1 : 0;
-                            setPageIndex(page);
-                        }}
-                    />
-                </VStack>
-                <VStack>
-                    <Text>Show</Text>
-                    <NativeSelect.Root
-                    >
-                        <NativeSelect.Field
-                            title="Select page size"
-                            value={'' + getState().pagination.pageSize}
-                            onChange={(event) => {
-                                console.log(event.target.value);
-                                setPageSize(Number(event.target.value));
-                            }}>
+          if (isOldObjectOrNull && isNewObjectOrNull) {
+            return (
+              <JSONDiff
+                oldValue={oldValue as Record<string, unknown> | null}
+                newValue={newValue as Record<string, unknown> | null}
+              />
+            );
+          } else {
+            // Handle cases where one or both values are not objects (e.g., primitives directly)
+            // Or provide a different display if needed.
+            return (
+              <Text textStyle="sm" color="text.muted">
+                Change not displayable as object diff
+              </Text>
+            );
+          }
+        }
+      }
+    ],
+    [roster.data?.data]
+  );
+  const {
+    getHeaderGroups,
+    getRowModel,
+    getState,
+    setPageIndex,
+    getCanPreviousPage,
+    getCanNextPage,
+    getRowCount,
+    nextPage,
+    previousPage,
+    setPageSize,
+    getPrePaginationRowModel,
+    refineCore: {}
+  } = useTable({
+    columns,
+    initialState: {
+      columnFilters: [{ id: "class_id", value: course_id as string }],
+      pagination: {
+        pageIndex: 0,
+        pageSize: 50
+      },
+      sorting: [{ id: "created_at", desc: true }]
+    },
+    getPaginationRowModel: getPaginationRowModel(),
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    refineCoreProps: {
+      resource: "audit",
+      pagination: {
+        mode: "off"
+      },
+      filters: {
+        mode: "off"
+      },
+      sorters: {
+        mode: "off"
+      },
+      meta: {
+        select: "*"
+      }
+    },
+    manualPagination: false,
+    manualFiltering: false,
+    manualSorting: false,
+    pageCount,
+    filterFromLeafRows: true
+  });
 
-                            {[25, 50, 100, 200, 500].map((pageSize) => (
-                                <option key={pageSize} value={pageSize}>
-                                    Show {pageSize}
-                                </option>
-                            ))}
-                        </NativeSelect.Field>
-                    </NativeSelect.Root>
-                </VStack>
-            </HStack>
-            <div>{getPrePaginationRowModel().rows.length} Rows</div>
-        </VStack>
-        <Box
-            p="2"
-            border="1px solid"
-            borderColor="border.muted"
-            backgroundColor="bg.subtle"
-            height="55px"
-            style={{
-                position: "fixed",
-                bottom: 0,
-                right: 0,
-                width: "100%",
-            }}>
-            <HStack>
-            </HStack>
-        </Box>
+  const nRows = getRowCount();
+  const pageSize = getState().pagination.pageSize;
+  useEffect(() => {
+    setPageCount(Math.ceil(nRows / pageSize));
+  }, [nRows, pageSize]);
+
+  return (
+    <VStack>
+      <VStack paddingBottom="55px">
+        <Table.Root striped>
+          <Table.Header>
+            {getHeaderGroups().map((headerGroup) => (
+              <Table.Row bg="bg.subtle" key={headerGroup.id}>
+                {headerGroup.headers
+                  .filter((h) => h.id !== "class_id")
+                  .map((header) => {
+                    return (
+                      <Table.ColumnHeader key={header.id}>
+                        {header.isPlaceholder ? null : (
+                          <>
+                            <Text onClick={header.column.getToggleSortingHandler()}>
+                              {flexRender(header.column.columnDef.header, header.getContext())}
+                              {{
+                                asc: (
+                                  <Icon size="md">
+                                    <FaSortUp />
+                                  </Icon>
+                                ),
+                                desc: (
+                                  <Icon size="md">
+                                    <FaSortDown />
+                                  </Icon>
+                                )
+                              }[header.column.getIsSorted() as string] ?? (
+                                <Icon size="md">
+                                  <FaSort />
+                                </Icon>
+                              )}
+                            </Text>
+                            <Input
+                              id={header.id}
+                              value={(header.column.getFilterValue() as string) ?? ""}
+                              onChange={(e) => {
+                                header.column.setFilterValue(e.target.value);
+                              }}
+                            />
+                          </>
+                        )}
+                      </Table.ColumnHeader>
+                    );
+                  })}
+              </Table.Row>
+            ))}
+          </Table.Header>
+          <Table.Body>
+            {getRowModel().rows.map((row) => {
+              return (
+                <Table.Row key={row.id}>
+                  {row
+                    .getVisibleCells()
+                    .filter((c) => c.column.id !== "class_id")
+                    .map((cell) => {
+                      return (
+                        <Table.Cell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </Table.Cell>
+                      );
+                    })}
+                </Table.Row>
+              );
+            })}
+          </Table.Body>
+        </Table.Root>
+        <HStack>
+          <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
+            {"<<"}
+          </Button>
+          <Button id="previous-button" onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
+            {"<"}
+          </Button>
+          <Button id="next-button" onClick={() => nextPage()} disabled={!getCanNextPage()}>
+            {">"}
+          </Button>
+          <Button onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
+            {">>"}
+          </Button>
+          <VStack>
+            <Text>Page</Text>
+            <Text>
+              {getState().pagination.pageIndex + 1} of {pageCount}
+            </Text>
+          </VStack>
+          <VStack>
+            | Go to page:
+            <input
+              title="Go to page"
+              type="number"
+              defaultValue={getState().pagination.pageIndex + 1}
+              onChange={(e) => {
+                const page = e.target.value ? Number(e.target.value) - 1 : 0;
+                setPageIndex(page);
+              }}
+            />
+          </VStack>
+          <VStack>
+            <Text>Show</Text>
+            <NativeSelect.Root>
+              <NativeSelect.Field
+                title="Select page size"
+                value={"" + getState().pagination.pageSize}
+                onChange={(event) => {
+                  console.log(event.target.value);
+                  setPageSize(Number(event.target.value));
+                }}
+              >
+                {[25, 50, 100, 200, 500].map((pageSize) => (
+                  <option key={pageSize} value={pageSize}>
+                    Show {pageSize}
+                  </option>
+                ))}
+              </NativeSelect.Field>
+            </NativeSelect.Root>
+          </VStack>
+        </HStack>
+        <div>{getPrePaginationRowModel().rows.length} Rows</div>
+      </VStack>
+      <Box
+        p="2"
+        border="1px solid"
+        borderColor="border.muted"
+        backgroundColor="bg.subtle"
+        height="55px"
+        style={{
+          position: "fixed",
+          bottom: 0,
+          right: 0,
+          width: "100%"
+        }}
+      >
+        <HStack></HStack>
+      </Box>
     </VStack>
   );
 }
