@@ -1,7 +1,21 @@
 "use client";
 
 import { SkeletonCircle } from "@/components/ui/skeleton";
-import { Box, Button, CloseButton, Dialog, Drawer, Flex, HStack, Icon, IconButton, Menu, Portal, Text, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  CloseButton,
+  Dialog,
+  Drawer,
+  Flex,
+  HStack,
+  Icon,
+  IconButton,
+  Menu,
+  Portal,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
 
@@ -13,13 +27,11 @@ import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
-import { Dispatch, SetStateAction, use, useCallback, useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useCallback, useEffect, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
-import { useDropzone } from 'react-dropzone';
-
-
+import { useDropzone } from "react-dropzone";
 
 function SupportMenu() {
   return (
@@ -71,241 +83,281 @@ function SupportMenu() {
 }
 
 const DropBoxAvatar = ({
-    avatarLink,
-    setAvatarLink,
-    avatarType,
-    profile
-} : {
-    avatarLink: string | null | undefined,
-    setAvatarLink: Dispatch<SetStateAction<string | null | undefined>>,
-    avatarType: string,
-    profile: UserProfile | null
-}) =>{
-    const [isHovered, setIsHovered] = useState<boolean>(false);
-    const supabase = createClient();
-    const { course_id } = useParams();
-    const {user} = useAuthState()
-    
-    /**
-     * Uploads user image to avatar storage bucket under avatars/[userid]/[courseid]/uuid.extension 
-     * @param file jpg or png image file for new avatar
-     */
-    const completeAvatarUpload = async (file: File) => {
-        if(!profile || !user) {
-            console.log("Profile and active user required to complete avatar upload");
-            return;
-        }
-        const uuid = crypto.randomUUID();
-        const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, '_');
-        const fileExtension = fileName.split('.').pop();
-        const { data, error } = await supabase.storage.from('avatars').upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
+  avatarLink,
+  setAvatarLink,
+  avatarType,
+  profile
+}: {
+  avatarLink: string | null | undefined;
+  setAvatarLink: Dispatch<SetStateAction<string | null | undefined>>;
+  avatarType: string;
+  profile: UserProfile | null;
+}) => {
+  const [isHovered, setIsHovered] = useState<boolean>(false);
+  const supabase = createClient();
+  const { course_id } = useParams();
+  const { user } = useAuthState();
 
-        if(!data || error) {
-            console.log("Error uploading avatar image with " + error);
-        }
-        else {
-            setAvatarLink(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`);
-        }
+  /**
+   * Uploads user image to avatar storage bucket under avatars/[userid]/[courseid]/uuid.extension
+   * @param file jpg or png image file for new avatar
+   */
+  const completeAvatarUpload = async (file: File) => {
+    if (!profile || !user) {
+      console.log("Profile and active user required to complete avatar upload");
+      return;
     }
+    const uuid = crypto.randomUUID();
+    const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
+    const fileExtension = fileName.split(".").pop();
+    const { data, error } = await supabase.storage
+      .from("avatars")
+      .upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
 
-    const onDrop = useCallback((acceptedFiles: File[]) => {
-        if (!acceptedFiles || acceptedFiles.length === 0) return;
-        const file = acceptedFiles[0];
-        if (file.type === 'image/jpeg' || file.type === 'image/png') {
-          completeAvatarUpload(file);
-        } else {
-          alert('Please upload a valid PDF file.');
-        }
-      }, [completeAvatarUpload],)
-    
-    const {    
-        acceptedFiles,
-        fileRejections,
-        getRootProps,
-        getInputProps
-     } = useDropzone({
-        onDrop,
-    accept: {
-        'image/jpeg': [],
-        'image/png': []
+    if (!data || error) {
+      console.log("Error uploading avatar image with " + error);
+    } else {
+      setAvatarLink(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
+      );
+    }
+  };
+
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      if (!acceptedFiles || acceptedFiles.length === 0) return;
+      const file = acceptedFiles[0];
+      if (file.type === "image/jpeg" || file.type === "image/png") {
+        completeAvatarUpload(file);
+      } else {
+        alert("Please upload a valid PDF file.");
       }
+    },
+    [completeAvatarUpload]
+  );
+
+  const { getRootProps, getInputProps } = useDropzone({
+    onDrop,
+    accept: {
+      "image/jpeg": [],
+      "image/png": []
+    }
   });
 
-
-    return <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px" {...getRootProps()}>
-            <Text fontWeight={"700"}>{avatarType} Avatar</Text>
-            <Box position="relative" width="100px" height="100px" >
-                        <input {...getInputProps()}/>
-                        <Avatar position="absolute" width="100%" height="100%" src={avatarLink || undefined} size="sm"
-                        _hover={
-                            {
-                                    boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
-                                    background: "rgba(0, 0, 0, 0.5)",
-                                    opacity: 0.2,
-                                    zIndex:10
-                        }}
-                        
-                        onMouseEnter={() => setIsHovered(true)}
-                        onMouseLeave={() => setIsHovered(false)}
-                        />
-                        {isHovered && <Flex
-                            position="absolute"
-                            w="100%"
-                            h="100%"
-                            top="0"
-                            alignItems="center"
-                            justifyContent="center"
-                            color="black"
-                            fontWeight={700}
-                            _hover={{
-                                opacity: 1,
-                                zIndex:20
-                            }}
-                            >
-                                <Text textAlign={"center"}>Edit</Text>
-                    </Flex>}
-                    </Box>
-            </Flex>
-
-}
+  return (
+    <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px" {...getRootProps()}>
+      <Text fontWeight={"700"}>{avatarType} Avatar</Text>
+      <Box position="relative" width="100px" height="100px">
+        <input {...getInputProps()} />
+        <Avatar
+          position="absolute"
+          width="100%"
+          height="100%"
+          src={avatarLink || undefined}
+          size="sm"
+          _hover={{
+            boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
+            background: "rgba(0, 0, 0, 0.5)",
+            opacity: 0.2,
+            zIndex: 10
+          }}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+        />
+        {isHovered && (
+          <Flex
+            position="absolute"
+            w="100%"
+            h="100%"
+            top="0"
+            alignItems="center"
+            justifyContent="center"
+            color="black"
+            fontWeight={700}
+            _hover={{
+              opacity: 1,
+              zIndex: 20
+            }}
+          >
+            <Text textAlign={"center"}>Edit</Text>
+          </Flex>
+        )}
+      </Box>
+    </Flex>
+  );
+};
 
 /**
  * Modal that handles user profile updates, currently only avatar changes.
  */
-const ProfileChangesMenu = () =>{
-    const [publicAvatarLink, setPublicAvatarLink] = useState<string | undefined | null>(null);
-    const [privateAvatarLink, setPrivateAvatarLink] = useState<string | undefined | null>(null);
-    const [privateProfile, setPrivateProfile] = useState<UserProfile | null>(null);
-    const [publicProfile, setPublicProfile] = useState<UserProfile | null>(null); 
-    const supabase = createClient();  
-    const { course_id } = useParams(); 
-    const { user } = useAuthState();
+const ProfileChangesMenu = () => {
+  const [publicAvatarLink, setPublicAvatarLink] = useState<string | undefined | null>(null);
+  const [privateAvatarLink, setPrivateAvatarLink] = useState<string | undefined | null>(null);
+  const [privateProfile, setPrivateProfile] = useState<UserProfile | null>(null);
+  const [publicProfile, setPublicProfile] = useState<UserProfile | null>(null);
+  const supabase = createClient();
+  const { course_id } = useParams();
+  const { user } = useAuthState();
 
   /**
-   * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar 
+   * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar
    * storage bucket.
    */
   const updateProfile = async () => {
     removeUnusedImages();
-    if(publicAvatarLink && publicProfile) {
-        const {data, error} = await supabase.from('profiles').update({avatar_url:publicAvatarLink}).eq("id", publicProfile.id).single();
-        if(error) {
-            console.log("Error updating user public profile");
-        }
+    if (publicAvatarLink && publicProfile) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ avatar_url: publicAvatarLink })
+        .eq("id", publicProfile.id)
+        .single();
+      if (error) {
+        console.log("Error updating user public profile");
+      }
     }
-    if(privateAvatarLink && privateProfile) {
-        const {data, error} = await supabase.from('profiles').update({avatar_url:privateAvatarLink}).eq("id", privateProfile.id).single();
-        if(error) {
-            console.log("Error updating user private profile");
-        }
+    if (privateAvatarLink && privateProfile) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ avatar_url: privateAvatarLink })
+        .eq("id", privateProfile.id)
+        .single();
+      if (error) {
+        console.log("Error updating user private profile");
+      }
     }
-  }
+  };
   /**
    * Removes extra images from storage that may have been populated if the user attempted to open the menu and reselect multiple times.
    */
   const removeUnusedImages = async () => {
-    const {data, error} = await supabase.storage.from('avatars').list(`${user?.id}/${course_id}`);
-    if(!data || error) {
-        console.log("Failed to find profile photo to update");
-        return;
+    const { data, error } = await supabase.storage.from("avatars").list(`${user?.id}/${course_id}`);
+    if (!data || error) {
+      console.log("Failed to find profile photo to update");
+      return;
     }
-    const pathsToRemove = data.filter((image) => (!publicAvatarLink?.includes(image.id) || !privateAvatarLink?.includes(image.id))).map((imageToRemove) => `${user?.id}/${course_id}/${imageToRemove.name}`);
-    const {error:removeError} = await supabase.storage.from('avatars').remove(pathsToRemove);
-    if(removeError) {
-        console.log("Error removing extra files");
+    const pathsToRemove = data
+      .filter((image) => !publicAvatarLink?.includes(image.id) || !privateAvatarLink?.includes(image.id))
+      .map((imageToRemove) => `${user?.id}/${course_id}/${imageToRemove.name}`);
+    const { error: removeError } = await supabase.storage.from("avatars").remove(pathsToRemove);
+    if (removeError) {
+      console.log("Error removing extra files");
     }
-  }
-  
+  };
+
   useEffect(() => {
     const fetchPrivateProfile = async () => {
-        if (course_id) {
-            const { data, error } = await supabase.from('user_roles').select('profiles!private_profile_id(*), users(*)').
-                eq('user_id', user!.id).eq('class_id', Number(course_id)).single();
-            if (error) {
-                console.error(error)
-            }
-            if (data) {
-                setPrivateProfile(data.profiles!)
-                setPrivateAvatarLink(data.profiles!.avatar_url)
-            }
-        } else {
-            const { data, error } = await supabase.from('user_roles').select('profiles!private_profile_id(*), users(*)').
-                eq('user_id', user!.id).limit(1).single();
-            if (error) {
-                console.error(error)
-            }
-            if (data) {
-                setPrivateProfile(data.profiles!)
-                setPrivateAvatarLink(data.profiles!.avatar_url)
-            }
+      if (course_id) {
+        const { data, error } = await supabase
+          .from("user_roles")
+          .select("profiles!private_profile_id(*), users(*)")
+          .eq("user_id", user!.id)
+          .eq("class_id", Number(course_id))
+          .single();
+        if (error) {
+          console.error(error);
         }
+        if (data) {
+          setPrivateProfile(data.profiles!);
+          setPrivateAvatarLink(data.profiles!.avatar_url);
+        }
+      } else {
+        const { data, error } = await supabase
+          .from("user_roles")
+          .select("profiles!private_profile_id(*), users(*)")
+          .eq("user_id", user!.id)
+          .limit(1)
+          .single();
+        if (error) {
+          console.error(error);
+        }
+        if (data) {
+          setPrivateProfile(data.profiles!);
+          setPrivateAvatarLink(data.profiles!.avatar_url);
+        }
+      }
     };
-    fetchPrivateProfile()
-}, [course_id, user])
-    useEffect(() => {
-        const fetchPublicProfile = async () => {
-            if (course_id) {
-                const { data, error } = await supabase.from('user_roles').select('profiles!public_profile_id(*), users(*)').
-                    eq('user_id', user!.id).eq('class_id', Number(course_id)).single();
-                if (error) {
-                    console.error(error)
-                }
-                if (data) {
-                    setPublicProfile(data.profiles!)
-                    setPublicAvatarLink(data.profiles!.avatar_url)
-                }
-            } else {
-                const { data, error } = await supabase.from('user_roles').select('profiles!public_profile_id(*), users(*)').
-                    eq('user_id', user!.id).limit(1).single();
-                if (error) {
-                    console.error(error)
-                }
-                if (data) {
-                    setPublicProfile(data.profiles!)
-                    setPublicAvatarLink(data.profiles!.avatar_url)
-                }
-            }
-        };
-        fetchPublicProfile()
-    }, [course_id, user])
+    fetchPrivateProfile();
+  }, [course_id, user]);
+  useEffect(() => {
+    const fetchPublicProfile = async () => {
+      if (course_id) {
+        const { data, error } = await supabase
+          .from("user_roles")
+          .select("profiles!public_profile_id(*), users(*)")
+          .eq("user_id", user!.id)
+          .eq("class_id", Number(course_id))
+          .single();
+        if (error) {
+          console.error(error);
+        }
+        if (data) {
+          setPublicProfile(data.profiles!);
+          setPublicAvatarLink(data.profiles!.avatar_url);
+        }
+      } else {
+        const { data, error } = await supabase
+          .from("user_roles")
+          .select("profiles!public_profile_id(*), users(*)")
+          .eq("user_id", user!.id)
+          .limit(1)
+          .single();
+        if (error) {
+          console.error(error);
+        }
+        if (data) {
+          setPublicProfile(data.profiles!);
+          setPublicAvatarLink(data.profiles!.avatar_url);
+        }
+      }
+    };
+    fetchPublicProfile();
+  }, [course_id, user]);
 
-
-    return <Dialog.Root size={"md"} placement={"center"}>
-    <Dialog.Trigger asChild>
-    <Button>
-        Edit Profile
-    </Button>
-    </Dialog.Trigger>
-    <Portal>
-    <Dialog.Backdrop />
-    <Dialog.Positioner >
-        <Dialog.Content>
-        <Dialog.Header>
-            <Dialog.Title>Edit {privateProfile?.name}</Dialog.Title>
-        </Dialog.Header>
-        <Dialog.Body>
-            <Flex flexDirection={"column"} gap="30px" >
-            <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
-                    <DropBoxAvatar avatarLink={publicAvatarLink} setAvatarLink={setPublicAvatarLink} avatarType="Public" profile={publicProfile}/>
-                <DropBoxAvatar avatarLink={privateAvatarLink} setAvatarLink={setPrivateAvatarLink} avatarType="Private" profile={privateProfile}/>
-            </Flex>
-            <Text fontStyle={"italic"}>Remember, your public avatar will be visible on anonymous posts.</Text>
-            </Flex>
-        </Dialog.Body>
-        <Dialog.Footer>
-            <Dialog.ActionTrigger asChild>
-            <Button variant="outline">Cancel</Button>
-            </Dialog.ActionTrigger>
-            <Dialog.ActionTrigger asChild>
+  return (
+    <Dialog.Root size={"md"} placement={"center"}>
+      <Dialog.Trigger asChild>
+        <Button>Edit Profile</Button>
+      </Dialog.Trigger>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content>
+            <Dialog.Header>
+              <Dialog.Title>Edit {privateProfile?.name}</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <Flex flexDirection={"column"} gap="30px">
+                <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
+                  <DropBoxAvatar
+                    avatarLink={publicAvatarLink}
+                    setAvatarLink={setPublicAvatarLink}
+                    avatarType="Public"
+                    profile={publicProfile}
+                  />
+                  <DropBoxAvatar
+                    avatarLink={privateAvatarLink}
+                    setAvatarLink={setPrivateAvatarLink}
+                    avatarType="Private"
+                    profile={privateProfile}
+                  />
+                </Flex>
+                <Text fontStyle={"italic"}>Remember, your public avatar will be visible on anonymous posts.</Text>
+              </Flex>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline">Cancel</Button>
+              </Dialog.ActionTrigger>
+              <Dialog.ActionTrigger asChild>
                 <Button onClick={updateProfile}>Save</Button>
-            </Dialog.ActionTrigger>
-        </Dialog.Footer>
-        </Dialog.Content>
-    </Dialog.Positioner>
-    </Portal>
-</Dialog.Root>
-}
-
+              </Dialog.ActionTrigger>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
+  );
+};
 
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
@@ -423,7 +475,7 @@ function UserSettingsMenu() {
                     </>
                   )}
                 </HStack>
-                <ProfileChangesMenu/>
+                <ProfileChangesMenu />
                 <Button
                   variant="ghost"
                   pl={0}
