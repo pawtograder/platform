@@ -29,9 +29,9 @@ export function ColorModeWatcher() {
     if (!currentTheme) {
       setColorMode(mediaQuery.matches ? "dark" : "light");
     }
-    // This is intentional: if you want to add setColorMode, also make sure that it is indeed possible to change the color mode in the GUI :)
+    // This is intentional, if you want to add setColorMode, also make sure that it is indeed possible to change the color mode in the GUI :)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
+  }, []);
   return <></>;
 }
 export function useColorMode() {
