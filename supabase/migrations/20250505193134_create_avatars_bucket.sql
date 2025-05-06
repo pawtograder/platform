@@ -1,10 +1,6 @@
--- Create avatars bucket
 INSERT INTO storage.buckets (id, name, public, avif_autodetection)
 VALUES ('avatars', 'avatars', true, false);
--- Set bucket to public for this example
--- For production, consider setting this to false and using policies for access control
 
--- Create policy to allow authenticated users to upload files
 CREATE POLICY "Allow authenticated users to upload avatars"
 ON storage.objects
 FOR INSERT
@@ -49,7 +45,10 @@ USING (
   bucket_id = 'avatars'
 );
 
-CREATE POLICY "Allow users to update only avatar_url of their profiles"
+CREATE POLICY "Allow users to update their profiles" 
 ON public.profiles
 FOR UPDATE
-TO anon
+TO authenticated 
+USING (
+  authorizeforprofile(id)
+);

@@ -177,13 +177,13 @@ const ProfileChangesMenu = () =>{
     removeUnusedImages();
     if(publicAvatarLink && publicProfile) {
         const {data, error} = await supabase.from('profiles').update({avatar_url:publicAvatarLink}).eq("id", publicProfile.id).single();
-        if(!data || error) {
+        if(error) {
             console.log("Error updating user public profile");
         }
     }
     if(privateAvatarLink && privateProfile) {
         const {data, error} = await supabase.from('profiles').update({avatar_url:privateAvatarLink}).eq("id", privateProfile.id).single();
-        if(!data || error) {
+        if(error) {
             console.log("Error updating user private profile");
         }
     }
@@ -332,7 +332,7 @@ function UserSettingsMenu() {
             }
         };
         fetchProfile()
-    }, [course_id, user])
+    }, [course_id, user, profile])
 
     const unlinkGitHub = useCallback(async () => {
         const identities = await supabase.auth.getUserIdentities()
