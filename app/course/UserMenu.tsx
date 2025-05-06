@@ -404,7 +404,7 @@ function UserSettingsMenu() {
       }
     };
     fetchProfile();
-  }, [course_id, user, supabase, profile]);
+  }, [course_id, user, supabase]);
 
   const unlinkGitHub = useCallback(async () => {
     const identities = await supabase.auth.getUserIdentities();
