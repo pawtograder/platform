@@ -15,13 +15,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
-import {
-  ColumnDef,
-  flexRender,
-  getPaginationRowModel,
-  getCoreRowModel,
-  getFilteredRowModel
-} from "@tanstack/react-table";
+import { ColumnDef, flexRender } from "@tanstack/react-table";
 
 import { useParams } from "next/navigation";
 import { useMemo, useState, useEffect } from "react";
@@ -115,7 +109,6 @@ function EnrollmentsTable() {
     getState,
     setPageIndex,
     getCanPreviousPage,
-    getPageCount,
     getCanNextPage,
     nextPage,
     previousPage,
@@ -125,22 +118,33 @@ function EnrollmentsTable() {
     columns,
     initialState: {
       columnFilters: [{ id: "class_id", value: course_id as string }],
-      pagination: { pageIndex: 0, pageSize: 50 }
+      pagination: {
+        pageIndex: 0,
+        pageSize: 50
+      }
+    },
+    refineCoreProps: {
+      resource: "user_roles",
+      filters: {
+        mode: "off"
+      },
+      sorters: {
+        mode: "off"
+      },
+      pagination: {
+        mode: "off"
+      },
+      meta: {
+        select: "*,profiles!private_profile_id(*), users(*)"
+      }
     },
     manualPagination: false,
     manualFiltering: false,
-    getPaginationRowModel: getPaginationRowModel(),
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
+    manualSorting: false,
     pageCount,
-    refineCoreProps: {
-      resource: "user_roles",
-      filters: { mode: "off" },
-      pagination: { mode: "off" },
-      meta: { select: "*,profiles!private_profile_id(*), users(*)" }
-    },
     filterFromLeafRows: true
   });
+
   const nRows = getRowCount();
   const pageSize = getState().pagination.pageSize;
   useEffect(() => {
@@ -163,7 +167,10 @@ function EnrollmentsTable() {
                           <>
                             <Text onClick={header.column.getToggleSortingHandler()}>
                               {flexRender(header.column.columnDef.header, header.getContext())}
-                              {{ asc: " 🔼", desc: " 🔽" }[header.column.getIsSorted() as string] ?? null}
+                              {{
+                                asc: " 🔼",
+                                desc: " 🔽"
+                              }[header.column.getIsSorted() as string] ?? null}
                             </Text>
                             <Input
                               id={header.id}
@@ -211,13 +218,13 @@ function EnrollmentsTable() {
           <Button id="next-button" onClick={() => nextPage()} disabled={!getCanNextPage()}>
             {">"}
           </Button>
-          <Button onClick={() => setPageIndex(getPageCount() - 1)} disabled={!getCanNextPage()}>
+          <Button onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
             {">>"}
           </Button>
           <VStack>
             <Text>Page</Text>
             <Text>
-              {getState().pagination.pageIndex + 1} of {getPageCount()}
+              {getState().pagination.pageIndex + 1} of {pageCount}
             </Text>
           </VStack>
           <VStack>
@@ -233,9 +240,10 @@ function EnrollmentsTable() {
             />
           </VStack>
           <VStack>
-            <Text>Show</Text>
+            <Text id="page-size-label">Show</Text>
             <NativeSelect.Root>
               <NativeSelect.Field
+                aria-labelledby="page-size-label"
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
                   console.log(event.target.value);
@@ -259,7 +267,12 @@ function EnrollmentsTable() {
         borderColor="border.muted"
         backgroundColor="bg.subtle"
         height="55px"
-        style={{ position: "fixed", bottom: 0, right: 0, width: "100%" }}
+        style={{
+          position: "fixed",
+          bottom: 0,
+          right: 0,
+          width: "100%"
+        }}
       >
         <HStack>
           <AddSingleStudent />

@@ -31,17 +31,30 @@ import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
 
 type JsonPrimitive = string | number | boolean | null;
 
-function AuditEventDiff({ oldValue, newValue }: { oldValue: JsonPrimitive; newValue: JsonPrimitive }) {
+function AuditEventDiff({
+  oldValue,
+  newValue
+}: {
+  oldValue: JsonPrimitive | undefined;
+  newValue: JsonPrimitive | undefined;
+}) {
   if (oldValue === true || oldValue === false) {
     oldValue = oldValue ? "True" : "False";
   }
   if (newValue === true || newValue === false) {
     newValue = newValue ? "True" : "False";
   }
+
+  const formatValue = (value: JsonPrimitive | undefined | object) => {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  };
+
   if (!oldValue && newValue) {
     return (
       <Text textStyle="sm" color="text.muted">
-        {newValue}
+        {formatValue(newValue)}
       </Text>
     );
   }
@@ -55,10 +68,10 @@ function AuditEventDiff({ oldValue, newValue }: { oldValue: JsonPrimitive; newVa
   return (
     <Box maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
       <Text textStyle="sm" color="text.muted">
-        Was: {oldValue}
+        Was: {formatValue(oldValue)}
       </Text>
       <Text textStyle="sm" color="text.muted">
-        Now: {newValue}
+        Now: {formatValue(newValue)}
       </Text>
     </Box>
   );
@@ -114,8 +127,8 @@ function JSONDiff({
               <DataList.ItemLabel>{property}</DataList.ItemLabel>
               <DataList.ItemValue>
                 <AuditEventDiff
-                  oldValue={oldValue?.[property] as JsonPrimitive}
-                  newValue={newValue?.[property] as JsonPrimitive}
+                  oldValue={oldValue?.[property] as JsonPrimitive | undefined}
+                  newValue={newValue?.[property] as JsonPrimitive | undefined}
                 />
               </DataList.ItemValue>
             </DataList.Item>
@@ -140,6 +153,8 @@ function AuditTable() {
       }
     ]
   });
+  const [pageCount, setPageCount] = useState(0);
+
   const columns = useMemo<ColumnDef<AuditEvent>[]>(
     () => [
       {
@@ -164,7 +179,7 @@ function AuditTable() {
         filterFn: (row, id, filterValue) => {
           const date = new Date(row.original.created_at);
           const filterString = String(filterValue);
-          return date.toLocaleString().includes(filterString);
+          return date.toLocaleString().toLowerCase().includes(filterString.toLowerCase());
         }
       },
       {
@@ -234,50 +249,45 @@ function AuditTable() {
         enableColumnFilter: true,
         enableHiding: true,
         cell: (props) => {
-          const oldValue = props.getValue() as unknown;
-          const newValue = props.row.original.new as unknown;
+          const oldValue = props.getValue();
+          const newValue = props.row.original.new;
+          const isOldObjectOrNull = typeof oldValue === "object" || oldValue === null;
+          const isNewObjectOrNull = typeof newValue === "object" || newValue === null;
 
-          const isObjectOrNull = (val: unknown): val is Record<string, unknown> | null => {
-            return val === null || (typeof val === "object" && !Array.isArray(val));
-          };
-
-          if (isObjectOrNull(oldValue) && isObjectOrNull(newValue)) {
-            // Only render JSONDiff if both are objects or null
-            return <JSONDiff oldValue={oldValue} newValue={newValue} />;
+          if (isOldObjectOrNull && isNewObjectOrNull) {
+            return (
+              <JSONDiff
+                oldValue={oldValue as Record<string, unknown> | null}
+                newValue={newValue as Record<string, unknown> | null}
+              />
+            );
+          } else {
+            // Handle cases where one or both values are not objects (e.g., primitives directly)
+            // Or provide a different display if needed.
+            return (
+              <Text textStyle="sm" color="text.muted">
+                Change not displayable as object diff
+              </Text>
+            );
           }
-          // Handle cases where values aren't suitable for object diff
-          // TODO: Potentially render a simpler diff for primitives/arrays if needed
-          return (
-            <Text textStyle="sm" color="text.muted">
-              Non-object change
-            </Text>
-          );
         }
-      },
-      {
-        id: "new",
-        accessorKey: "new",
-        header: "New Value",
-        enableColumnFilter: true,
-        enableHiding: true
       }
     ],
     [roster.data?.data]
   );
-  const [pageCount, setPageCount] = useState(0);
   const {
     getHeaderGroups,
     getRowModel,
     getState,
     setPageIndex,
     getCanPreviousPage,
-    getPageCount,
     getCanNextPage,
     getRowCount,
     nextPage,
     previousPage,
     setPageSize,
-    getPrePaginationRowModel
+    getPrePaginationRowModel,
+    refineCore: {}
   } = useTable({
     columns,
     initialState: {
@@ -288,10 +298,7 @@ function AuditTable() {
       },
       sorting: [{ id: "created_at", desc: true }]
     },
-    manualPagination: false,
-    manualFiltering: false,
     getPaginationRowModel: getPaginationRowModel(),
-    pageCount,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     refineCoreProps: {
@@ -302,17 +309,26 @@ function AuditTable() {
       filters: {
         mode: "off"
       },
+      sorters: {
+        mode: "off"
+      },
       meta: {
-        select: "*,users(*)"
+        select: "*"
       }
     },
+    manualPagination: false,
+    manualFiltering: false,
+    manualSorting: false,
+    pageCount,
     filterFromLeafRows: true
   });
+
   const nRows = getRowCount();
   const pageSize = getState().pagination.pageSize;
   useEffect(() => {
     setPageCount(Math.ceil(nRows / pageSize));
   }, [nRows, pageSize]);
+
   return (
     <VStack>
       <VStack paddingBottom="55px">
@@ -321,7 +337,7 @@ function AuditTable() {
             {getHeaderGroups().map((headerGroup) => (
               <Table.Row bg="bg.subtle" key={headerGroup.id}>
                 {headerGroup.headers
-                  .filter((h) => h.id !== "class_id" && h.id !== "new")
+                  .filter((h) => h.id !== "class_id")
                   .map((header) => {
                     return (
                       <Table.ColumnHeader key={header.id}>
@@ -362,24 +378,22 @@ function AuditTable() {
             ))}
           </Table.Header>
           <Table.Body>
-            {getRowModel()
-              .rows //.filter(row => row.getValue("profiles.name") !== undefined)
-              .map((row) => {
-                return (
-                  <Table.Row key={row.id}>
-                    {row
-                      .getVisibleCells()
-                      .filter((c) => c.column.id !== "class_id" && c.column.id !== "new")
-                      .map((cell) => {
-                        return (
-                          <Table.Cell key={cell.id}>
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </Table.Cell>
-                        );
-                      })}
-                  </Table.Row>
-                );
-              })}
+            {getRowModel().rows.map((row) => {
+              return (
+                <Table.Row key={row.id}>
+                  {row
+                    .getVisibleCells()
+                    .filter((c) => c.column.id !== "class_id")
+                    .map((cell) => {
+                      return (
+                        <Table.Cell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </Table.Cell>
+                      );
+                    })}
+                </Table.Row>
+              );
+            })}
           </Table.Body>
         </Table.Root>
         <HStack>
@@ -392,13 +406,13 @@ function AuditTable() {
           <Button id="next-button" onClick={() => nextPage()} disabled={!getCanNextPage()}>
             {">"}
           </Button>
-          <Button onClick={() => setPageIndex(getPageCount() - 1)} disabled={!getCanNextPage()}>
+          <Button onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
             {">>"}
           </Button>
           <VStack>
             <Text>Page</Text>
             <Text>
-              {getState().pagination.pageIndex + 1} of {getPageCount()}
+              {getState().pagination.pageIndex + 1} of {pageCount}
             </Text>
           </VStack>
           <VStack>
@@ -417,6 +431,7 @@ function AuditTable() {
             <Text>Show</Text>
             <NativeSelect.Root>
               <NativeSelect.Field
+                title="Select page size"
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
                   console.log(event.target.value);

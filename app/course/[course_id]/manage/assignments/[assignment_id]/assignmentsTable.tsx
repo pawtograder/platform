@@ -56,6 +56,14 @@ export default function AssignmentsTable() {
             return <Text></Text>;
           }
           return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
+        },
+        filterFn: (row, id, filterValue) => {
+          if (row.original.late_due_date === null) {
+            return false;
+          }
+          const date = new TZDate(row.original.late_due_date, timeZone);
+          const filterString = String(filterValue).toLowerCase();
+          return date.toLocaleString().toLowerCase().includes(filterString);
         }
       },
 
@@ -88,7 +96,7 @@ export default function AssignmentsTable() {
           if (!row.original.created_at) return false;
           const date = new TZDate(row.original.created_at, timeZone);
           const filterString = String(filterValue);
-          return date.toLocaleString().includes(filterString);
+          return date.toLocaleString().toLowerCase().includes(filterString.toLowerCase());
         }
       },
       {
@@ -272,7 +280,7 @@ export default function AssignmentsTable() {
           </VStack>
           <VStack>
             <Text>Show</Text>
-            <NativeSelect.Root>
+            <NativeSelect.Root title="Select page size">
               <NativeSelect.Field
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
