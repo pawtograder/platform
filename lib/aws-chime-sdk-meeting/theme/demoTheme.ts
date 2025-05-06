@@ -1,4 +1,4 @@
-import { lightTheme, darkTheme } from 'amazon-chime-sdk-component-library-react';
+import { lightTheme, darkTheme } from "amazon-chime-sdk-component-library-react";
 
 const { colors: lightThemeColors, shadows: lightThemeShadows } = lightTheme;
 const { colors: darkThemeColors, shadows: darkThemeShadows } = darkTheme;
@@ -12,7 +12,7 @@ const chatLightTheme = {
   bgd: lightThemeColors.greys.grey10,
   fgd: lightThemeColors.greys.white,
   shadow: lightThemeShadows.large,
-  maxWidth: '18.5rem',
+  maxWidth: "18.5rem"
 };
 
 const chatDarkTheme = {
@@ -24,15 +24,15 @@ const chatDarkTheme = {
   bgd: darkThemeColors.greys.grey100,
   fgd: darkThemeColors.greys.grey60,
   shadow: darkThemeShadows.large,
-  maxWidth: '18.5rem',
+  maxWidth: "18.5rem"
 };
 
 export const demoLightTheme = {
   ...lightTheme,
-  chat: chatLightTheme,
+  chat: chatLightTheme
 };
 
 export const demoDarkTheme = {
   ...darkTheme,
-  chat: chatDarkTheme,
+  chat: chatDarkTheme
 };

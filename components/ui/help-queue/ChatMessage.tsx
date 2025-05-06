@@ -1,23 +1,21 @@
-import { useUserProfile } from '@/hooks/useUserProfiles'
-import { Avatar, Box, HStack, Stack, Text } from '@chakra-ui/react'
-import Markdown from '../markdown'
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { Avatar, Box, HStack, Stack, Text } from "@chakra-ui/react";
+import Markdown from "../markdown";
 interface MessageData {
-  user: string
-  updatedAt: string
-  message: string
+  user: string;
+  updatedAt: string;
+  message: string;
 }
 
 interface Props {
-  data: MessageData
+  data: MessageData;
 }
 
 export const ChatMessage = (props: Props) => {
-  const { user, updatedAt, message } = props.data
+  const { user, updatedAt, message } = props.data;
   const userProfile = useUserProfile(user);
   return (
-    <HStack align="flex-start" gap="3" px="4" py="3"
-      rounded="md"
-    >
+    <HStack align="flex-start" gap="3" px="4" py="3" rounded="md">
       <Box pt="1">
         <Avatar.Root size="sm">
           <Avatar.Image src={userProfile?.avatar_url} />
@@ -38,5 +36,5 @@ export const ChatMessage = (props: Props) => {
         </Box>
       </Stack>
     </HStack>
-  )
-}
+  );
+};

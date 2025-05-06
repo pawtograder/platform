@@ -9,40 +9,49 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { syncRepoPermissions, } from "../_shared/GitHubWrapper.ts";
+import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { AssignmentGroupCopyGroupsFromAssignmentRequest } from "../_shared/FunctionTypes.d.ts";
 
 async function copyGroupsFromAssignment(req: Request): Promise<void> {
-  const { source_assignment_id, class_id, target_assignment_id } = await req.json() as AssignmentGroupCopyGroupsFromAssignmentRequest;
+  const { source_assignment_id, class_id, target_assignment_id } =
+    (await req.json()) as AssignmentGroupCopyGroupsFromAssignmentRequest;
   const { supabase, enrollment } = await assertUserIsInstructor(class_id, req.headers.get("Authorization")!);
-  const { data: sourceAssignmentGroups } = await supabase.from("assignment_groups").
-    select("*, assignment_groups_members(*)").
-    eq("class_id", class_id).
-    eq("assignment_id", source_assignment_id);
+  const { data: sourceAssignmentGroups } = await supabase
+    .from("assignment_groups")
+    .select("*, assignment_groups_members(*)")
+    .eq("class_id", class_id)
+    .eq("assignment_id", source_assignment_id);
   if (!sourceAssignmentGroups || !sourceAssignmentGroups.length) {
     throw new IllegalArgumentError("Source assignment groups not found");
   }
-  const adminSupabase = createClient<Database>( 
+  const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  const newGroups = await adminSupabase.from("assignment_groups").insert(sourceAssignmentGroups.map((group) => ({
-    assignment_id: target_assignment_id,
-    name: group.name,
-    class_id: class_id,
-  }))).select();
+  const newGroups = await adminSupabase
+    .from("assignment_groups")
+    .insert(
+      sourceAssignmentGroups.map((group) => ({
+        assignment_id: target_assignment_id,
+        name: group.name,
+        class_id: class_id
+      }))
+    )
+    .select();
   if (newGroups.error) {
     console.error(newGroups.error);
     throw new IllegalArgumentError("Failed to create new groups");
   }
-  const newMemberships = sourceAssignmentGroups.flatMap((group) => group.assignment_groups_members.map((member) => ({
-    assignment_group_id: newGroups.data.find((g) => g.name === group.name)?.id || 0,
-    profile_id: member.profile_id,
-    class_id: class_id,
-    assignment_id: target_assignment_id,
-    added_by: enrollment.private_profile_id,
-  })));
-  const {error} = await adminSupabase.from("assignment_groups_members").insert(newMemberships);
+  const newMemberships = sourceAssignmentGroups.flatMap((group) =>
+    group.assignment_groups_members.map((member) => ({
+      assignment_group_id: newGroups.data.find((g) => g.name === group.name)?.id || 0,
+      profile_id: member.profile_id,
+      class_id: class_id,
+      assignment_id: target_assignment_id,
+      added_by: enrollment.private_profile_id
+    }))
+  );
+  const { error } = await adminSupabase.from("assignment_groups_members").insert(newMemberships);
   if (error) {
     throw new IllegalArgumentError("Failed to create new memberships");
   }
@@ -50,7 +59,7 @@ async function copyGroupsFromAssignment(req: Request): Promise<void> {
 
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, copyGroupsFromAssignment);
-})
+});
 
 /* To invoke locally:
 

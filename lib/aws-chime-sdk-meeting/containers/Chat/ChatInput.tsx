@@ -1,11 +1,11 @@
-import { Input } from 'amazon-chime-sdk-component-library-react';
-import React, { ChangeEvent, useState } from 'react';
-import { useDataMessages } from '../../providers/DataMessagesProvider';
-import { StyledChatInputContainer } from './Styled';
+import { Input } from "amazon-chime-sdk-component-library-react";
+import React, { ChangeEvent, useState } from "react";
+import { useDataMessagesState } from "../../providers/DataMessagesProvider";
+import { StyledChatInputContainer } from "./Styled";
 
 export default function ChatInput() {
-  const [message, setMessage] = useState('');
-  const { sendMessage } = useDataMessages();
+  const [message, setMessage] = useState("");
+  const { sendMessage } = useDataMessagesState();
 
   const handleMessageChange = (event: ChangeEvent<HTMLInputElement>) => {
     setMessage(event.target.value);
@@ -16,9 +16,9 @@ export default function ChatInput() {
   // For now use, any as type and cast internally to KeyboardEvent.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleKeyPress = (event: any) => {
-    if ((event as KeyboardEvent).key === 'Enter') {
+    if ((event as KeyboardEvent).key === "Enter") {
       sendMessage(message);
-      setMessage('');
+      setMessage("");
     }
   };
 

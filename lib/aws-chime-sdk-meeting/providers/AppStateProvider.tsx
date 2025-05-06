@@ -1,16 +1,21 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useContext, useState, ReactNode, useEffect } from 'react';
-import { VideoPriorityBasedPolicy } from 'amazon-chime-sdk-js';
-import { MeetingMode, Layout, VideoFiltersCpuUtilization, ReplacementOptions, ReplacementType, ReplacementDropdownOptionType } from '../types';
-import { JoinMeetingInfo } from '../utils/api';
-import { useLogger } from 'amazon-chime-sdk-component-library-react';
-import { createBlob } from '../utils/background-replacement';
+import React, { useContext, useState, ReactNode, useEffect, useMemo } from "react";
+import { VideoPriorityBasedPolicy } from "amazon-chime-sdk-js";
+import {
+  MeetingMode,
+  Layout,
+  VideoFiltersCpuUtilization,
+  ReplacementOptions,
+  ReplacementType,
+  ReplacementDropdownOptionType
+} from "../types";
+import { JoinMeetingInfo } from "../utils/api";
+import { useLogger } from "amazon-chime-sdk-component-library-react";
+import { createBlob } from "../utils/background-replacement";
 
-type Props = {
-  children: ReactNode;
-};
+type Props = { children: ReactNode };
 
 interface AppStateValue {
   meetingId: string;
@@ -54,67 +59,64 @@ export function useAppState(): AppStateValue {
   const state = useContext(AppStateContext);
 
   if (!state) {
-    throw new Error('useAppState must be used within AppStateProvider');
+    throw new Error("useAppState must be used within AppStateProvider");
   }
 
   return state;
 }
 
-
-// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 export function AppStateProvider({ children }: Props) {
   const logger = useLogger();
-  const [meetingId, setMeetingId] = useState('aMeetingID');
-  const [region, setRegion] = useState('us-east-1');
+  const [meetingId, setMeetingId] = useState("aMeetingID");
+  const [region, setRegion] = useState("us-east-1");
   const [meetingMode, setMeetingMode] = useState(MeetingMode.Attendee);
   const [joinInfo, setJoinInfo] = useState<JoinMeetingInfo | undefined>(undefined);
   const [layout, setLayout] = useState(Layout.Gallery);
-  const [localUserName, setLocalUserName] = useState('');
+  const [localUserName, setLocalUserName] = useState("");
   const [isWebAudioEnabled, setIsWebAudioEnabled] = useState(true);
   const [priorityBasedPolicy, setPriorityBasedPolicy] = useState<VideoPriorityBasedPolicy | undefined>(undefined);
   const [enableSimulcast, setEnableSimulcast] = useState(false);
   const [keepLastFrameWhenPaused, setKeepLastFrameWhenPaused] = useState(false);
   const [isEchoReductionEnabled, setIsEchoReductionEnabled] = useState(false);
-  const [theme, setTheme] = useState('light');
+  const [theme, setTheme] = useState("light");
   const [videoTransformCpuUtilization, setCpuPercentage] = useState(VideoFiltersCpuUtilization.CPU40Percent);
   const [imageBlob, setImageBlob] = useState<Blob | undefined>(undefined);
   const [skipDeviceSelection, setSkipDeviceSelection] = useState(false);
-  const [backgroundReplacementOption, setBackgroundReplacementOption] = useState<ReplacementOptions>(ReplacementOptions.Blue);
+  const [backgroundReplacementOption, setBackgroundReplacementOption] = useState<ReplacementOptions>(
+    ReplacementOptions.Blue
+  );
 
-  const replacementOptionsList: ReplacementDropdownOptionType[] = [
-    {
-      label: ReplacementOptions.Blue,
-      type: ReplacementType.Color,
-      value: '#0000ff',
-    },
-    {
-      label: ReplacementOptions.Beach,
-      type: ReplacementType.Image,
-      value: ReplacementOptions.Beach,
-    },
-  ];
+  const replacementOptionsList: ReplacementDropdownOptionType[] = useMemo(
+    () => [
+      { label: ReplacementOptions.Blue, type: ReplacementType.Color, value: "#0000ff" },
+      { label: ReplacementOptions.Beach, type: ReplacementType.Image, value: ReplacementOptions.Beach }
+    ],
+    []
+  );
 
   useEffect(() => {
     /* Load a canvas that will be used as the replacement image for Background Replacement */
     async function loadImage() {
-      const option = replacementOptionsList.find(option => backgroundReplacementOption === option.label);
+      const option = replacementOptionsList.find((option) => backgroundReplacementOption === option.label);
       if (option) {
         const blob = await createBlob(option);
         setImageBlob(blob);
       } else {
-        logger.error(`Error: Cannot find ${backgroundReplacementOption} in the replacementOptionsList: ${replacementOptionsList}`);
+        logger.error(
+          `Error: Cannot find ${backgroundReplacementOption} in the replacementOptionsList: ${replacementOptionsList}`
+        );
       }
     }
     loadImage();
-  }, [backgroundReplacementOption]);
+  }, [backgroundReplacementOption, replacementOptionsList, logger]);
 
   const toggleTheme = (): void => {
-    if (theme === 'light') {
-      setTheme('dark');
-      localStorage.setItem('theme', 'dark');
+    if (theme === "light") {
+      setTheme("dark");
+      localStorage.setItem("theme", "dark");
     } else {
-      setTheme('light');
-      localStorage.setItem('theme', 'light');
+      setTheme("light");
+      localStorage.setItem("theme", "light");
     }
   };
 
@@ -187,7 +189,7 @@ export function AppStateProvider({ children }: Props) {
     toggleMeetingJoinDeviceSelection,
     backgroundReplacementOption,
     setBackgroundReplacementOption,
-    replacementOptionsList,
+    replacementOptionsList
   };
 
   return <AppStateContext.Provider value={providerValue}>{children}</AppStateContext.Provider>;
