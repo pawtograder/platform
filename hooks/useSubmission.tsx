@@ -17,7 +17,6 @@ import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
-import { check } from "prettier";
 
 type ListUpdateCallback<T> = (
   data: T[],
@@ -86,7 +85,7 @@ class SubmissionController {
       subscribers.push(filteredCallback);
     }
     this.genericDataListSubscribers[typeName] = subscribers;
-    let currentData = this.genericData[typeName]?.values() || [];
+    const currentData = this.genericData[typeName]?.values() || [];
     if (filter) {
       return {
         unsubscribe: () => {
@@ -118,7 +117,7 @@ class SubmissionController {
       );
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => {},
+          unsubscribe: () => { },
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -181,7 +180,7 @@ class SubmissionController {
       );
     }
   }
-  constructor() {}
+  constructor() { }
 
   get isReady() {
     return this._submission !== undefined;
@@ -558,7 +557,6 @@ export function useRubricCriteriaInstances({
 }) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
-  const review = useSubmissionReview(review_id);
   const rubric = useSubmissionRubric();
   if (!review_id) {
     return [];
@@ -583,11 +581,7 @@ export function useRubricCriteriaInstances({
   throw new Error("Either criteria or rubric_id must be provided");
 }
 export function useSubmissionReview(reviewId?: number | null) {
-  const ctx = useContext(SubmissionContext);
-  if (!ctx) {
-    return undefined;
-  }
-  const controller = ctx.submissionController;
+  const controller = useSubmissionController();
   const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
   if (!reviewId) {
     reviewId = controller.submission.grading_review_id;
@@ -609,13 +603,14 @@ export function useSubmissionReview(reviewId?: number | null) {
   return review;
 }
 export function useRubricCheck(rubric_check_id: number | null) {
-  if (!rubric_check_id) {
+  const context = useContext(SubmissionContext);
+  if (!rubric_check_id || !context) {
     return {
       rubricCheck: undefined,
       rubricCriteria: undefined
     };
   }
-  const controller = useSubmissionController();
+  const controller = context.submissionController;
   const criteria = controller.submission.assignments.rubrics?.rubric_criteria?.find((c) =>
     c.rubric_checks?.some((c) => c.id === rubric_check_id)
   );
