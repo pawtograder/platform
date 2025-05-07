@@ -281,8 +281,8 @@ export function RubricCheckGlobal({
   const gradingIsPermitted =
     isGrader &&
     review &&
-    criteria.max_checks_per_submission !== null &&
-    criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000);
+    (criteria.max_checks_per_submission === null ||
+      criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000));
   return (
     <>
       <HStack>
