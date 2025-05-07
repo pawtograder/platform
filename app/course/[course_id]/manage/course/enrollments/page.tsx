@@ -78,19 +78,7 @@ function EnrollmentsTable() {
         enableColumnFilter: true,
         cell: ({ row }) => {
           const profile = row.original.profiles;
-          const courseId = course_id;
-          const studentProfileId = profile?.id;
-
-          if (profile && studentProfileId && profile.name) {
-            if (row.original.role === "student") {
-              return (
-                <Link href={`/course/${courseId}/manage/students/${studentProfileId}/edit`} passHref legacyBehavior>
-                  <Text as="a" _hover={{ textDecoration: "underline" }} cursor="pointer">
-                    {profile.name}
-                  </Text>
-                </Link>
-              );
-            }
+          if (profile && profile.name) {
             return profile.name;
           }
           return "N/A";
@@ -170,7 +158,7 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [course_id]
+    []
   );
   const {
     getHeaderGroups,
