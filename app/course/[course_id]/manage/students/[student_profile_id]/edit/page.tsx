@@ -10,7 +10,8 @@ import {
   Container,
   Fieldset,
   NativeSelectRoot,
-  NativeSelectField
+  NativeSelectField,
+  HStack
 } from "@chakra-ui/react";
 import { Field } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
@@ -142,64 +143,72 @@ export default function EditStudentProfilePage() {
   return (
     <Container py={8}>
       <Toaster />
-      <Heading size="lg" mb={6}>
+      <Heading size="lg" mb={6} textAlign="center">
         Edit Profile: {profileDataFromHook.name || "Student"}
       </Heading>
       <form onSubmit={handleSubmit(onSubmit)}>
-        <Fieldset.Root maxW="lg">
-          <Fieldset.Content>
-            <Field label="Name" errorText={errors.name?.message?.toString()} invalid={!!errors.name} required>
-              <Input
-                id="name"
-                placeholder="Student\'s full name"
-                {...register("name", { required: "Name is required." })}
-              />
-            </Field>
-          </Fieldset.Content>
+        <Fieldset.Root maxW="lg" mx="auto">
+          <VStack spaceY={5} align="stretch">
+            <Fieldset.Content>
+              <Field label="Name" errorText={errors.name?.message?.toString()} invalid={!!errors.name} required>
+                <Input
+                  id="name"
+                  placeholder="Student\'s full name"
+                  {...register("name", { required: "Name is required." })}
+                />
+              </Field>
+            </Fieldset.Content>
 
-          <Fieldset.Content>
-            <Field label="Avatar URL" errorText={errors.avatar_url?.message?.toString()} invalid={!!errors.avatar_url}>
-              <Input
-                id="avatar_url"
-                type="url"
-                placeholder="http://example.com/avatar.png"
-                {...register("avatar_url")}
-              />
-            </Field>
-          </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                label="Avatar URL"
+                errorText={errors.avatar_url?.message?.toString()}
+                invalid={!!errors.avatar_url}
+              >
+                <Input
+                  id="avatar_url"
+                  type="url"
+                  placeholder="http://example.com/avatar.png"
+                  {...register("avatar_url")}
+                />
+              </Field>
+            </Fieldset.Content>
 
-          <Fieldset.Content>
-            <Field label="Flair Text" errorText={errors.flair?.message?.toString()} invalid={!!errors.flair}>
-              <Input id="flair" placeholder="e.g., Helpful Mentor, Debug Wizard" {...register("flair")} />
-            </Field>
-          </Fieldset.Content>
+            <Fieldset.Content>
+              <Field label="Flair Text" errorText={errors.flair?.message?.toString()} invalid={!!errors.flair}>
+                <Input id="flair" placeholder="e.g., Helpful Mentor, Debug Wizard" {...register("flair")} />
+              </Field>
+            </Fieldset.Content>
 
-          <Fieldset.Content>
-            <Field
-              label="Flair Color"
-              errorText={errors.flair_color?.message?.toString()}
-              invalid={!!errors.flair_color}
-            >
-              <NativeSelectRoot {...register("flair_color")} id="flair_color">
-                <NativeSelectField placeholder="Select a color">
-                  {allowedFlairColors.map((color) => (
-                    <option key={color} value={color}>
-                      {color.charAt(0).toUpperCase() + color.slice(1)}
-                    </option>
-                  ))}
-                </NativeSelectField>
-              </NativeSelectRoot>
-            </Field>
-          </Fieldset.Content>
+            <Fieldset.Content>
+              <Field
+                label="Flair Color"
+                errorText={errors.flair_color?.message?.toString()}
+                invalid={!!errors.flair_color}
+              >
+                <NativeSelectRoot {...register("flair_color")} id="flair_color">
+                  <NativeSelectField placeholder="Select a color">
+                    {allowedFlairColors.map((color) => (
+                      <option key={color} value={color}>
+                        {color.charAt(0).toUpperCase() + color.slice(1)}
+                      </option>
+                    ))}
+                  </NativeSelectField>
+                </NativeSelectRoot>
+              </Field>
+            </Fieldset.Content>
 
-          <Fieldset.Content>
-            <Button mt={4} colorScheme="blue" loading={isSubmitting} type="submit">
-              Update Profile
-            </Button>
-            <Button mt={2} variant="outline" onClick={() => router.back()} disabled={isSubmitting}>
-              Cancel
-            </Button>
-          </Fieldset.Content>
+            <Fieldset.Content>
+              <HStack spaceX={3} mt={4} justify="flex-end">
+                <Button variant="outline" onClick={() => router.back()} disabled={isSubmitting}>
+                  Cancel
+                </Button>
+                <Button colorScheme="blue" loading={isSubmitting} type="submit">
+                  Update Profile
+                </Button>
+              </HStack>
+            </Fieldset.Content>
+          </VStack>
         </Fieldset.Root>
       </form>
     </Container>
