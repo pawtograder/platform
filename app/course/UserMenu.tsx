@@ -270,10 +270,10 @@ const ProfileChangesMenu = () => {
         console.log("Error updating user private profile");
       }
     }
-    await invalidate({
+    invalidate({
       resource: "user_roles",
-      invalidates: ["list", "detail"],
-      id: user?.id
+      invalidates: ["detail"],
+      id: user!.id
     });
   };
   /**
@@ -287,7 +287,7 @@ const ProfileChangesMenu = () => {
     }
     console.log(storedImages);
     const pathsToRemove = storedImages
-      .filter((image) => !publicAvatarLink?.includes(image.name) && !privateLink?.includes(image.name))
+      .filter((image) => !publicLink?.includes(image.name) && !privateLink?.includes(image.name))
       .map((imageToRemove) => `${user?.id}/${course_id}/${imageToRemove.name}`);
     console.log(pathsToRemove);
     if (pathsToRemove.length > 0) {
