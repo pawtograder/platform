@@ -1,6 +1,6 @@
 import { createClient } from "@/utils/supabase/server";
-import { jwtDecode } from "jwt-decode";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { jwtDecode } from "jwt-decode";
 
 type UserRoleJwt = Pick<
   Database["public"]["Tables"]["user_roles"]["Row"],
@@ -40,4 +40,12 @@ export async function getCourse(course_id: number) {
 export async function isInstructor(course_id: number) {
   const roles = await getRolesForCourse(course_id);
   return roles.includes("instructor");
+}
+export async function isGrader(course_id: number) {
+  const roles = await getRolesForCourse(course_id);
+  return roles.includes("grader");
+}
+export async function isInstructorOrGrader(course_id: number) {
+  const roles = await getRolesForCourse(course_id);
+  return roles.includes("instructor") || roles.includes("grader");
 }

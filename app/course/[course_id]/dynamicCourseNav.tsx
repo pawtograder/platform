@@ -17,13 +17,13 @@ import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Course, CourseWithFeatures, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
+import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef } from "react";
 import { FaScroll } from "react-icons/fa";
 import { FiClipboard, FiCompass, FiMenu, FiMessageSquare, FiSettings, FiStar, FiUsers } from "react-icons/fi";
 import UserMenu from "../UserMenu";
-import Image from "next/image";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -120,7 +120,7 @@ export default function DynamicCourseNav() {
   const { role: enrollment } = useClassProfiles();
   const { roles: courses } = useAuthState();
   const { colorMode } = useColorMode();
-  const isInstructor = enrollment.role === "instructor";
+  const isInstructor = enrollment.role === "instructor" || enrollment.role === "grader";
   useEffect(() => {
     if (courseNavRef.current) {
       const height = courseNavRef.current.offsetHeight;
