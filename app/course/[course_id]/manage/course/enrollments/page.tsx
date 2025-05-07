@@ -47,6 +47,25 @@ function EnrollmentsTable() {
         accessorKey: "profiles.name",
         header: "Name",
         enableColumnFilter: true,
+        cell: ({ row }) => {
+          const profile = row.original.profiles;
+          const courseId = course_id;
+          const studentProfileId = profile?.id;
+
+          if (profile && studentProfileId && profile.name) {
+            if (row.original.role === "student") {
+              return (
+                <Link href={`/course/${courseId}/manage/students/${studentProfileId}/edit`} passHref legacyBehavior>
+                  <Text as="a" _hover={{ textDecoration: "underline" }} cursor="pointer">
+                    {profile.name}
+                  </Text>
+                </Link>
+              );
+            }
+            return profile.name;
+          }
+          return "N/A";
+        },
         filterFn: (row, id, filterValue) => {
           const name = row.original.profiles?.name;
           if (!name) return false;
@@ -100,7 +119,7 @@ function EnrollmentsTable() {
         }
       }
     ],
-    []
+    [course_id]
   );
   const {
     getHeaderGroups,
@@ -244,9 +263,9 @@ function EnrollmentsTable() {
             <NativeSelect.Root>
               <NativeSelect.Field
                 aria-labelledby="page-size-label"
+                title="Select page size"
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
-                  console.log(event.target.value);
                   setPageSize(Number(event.target.value));
                 }}
               >
