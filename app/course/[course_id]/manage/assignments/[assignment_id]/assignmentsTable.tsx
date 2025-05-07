@@ -2,7 +2,7 @@
 import Link from "@/components/ui/link";
 import { useCourse } from "@/hooks/useAuthState";
 import { ActiveSubmissionsWithGradesForAssignment } from "@/utils/supabase/DatabaseTypes";
-import { HStack, Box, Text, VStack, NativeSelect, Button, Icon, Table, Input } from "@chakra-ui/react";
+import { Box, Button, HStack, Icon, Input, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useTable } from "@refinedev/react-table";
 import {
@@ -14,7 +14,7 @@ import {
 } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { FaSort, FaSortUp, FaSortDown, FaCheck, FaTimes } from "react-icons/fa";
+import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
@@ -70,7 +70,7 @@ export default function AssignmentsTable() {
       {
         id: "autograder_score",
         accessorKey: "autograder_score",
-        header: "Autograder Score"
+        header: "Student-Visible Autograder Score"
       },
       {
         id: "total_score",
