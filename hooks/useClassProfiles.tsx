@@ -1,11 +1,11 @@
 "use client";
-import { UserRole, UserProfile, UserRoleWithCourse, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
-import { createContext, useContext } from "react";
-import { useList, CrudFilter } from "@refinedev/core";
-import { useParams } from "next/navigation";
-import useAuthState from "./useAuthState";
-import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/components/ui/not-found";
+import { Skeleton } from "@/components/ui/skeleton";
+import { CourseWithFeatures, UserProfile, UserRole, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { CrudFilter, useList } from "@refinedev/core";
+import { useParams } from "next/navigation";
+import { createContext, useContext } from "react";
+import useAuthState from "./useAuthState";
 type ClassProfileContextType = {
   role: UserRoleWithCourse;
   allVisibleRoles: UserRole[];
@@ -63,6 +63,9 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     resource: "user_roles",
     meta: {
       select: "*"
+    },
+    pagination: {
+      pageSize: 1000
     },
     queryOptions: {
       cacheTime: Infinity,
