@@ -142,7 +142,7 @@ function EnrollmentsTable() {
           const profile = row.original.profiles;
           const studentProfileId = profile?.id;
 
-          if (row.original.role === "student" && profile && studentProfileId) {
+          if (profile && studentProfileId) {
             return (
               <Box textAlign="center">
                 <Icon
