@@ -75,7 +75,14 @@ export default function EditStudentProfilePage() {
 
   const onSubmit = useCallback(
     async (values: StudentProfileFormData) => {
-      if (!studentProfileId) return;
+      if (!studentProfileId) {
+        toaster.create({
+          title: "Submission Error",
+          description: "Unable to submit the form. Missing student profile ID.",
+          type: "error"
+        });
+        return;
+      }
 
       const updatePayload: ProfileUpdate = {
         name: values.name,
