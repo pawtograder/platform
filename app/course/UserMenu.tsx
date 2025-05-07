@@ -18,6 +18,9 @@ import {
 } from "@chakra-ui/react";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
+import { FaCircleUser } from "react-icons/fa6";
+
+import { useInvalidate } from "@refinedev/core";
 
 import { Avatar } from "@/components/ui/avatar";
 import { ColorModeButton } from "@/components/ui/color-mode";
@@ -27,11 +30,10 @@ import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
-import { Dispatch, SetStateAction, useCallback, useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
-import { useDropzone } from "react-dropzone";
 
 function SupportMenu() {
   return (
@@ -115,75 +117,116 @@ const DropBoxAvatar = ({
       .upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
 
     if (!data || error) {
-      console.log("Error uploading avatar image with " + error);
+      console.log("Error uploading avatar image with " + error.message);
     } else {
       setAvatarLink(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
       );
     }
   };
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const onDrop = useCallback(
-    (acceptedFiles: File[]) => {
-      if (!acceptedFiles || acceptedFiles.length === 0) return;
-      const file = acceptedFiles[0];
+  const handleFileChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      console.log("File input change event triggered");
+      const files = event.target.files;
+
+      if (!files || files.length === 0) {
+        console.log("No files were selected");
+        return;
+      }
+
+      const file = files[0];
+      console.log("Selected file:", file);
+
       if (file.type === "image/jpeg" || file.type === "image/png") {
         completeAvatarUpload(file);
       } else {
         alert("Please upload a valid JPEG or PNG image file.");
       }
+
+      // Reset the input value so the same file can be selected again if needed
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     },
     [completeAvatarUpload]
   );
 
-  const { getRootProps, getInputProps } = useDropzone({
-    onDrop,
-    accept: {
-      "image/jpeg": [],
-      "image/png": []
-    }
-  });
-
   return (
-    <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px" {...getRootProps()}>
-      <Text fontWeight={"700"}>{avatarType} Avatar</Text>
-      <Box position="relative" width="100px" height="100px">
-        <input {...getInputProps()} />
-        <Avatar
-          position="absolute"
-          width="100%"
-          height="100%"
-          src={avatarLink || undefined}
-          size="sm"
-          _hover={{
-            boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
-            background: "rgba(0, 0, 0, 0.5)",
-            opacity: 0.2,
-            zIndex: 10
-          }}
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
-        />
-        {isHovered && (
-          <Flex
-            position="absolute"
-            w="100%"
-            h="100%"
-            top="0"
-            alignItems="center"
-            justifyContent="center"
-            color="black"
-            fontWeight={700}
-            _hover={{
-              opacity: 1,
-              zIndex: 20
-            }}
-          >
-            <Text textAlign={"center"}>Edit</Text>
-          </Flex>
-        )}
-      </Box>
-    </Flex>
+    <>
+      <input
+        type="file"
+        ref={fileInputRef}
+        style={{ display: "none" }}
+        accept="image/jpeg,image/png"
+        onChange={handleFileChange}
+      />
+      <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px">
+        <Box position="relative" width="100px" height="100px">
+          <Menu.Root positioning={{ placement: "bottom" }}>
+            <Text fontWeight={"700"}>{avatarType} Avatar</Text>
+            <Menu.Trigger asChild>
+              <Button background="transparent" height="100%" width="100%" borderRadius={"full"}>
+                <Avatar
+                  position="absolute"
+                  width="100%"
+                  height="100%"
+                  src={avatarLink || undefined}
+                  size="sm"
+                  _hover={{
+                    boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
+                    background: "rgba(0, 0, 0, 0.5)",
+                    opacity: 0.2,
+                    zIndex: 10
+                  }}
+                  onMouseEnter={() => setIsHovered(true)}
+                  onMouseLeave={() => setIsHovered(false)}
+                />
+                {isHovered && (
+                  <Flex
+                    position="absolute"
+                    w="100%"
+                    h="100%"
+                    top="0"
+                    alignItems="center"
+                    justifyContent="center"
+                    color="black"
+                    fontWeight={700}
+                    _hover={{
+                      opacity: 1,
+                      zIndex: 20
+                    }}
+                  >
+                    <Text textAlign={"center"}>Edit Avatar</Text>
+                  </Flex>
+                )}
+              </Button>
+            </Menu.Trigger>
+            <Menu.Positioner>
+              <Menu.Content>
+                <Menu.Item
+                  value="new-img"
+                  onClick={() => {
+                    fileInputRef?.current?.click();
+                  }}
+                >
+                  Choose from computer
+                </Menu.Item>
+                <Menu.Item
+                  value="delete"
+                  color="fg.error"
+                  _hover={{ bg: "bg.error", color: "fg.error" }}
+                  onClick={() => setAvatarLink(`https://api.dicebear.com/9.x/identicon/svg?seed=${profile?.name}`)}
+                >
+                  Remove current picture
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Positioner>
+          </Menu.Root>
+        </Box>
+      </Flex>
+    </>
   );
 };
 
@@ -198,13 +241,15 @@ const ProfileChangesMenu = () => {
   const supabase = createClient();
   const { course_id } = useParams();
   const { user } = useAuthState();
+  const invalidate = useInvalidate();
 
   /**
    * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar
    * storage bucket.
    */
   const updateProfile = async () => {
-    removeUnusedImages();
+    console.log("update profile changed");
+    removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
     if (publicAvatarLink && publicProfile) {
       const { error } = await supabase
         .from("profiles")
@@ -225,22 +270,31 @@ const ProfileChangesMenu = () => {
         console.log("Error updating user private profile");
       }
     }
+    await invalidate({
+      resource: "user_roles",
+      invalidates: ["list", "detail"],
+      id: user?.id
+    });
   };
   /**
    * Removes extra images from storage that may have been populated if the user attempted to open the menu and reselect multiple times.
    */
-  const removeUnusedImages = async () => {
-    const { data, error } = await supabase.storage.from("avatars").list(`${user?.id}/${course_id}`);
-    if (!data || error) {
-      console.log("Failed to find profile photo to update");
+  const removeUnusedImages = async (privateLink: string | null, publicLink: string | null) => {
+    const { data: storedImages, error } = await supabase.storage.from("avatars").list(`${user?.id}/${course_id}`);
+    if (!storedImages || error) {
+      console.log("Error finding stored images");
       return;
     }
-    const pathsToRemove = data
-      .filter((image) => !publicAvatarLink?.includes(image.id) && !privateAvatarLink?.includes(image.id))
+    console.log(storedImages);
+    const pathsToRemove = storedImages
+      .filter((image) => !publicAvatarLink?.includes(image.name) && !privateLink?.includes(image.name))
       .map((imageToRemove) => `${user?.id}/${course_id}/${imageToRemove.name}`);
-    const { error: removeError } = await supabase.storage.from("avatars").remove(pathsToRemove);
-    if (removeError) {
-      console.log("Error removing extra files");
+    console.log(pathsToRemove);
+    if (pathsToRemove.length > 0) {
+      const { error: removeError } = await supabase.storage.from("avatars").remove(pathsToRemove);
+      if (removeError) {
+        console.log("Error removing extra files");
+      }
     }
   };
 
@@ -278,6 +332,7 @@ const ProfileChangesMenu = () => {
     };
     fetchPrivateProfile();
   }, [course_id, user]);
+
   useEffect(() => {
     const fetchPublicProfile = async () => {
       if (course_id) {
@@ -316,7 +371,10 @@ const ProfileChangesMenu = () => {
   return (
     <Dialog.Root size={"md"} placement={"center"}>
       <Dialog.Trigger asChild>
-        <Button>Edit Profile</Button>
+        <Flex alignItems={"center"} gap="8px">
+          <Icon as={FaCircleUser} size="md" />
+          <Button colorPalette={"gray"}>Edit Avatar</Button>
+        </Flex>
       </Dialog.Trigger>
       <Portal>
         <Dialog.Backdrop />
@@ -326,7 +384,7 @@ const ProfileChangesMenu = () => {
               <Dialog.Title>Edit {privateProfile?.name}</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
-              <Flex flexDirection={"column"} gap="30px">
+              <Flex flexDirection={"column"} gap="50px">
                 <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
                   <DropBoxAvatar
                     avatarLink={publicAvatarLink}
@@ -346,7 +404,14 @@ const ProfileChangesMenu = () => {
             </Dialog.Body>
             <Dialog.Footer>
               <Dialog.ActionTrigger asChild>
-                <Button variant="outline">Cancel</Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    removeUnusedImages(privateProfile?.avatar_url ?? null, publicProfile?.avatar_url ?? null)
+                  }
+                >
+                  Cancel
+                </Button>
               </Dialog.ActionTrigger>
               <Dialog.ActionTrigger asChild>
                 <Button onClick={updateProfile}>Save</Button>
@@ -378,6 +443,7 @@ function UserSettingsMenu() {
           .single();
         if (error) {
           console.error(error);
+          return;
         }
         if (data) {
           setProfile(data.profiles!);
@@ -449,9 +515,9 @@ function UserSettingsMenu() {
                   </VStack>
                 </HStack>
                 <HStack>
-                  <Icon as={FaGithub} />
+                  <Icon as={FaGithub} size="md" />
                   {!gitHubUsername && (
-                    <Button onClick={linkGitHub} colorPalette="teal">
+                    <Button onClick={linkGitHub} colorPalette="gray">
                       Link GitHub
                     </Button>
                   )}
