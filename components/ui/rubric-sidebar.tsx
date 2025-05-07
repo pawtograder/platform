@@ -263,8 +263,8 @@ export function RubricCheckGlobal({
   useEffect(() => {
     setIsEditing(
       isSelected &&
-      rubricCheckComments.length === 0 &&
-      criteria.max_checks_per_submission != criteriaCheckComments.length
+        rubricCheckComments.length === 0 &&
+        criteria.max_checks_per_submission != criteriaCheckComments.length
     );
   }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
 
@@ -445,8 +445,8 @@ function SubmissionCommentForm({
           }
           const artifactInfo = check.artifact
             ? {
-              submission_artifact_id: linkedArtifactId
-            }
+                submission_artifact_id: linkedArtifactId
+              }
             : {};
           const values = {
             comment,

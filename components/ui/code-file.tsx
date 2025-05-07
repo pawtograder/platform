@@ -63,7 +63,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     left: 0,
     visible: false,
     mode: "select",
-    close: () => { }
+    close: () => {}
   });
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -131,26 +131,26 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   });
   const commentsCSS = showCommentsFeature
     ? {
-      "& .source-code-line": {
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "row",
-        "&:hover": {
-          bg: "yellow.subtle",
-          width: "100%",
-          cursor: "cell"
+        "& .source-code-line": {
+          cursor: "pointer",
+          display: "flex",
+          flexDirection: "row",
+          "&:hover": {
+            bg: "yellow.subtle",
+            width: "100%",
+            cursor: "cell"
+          }
+        },
+        "& .selected": {
+          bg: "yellow.subtle"
         }
-      },
-      "& .selected": {
-        bg: "yellow.subtle"
       }
-    }
     : {
-      "& .source-code-line": {
-        display: "flex",
-        flexDirection: "row"
-      }
-    };
+        "& .source-code-line": {
+          display: "flex",
+          flexDirection: "row"
+        }
+      };
   return (
     <Box
       border="1px solid"
@@ -254,7 +254,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
                 ...prev,
                 visible: false,
                 onClose: undefined,
-                close: () => { }
+                close: () => {}
               };
             });
           }}
@@ -921,7 +921,7 @@ function createLine(
                     left: 0,
                     visible: false,
                     onClose: undefined,
-                    close: () => { },
+                    close: () => {},
                     mode: "marking"
                   });
                 }
@@ -955,7 +955,7 @@ function createLine(
                     left: 0,
                     visible: false,
                     onClose: undefined,
-                    close: () => { },
+                    close: () => {},
                     mode: "select"
                   });
                 },

@@ -86,15 +86,15 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
-      field: "assignment_group_id",
-      operator: "eq",
-      value: submission.assignment_group_id
-    }
+        field: "assignment_group_id",
+        operator: "eq",
+        value: submission.assignment_group_id
+      }
     : {
-      field: "profile_id",
-      operator: "eq",
-      value: submission.profile_id
-    };
+        field: "profile_id",
+        operator: "eq",
+        value: submission.profile_id
+      };
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -212,8 +212,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         <Link href={link}>
                           {historical_submission.grader_results?.score !== undefined
                             ? historical_submission.grader_results?.score +
-                            "/" +
-                            historical_submission.grader_results?.max_score
+                              "/" +
+                              historical_submission.grader_results?.max_score
                             : "Error"}
                         </Link>
                       </Table.Cell>
@@ -221,8 +221,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         <Link href={link}>
                           {historical_submission.submission_reviews?.completed_at &&
                             historical_submission.submission_reviews?.total_score +
-                            "/" +
-                            historical_submission.assignments.total_points}
+                              "/" +
+                              historical_submission.assignments.total_points}
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
@@ -566,7 +566,7 @@ function UnGradedGradingSummary() {
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
       <List.Root as="ul" fontSize="sm" color="text.muted">
-        {(submission.assignments.autograder_points !== null && submission.assignments.total_points !== null) && (
+        {submission.assignments.autograder_points !== null && submission.assignments.total_points !== null && (
           <List.Item>
             <Text as="span" fontWeight="bold">
               Hand Grading:
@@ -581,7 +581,7 @@ function UnGradedGradingSummary() {
           </Text>{" "}
           {graderResultsMaxScore} points, results shown below.
         </List.Item>
-        {(graderResultsMaxScore !== undefined && totalMaxScore !== null && graderResultsMaxScore > totalMaxScore) && (
+        {graderResultsMaxScore !== undefined && totalMaxScore !== null && graderResultsMaxScore > totalMaxScore && (
           <List.Item>
             <Text as="span" fontWeight="bold">
               Hidden Automated Checks:

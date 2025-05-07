@@ -117,7 +117,7 @@ class SubmissionController {
       );
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => { },
+          unsubscribe: () => {},
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -180,7 +180,7 @@ class SubmissionController {
       );
     }
   }
-  constructor() { }
+  constructor() {}
 
   get isReady() {
     return this._submission !== undefined;
