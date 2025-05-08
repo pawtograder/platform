@@ -1,34 +1,31 @@
 CREATE TABLE IF NOT EXISTS "public"."tags" (
-    "id" bigint NOT NULL,
+    "id" uuid NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "name" "text" NOT NULL,
     "color" "text" NOT NULL,
     "visible" boolean NOT NULL,
-    "class_id" bigint NOT NULL 
+    "user_id" uuid NOT NULL, 
+    "class_id" bigint NOT NULL
 );
 
+alter table "public"."tags" enable row level security;
 
-CREATE POLICY "graders and instructors CRUD on tags"
+CREATE POLICY "graders and instructors CRUD on class tags"
 on "public"."tags"
 as permissive
 for all 
 to public
 using (
-    authorizeforclassgrader(class_id) OR authorizeforclassinstructor(class_id)
+    authorizeforclassgrader(class_id)
+    OR authorizeforclassinstructor(class_id)
 );
 
-ALTER TABLE "public"."user_roles"
-ADD COLUMN "tag_ids" bigint[];
-
-CREATE POLICY "users can view their visible tags"
-ON "public"."user_roles"
+CREATE POLICY "users can view their visible tags for class"
+ON "public"."tags"
 AS PERMISSIVE
 FOR SELECT
-USING (
-    authorizeForProfile(user_id) AND 
-    (EXISTS (
-        SELECT 1 FROM "public"."tags" 
-        WHERE "public"."tags".id = ANY("public"."user_roles".tag_ids) 
-        AND "public"."tags".visible = true
-    ))
+USING (n
+    visible = true AND 
+    user_id = auth.uid() AND
+    authorizeforclass("class_id") 
 );
