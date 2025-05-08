@@ -2,7 +2,6 @@
 import { ClassSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
-  Button,
   Container,
   Heading,
   HStack,
@@ -34,6 +33,8 @@ import RemoveStudentModal from "./removeStudentModal";
 import useAuthState from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
 import { Tooltip } from "@/components/ui/tooltip";
+import ImportStudentsCSVModal from "./importStudentsCSVModal";
+import { Button } from "@/components/ui/button";
 
 type EditProfileModalData = string; // studentId
 type EditUserRoleModalData = {
@@ -73,6 +74,12 @@ function EnrollmentsTable() {
     openModal: openRemoveStudentModal,
     closeModal: closeRemoveStudentModal
   } = useModalManager<RemoveStudentModalData>();
+
+  const {
+    isOpen: isImportCSVModalOpen,
+    openModal: openImportCSVModal,
+    closeModal: closeImportCSVModal
+  } = useModalManager<undefined>();
 
   const [pageCount, setPageCount] = useState(0);
 
@@ -217,7 +224,7 @@ function EnrollmentsTable() {
                     as={FaEdit}
                     aria-label="Edit student profile"
                     cursor="pointer"
-                    onClick={() => openEditProfileModal(studentProfileId)} // Use openModal from hook
+                    onClick={() => openEditProfileModal(studentProfileId)}
                   />
                 </Tooltip>
               )}
@@ -231,7 +238,6 @@ function EnrollmentsTable() {
                     onClick={() => {
                       if (canEditThisUserRole) {
                         openEditUserRoleModal({
-                          // Use openModal from hook
                           userRoleId: String(userRoleEntry.id),
                           currentRole: userRoleEntry.role,
                           userName: profile?.name
@@ -252,7 +258,6 @@ function EnrollmentsTable() {
                     onClick={() => {
                       if (canRemoveThisUser) {
                         openRemoveStudentModal({
-                          // Use openModal from hook
                           userRoleId: String(userRoleEntry.id),
                           userName: profile?.name,
                           role: userRoleEntry.role
@@ -267,8 +272,9 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal] // Dependencies are now the openModal functions from the hook
+    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal]
   );
+
   const {
     getHeaderGroups,
     getRowModel,
@@ -381,17 +387,17 @@ function EnrollmentsTable() {
         </Table.Root>
         <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
           <HStack gap={2}>
-            <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
-              {"<< First"}
+            <Button size="sm" onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
+              {"<<"}
             </Button>
-            <Button onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
-              {"< Previous"}
+            <Button size="sm" onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
+              {"<"}
             </Button>
-            <Button onClick={() => nextPage()} disabled={!getCanNextPage()}>
-              {"Next >"}
+            <Button size="sm" onClick={() => nextPage()} disabled={!getCanNextPage()}>
+              {">"}
             </Button>
-            <Button onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
-              {"Last >>"}
+            <Button size="sm" onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
+              {">>"}
             </Button>
           </HStack>
 
@@ -406,16 +412,19 @@ function EnrollmentsTable() {
             <Input
               type="number"
               defaultValue={getState().pagination.pageIndex + 1}
+              min={1}
+              max={pageCount}
               onChange={(e) => {
                 const page = e.target.value ? Number(e.target.value) - 1 : 0;
-                setPageIndex(page);
+                const newPageIndex = Math.max(0, Math.min(page, pageCount - 1));
+                setPageIndex(newPageIndex);
               }}
-              width="100px"
+              width="60px"
               textAlign="center"
             />
           </HStack>
 
-          <NativeSelect.Root>
+          <NativeSelect.Root aria-label="Select page size" width="120px">
             <NativeSelect.Field
               aria-label="Select page size"
               value={getState().pagination.pageSize}
@@ -423,22 +432,18 @@ function EnrollmentsTable() {
                 setPageSize(Number(e.target.value));
               }}
             >
-              {[
-                10,
-                20,
-                30,
-                40,
-                50,
-                100,
-                200,
-                getPrePaginationRowModel().rows.length > 200 ? getPrePaginationRowModel().rows.length : undefined
-              ]
-                .filter((size) => typeof size === "number")
-                .map((pageSize) => (
-                  <option key={pageSize} value={pageSize}>
-                    Show {pageSize === getPrePaginationRowModel().rows.length ? `All (${pageSize})` : pageSize}
+              {[25, 50, 100, 200, 500].map((pageSizeOption) => (
+                <option key={pageSizeOption} value={pageSizeOption}>
+                  Show {pageSizeOption}
+                </option>
+              ))}
+              {/* Add option to show all if current count is not in the default list and is greater than largest default option */}
+              {![25, 50, 100, 200, 500].includes(getPrePaginationRowModel().rows.length) &&
+                getPrePaginationRowModel().rows.length > 500 && (
+                  <option key="all" value={getPrePaginationRowModel().rows.length}>
+                    Show All ({getPrePaginationRowModel().rows.length})
                   </option>
-                ))}
+                )}
             </NativeSelect.Field>
           </NativeSelect.Root>
         </HStack>
@@ -447,6 +452,9 @@ function EnrollmentsTable() {
       <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
         <HStack justifyContent="flex-end">
           {" "}
+          <Button variant="outline" size="sm" onClick={() => openImportCSVModal()}>
+            Import from CSV
+          </Button>
           <AddSingleStudent />
         </HStack>
       </Box>
@@ -504,6 +512,7 @@ function EnrollmentsTable() {
           isLoading={isDeletingUserRole}
         />
       )}
+      {isImportCSVModalOpen && <ImportStudentsCSVModal isOpen={isImportCSVModalOpen} onClose={closeImportCSVModal} />}
     </VStack>
   );
 }
