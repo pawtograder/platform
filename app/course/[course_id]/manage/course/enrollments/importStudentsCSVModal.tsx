@@ -24,7 +24,7 @@ type ImportStudentsCSVModalProps = {
   onClose: () => void;
 };
 
-const ImportStudentsCSVModal: React.FC<ImportStudentsCSVModalProps> = ({ isOpen, onClose }) => {
+const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps) => {
   const { course_id } = useParams<{ course_id: string }>();
   const [isLoading, setIsLoading] = useState(false);
   const invalidate = useInvalidate();

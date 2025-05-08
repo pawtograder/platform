@@ -25,7 +25,7 @@ import { useInvalidate, useList, useDelete } from "@refinedev/core";
 import Link from "next/link";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { FaLink, FaEdit, FaUserCog, FaTrash } from "react-icons/fa";
+import { FaLink, FaEdit, FaUserCog, FaTrash, FaFileImport } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EditStudentProfileModal from "./editStudentProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
@@ -452,7 +452,8 @@ function EnrollmentsTable() {
       <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
         <HStack justifyContent="flex-end">
           {" "}
-          <Button variant="outline" size="sm" onClick={() => openImportCSVModal()}>
+          <Button onClick={() => openImportCSVModal()}>
+            <Icon as={FaFileImport} mr="2" />
             Import from CSV
           </Button>
           <AddSingleStudent />
