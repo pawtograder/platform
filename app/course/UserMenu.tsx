@@ -1,6 +1,5 @@
 "use client";
 
-import { SkeletonCircle } from "@/components/ui/skeleton";
 import {
   Box,
   Button,
@@ -20,9 +19,9 @@ import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
 import { FaCircleUser } from "react-icons/fa6";
 
-import { useInvalidate } from "@refinedev/core";
+import { useInvalidate, useList, useOne } from "@refinedev/core";
 
-import { Avatar } from "@/components/ui/avatar";
+import { Avatar } from "@chakra-ui/react";
 import { ColorModeButton } from "@/components/ui/color-mode";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
@@ -34,6 +33,7 @@ import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } fr
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
+import { toaster, Toaster } from "@/components/ui/toaster";
 
 function SupportMenu() {
   return (
@@ -91,7 +91,7 @@ const DropBoxAvatar = ({
   profile
 }: {
   avatarLink: string | null | undefined;
-  setAvatarLink: Dispatch<SetStateAction<string | null | undefined>>;
+  setAvatarLink: Dispatch<SetStateAction<string | null>>;
   avatarType: string;
   profile: UserProfile | null;
 }) => {
@@ -104,9 +104,8 @@ const DropBoxAvatar = ({
    * Uploads user image to avatar storage bucket under avatars/[userid]/[courseid]/uuid.extension
    * @param file jpg or png image file for new avatar
    */
-  const completeAvatarUpload = async (file: File) => {
+  const completeAvatarUpload = useCallback(async (file: File) => {
     if (!profile || !user) {
-      console.log("Profile and active user required to complete avatar upload");
       return;
     }
     const uuid = crypto.randomUUID();
@@ -117,34 +116,31 @@ const DropBoxAvatar = ({
       .upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
 
     if (!data || error) {
-      console.log("Error uploading avatar image with " + error.message);
+      toaster.error({
+        title: "Error uploading avatar image",
+        description: error instanceof Error ? error.message : "An unknown error occurred"
+      });
     } else {
       setAvatarLink(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
       );
     }
-  };
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
-      console.log("File input change event triggered");
       const files = event.target.files;
-
       if (!files || files.length === 0) {
-        console.log("No files were selected");
         return;
       }
-
       const file = files[0];
-      console.log("Selected file:", file);
-
       if (file.type === "image/jpeg" || file.type === "image/png") {
         completeAvatarUpload(file);
       } else {
         alert("Please upload a valid JPEG or PNG image file.");
       }
-
       // Reset the input value so the same file can be selected again if needed
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -162,18 +158,17 @@ const DropBoxAvatar = ({
         accept="image/jpeg,image/png"
         onChange={handleFileChange}
       />
+      <Toaster />
       <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px">
         <Box position="relative" width="100px" height="100px">
           <Menu.Root positioning={{ placement: "bottom" }}>
             <Text fontWeight={"700"}>{avatarType} Avatar</Text>
             <Menu.Trigger asChild>
               <Button background="transparent" height="100%" width="100%" borderRadius={"full"}>
-                <Avatar
-                  position="absolute"
-                  width="100%"
-                  height="100%"
-                  src={avatarLink || undefined}
-                  size="sm"
+                <Avatar.Root
+                  colorPalette="gray"
+                  width="100px"
+                  height="100px"
                   _hover={{
                     boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
                     background: "rgba(0, 0, 0, 0.5)",
@@ -182,7 +177,10 @@ const DropBoxAvatar = ({
                   }}
                   onMouseEnter={() => setIsHovered(true)}
                   onMouseLeave={() => setIsHovered(false)}
-                />
+                >
+                  <Avatar.Image src={avatarLink || undefined} />
+                  <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
+                </Avatar.Root>
                 {isHovered && (
                   <Flex
                     position="absolute"
@@ -234,46 +232,90 @@ const DropBoxAvatar = ({
  * Modal that handles user profile updates, currently only avatar changes.
  */
 const ProfileChangesMenu = () => {
-  const [publicAvatarLink, setPublicAvatarLink] = useState<string | undefined | null>(null);
-  const [privateAvatarLink, setPrivateAvatarLink] = useState<string | undefined | null>(null);
-  const [privateProfile, setPrivateProfile] = useState<UserProfile | null>(null);
-  const [publicProfile, setPublicProfile] = useState<UserProfile | null>(null);
+  const [publicAvatarLink, setPublicAvatarLink] = useState<string | null>(null);
+  const [privateAvatarLink, setPrivateAvatarLink] = useState<string | null>(null);
   const supabase = createClient();
   const { course_id } = useParams();
   const { user } = useAuthState();
   const invalidate = useInvalidate();
+
+  const { data } = useList({
+    resource: "user_roles",
+    meta: {
+      filters: [
+        {
+          field: "user_id",
+          operator: "eq",
+          value: user?.id
+        },
+        {
+          field: "course_id",
+          operator: "eq",
+          value: course_id
+        }
+      ]
+    }
+  });
+  const { data: privateProfile } = useOne<UserProfile>({
+    resource: "profiles",
+    id: data?.data[0].private_profile_id
+  });
+
+  const { data: publicProfile } = useOne<UserProfile>({
+    resource: "profiles",
+    id: data?.data[0].public_profile_id
+  });
+
+  useEffect(() => {
+    if (publicProfile) {
+      setPublicAvatarLink(publicProfile?.data.avatar_url);
+    }
+    if (privateProfile) {
+      setPrivateAvatarLink(privateProfile?.data.avatar_url);
+    }
+  }, [publicProfile, privateProfile]);
 
   /**
    * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar
    * storage bucket.
    */
   const updateProfile = async () => {
-    console.log("update profile changed");
     removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
     if (publicAvatarLink && publicProfile) {
       const { error } = await supabase
         .from("profiles")
         .update({ avatar_url: publicAvatarLink })
-        .eq("id", publicProfile.id)
+        .eq("id", publicProfile.data.id)
         .single();
       if (error) {
-        console.log("Error updating user public profile");
+        toaster.error({
+          title: "Error updating user public profile",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
       }
     }
     if (privateAvatarLink && privateProfile) {
       const { error } = await supabase
         .from("profiles")
         .update({ avatar_url: privateAvatarLink })
-        .eq("id", privateProfile.id)
+        .eq("id", privateProfile.data.id)
         .single();
       if (error) {
-        console.log("Error updating user private profile");
+        toaster.error({
+          title: "Error updating user private profile",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
       }
     }
     invalidate({
-      resource: "user_roles",
-      invalidates: ["detail"],
-      id: user!.id
+      resource: "profiles",
+      invalidates: ["list", "detail"],
+      id: publicProfile?.data.id
+    });
+    invalidate({
+      resource: "profiles",
+      invalidates: ["list", "detail"],
+      id: privateProfile?.data.id
     });
   };
   /**
@@ -282,7 +324,11 @@ const ProfileChangesMenu = () => {
   const removeUnusedImages = async (privateLink: string | null, publicLink: string | null) => {
     const { data: storedImages, error } = await supabase.storage.from("avatars").list(`${user?.id}/${course_id}`);
     if (!storedImages || error) {
-      console.log("Error finding stored images");
+      toaster.error({
+        title: "Error finding stored images",
+        description: error instanceof Error ? error.message : "An unknown error occurred"
+      });
+
       return;
     }
     console.log(storedImages);
@@ -293,134 +339,75 @@ const ProfileChangesMenu = () => {
     if (pathsToRemove.length > 0) {
       const { error: removeError } = await supabase.storage.from("avatars").remove(pathsToRemove);
       if (removeError) {
-        console.log("Error removing extra files");
+        toaster.error({
+          title: "Error removing extra files from storage",
+          description: removeError instanceof Error ? removeError.message : "An unknown error occurred"
+        });
       }
     }
   };
 
-  useEffect(() => {
-    const fetchPrivateProfile = async () => {
-      if (course_id) {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!private_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .eq("class_id", Number(course_id))
-          .single();
-        if (error) {
-          console.error(error);
-        }
-        if (data) {
-          setPrivateProfile(data.profiles!);
-          setPrivateAvatarLink(data.profiles!.avatar_url);
-        }
-      } else {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!private_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .limit(1)
-          .single();
-        if (error) {
-          console.error(error);
-        }
-        if (data) {
-          setPrivateProfile(data.profiles!);
-          setPrivateAvatarLink(data.profiles!.avatar_url);
-        }
-      }
-    };
-    fetchPrivateProfile();
-  }, [course_id, user]);
-
-  useEffect(() => {
-    const fetchPublicProfile = async () => {
-      if (course_id) {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!public_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .eq("class_id", Number(course_id))
-          .single();
-        if (error) {
-          console.error(error);
-        }
-        if (data) {
-          setPublicProfile(data.profiles!);
-          setPublicAvatarLink(data.profiles!.avatar_url);
-        }
-      } else {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!public_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .limit(1)
-          .single();
-        if (error) {
-          console.error(error);
-        }
-        if (data) {
-          setPublicProfile(data.profiles!);
-          setPublicAvatarLink(data.profiles!.avatar_url);
-        }
-      }
-    };
-    fetchPublicProfile();
-  }, [course_id, user]);
-
   return (
-    <Dialog.Root size={"md"} placement={"center"}>
-      <Dialog.Trigger asChild>
-        <Flex alignItems={"center"} gap="8px">
-          <Icon as={FaCircleUser} size="md" />
-          <Button colorPalette={"gray"}>Edit Avatar</Button>
-        </Flex>
-      </Dialog.Trigger>
-      <Portal>
-        <Dialog.Backdrop />
-        <Dialog.Positioner>
-          <Dialog.Content>
-            <Dialog.Header>
-              <Dialog.Title>Edit {privateProfile?.name}</Dialog.Title>
-            </Dialog.Header>
-            <Dialog.Body>
-              <Flex flexDirection={"column"} gap="50px">
-                <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
-                  <DropBoxAvatar
-                    avatarLink={publicAvatarLink}
-                    setAvatarLink={setPublicAvatarLink}
-                    avatarType="Public"
-                    profile={publicProfile}
-                  />
-                  <DropBoxAvatar
-                    avatarLink={privateAvatarLink}
-                    setAvatarLink={setPrivateAvatarLink}
-                    avatarType="Private"
-                    profile={privateProfile}
-                  />
+    <>
+      <Toaster />
+      <Dialog.Root size={"md"} placement={"center"}>
+        <Dialog.Trigger asChild>
+          <Flex alignItems={"center"} gap="8px">
+            <Icon as={FaCircleUser} size="md" />
+            <Button colorPalette={"gray"}>Edit Avatar</Button>
+          </Flex>
+        </Dialog.Trigger>
+        <Portal>
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content>
+              <Dialog.Header>
+                <Dialog.Title>Edit {privateProfile?.data.name}</Dialog.Title>
+              </Dialog.Header>
+              <Dialog.Body>
+                <Flex flexDirection={"column"} gap="50px">
+                  <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
+                    <DropBoxAvatar
+                      avatarLink={publicAvatarLink}
+                      setAvatarLink={setPublicAvatarLink}
+                      avatarType="Public"
+                      profile={publicProfile?.data ?? null}
+                    />
+                    <DropBoxAvatar
+                      avatarLink={privateAvatarLink}
+                      setAvatarLink={setPrivateAvatarLink}
+                      avatarType="Private"
+                      profile={privateProfile?.data ?? null}
+                    />
+                  </Flex>
+                  <Text fontStyle={"italic"}>Remember, your public avatar will be visible on anonymous posts.</Text>
                 </Flex>
-                <Text fontStyle={"italic"}>Remember, your public avatar will be visible on anonymous posts.</Text>
-              </Flex>
-            </Dialog.Body>
-            <Dialog.Footer>
-              <Dialog.ActionTrigger asChild>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    removeUnusedImages(privateProfile?.avatar_url ?? null, publicProfile?.avatar_url ?? null)
-                  }
-                >
-                  Cancel
-                </Button>
-              </Dialog.ActionTrigger>
-              <Dialog.ActionTrigger asChild>
-                <Button onClick={updateProfile}>Save</Button>
-              </Dialog.ActionTrigger>
-            </Dialog.Footer>
-          </Dialog.Content>
-        </Dialog.Positioner>
-      </Portal>
-    </Dialog.Root>
+              </Dialog.Body>
+              <Dialog.Footer>
+                <Dialog.ActionTrigger asChild>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setPrivateAvatarLink(privateProfile?.data.avatar_url ?? null);
+                      setPublicAvatarLink(publicProfile?.data.avatar_url ?? null);
+                      removeUnusedImages(
+                        privateProfile?.data.avatar_url ?? null,
+                        publicProfile?.data.avatar_url ?? null
+                      );
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </Dialog.ActionTrigger>
+                <Dialog.ActionTrigger asChild>
+                  <Button onClick={updateProfile}>Save</Button>
+                </Dialog.ActionTrigger>
+              </Dialog.Footer>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Portal>
+      </Dialog.Root>
+    </>
   );
 };
 
@@ -431,46 +418,56 @@ function UserSettingsMenu() {
   const { course_id } = useParams();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
+
+  const { data: dbUser } = useList<{ user_id: string; github_username: string }>({
+    resource: "users",
+    meta: {
+      select: "user_id, github_username",
+      filters: [
+        {
+          field: "user_id",
+          operator: "eq",
+          value: user?.id
+        }
+      ]
+    }
+  });
+
+  const { data: userRole } = useList<{ user_id: string; public_profile_id: string; private_profile_id: string }>({
+    resource: "user_roles",
+    meta: {
+      select: "user_id, public_profile_id, private_profile_id",
+      filters: [
+        {
+          field: "user_id",
+          operator: "eq",
+          value: user?.id
+        },
+        {
+          field: "course_id",
+          operator: "eq",
+          value: course_id
+        }
+      ]
+    }
+  });
+
+  const { data: privateProfile } = useOne<UserProfile>({
+    resource: "profiles",
+    id: userRole?.data[0].private_profile_id
+  });
+
   useEffect(() => {
-    // Fetch profile
-    const fetchProfile = async () => {
-      if (course_id) {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!private_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .eq("class_id", Number(course_id))
-          .single();
-        if (error) {
-          console.error(error);
-          return;
-        }
-        if (data) {
-          setProfile(data.profiles!);
-          if (data.users) {
-            setGitHubUsername(data.users.github_username);
-          }
-        }
-      } else {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!private_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .limit(1)
-          .single();
-        if (error) {
-          console.error(error);
-        }
-        if (data) {
-          setProfile(data.profiles!);
-          if (data.users) {
-            setGitHubUsername(data.users.github_username);
-          }
-        }
-      }
-    };
-    fetchProfile();
-  }, [course_id, user, supabase]);
+    if (privateProfile) {
+      setProfile(privateProfile.data);
+    }
+  }, [privateProfile]);
+
+  useEffect(() => {
+    if (dbUser) {
+      setGitHubUsername(dbUser.data[0].github_username);
+    }
+  }, [dbUser]);
 
   const unlinkGitHub = useCallback(async () => {
     const identities = await supabase.auth.getUserIdentities();
@@ -497,7 +494,10 @@ function UserSettingsMenu() {
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Drawer.Trigger>
-        {profile && profile.avatar_url ? <Avatar size={"sm"} src={profile.avatar_url} /> : <SkeletonCircle size="8" />}
+        <Avatar.Root size="sm" colorPalette="gray">
+          <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
+          <Avatar.Image src={profile?.avatar_url ?? undefined} />
+        </Avatar.Root>
       </Drawer.Trigger>
       <Portal>
         <Drawer.Backdrop />
@@ -509,7 +509,10 @@ function UserSettingsMenu() {
             <Drawer.Body p={2}>
               <VStack alignItems="flex-start">
                 <HStack>
-                  <Avatar src={profile?.avatar_url || undefined} size="sm" />
+                  <Avatar.Root size="sm" colorPalette="gray">
+                    <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
+                    <Avatar.Image src={profile?.avatar_url ?? undefined} />
+                  </Avatar.Root>{" "}
                   <VStack alignItems="flex-start">
                     <Text fontWeight="bold">{profile?.name}</Text>
                   </VStack>
