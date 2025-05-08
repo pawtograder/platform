@@ -20,70 +20,92 @@ import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 
 import { useParams } from "next/navigation";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import AddSingleStudent from "./addSingleStudent";
-import { useInvalidate, useList } from "@refinedev/core";
+import { useInvalidate, useList, useDelete } from "@refinedev/core";
 import Link from "next/link";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { FaLink, FaEdit, FaUserCog } from "react-icons/fa";
+import { FaLink, FaEdit, FaUserCog, FaTrash } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EditStudentProfileModal from "./editStudentProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
+import RemoveStudentModal from "./removeStudentModal";
 import useAuthState from "@/hooks/useAuthState";
+import useModalManager from "@/hooks/useModalManager";
 import { Tooltip } from "@/components/ui/tooltip";
+
+type EditProfileModalData = string; // studentId
+type EditUserRoleModalData = {
+  userRoleId: string;
+  currentRole: UserRoleWithPrivateProfileAndUser["role"];
+  userName: string | null | undefined;
+};
+type RemoveStudentModalData = {
+  userRoleId: string;
+  userName: string | null | undefined;
+  role: UserRoleWithPrivateProfileAndUser["role"];
+};
 
 function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
+  const invalidate = useInvalidate();
+  const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
+
+  const {
+    isOpen: isEditProfileModalOpen,
+    modalData: editingStudentId,
+    openModal: openEditProfileModal,
+    closeModal: closeEditProfileModal
+  } = useModalManager<EditProfileModalData>();
+
+  const {
+    isOpen: isEditUserRoleModalOpen,
+    modalData: editingUserRoleData,
+    openModal: openEditUserRoleModal,
+    closeModal: closeEditUserRoleModal
+  } = useModalManager<EditUserRoleModalData>();
+
+  const {
+    isOpen: isRemoveStudentModalOpen,
+    modalData: removingStudentData,
+    openModal: openRemoveStudentModal,
+    closeModal: closeRemoveStudentModal
+  } = useModalManager<RemoveStudentModalData>();
+
   const [pageCount, setPageCount] = useState(0);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [editingStudentId, setEditingStudentId] = useState<string | undefined>(undefined);
-  const [isEditUserRoleModalOpen, setIsEditUserRoleModalOpen] = useState(false);
-  const [editingUserRoleData, setEditingUserRoleData] = useState<
-    | {
-        userRoleId: string;
-        currentRole: UserRoleWithPrivateProfileAndUser["role"];
-        userName: string | null | undefined;
-      }
-    | undefined
-  >(undefined);
 
-  const handleOpenEditModal = (studentId: string) => {
-    setEditingStudentId(studentId);
-    setIsEditModalOpen(true);
-  };
-
-  const handleCloseEditModal = () => {
-    setIsEditModalOpen(false);
-    setEditingStudentId(undefined);
-  };
-
-  const handleOpenEditUserRoleModal = (data: {
-    userRoleId: string;
-    currentRole: UserRoleWithPrivateProfileAndUser["role"];
-    userName: string | null | undefined;
-  }) => {
-    setEditingUserRoleData(data);
-    setIsEditUserRoleModalOpen(true);
-  };
-
-  const handleCloseEditUserRoleModal = () => {
-    setIsEditUserRoleModalOpen(false);
-    setEditingUserRoleData(undefined);
-  };
-
-  const onModalOpenChange = (details: { open: boolean }) => {
-    if (!details.open) {
-      handleCloseEditModal();
-    }
-  };
-
-  const onUserRoleModalOpenChange = (details: { open: boolean }) => {
-    if (!details.open) {
-      handleCloseEditUserRoleModal();
-    }
-  };
+  const handleConfirmRemoveStudent = useCallback(
+    (userRoleIdToRemove: string) => {
+      deleteUserRole(
+        {
+          resource: "user_roles",
+          id: userRoleIdToRemove
+        },
+        {
+          onSuccess: () => {
+            toaster.create({
+              title: "User Removed",
+              description: `${removingStudentData?.userName || "User"} has been removed from the course.`,
+              type: "success"
+            });
+            invalidate({ resource: "user_roles", invalidates: ["list"] });
+            closeRemoveStudentModal();
+          },
+          onError: (error) => {
+            toaster.create({
+              title: "Error Removing User",
+              description: `Failed to remove user: ${error.message}`,
+              type: "error"
+            });
+            closeRemoveStudentModal();
+          }
+        }
+      );
+    },
+    [deleteUserRole, invalidate, removingStudentData?.userName, closeRemoveStudentModal]
+  );
 
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
@@ -169,40 +191,71 @@ function EnrollmentsTable() {
           const studentProfileId = profile?.id;
           const userRoleEntry = row.original;
           const isCurrentUserRow = currentUser?.id === userRoleEntry.user_id;
-
           const isTargetInstructor = userRoleEntry.role === "instructor";
-          const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
 
-          let tooltipContent = "Edit user role";
+          const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
+          let editRoleTooltipContent = "Edit user role";
           if (isCurrentUserRow) {
-            tooltipContent = "You cannot edit your own role";
+            editRoleTooltipContent = "You cannot edit your own role";
           } else if (isTargetInstructor) {
-            tooltipContent = "Instructors' roles cannot be changed";
+            editRoleTooltipContent = "Instructors' roles cannot be changed";
+          }
+
+          const canRemoveThisUser = !isCurrentUserRow && !isTargetInstructor;
+          let removeUserTooltipContent = "Remove user from course";
+          if (isCurrentUserRow) {
+            removeUserTooltipContent = "You cannot remove yourself";
+          } else if (isTargetInstructor) {
+            removeUserTooltipContent = "Instructors cannot be removed this way";
           }
 
           return (
             <HStack gap={2} justifyContent="center">
               {profile && studentProfileId && (
-                <Icon
-                  as={FaEdit}
-                  aria-label="Edit student profile"
-                  cursor="pointer"
-                  onClick={() => handleOpenEditModal(studentProfileId)}
-                />
+                <Tooltip content="Edit student profile">
+                  <Icon
+                    as={FaEdit}
+                    aria-label="Edit student profile"
+                    cursor="pointer"
+                    onClick={() => openEditProfileModal(studentProfileId)} // Use openModal from hook
+                  />
+                </Tooltip>
               )}
               {userRoleEntry && userRoleEntry.id && userRoleEntry.role && (
-                <Tooltip content={tooltipContent}>
+                <Tooltip content={editRoleTooltipContent}>
                   <Icon
                     as={FaUserCog}
-                    aria-label={tooltipContent}
+                    aria-label={editRoleTooltipContent}
                     cursor={canEditThisUserRole ? "pointer" : "not-allowed"}
                     opacity={canEditThisUserRole ? 1 : 0.5}
                     onClick={() => {
                       if (canEditThisUserRole) {
-                        handleOpenEditUserRoleModal({
+                        openEditUserRoleModal({
+                          // Use openModal from hook
                           userRoleId: String(userRoleEntry.id),
                           currentRole: userRoleEntry.role,
                           userName: profile?.name
+                        });
+                      }
+                    }}
+                  />
+                </Tooltip>
+              )}
+              {userRoleEntry && userRoleEntry.id && (
+                <Tooltip content={removeUserTooltipContent}>
+                  <Icon
+                    as={FaTrash}
+                    aria-label={removeUserTooltipContent}
+                    cursor={canRemoveThisUser ? "pointer" : "not-allowed"}
+                    opacity={canRemoveThisUser ? 1 : 0.5}
+                    color={canRemoveThisUser ? "red.500" : undefined}
+                    onClick={() => {
+                      if (canRemoveThisUser) {
+                        openRemoveStudentModal({
+                          // Use openModal from hook
+                          userRoleId: String(userRoleEntry.id),
+                          userName: profile?.name,
+                          role: userRoleEntry.role
                         });
                       }
                     }}
@@ -214,7 +267,7 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [currentUser]
+    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal] // Dependencies are now the openModal functions from the hook
   );
   const {
     getHeaderGroups,
@@ -398,17 +451,17 @@ function EnrollmentsTable() {
         </HStack>
       </Box>
       {editingStudentId && (
-        <Dialog.Root open={isEditModalOpen} onOpenChange={onModalOpenChange}>
+        <Dialog.Root open={isEditProfileModalOpen} onOpenChange={(details) => !details.open && closeEditProfileModal()}>
           <Portal>
             <Dialog.Backdrop />
             <Dialog.Positioner>
               <Dialog.Content>
                 <Dialog.Header>
                   <Dialog.Title>Edit Student Profile</Dialog.Title>
-                  <Dialog.CloseTrigger onClick={handleCloseEditModal} />
+                  <Dialog.CloseTrigger onClick={closeEditProfileModal} />
                 </Dialog.Header>
                 <Dialog.Body>
-                  <EditStudentProfileModal studentProfileId={editingStudentId} onClose={handleCloseEditModal} />
+                  <EditStudentProfileModal studentProfileId={editingStudentId} onClose={closeEditProfileModal} />
                 </Dialog.Body>
               </Dialog.Content>
             </Dialog.Positioner>
@@ -416,27 +469,40 @@ function EnrollmentsTable() {
         </Dialog.Root>
       )}
       {editingUserRoleData && (
-        <Dialog.Root open={isEditUserRoleModalOpen} onOpenChange={onUserRoleModalOpenChange}>
+        <Dialog.Root
+          open={isEditUserRoleModalOpen}
+          onOpenChange={(details) => !details.open && closeEditUserRoleModal()}
+        >
           <Portal>
             <Dialog.Backdrop />
             <Dialog.Positioner>
               <Dialog.Content>
                 <Dialog.Header>
                   <Dialog.Title>Edit User Role</Dialog.Title>
-                  <Dialog.CloseTrigger onClick={handleCloseEditUserRoleModal} />
+                  <Dialog.CloseTrigger onClick={closeEditUserRoleModal} />
                 </Dialog.Header>
                 <Dialog.Body>
                   <EditUserRoleModal
                     userRoleId={editingUserRoleData.userRoleId}
                     currentRole={editingUserRoleData.currentRole}
                     userName={editingUserRoleData.userName}
-                    onClose={handleCloseEditUserRoleModal}
+                    onClose={closeEditUserRoleModal}
                   />
                 </Dialog.Body>
               </Dialog.Content>
             </Dialog.Positioner>
           </Portal>
         </Dialog.Root>
+      )}
+      {removingStudentData && (
+        <RemoveStudentModal
+          isOpen={isRemoveStudentModalOpen}
+          onClose={closeRemoveStudentModal}
+          studentName={removingStudentData.userName}
+          userRoleId={removingStudentData.userRoleId}
+          onConfirmRemove={handleConfirmRemoveStudent}
+          isLoading={isDeletingUserRole}
+        />
       )}
     </VStack>
   );
