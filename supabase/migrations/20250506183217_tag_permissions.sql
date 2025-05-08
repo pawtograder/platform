@@ -24,7 +24,7 @@ CREATE POLICY "users can view their visible tags for class"
 ON "public"."tags"
 AS PERMISSIVE
 FOR SELECT
-USING (n
+USING (
     visible = true AND 
     user_id = auth.uid() AND
     authorizeforclass("class_id") 
