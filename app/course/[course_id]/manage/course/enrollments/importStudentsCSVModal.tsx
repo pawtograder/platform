@@ -173,8 +173,7 @@ const ImportStudentsCSVModal: React.FC<ImportStudentsCSVModalProps> = ({ isOpen,
                   )}
                 </Field>
                 <Text fontSize="sm" color="gray.500">
-                  The system will attempt to enroll existing users found by email. New users may not be automatically
-                  created by this import.
+                  New users will be enrolled into the course.
                 </Text>
               </VStack>
             </Dialog.Body>
