@@ -331,11 +331,9 @@ const ProfileChangesMenu = () => {
 
       return;
     }
-    console.log(storedImages);
     const pathsToRemove = storedImages
       .filter((image) => !publicLink?.includes(image.name) && !privateLink?.includes(image.name))
       .map((imageToRemove) => `${user?.id}/${course_id}/${imageToRemove.name}`);
-    console.log(pathsToRemove);
     if (pathsToRemove.length > 0) {
       const { error: removeError } = await supabase.storage.from("avatars").remove(pathsToRemove);
       if (removeError) {
