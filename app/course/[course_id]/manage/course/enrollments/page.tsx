@@ -14,13 +14,6 @@ import {
   Text,
   VStack,
   Dialog,
-  DialogBackdrop,
-  DialogBody,
-  DialogCloseTrigger,
-  DialogContent,
-  DialogHeader,
-  DialogPositioner,
-  DialogTitle,
   Portal
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
@@ -33,15 +26,28 @@ import { useInvalidate, useList } from "@refinedev/core";
 import Link from "next/link";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { FaLink, FaEdit } from "react-icons/fa";
+import { FaLink, FaEdit, FaUserCog } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EditStudentProfileModal from "./editStudentProfileModal";
+import EditUserRoleModal from "./editUserRoleModal";
+import useAuthState from "@/hooks/useAuthState";
+import { Tooltip } from "@/components/ui/tooltip";
 
 function EnrollmentsTable() {
   const { course_id } = useParams();
+  const { user: currentUser } = useAuthState();
   const [pageCount, setPageCount] = useState(0);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingStudentId, setEditingStudentId] = useState<string | undefined>(undefined);
+  const [isEditUserRoleModalOpen, setIsEditUserRoleModalOpen] = useState(false);
+  const [editingUserRoleData, setEditingUserRoleData] = useState<
+    | {
+        userRoleId: string;
+        currentRole: UserRoleWithPrivateProfileAndUser["role"];
+        userName: string | null | undefined;
+      }
+    | undefined
+  >(undefined);
 
   const handleOpenEditModal = (studentId: string) => {
     setEditingStudentId(studentId);
@@ -53,9 +59,29 @@ function EnrollmentsTable() {
     setEditingStudentId(undefined);
   };
 
+  const handleOpenEditUserRoleModal = (data: {
+    userRoleId: string;
+    currentRole: UserRoleWithPrivateProfileAndUser["role"];
+    userName: string | null | undefined;
+  }) => {
+    setEditingUserRoleData(data);
+    setIsEditUserRoleModalOpen(true);
+  };
+
+  const handleCloseEditUserRoleModal = () => {
+    setIsEditUserRoleModalOpen(false);
+    setEditingUserRoleData(undefined);
+  };
+
   const onModalOpenChange = (details: { open: boolean }) => {
     if (!details.open) {
       handleCloseEditModal();
+    }
+  };
+
+  const onUserRoleModalOpenChange = (details: { open: boolean }) => {
+    if (!details.open) {
+      handleCloseEditUserRoleModal();
     }
   };
 
@@ -141,24 +167,54 @@ function EnrollmentsTable() {
         cell: ({ row }) => {
           const profile = row.original.profiles;
           const studentProfileId = profile?.id;
+          const userRoleEntry = row.original;
+          const isCurrentUserRow = currentUser?.id === userRoleEntry.user_id;
 
-          if (profile && studentProfileId) {
-            return (
-              <Box textAlign="center">
+          const isTargetInstructor = userRoleEntry.role === "instructor";
+          const canEditThisUserRole = !isCurrentUserRow && !isTargetInstructor;
+
+          let tooltipContent = "Edit user role";
+          if (isCurrentUserRow) {
+            tooltipContent = "You cannot edit your own role";
+          } else if (isTargetInstructor) {
+            tooltipContent = "Instructors' roles cannot be changed";
+          }
+
+          return (
+            <HStack gap={2} justifyContent="center">
+              {profile && studentProfileId && (
                 <Icon
                   as={FaEdit}
                   aria-label="Edit student profile"
                   cursor="pointer"
                   onClick={() => handleOpenEditModal(studentProfileId)}
                 />
-              </Box>
-            );
-          }
-          return null;
+              )}
+              {userRoleEntry && userRoleEntry.id && userRoleEntry.role && (
+                <Tooltip content={tooltipContent}>
+                  <Icon
+                    as={FaUserCog}
+                    aria-label={tooltipContent}
+                    cursor={canEditThisUserRole ? "pointer" : "not-allowed"}
+                    opacity={canEditThisUserRole ? 1 : 0.5}
+                    onClick={() => {
+                      if (canEditThisUserRole) {
+                        handleOpenEditUserRoleModal({
+                          userRoleId: String(userRoleEntry.id),
+                          currentRole: userRoleEntry.role,
+                          userName: profile?.name
+                        });
+                      }
+                    }}
+                  />
+                </Tooltip>
+              )}
+            </HStack>
+          );
         }
       }
     ],
-    []
+    [currentUser]
   );
   const {
     getHeaderGroups,
@@ -251,117 +307,141 @@ function EnrollmentsTable() {
             ))}
           </Table.Header>
           <Table.Body>
-            {getRowModel()
-              .rows //.filter(row => row.getValue("profiles.name") !== undefined)
-              .map((row) => {
-                return (
-                  <Table.Row key={row.id}>
-                    {row
-                      .getVisibleCells()
-                      .filter((c) => c.column.id !== "class_id")
-                      .map((cell) => {
-                        return (
-                          <Table.Cell key={cell.id}>
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </Table.Cell>
-                        );
-                      })}
-                  </Table.Row>
-                );
-              })}
+            {getRowModel().rows.map((row) => (
+              <Table.Row
+                key={row.id}
+                onClick={row.getToggleSelectedHandler()}
+                cursor="pointer"
+                bg={row.getIsSelected() ? "bg.subtle" : undefined}
+              >
+                {row
+                  .getVisibleCells()
+                  .filter((cell) => cell.column.id !== "class_id")
+                  .map((cell) => {
+                    return (
+                      <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
+                    );
+                  })}
+              </Table.Row>
+            ))}
           </Table.Body>
         </Table.Root>
-        <HStack>
-          <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
-            {"<<"}
-          </Button>
-          <Button id="previous-button" onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
-            {"<"}
-          </Button>
-          <Button id="next-button" onClick={() => nextPage()} disabled={!getCanNextPage()}>
-            {">"}
-          </Button>
-          <Button onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
-            {">>"}
-          </Button>
-          <VStack>
-            <Text>Page</Text>
-            <Text>
-              {getState().pagination.pageIndex + 1} of {pageCount}
+        <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
+          <HStack gap={2}>
+            <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
+              {"<< First"}
+            </Button>
+            <Button onClick={() => previousPage()} disabled={!getCanPreviousPage()}>
+              {"< Previous"}
+            </Button>
+            <Button onClick={() => nextPage()} disabled={!getCanNextPage()}>
+              {"Next >"}
+            </Button>
+            <Button onClick={() => setPageIndex(pageCount - 1)} disabled={!getCanNextPage()}>
+              {"Last >>"}
+            </Button>
+          </HStack>
+
+          <HStack gap={2} alignItems="center">
+            <Text whiteSpace="nowrap">
+              Page{" "}
+              <strong>
+                {getState().pagination.pageIndex + 1} of {pageCount}
+              </strong>
             </Text>
-          </VStack>
-          <VStack>
-            | Go to page:
-            <input
-              title="Go to page"
+            <Text whiteSpace="nowrap">| Go to page:</Text>
+            <Input
               type="number"
               defaultValue={getState().pagination.pageIndex + 1}
               onChange={(e) => {
                 const page = e.target.value ? Number(e.target.value) - 1 : 0;
                 setPageIndex(page);
               }}
+              width="100px"
+              textAlign="center"
             />
-          </VStack>
-          <VStack>
-            <Text id="page-size-label">Show</Text>
-            <NativeSelect.Root>
-              <NativeSelect.Field
-                aria-labelledby="page-size-label"
-                title="Select page size"
-                value={"" + getState().pagination.pageSize}
-                onChange={(event) => {
-                  setPageSize(Number(event.target.value));
-                }}
-              >
-                {[25, 50, 100, 200, 500].map((pageSize) => (
+          </HStack>
+
+          <NativeSelect.Root>
+            <NativeSelect.Field
+              aria-label="Select page size"
+              value={getState().pagination.pageSize}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                setPageSize(Number(e.target.value));
+              }}
+            >
+              {[
+                10,
+                20,
+                30,
+                40,
+                50,
+                100,
+                200,
+                getPrePaginationRowModel().rows.length > 200 ? getPrePaginationRowModel().rows.length : undefined
+              ]
+                .filter((size) => typeof size === "number")
+                .map((pageSize) => (
                   <option key={pageSize} value={pageSize}>
-                    Show {pageSize}
+                    Show {pageSize === getPrePaginationRowModel().rows.length ? `All (${pageSize})` : pageSize}
                   </option>
                 ))}
-              </NativeSelect.Field>
-            </NativeSelect.Root>
-          </VStack>
+            </NativeSelect.Field>
+          </NativeSelect.Root>
         </HStack>
-        <div>{getPrePaginationRowModel().rows.length} Rows</div>
+        <Toaster />
       </VStack>
-      <Box
-        p="2"
-        border="1px solid"
-        borderColor="border.muted"
-        backgroundColor="bg.subtle"
-        height="55px"
-        style={{
-          position: "fixed",
-          bottom: 0,
-          right: 0,
-          width: "100%"
-        }}
-      >
-        <HStack>
+      <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
+        <HStack justifyContent="flex-end">
+          {" "}
           <AddSingleStudent />
         </HStack>
       </Box>
       {editingStudentId && (
-        <Dialog.Root open={isEditModalOpen} onOpenChange={onModalOpenChange} size="xl">
+        <Dialog.Root open={isEditModalOpen} onOpenChange={onModalOpenChange}>
           <Portal>
-            <DialogBackdrop />
-            <DialogPositioner>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Edit Student Profile</DialogTitle>
-                </DialogHeader>
-                <DialogCloseTrigger />
-                <DialogBody>
+            <Dialog.Backdrop />
+            <Dialog.Positioner>
+              <Dialog.Content>
+                <Dialog.Header>
+                  <Dialog.Title>Edit Student Profile</Dialog.Title>
+                  <Dialog.CloseTrigger onClick={handleCloseEditModal} />
+                </Dialog.Header>
+                <Dialog.Body>
                   <EditStudentProfileModal studentProfileId={editingStudentId} onClose={handleCloseEditModal} />
-                </DialogBody>
-              </DialogContent>
-            </DialogPositioner>
+                </Dialog.Body>
+              </Dialog.Content>
+            </Dialog.Positioner>
+          </Portal>
+        </Dialog.Root>
+      )}
+      {editingUserRoleData && (
+        <Dialog.Root open={isEditUserRoleModalOpen} onOpenChange={onUserRoleModalOpenChange}>
+          <Portal>
+            <Dialog.Backdrop />
+            <Dialog.Positioner>
+              <Dialog.Content>
+                <Dialog.Header>
+                  <Dialog.Title>Edit User Role</Dialog.Title>
+                  <Dialog.CloseTrigger onClick={handleCloseEditUserRoleModal} />
+                </Dialog.Header>
+                <Dialog.Body>
+                  <EditUserRoleModal
+                    userRoleId={editingUserRoleData.userRoleId}
+                    currentRole={editingUserRoleData.currentRole}
+                    userName={editingUserRoleData.userName}
+                    onClose={handleCloseEditUserRoleModal}
+                  />
+                </Dialog.Body>
+              </Dialog.Content>
+            </Dialog.Positioner>
           </Portal>
         </Dialog.Root>
       )}
     </VStack>
   );
 }
+
 export default function EnrollmentsPage() {
   const { course_id } = useParams();
   const [isSyncing, setIsSyncing] = useState(false);

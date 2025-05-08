@@ -1,7 +1,7 @@
 "use client";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Heading, VStack, NativeSelectRoot, NativeSelectField, HStack, Text } from "@chakra-ui/react";
+import { Heading, VStack, NativeSelect, HStack, Text } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { useForm } from "react-hook-form";
@@ -100,15 +100,19 @@ export default function EditUserRoleModal({ userRoleId, currentRole, userName, o
       <form onSubmit={handleSubmit(onSubmit)}>
         <VStack gap={4} align="stretch">
           <Field label="New Role" errorText={errors.role?.message?.toString()} invalid={!!errors.role} required>
-            <NativeSelectRoot id="role">
-              <NativeSelectField {...register("role", { required: "Role is required." })}>
+            <NativeSelect.Root id="role" disabled={currentRole === "instructor"}>
+              <NativeSelect.Field
+                {...register("role", {
+                  required: "Role is required."
+                })}
+              >
                 {availableRoles.map((roleOption) => (
                   <option key={roleOption} value={roleOption}>
                     {roleOption.charAt(0).toUpperCase() + roleOption.slice(1)}
                   </option>
                 ))}
-              </NativeSelectField>
-            </NativeSelectRoot>
+              </NativeSelect.Field>
+            </NativeSelect.Root>
           </Field>
 
           <HStack gap={3} mt={3} justify="flex-end">
