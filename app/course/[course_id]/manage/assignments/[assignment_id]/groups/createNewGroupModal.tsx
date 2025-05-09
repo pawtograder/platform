@@ -1,7 +1,10 @@
 import { useUngroupedProfiles } from "@/app/course/[course_id]/assignments/[assignment_id]/manageGroupWidget";
 import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupCreate, EdgeFunctionError } from "@/lib/edgeFunctions";
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import {
+  Assignment,
+  AssignmentGroupWithMembersInvitationsAndJoinRequests
+} from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
@@ -28,7 +31,7 @@ export default function CreateNewGroup({
         course_id: assignment.class_id,
         assignment_id: assignment.id,
         name: newGroupName,
-        invitees: []
+        invitees: selectedMembers.map((member) => member.value)
       },
       supabase
     )
@@ -79,7 +82,12 @@ export default function CreateNewGroup({
                     The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
                   </Field.ErrorText>
                 </Field.Root>
-                <Field.Root>
+                <Field.Root
+                  invalid={
+                    (assignment.min_group_size !== null && selectedMembers.length < assignment.min_group_size) ||
+                    (assignment.max_group_size !== null && selectedMembers.length > assignment.max_group_size)
+                  }
+                >
                   <Field.Label>Select unassigned students to place in the group</Field.Label>
                   <Select
                     onChange={(e) => setSelectedMembers(e)}
@@ -87,7 +95,7 @@ export default function CreateNewGroup({
                     options={ungroupedProfiles.map((p) => ({ label: p.name, value: p.id }))}
                   />
                   <Field.ErrorText>
-                    Groups for this assignment must contain minimum ${assignment.min_group_size ?? "any"} and maximum $
+                    Groups for this assignment must contain minimum ${assignment.min_group_size ?? "1"} and maximum $
                     {assignment.max_group_size ?? "any"} members.
                   </Field.ErrorText>
                 </Field.Root>
@@ -99,7 +107,7 @@ export default function CreateNewGroup({
                   Cancel
                 </Button>
               </Dialog.ActionTrigger>
-              <Button onClick={createGroupWithAssignees} colorPalette={"gray"}>
+              <Button onClick={createGroupWithAssignees} colorPalette={"green"}>
                 Save
               </Button>
             </Dialog.Footer>

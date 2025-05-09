@@ -121,9 +121,8 @@ export default function BulkAssignGroup({
                   {ungroupedProfiles.length} student profile{ungroupedProfiles.length > 1 ? "s are" : " is"} unassigned
                   for this assignment.
                 </Heading>
-                <Field.Root invalid={!/^\d+$/.test(groupTextField) || groupSize > ungroupedProfiles.length}>
+                <Field.Root invalid={groupSize > ungroupedProfiles.length || groupSize < 1}>
                   <Field.Label>How many students would you like in each group?</Field.Label>
-
                   <NumberInput.Root
                     value={groupTextField}
                     onValueChange={(e) => {
@@ -133,14 +132,12 @@ export default function BulkAssignGroup({
                   >
                     <NumberInput.Input />
                   </NumberInput.Root>
-                  {!/^\d+$/.test(groupTextField) && <Field.ErrorText>Please enter a number</Field.ErrorText>}
-                  {groupSize < 1 ||
-                    (groupSize > ungroupedProfiles.length && (
-                      <Field.ErrorText>
-                        Please enter a number from {assignment.min_group_size ?? "1"} -{" "}
-                        {assignment.max_group_size ?? ungroupedProfiles.length}
-                      </Field.ErrorText>
-                    ))}
+                  {(groupSize < 1 || groupSize > ungroupedProfiles.length) && (
+                    <Field.ErrorText>
+                      Please enter a number from {assignment.min_group_size ?? "1"} -{" "}
+                      {assignment.max_group_size ?? ungroupedProfiles.length}
+                    </Field.ErrorText>
+                  )}
                   <Field.HelperText>In the case of an uneven number, we will prefer larger groups.</Field.HelperText>
                 </Field.Root>
                 <Button
@@ -179,7 +176,7 @@ export default function BulkAssignGroup({
                   Cancel
                 </Button>
               </Dialog.ActionTrigger>
-              <Button onClick={createGroupWithAssignees} colorPalette={"gray"}>
+              <Button onClick={createGroupWithAssignees} colorPalette={"green"} disabled={generatedGroups.length === 0}>
                 Assign
               </Button>
             </Dialog.Footer>
