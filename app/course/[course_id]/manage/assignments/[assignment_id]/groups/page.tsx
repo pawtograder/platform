@@ -1,6 +1,6 @@
 "use client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Box, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
+import { Box, Flex, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import { toaster } from "@/components/ui/toaster";
@@ -11,6 +11,8 @@ import { Heading, Skeleton, Text } from "@chakra-ui/react";
 import { useInvalidate, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
+import CreateNewGroup from "./createNewGroupModal";
+import BulkAssignGroup from "./bulkAssignGroupModal";
 
 type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
@@ -19,6 +21,7 @@ type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"]["Tables"]["user_roles"]["Relationships"],
   "*, profiles!private_profile_id(*,assignment_groups_members!assignment_groups_members_profile_id_fkey(*))"
 >;
+
 function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignment; course_id: number }) {
   const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
     resource: "assignment_groups",
@@ -41,6 +44,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   const groupsData = groups?.data;
   const invalidate = useInvalidate();
   const supabase = createClient();
+
   const [loading, setLoading] = useState<boolean>(false);
   const updateGroupForStudent = useCallback(
     async (
@@ -76,6 +80,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     },
     [supabase, invalidate, course_id]
   );
+
   if (!groupsData || !assignment) {
     return (
       <Box>
@@ -115,6 +120,14 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           Changes are applied in real time: use with caution.
         </Text>
       </Text>
+      <Heading size="md" pt="10px">
+        Options
+      </Heading>
+      <Flex gap="10px" flexDir={"row"}>
+        <CreateNewGroup groups={groupsData} assignment={assignment} />
+        <BulkAssignGroup groups={groupsData} assignment={assignment} />
+      </Flex>
+
       <Table.Root maxW="4xl" striped>
         <Table.Header>
           <Table.Row>

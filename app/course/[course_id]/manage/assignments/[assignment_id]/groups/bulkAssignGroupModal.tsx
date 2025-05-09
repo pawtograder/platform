@@ -1,0 +1,191 @@
+import { toaster } from "@/components/ui/toaster";
+import { assignmentGroupCreate, EdgeFunctionError } from "@/lib/edgeFunctions";
+import {
+  Assignment,
+  AssignmentGroupWithMembersInvitationsAndJoinRequests,
+  UserProfile
+} from "@/utils/supabase/DatabaseTypes";
+import { Button, Dialog, Field, Flex, Heading, NumberInput, Portal, Table } from "@chakra-ui/react";
+import { useEffect, useMemo, useState } from "react";
+import { createClient } from "@/utils/supabase/client";
+import { useInvalidate } from "@refinedev/core";
+import { useStudentRoster } from "@/hooks/useClassProfiles";
+
+type SampleGroup = {
+  name: string;
+  members: UserProfile[];
+};
+
+function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
+  const students = useStudentRoster();
+  const ungroupedProfiles = useMemo(() => {
+    if (!groups) {
+      return [];
+    }
+    return students.filter(
+      (p: { is_private_profile: boolean; id: string }) =>
+        p.is_private_profile && !groups.some((g) => g.assignment_groups_members.some((m) => m.profile_id === p.id))
+    );
+  }, [students, groups]);
+  return ungroupedProfiles;
+}
+
+export default function BulkAssignGroup({
+  groups,
+  assignment
+}: {
+  groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  assignment: Assignment;
+}) {
+  const supabase = createClient();
+  const invalidate = useInvalidate();
+
+  const [groupTextField, setGroupTextField] = useState<string>("");
+  const [groupSize, setGroupSize] = useState<number>(0);
+  const ungroupedProfiles = useUngroupedProfiles(groups);
+  const [generatedGroups, setGeneratedGroups] = useState<SampleGroup[]>([]);
+
+  /**
+   * When group field is changed to a new number, update groupsize
+   */
+  useEffect(() => {
+    console.log("text field changed to: " + groupTextField);
+    if (typeof parseInt(groupTextField) === "number") {
+      setGroupSize(parseInt(groupTextField));
+    }
+  }, [setGroupTextField]);
+
+  const createGroupWithAssignees = async () => {
+    assignmentGroupCreate(
+      {
+        course_id: assignment.class_id,
+        assignment_id: assignment.id,
+        name: crypto.randomUUID(),
+        invitees: []
+      },
+      supabase
+    )
+      .then(() => {
+        toaster.create({ title: "Group created", description: "", type: "success" });
+        invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+        invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+        invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+      })
+      .catch((e) => {
+        if (e instanceof EdgeFunctionError) {
+          toaster.create({ title: "Error: " + e.message, description: e.details, type: "error" });
+        }
+      });
+  };
+
+  const generateGroups = async () => {
+    const newGroups = [];
+    // shuffle ungrouped profiles
+    for (let i = ungroupedProfiles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j], ungroupedProfiles[i]];
+    }
+    // create as many even groups as possible
+    let index = 0;
+    while (index <= ungroupedProfiles.length - groupSize) {
+      newGroups.push({ name: crypto.randomUUID(), members: ungroupedProfiles.slice(index, index + groupSize) });
+      index += groupSize;
+    }
+    // spread extras across created groups
+    while (index < ungroupedProfiles.length && newGroups.length > 0) {
+      const createdGroup: SampleGroup = newGroups.pop()!;
+      createdGroup?.members.push(ungroupedProfiles[index]);
+      newGroups.push(createdGroup);
+      index += 1;
+    }
+    setGeneratedGroups(newGroups);
+  };
+
+  return (
+    <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom" size="lg">
+      <Dialog.Trigger asChild>
+        <Button size="sm" variant="outline">
+          Bulk Assign Groups
+        </Button>
+      </Dialog.Trigger>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content>
+            <Dialog.Header>
+              <Dialog.Title>Bulk Assign Groups</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <Flex flexDir="column" gap="10px">
+                <Heading size="md">
+                  {ungroupedProfiles.length} student profile{ungroupedProfiles.length > 1 ? "s are" : " is"} unassigned
+                  for this assignment.
+                </Heading>
+                <Field.Root invalid={!/^\d+$/.test(groupTextField) || groupSize > ungroupedProfiles.length}>
+                  <Field.Label>How many students would you like in each group?</Field.Label>
+
+                  <NumberInput.Root
+                    value={groupTextField}
+                    onValueChange={(e) => {
+                      setGroupTextField(e.value);
+                      setGroupSize(e.valueAsNumber);
+                    }}
+                  >
+                    <NumberInput.Input />
+                  </NumberInput.Root>
+                  {!/^\d+$/.test(groupTextField) && <Field.ErrorText>Please enter a number</Field.ErrorText>}
+                  {groupSize < 1 ||
+                    (groupSize > ungroupedProfiles.length && (
+                      <Field.ErrorText>
+                        Please enter a number from {assignment.min_group_size ?? "1"} -{" "}
+                        {assignment.max_group_size ?? ungroupedProfiles.length}
+                      </Field.ErrorText>
+                    ))}
+                  <Field.HelperText>In the case of an uneven number, we will prefer larger groups.</Field.HelperText>
+                </Field.Root>
+                <Button
+                  onClick={() => generateGroups()}
+                  colorPalette={"gray"}
+                  disabled={Number.isNaN(groupSize) || groupSize < 1 || groupSize > ungroupedProfiles.length}
+                >
+                  Generate Groups
+                </Button>
+                <Table.Root></Table.Root>
+                {generatedGroups.length > 0 && (
+                  <Table.Root>
+                    <Table.Header>
+                      <Table.Row>
+                        <Table.ColumnHeader>Name</Table.ColumnHeader>
+                        <Table.ColumnHeader>Members</Table.ColumnHeader>
+                      </Table.Row>
+                    </Table.Header>
+                    <Table.Body>
+                      {generatedGroups.map((group, index) => {
+                        return (
+                          <Table.Row key={index}>
+                            <Table.Cell>{group.name}</Table.Cell>
+                            <Table.Cell>{group.members.map((member) => member.name + " ")}</Table.Cell>
+                          </Table.Row>
+                        );
+                      })}
+                    </Table.Body>
+                  </Table.Root>
+                )}
+              </Flex>
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline" colorPalette={"gray"}>
+                  Cancel
+                </Button>
+              </Dialog.ActionTrigger>
+              <Button onClick={createGroupWithAssignees} colorPalette={"gray"}>
+                Assign
+              </Button>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
+  );
+}
