@@ -407,6 +407,58 @@ export type Database = {
           }
         ];
       };
+      assignment_handout_commits: {
+        Row: {
+          assignment_id: number;
+          author: string | null;
+          class_id: number | null;
+          created_at: string;
+          id: number;
+          message: string;
+          sha: string;
+        };
+        Insert: {
+          assignment_id: number;
+          author?: string | null;
+          class_id?: number | null;
+          created_at?: string;
+          id?: number;
+          message: string;
+          sha: string;
+        };
+        Update: {
+          assignment_id?: number;
+          author?: string | null;
+          class_id?: number | null;
+          created_at?: string;
+          id?: number;
+          message?: string;
+          sha?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assignment_handout_commit_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_commit_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "assignment_handout_commits_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignments: {
         Row: {
           allow_student_formed_groups: boolean | null;
@@ -422,6 +474,7 @@ export type Database = {
           has_autograder: boolean;
           has_handgrader: boolean;
           id: number;
+          latest_template_sha: string | null;
           max_group_size: number | null;
           max_late_tokens: number;
           min_group_size: number | null;
@@ -446,6 +499,7 @@ export type Database = {
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
+          latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
           min_group_size?: number | null;
@@ -470,6 +524,7 @@ export type Database = {
           has_autograder?: boolean;
           has_handgrader?: boolean;
           id?: number;
+          latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
           min_group_size?: number | null;
@@ -1918,6 +1973,7 @@ export type Database = {
           profile_id: string | null;
           repository: string;
           synced_handout_sha: string | null;
+          synced_repo_sha: string | null;
         };
         Insert: {
           assignment_group_id?: number | null;
@@ -1928,6 +1984,7 @@ export type Database = {
           profile_id?: string | null;
           repository: string;
           synced_handout_sha?: string | null;
+          synced_repo_sha?: string | null;
         };
         Update: {
           assignment_group_id?: number | null;
@@ -1938,6 +1995,7 @@ export type Database = {
           profile_id?: string | null;
           repository?: string;
           synced_handout_sha?: string | null;
+          synced_repo_sha?: string | null;
         };
         Relationships: [
           {
@@ -3254,12 +3312,14 @@ export type Database = {
           class_id: number | null;
           grader_repo: string | null;
           id: number | null;
+          name: string | null;
           repository: string | null;
+          score: number | null;
           sha: string | null;
         };
         Relationships: [
           {
-            foreignKeyName: "submissions_class_id_fkey";
+            foreignKeyName: "grader_results_class_id_fkey";
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";

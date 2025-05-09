@@ -3,12 +3,12 @@
 // This enables autocomplete, go to definition, etc.
 
 // Setup type definitions for built-in Supabase Runtime APIs
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { validateOIDCToken, getRepoTarballURL } from "../_shared/GitHubWrapper.ts";
+import { getRepoTarballURL, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
 async function handleRequest(req: Request) {
   const url = req.url;
   const lastURLPart = url.split("/").pop();
@@ -28,12 +28,16 @@ async function handleRequest(req: Request) {
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  const { data: graderData } = await adminSupabase
+  const { data: graderData, error: graderError } = await adminSupabase
     .from("autograder")
-    .select("*, assignments(id, submission_files, class_id)")
+    .select("*, assignments(id, class_id)")
     .eq("grader_repo", repository)
     .limit(1)
     .single();
+  if (graderError) {
+    console.error(graderError);
+    throw new UserVisibleError("Error fetching grader data");
+  }
   if (graderData) {
     //It's a grader repo
     if (!workflow_ref.endsWith(`.github/workflows/regression-test.yml@refs/heads/main`)) {

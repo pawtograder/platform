@@ -1,13 +1,13 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { App, Octokit, RequestError, Endpoints } from "https://esm.sh/octokit?dts";
+import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
 
+import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
-import { createHash } from "node:crypto";
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GitHubOIDCToken = {
@@ -157,7 +157,11 @@ export async function getRepoTarballURL(repo: string, sha?: string) {
       .from("graders")
       .upload(`${repo}/${resolved_sha}/archive.tgz`, grader.data as ArrayBuffer);
     if (saveGraderError) {
-      throw new Error(`Failed to save grader: ${saveGraderError.message}`);
+      if (saveGraderError.message === "The resource already exists") {
+        //This is fine, just continue
+      } else {
+        throw new Error(`Failed to save grader: ${saveGraderError.message}`);
+      }
     }
     //Return the grader
     const { data: secondAttempt, error: secondError } = await adminSupabase.storage
