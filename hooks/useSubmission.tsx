@@ -117,7 +117,7 @@ class SubmissionController {
       );
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => {},
+          unsubscribe: () => { },
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -180,7 +180,7 @@ class SubmissionController {
       );
     }
   }
-  constructor() {}
+  constructor() { }
 
   get isReady() {
     return this._submission !== undefined;
@@ -581,6 +581,10 @@ export function useRubricCriteriaInstances({
   throw new Error("Either criteria or rubric_id must be provided");
 }
 export function useSubmissionReview(reviewId?: number | null) {
+  const ctx = useContext(SubmissionContext);
+  if (!ctx) {
+    return undefined;
+  }
   const controller = useSubmissionController();
   const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
   if (!reviewId) {
