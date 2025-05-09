@@ -20,8 +20,8 @@ type GitHubCommit = {
   author: {
     name: string;
     email: string;
-  }
-}
+  };
+};
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
   payload: WebhookPayload,
@@ -155,9 +155,12 @@ async function handlePushToTemplateRepo(
     }
   }
   for (const assignment of assignments) {
-    const { error: assignmentUpdateError } = await adminSupabase.from("assignments").update({
-      latest_template_sha: payload.commits[0].id
-    }).eq("id", assignment.id);
+    const { error: assignmentUpdateError } = await adminSupabase
+      .from("assignments")
+      .update({
+        latest_template_sha: payload.commits[0].id
+      })
+      .eq("id", assignment.id);
     if (assignmentUpdateError) {
       console.error(assignmentUpdateError);
       throw new Error("Failed to update assignment");
@@ -169,7 +172,7 @@ async function handlePushToTemplateRepo(
         message: commit.message,
         sha: commit.id,
         author: commit.author.name,
-        class_id: assignment.class_id,
+        class_id: assignment.class_id
       }))
     );
     if (error) {

@@ -106,9 +106,12 @@ async function handleRequest(req: Request) {
         assignment.classes!.slug!,
         github_username
       );
-      await adminSupabase.from("repositories").update({
-        synced_repo_sha: headSha
-      }).eq("id", dbRepo!.id);
+      await adminSupabase
+        .from("repositories")
+        .update({
+          synced_repo_sha: headSha
+        })
+        .eq("id", dbRepo!.id);
     } catch (e) {
       console.log(`Error creating repo: ${repoName}`);
       console.error(e);

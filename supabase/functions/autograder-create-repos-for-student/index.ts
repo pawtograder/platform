@@ -174,10 +174,13 @@ async function handleRequest(req: Request) {
         const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
         console.log(`courseSlug: ${courseSlug}`);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername]);
-        await adminSupabase.from("repositories").update({
-          synced_repo_sha: new_repo_sha,
-          synced_handout_sha: assignment.latest_template_sha
-        }).eq("id", dbRepo!.id);
+        await adminSupabase
+          .from("repositories")
+          .update({
+            synced_repo_sha: new_repo_sha,
+            synced_handout_sha: assignment.latest_template_sha
+          })
+          .eq("id", dbRepo!.id);
 
         return new_repo_sha;
       } catch (e) {
