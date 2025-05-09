@@ -40,9 +40,6 @@ async function handleRequest(req: Request) {
   }
   if (graderData) {
     //It's a grader repo
-    if (!workflow_ref.endsWith(`.github/workflows/regression-test.yml@refs/heads/main`)) {
-      throw new Error(`Invalid workflow, got ${workflow_ref}`);
-    }
     try {
       //Validate that the regression test repo is registered for this grader
       const { data: regressionTestRepoData } = await adminSupabase

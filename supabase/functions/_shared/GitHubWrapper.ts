@@ -1,7 +1,9 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
+import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
+
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
 
@@ -62,6 +64,8 @@ const installations: {
   id: number;
   octokit: Octokit;
 }[] = [];
+const MyOctokit = Octokit.plugin(throttling);
+
 async function getOctoKit(repoName: string) {
   if (installations.length === 0) {
     const _installations = await app.octokit.request("GET /app/installations");
@@ -69,12 +73,22 @@ async function getOctoKit(repoName: string) {
       installations.push({
         orgName: i.account?.login || "",
         id: i.id,
-        octokit: new Octokit({
+        octokit: new MyOctokit({
           authStrategy: createAppAuth,
           auth: {
             appId: Deno.env.get("GITHUB_APP_ID") || -1,
             privateKey: Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "",
             installationId: i.id
+          },
+          throttle: {
+            onRateLimit: (_retryAfter, options, _octokit, _retryCount) => {
+              console.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
+              return true;
+            },
+            onSecondaryRateLimit: (_retryAfter, options, _octokit) => {
+              octokit.log.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
+              return true;
+            }
           }
         })
       });

@@ -15,12 +15,12 @@ import { Controller, FieldValues } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useParams } from "next/navigation";
-import { useCallback, useState } from "react";
 import { useCourse } from "@/hooks/useAuthState";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
-import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useList } from "@refinedev/core";
+import { UseFormReturnType } from "@refinedev/react-hook-form";
+import { useParams } from "next/navigation";
+import { useCallback, useState } from "react";
 function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   const { course_id } = useParams();
   const { data: otherAssignments } = useList({
@@ -226,6 +226,32 @@ export default function AssignmentForm({
           </Fieldset.Content>
           <Fieldset.Content>
             <Field
+              label="Template repository"
+              helperText="A link to a repository that will be used as a template for each student's assignment"
+              errorText={errors.template_repo?.message?.toString()}
+              invalid={errors.template_repo ? true : false}
+            >
+              <Controller
+                control={control}
+                name="template_repo"
+                render={({ field }) => {
+                  return (
+                    <RepoSelector
+                      templateReposOnly
+                      name={field.name}
+                      value={field.value ? field.value : ""}
+                      onBlur={field.onBlur}
+                      onChange={(val) => {
+                        field.onChange(val);
+                      }}
+                    />
+                  );
+                }}
+              />
+            </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Field
               label={`Release Date (${course.classes.time_zone})`}
               helperText="Date that students can see the assignment"
               errorText={errors.release_date?.message?.toString()}
@@ -279,32 +305,6 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <GroupConfigurationSubform form={form} />
-          <Fieldset.Content>
-            <Field
-              label="Template repository"
-              helperText="A link to a repository that will be used as a template for each student's assignment"
-              errorText={errors.template_repo?.message?.toString()}
-              invalid={errors.template_repo ? true : false}
-            >
-              <Controller
-                control={control}
-                name="template_repo"
-                render={({ field }) => {
-                  return (
-                    <RepoSelector
-                      templateReposOnly
-                      name={field.name}
-                      value={field.value ? field.value : ""}
-                      onBlur={field.onBlur}
-                      onChange={(val) => {
-                        field.onChange(val);
-                      }}
-                    />
-                  );
-                }}
-              />
-            </Field>
-          </Fieldset.Content>
           <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green">
               Save
