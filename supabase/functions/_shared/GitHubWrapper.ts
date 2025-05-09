@@ -328,7 +328,7 @@ export async function getRepos(org: string) {
   return repos;
 }
 
-export async function createRepo(org: string, repoName: string, template_repo: string) {
+export async function createRepo(org: string, repoName: string, template_repo: string): string {
   console.log("Creating repo", org, repoName, template_repo);
   const octokit = await getOctoKit(org);
   if (!octokit) {
@@ -346,6 +346,21 @@ export async function createRepo(org: string, repoName: string, template_repo: s
       name: repoName,
       private: true
     });
+    //Disable squash merging
+    await octokit.request("PATCH /repos/{owner}/{repo}", {
+      owner: org,
+      repo: repoName,
+      allow_squash_merge: false
+    });
+    //Get the head SHA
+    const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner: org,
+      repo: repoName,
+      ref: "heads/main"
+    });
+    console.log(`Created repo ${org}/${repoName} with head SHA ${heads.data.object.sha}`);
+    console.log(`Heads: ${JSON.stringify(heads.data)}`);
+    return heads.data.object.sha;
   } catch (e) {
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
@@ -357,12 +372,7 @@ export async function createRepo(org: string, repoName: string, template_repo: s
       throw e;
     }
   }
-  //Disable squash merging
-  await octokit.request("PATCH /repos/{owner}/{repo}", {
-    owner: org,
-    repo: repoName,
-    allow_squash_merge: false
-  });
+
 }
 async function listFilesInRepoDirectory(
   octokit: Octokit,

@@ -1,10 +1,10 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-import { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 type RepoToCreate = {
   name: string;
@@ -89,7 +89,8 @@ async function handleRequest(req: Request) {
         assignment_group: assignmentGroup?.id,
         assignment_id: assignmentId,
         repository: assignment.classes!.github_org! + "/" + repoName,
-        class_id: courseId
+        class_id: courseId,
+        synced_handout_sha: assignment.latest_template_sha
       })
       .select("id")
       .single();
@@ -98,13 +99,16 @@ async function handleRequest(req: Request) {
     }
 
     try {
-      await github.createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
+      const headSha = await github.createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
       await github.syncRepoPermissions(
         assignment.classes!.github_org!,
         repoName,
         assignment.classes!.slug!,
         github_username
       );
+      await adminSupabase.from("repositories").update({
+        synced_repo_sha: headSha
+      }).eq("id", dbRepo!.id);
     } catch (e) {
       console.log(`Error creating repo: ${repoName}`);
       console.error(e);

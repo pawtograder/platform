@@ -1,4 +1,5 @@
 import { createEventHandler, WebhookPayload } from "https://esm.sh/@octokit/webhooks?dts";
+import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parse } from "jsr:@std/yaml";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -7,13 +8,20 @@ import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import { createCheckRun, getFileFromRepo, triggerWorkflow, updateCheckRun } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
 
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
+type GitHubCommit = {
+  message: string;
+  id: string;
+  author: {
+    name: string;
+    email: string;
+  }
+}
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
   payload: WebhookPayload,
@@ -144,6 +152,29 @@ async function handlePushToTemplateRepo(
         console.error(error);
         throw new Error("Failed to update autograder workflow hash");
       }
+    }
+  }
+  for (const assignment of assignments) {
+    const { error: assignmentUpdateError } = await adminSupabase.from("assignments").update({
+      latest_template_sha: payload.commits[0].id
+    }).eq("id", assignment.id);
+    if (assignmentUpdateError) {
+      console.error(assignmentUpdateError);
+      throw new Error("Failed to update assignment");
+    }
+    //Store the commit for the template repo
+    const { error } = await adminSupabase.from("assignment_handout_commits").insert(
+      payload.commits.map((commit: GitHubCommit) => ({
+        assignment_id: assignment.id,
+        message: commit.message,
+        sha: commit.id,
+        author: commit.author.name,
+        class_id: assignment.class_id,
+      }))
+    );
+    if (error) {
+      console.error(error);
+      throw new Error("Failed to store assignment handout commit");
     }
   }
 }
