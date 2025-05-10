@@ -5,18 +5,17 @@
 // Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { UserVisibleError, SecurityError } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { validateOIDCToken, cloneRepository, getRepoTarballURL, updateCheckRun } from "../_shared/GitHubWrapper.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { Open as openZip } from "npm:unzipper";
 import { createHash } from "node:crypto";
-import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { addHours, addSeconds, format } from "npm:date-fns@4";
 import { TZDate } from "npm:@date-fns/tz";
-import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
+import { addHours, addSeconds, format } from "npm:date-fns@4";
 import micromatch from "npm:micromatch";
+import { Open as openZip } from "npm:unzipper";
+import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
+import { cloneRepository, getRepoTarballURL, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
+import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 function formatSeconds(seconds: number) {
   const days = Math.floor(seconds / 86400);
@@ -64,7 +63,7 @@ async function handleRequest(req: Request) {
       .select("*, user_roles(*), classes(time_zone)")
       .eq("repository_id", repoData.id)
       .eq("sha", sha)
-      .maybeSingle();
+      .maybeSingle(); //TODO: Select the MOST RECENT check run, so that when we call Regrade, we know who triggered it
     if (checkRunError || !checkRun) {
       throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError?.message}`);
     }

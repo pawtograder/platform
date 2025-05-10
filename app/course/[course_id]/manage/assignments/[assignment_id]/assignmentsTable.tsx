@@ -70,7 +70,7 @@ export default function AssignmentsTable() {
       {
         id: "autograder_score",
         accessorKey: "autograder_score",
-        header: "Student-Visible Autograder Score"
+        header: "Autograder Score"
       },
       {
         id: "total_score",

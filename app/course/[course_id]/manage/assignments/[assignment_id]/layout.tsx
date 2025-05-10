@@ -2,10 +2,10 @@
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
-import { useParams, usePathname } from "next/navigation";
-import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaUsers } from "react-icons/fa";
 import NextLink from "next/link";
+import { useParams, usePathname } from "next/navigation";
 import React from "react";
+import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
@@ -22,7 +22,12 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaCalendar
   },
   { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
-  { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay }
+  { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
+  {
+    label: "Rerun Autograder",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
+    icon: FaPooStorm
+  }
 ];
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
   const { course_id, assignment_id } = useParams();

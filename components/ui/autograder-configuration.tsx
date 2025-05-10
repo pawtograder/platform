@@ -1,15 +1,15 @@
+import { Alert } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Box, Button, Heading, Link, List, Spinner, Table, Text } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import yaml from "yaml";
-import { Alert } from "@/components/ui/alert";
-import { Box, Button, Heading, Spinner, Link, Table, Text, List } from "@chakra-ui/react";
-import { Checkbox } from "@/components/ui/checkbox";
 
+import { EdgeFunctionError, repositoryGetFile } from "@/lib/edgeFunctions";
+import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "@/utils/PawtograderYml";
+import { createClient } from "@/utils/supabase/client";
 import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
-import { EdgeFunctionError, repositoryGetFile } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
-import { MutationTestUnit, RegularTestUnit, GradedUnit, PawtograderConfig } from "@/utils/PawtograderYml";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
@@ -56,11 +56,13 @@ export default function AutograderConfiguration({
   const { data: repos, isLoading: reposLoading } = useList<Repository>({
     resource: "repositories",
     meta: { select: "*" },
+    pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number(assignment_id) }]
   });
   const { data: regressionTestRepos, isLoading: regressionTestReposLoading } = useList<AutograderRegressionTest>({
     resource: "autograder_regression_test",
     meta: { select: "*" },
+    pagination: { pageSize: 1000 },
     filters: [{ field: "autograder_id", operator: "eq", value: Number(assignment_id) }]
   });
   useEffect(() => {
