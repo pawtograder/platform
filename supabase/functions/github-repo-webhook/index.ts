@@ -334,13 +334,23 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
 }
 
 Deno.serve(async (req) => {
+  if (req.headers.get("Authorization") !== Deno.env.get("EVENTBRIDGE_SECRET")) {
+    return Response.json({
+      message: "Unauthorized"
+    }, {
+      status: 401
+    });
+  }
+  const body = await req.json();
+  const eventName = body['detail-type'];
+  const id = body.id;
   console.log(
-    `Received webhook for ${req.headers.get("x-github-event")} delivery ${req.headers.get("x-github-delivery")}`
+    `Received webhook for ${eventName} id ${id}`
   );
   await eventHandler.receive({
-    id: req.headers.get("x-github-delivery") || "",
-    name: req.headers.get("x-github-event") as "push",
-    payload: await req.json()
+    id: id || "",
+    name: eventName as "push" | "check_run",
+    payload: body.detail
   });
   return Response.json({
     message: "Triggered webhook"
