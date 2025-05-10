@@ -1,8 +1,8 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 async function handleRequest(req: Request) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
@@ -93,7 +93,7 @@ async function handleRequest(req: Request) {
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           console.log("Creating repo");
-          await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
+          const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
 
           console.log("Repo created");
           //Add the repo to the database
@@ -105,7 +105,9 @@ async function handleRequest(req: Request) {
             class_id: assignment.class_id!,
             assignment_group_id: group.id,
             assignment_id: assignment.id,
-            repository: `${c.classes!.github_org}/${repoName}`
+            repository: `${c.classes!.github_org}/${repoName}`,
+            synced_repo_sha: headSha,
+            synced_handout_sha: assignment.latest_template_sha
           });
           if (error) {
             console.error(error);
@@ -169,11 +171,18 @@ async function handleRequest(req: Request) {
       }
 
       try {
-        const repo = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
+        const new_repo_sha = await createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
         console.log(`courseSlug: ${courseSlug}`);
         await syncRepoPermissions(assignment.classes!.github_org!, repoName, courseSlug!, [githubUsername]);
+        await adminSupabase
+          .from("repositories")
+          .update({
+            synced_repo_sha: new_repo_sha,
+            synced_handout_sha: assignment.latest_template_sha
+          })
+          .eq("id", dbRepo!.id);
 
-        return repo;
+        return new_repo_sha;
       } catch (e) {
         console.log(`Error creating repo: ${repoName}`);
         console.error(e);
