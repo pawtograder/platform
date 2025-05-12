@@ -335,18 +335,19 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
 
 Deno.serve(async (req) => {
   if (req.headers.get("Authorization") !== Deno.env.get("EVENTBRIDGE_SECRET")) {
-    return Response.json({
-      message: "Unauthorized"
-    }, {
-      status: 401
-    });
+    return Response.json(
+      {
+        message: "Unauthorized"
+      },
+      {
+        status: 401
+      }
+    );
   }
   const body = await req.json();
-  const eventName = body['detail-type'];
+  const eventName = body["detail-type"];
   const id = body.id;
-  console.log(
-    `Received webhook for ${eventName} id ${id}`
-  );
+  console.log(`Received webhook for ${eventName} id ${id}`);
   await eventHandler.receive({
     id: id || "",
     name: eventName as "push" | "check_run",
