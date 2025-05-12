@@ -12,7 +12,16 @@ import {
   NativeSelect,
   Table,
   Text,
-  VStack
+  VStack,
+  Dialog,
+  DialogBackdrop,
+  DialogBody,
+  DialogCloseTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogPositioner,
+  DialogTitle,
+  Portal
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
@@ -24,11 +33,31 @@ import { useInvalidate, useList } from "@refinedev/core";
 import Link from "next/link";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { FaLink } from "react-icons/fa";
+import { FaLink, FaEdit } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import EditStudentProfileModal from "./editStudentProfileModal";
+
 function EnrollmentsTable() {
   const { course_id } = useParams();
   const [pageCount, setPageCount] = useState(0);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingStudentId, setEditingStudentId] = useState<string | undefined>(undefined);
+
+  const handleOpenEditModal = (studentId: string) => {
+    setEditingStudentId(studentId);
+    setIsEditModalOpen(true);
+  };
+
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setEditingStudentId(undefined);
+  };
+
+  const onModalOpenChange = (details: { open: boolean }) => {
+    if (!details.open) {
+      handleCloseEditModal();
+    }
+  };
 
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
@@ -47,6 +76,13 @@ function EnrollmentsTable() {
         accessorKey: "profiles.name",
         header: "Name",
         enableColumnFilter: true,
+        cell: ({ row }) => {
+          const profile = row.original.profiles;
+          if (profile && profile.name) {
+            return profile.name;
+          }
+          return "N/A";
+        },
         filterFn: (row, id, filterValue) => {
           const name = row.original.profiles?.name;
           if (!name) return false;
@@ -95,6 +131,28 @@ function EnrollmentsTable() {
         cell: ({ row }) => {
           if (row.original.canvas_id) {
             return <Icon aria-label="Linked to Canvas" as={FaLink} />;
+          }
+          return null;
+        }
+      },
+      {
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => {
+          const profile = row.original.profiles;
+          const studentProfileId = profile?.id;
+
+          if (profile && studentProfileId) {
+            return (
+              <Box textAlign="center">
+                <Icon
+                  as={FaEdit}
+                  aria-label="Edit student profile"
+                  cursor="pointer"
+                  onClick={() => handleOpenEditModal(studentProfileId)}
+                />
+              </Box>
+            );
           }
           return null;
         }
@@ -165,20 +223,25 @@ function EnrollmentsTable() {
                       <Table.ColumnHeader key={header.id}>
                         {header.isPlaceholder ? null : (
                           <>
-                            <Text onClick={header.column.getToggleSortingHandler()}>
+                            <Text
+                              onClick={header.column.getToggleSortingHandler()}
+                              textAlign={header.id === "actions" ? "center" : undefined}
+                            >
                               {flexRender(header.column.columnDef.header, header.getContext())}
                               {{
                                 asc: " 🔼",
                                 desc: " 🔽"
                               }[header.column.getIsSorted() as string] ?? null}
                             </Text>
-                            <Input
-                              id={header.id}
-                              value={(header.column.getFilterValue() as string) ?? ""}
-                              onChange={(e) => {
-                                header.column.setFilterValue(e.target.value);
-                              }}
-                            />
+                            {header.id !== "actions" && (
+                              <Input
+                                id={header.id}
+                                value={(header.column.getFilterValue() as string) ?? ""}
+                                onChange={(e) => {
+                                  header.column.setFilterValue(e.target.value);
+                                }}
+                              />
+                            )}
                           </>
                         )}
                       </Table.ColumnHeader>
@@ -244,9 +307,9 @@ function EnrollmentsTable() {
             <NativeSelect.Root>
               <NativeSelect.Field
                 aria-labelledby="page-size-label"
+                title="Select page size"
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
-                  console.log(event.target.value);
                   setPageSize(Number(event.target.value));
                 }}
               >
@@ -278,6 +341,24 @@ function EnrollmentsTable() {
           <AddSingleStudent />
         </HStack>
       </Box>
+      {editingStudentId && (
+        <Dialog.Root open={isEditModalOpen} onOpenChange={onModalOpenChange} size="xl">
+          <Portal>
+            <DialogBackdrop />
+            <DialogPositioner>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit Student Profile</DialogTitle>
+                </DialogHeader>
+                <DialogCloseTrigger />
+                <DialogBody>
+                  <EditStudentProfileModal studentProfileId={editingStudentId} onClose={handleCloseEditModal} />
+                </DialogBody>
+              </DialogContent>
+            </DialogPositioner>
+          </Portal>
+        </Dialog.Root>
+      )}
     </VStack>
   );
 }
@@ -291,13 +372,15 @@ export default function EnrollmentsPage() {
   });
   return (
     <Container>
-      <Heading>Enrollments</Heading>
-      <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4">
-        <Heading size="sm">Canvas Links</Heading>
-        <Text fontSize="sm" color="fg.muted">
+      <Heading my="4">Enrollments</Heading>
+      <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4" mb="4">
+        <Heading size="sm" mb={3}>
+          Canvas Links
+        </Heading>
+        <Text fontSize="sm" color="fg.muted" mb={3}>
           Enrollments in this course are linked to the following Canvas sections:
         </Text>
-        <List.Root as="ul" pl="4">
+        <List.Root as="ul" pl="4" mb={3}>
           {sections?.data?.map((section) => (
             <List.Item key={section.id} as="li" fontSize="sm">
               <Link href={`https://canvas.instructure.com/courses/${section.canvas_course_id}`}>{section.name}</Link>
