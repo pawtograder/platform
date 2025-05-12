@@ -26,7 +26,7 @@ import Link from "@/components/ui/link";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import useAuthState from "@/hooks/useAuthState";
+import useAuthState, { useCourse } from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Avatar } from "@chakra-ui/react";
@@ -238,32 +238,16 @@ const ProfileChangesMenu = () => {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const invalidate = useInvalidate();
+  const { private_profile_id, public_profile_id } = useCourse();
 
-  const { data } = useList({
-    resource: "user_roles",
-    meta: {
-      filters: [
-        {
-          field: "user_id",
-          operator: "eq",
-          value: user?.id
-        },
-        {
-          field: "course_id",
-          operator: "eq",
-          value: course_id
-        }
-      ]
-    }
-  });
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
-    id: data?.data[0].private_profile_id
+    id: private_profile_id
   });
 
   const { data: publicProfile } = useOne<UserProfile>({
     resource: "profiles",
-    id: data?.data[0].public_profile_id
+    id: public_profile_id
   });
 
   useEffect(() => {
@@ -418,53 +402,31 @@ function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
   const supabase = createClient();
   const { user } = useAuthState();
-  const { course_id } = useParams();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
-
+  const { private_profile_id } = useCourse();
+  const { data: privateProfile } = useOne<UserProfile>({
+    resource: "profiles",
+    id: private_profile_id
+  });
+  const uid = user?.id;
+  console.log(uid);
   const { data: dbUser } = useList<{ user_id: string; github_username: string }>({
     resource: "users",
     meta: {
-      select: "user_id, github_username",
-      filters: [
-        {
-          field: "user_id",
-          operator: "eq",
-          value: user?.id
-        }
-      ]
+      select: "user_id, github_username"
+    },
+    filters: [
+      {
+        field: "user_id",
+        operator: "eq",
+        value: uid
+      }
+    ],
+    queryOptions: {
+      enabled: uid !== undefined
     }
   });
-
-  const { data: userRole } = useList<{ user_id: string; public_profile_id: string; private_profile_id: string }>({
-    resource: "user_roles",
-    meta: {
-      select: "user_id, public_profile_id, private_profile_id",
-      filters: [
-        {
-          field: "user_id",
-          operator: "eq",
-          value: user?.id
-        },
-        {
-          field: "course_id",
-          operator: "eq",
-          value: course_id
-        }
-      ]
-    }
-  });
-
-  const { data: privateProfile } = useOne<UserProfile>({
-    resource: "profiles",
-    id: userRole?.data[0].private_profile_id
-  });
-
-  useEffect(() => {
-    if (privateProfile) {
-      setProfile(privateProfile.data);
-    }
-  }, [privateProfile]);
+  console.log(dbUser);
 
   useEffect(() => {
     if (dbUser) {
@@ -498,8 +460,8 @@ function UserSettingsMenu() {
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Drawer.Trigger>
         <Avatar.Root size="sm" colorPalette="gray">
-          <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
-          <Avatar.Image src={profile?.avatar_url ?? undefined} />
+          <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+          <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
         </Avatar.Root>
       </Drawer.Trigger>
       <Portal>
@@ -513,11 +475,11 @@ function UserSettingsMenu() {
               <VStack alignItems="flex-start" gap={0}>
                 <HStack pb={2}>
                   <Avatar.Root size="sm" colorPalette="gray">
-                    <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
-                    <Avatar.Image src={profile?.avatar_url ?? undefined} />
+                    <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+                    <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
                   </Avatar.Root>{" "}
                   <VStack alignItems="flex-start" gap={0}>
-                    <Text fontWeight="bold">{profile?.name}</Text>
+                    <Text fontWeight="bold">{privateProfile?.data.name}</Text>
                     {gitHubUsername && (
                       <Text fontSize="sm">
                         GitHub:{" "}
