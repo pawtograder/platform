@@ -15,25 +15,25 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
+import { FaCircleUser } from "react-icons/fa6";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
-import { FaCircleUser } from "react-icons/fa6";
 
 import { useInvalidate, useList, useOne } from "@refinedev/core";
 
-import { Avatar } from "@chakra-ui/react";
 import { ColorModeButton } from "@/components/ui/color-mode";
+import Link from "@/components/ui/link";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster, Toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { Avatar } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
-import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
-import { toaster, Toaster } from "@/components/ui/toaster";
 
 function SupportMenu() {
   return (
@@ -350,17 +350,17 @@ const ProfileChangesMenu = () => {
       <Toaster />
       <Dialog.Root size={"md"} placement={"center"}>
         <Dialog.Trigger asChild>
-          <Flex alignItems={"center"} gap="8px">
+          <Button variant="ghost" colorPalette={"gray"} w="100%" justifyContent="flex-start" size="sm" py={0}>
             <Icon as={FaCircleUser} size="md" />
-            <Button colorPalette={"gray"}>Edit Avatar</Button>
-          </Flex>
+            Edit Avatar
+          </Button>
         </Dialog.Trigger>
         <Portal>
           <Dialog.Backdrop />
           <Dialog.Positioner>
             <Dialog.Content>
               <Dialog.Header>
-                <Dialog.Title>Edit {privateProfile?.data.name}</Dialog.Title>
+                <Dialog.Title>Edit Avatar</Dialog.Title>
               </Dialog.Header>
               <Dialog.Body>
                 <Flex flexDirection={"column"} gap="50px">
@@ -378,7 +378,10 @@ const ProfileChangesMenu = () => {
                       profile={privateProfile?.data ?? null}
                     />
                   </Flex>
-                  <Text fontStyle={"italic"}>Remember, your public avatar will be visible on anonymous posts.</Text>
+                  <Text fontSize="sm" color="fg.muted">
+                    Your public avatar will be used on anonymous posts along with your pseudonym, &quot;
+                    {publicProfile?.data.name}&quot;.
+                  </Text>
                 </Flex>
               </Dialog.Body>
               <Dialog.Footer>
@@ -398,7 +401,9 @@ const ProfileChangesMenu = () => {
                   </Button>
                 </Dialog.ActionTrigger>
                 <Dialog.ActionTrigger asChild>
-                  <Button onClick={updateProfile}>Save</Button>
+                  <Button onClick={updateProfile} colorPalette="green">
+                    Save
+                  </Button>
                 </Dialog.ActionTrigger>
               </Dialog.Footer>
             </Dialog.Content>
@@ -505,43 +510,64 @@ function UserSettingsMenu() {
               <CloseButton size="sm" position="absolute" right={4} top={4} />
             </Drawer.CloseTrigger>
             <Drawer.Body p={2}>
-              <VStack alignItems="flex-start">
-                <HStack>
+              <VStack alignItems="flex-start" gap={0}>
+                <HStack pb={2}>
                   <Avatar.Root size="sm" colorPalette="gray">
                     <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
                     <Avatar.Image src={profile?.avatar_url ?? undefined} />
                   </Avatar.Root>{" "}
-                  <VStack alignItems="flex-start">
+                  <VStack alignItems="flex-start" gap={0}>
                     <Text fontWeight="bold">{profile?.name}</Text>
+                    {gitHubUsername && (
+                      <Text fontSize="sm">
+                        GitHub:{" "}
+                        <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
+                          {gitHubUsername}
+                        </Link>
+                      </Text>
+                    )}
                   </VStack>
                 </HStack>
-                <HStack>
-                  <Icon as={FaGithub} size="md" />
-                  {!gitHubUsername && (
-                    <Button onClick={linkGitHub} colorPalette="gray">
-                      Link GitHub
-                    </Button>
-                  )}
-                  {gitHubUsername && (
-                    <>
-                      <Text fontSize="sm">Linked to {gitHubUsername}</Text>{" "}
-                      <PopConfirm
-                        triggerLabel="Unlink GitHub"
-                        trigger={
-                          <Button variant="ghost" colorPalette="red" size="sm" p={0}>
-                            <Icon as={FaUnlink} />
-                          </Button>
-                        }
-                        confirmHeader="Unlink GitHub"
-                        confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
-                        onConfirm={() => {
-                          unlinkGitHub();
-                        }}
-                        onCancel={() => {}}
-                      ></PopConfirm>
-                    </>
-                  )}
-                </HStack>
+                {!gitHubUsername && (
+                  <Button
+                    onClick={linkGitHub}
+                    colorPalette="gray"
+                    w="100%"
+                    variant="ghost"
+                    size="sm"
+                    justifyContent="flex-start"
+                    py={0}
+                  >
+                    <Icon as={FaGithub} size="md" />
+                    Link GitHub
+                  </Button>
+                )}
+                {gitHubUsername && (
+                  <>
+                    <PopConfirm
+                      triggerLabel="Unlink GitHub"
+                      trigger={
+                        <Button
+                          variant="ghost"
+                          colorPalette="red"
+                          size="sm"
+                          w="100%"
+                          justifyContent="flex-start"
+                          py={0}
+                        >
+                          <Icon as={FaUnlink} size="md" />
+                          Unlink GitHub
+                        </Button>
+                      }
+                      confirmHeader="Unlink GitHub"
+                      confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
+                      onConfirm={() => {
+                        unlinkGitHub();
+                      }}
+                      onCancel={() => {}}
+                    ></PopConfirm>
+                  </>
+                )}
                 <ProfileChangesMenu />
                 <Button
                   variant="ghost"
