@@ -1,8 +1,10 @@
 "use client";
+import { Field } from "@/components/ui/field";
 import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCourse } from "@/hooks/useAuthState";
-import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
 import {
   Assignment,
   AssignmentDueDateException,
@@ -25,16 +27,13 @@ import {
   Text,
   Textarea
 } from "@chakra-ui/react";
-import { Field } from "@/components/ui/field";
 import { TZDate } from "@date-fns/tz";
 import { useDelete, useList, useOne } from "@refinedev/core";
+import { useForm } from "@refinedev/react-hook-form";
 import { addHours } from "date-fns";
 import { useParams } from "next/navigation";
-import { useForm } from "@refinedev/react-hook-form";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCallback } from "react";
 import { FaTrash } from "react-icons/fa";
-import { PopConfirm } from "@/components/ui/popconfirm";
 function AdjustDueDateDialog({
   student,
   group,
@@ -227,12 +226,14 @@ export default function DueDateExceptions() {
     resource: "assignment_groups_members",
     queryOptions: { enabled: !!assignment },
     meta: { select: "*, assignment_groups(*)" },
+    pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }]
   });
   const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
     queryOptions: { enabled: !!course },
     liveMode: "auto",
+    pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }],
     sorters: [{ field: "created_at", order: "desc" }]
   });

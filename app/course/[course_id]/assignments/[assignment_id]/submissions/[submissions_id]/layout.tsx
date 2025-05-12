@@ -56,7 +56,6 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
-
 // Create a mapping of icon names to their components
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const iconMap: { [key: string]: any } = {
@@ -133,7 +132,9 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
       const newSubmission = event.payload as Submission;
       if (
         newSubmission.assignment_group_id === submission.assignment_group_id &&
-        newSubmission.profile_id === submission.profile_id
+        newSubmission.profile_id === submission.profile_id &&
+        newSubmission.id !== submission.id &&
+        newSubmission.is_active
       ) {
         setHasNewSubmission(true);
       }
@@ -565,7 +566,7 @@ function UnGradedGradingSummary() {
         This assignment is worth a total of {totalMaxScore} points, broken down as follows:
       </Text>
       <List.Root as="ul" fontSize="sm" color="text.muted">
-        {submission.assignments.autograder_points && submission.assignments.total_points && (
+        {submission.assignments.autograder_points !== null && submission.assignments.total_points !== null && (
           <List.Item>
             <Text as="span" fontWeight="bold">
               Hand Grading:
@@ -580,7 +581,7 @@ function UnGradedGradingSummary() {
           </Text>{" "}
           {graderResultsMaxScore} points, results shown below.
         </List.Item>
-        {graderResultsMaxScore && totalMaxScore && graderResultsMaxScore > totalMaxScore && (
+        {graderResultsMaxScore !== undefined && totalMaxScore !== null && graderResultsMaxScore > totalMaxScore && (
           <List.Item>
             <Text as="span" fontWeight="bold">
               Hidden Automated Checks:
@@ -636,9 +637,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
     <Flex direction="column" borderColor="border.muted" borderWidth="2px" borderRadius="md" minW="0px">
       <HStack pl={4} pr={4} pt={2} alignItems="center" justify="space-between" align="center">
         <Box>
-          <Heading size="lg">
-            {submission.assignments.title} - Submission #{submission.ordinal}
-          </Heading>
+          <Heading size="lg">{submission.assignments.title}</Heading>
           <VStack align="flex-start">
             <HStack gap={1}>
               {submission.is_active && <ActiveSubmissionIcon />}
@@ -653,6 +652,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
               ) : (
                 <Text>{submitter?.name}</Text>
               )}
+              - Submission #{submission.ordinal}
             </HStack>
             <HStack gap={1}>
               <Link href={`https://github.com/${submission.repository}/commit/${submission.sha}`} target="_blank">
@@ -664,6 +664,15 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             </HStack>
           </VStack>
         </Box>
+        {!submission.is_active && (
+          <Box rounded="sm" bg="red.fg" color="fg.inverted" px={6} py={2} textAlign="center" m={0}>
+            <Heading size="md">Viewing a previous submission.</Heading>
+            <Text fontSize="xs">
+              Use the submission history to view or change the active submission. The active submission is the one that
+              will be graded.
+            </Text>
+          </Box>
+        )}
         <HStack>
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />

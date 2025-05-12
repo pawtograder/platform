@@ -777,7 +777,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
                   submission_file_id: file?.id,
                   submission_id: submission.id,
                   author: profile_id,
-                  released: review ? false : true,
+                  released: review ? review.released : true,
                   points,
                   submission_review_id: review?.id
                 };

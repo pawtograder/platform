@@ -171,6 +171,11 @@ export type AutograderTriggerGradingWorkflowRequest = {
   class_id: number;
 };
 
+export type AutograderRerunGraderRequest = {
+  submission_ids: number[];
+  class_id: number;
+};
+
 export type CheckRunStatus = {
   commit_author?: string;
   commit_date?: string;
