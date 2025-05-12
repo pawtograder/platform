@@ -1,9 +1,9 @@
-import { createSystem, defineConfig, defaultConfig } from "@chakra-ui/react";
+import { createSystem, defaultConfig, defineConfig } from "@chakra-ui/react";
 
 const config = defineConfig({
   globalCss: {
     html: {
-      colorPalette: "blue" // Change this to any color palette you prefer
+      colorPalette: "gray" // Change this to any color palette you prefer
     }
   }
 });
