@@ -138,13 +138,6 @@ function EnrollmentsTable() {
           }
           return "N/A";
         },
-        cell: ({ row }) => {
-          const profile = row.original.profiles;
-          if (profile && profile.name) {
-            return profile.name;
-          }
-          return "N/A";
-        },
         filterFn: (row, id, filterValue) => {
           const name = row.original.profiles?.name;
           if (!name) return false;
@@ -349,25 +342,12 @@ function EnrollmentsTable() {
                               onClick={header.column.getToggleSortingHandler()}
                               textAlign={header.id === "actions" ? "center" : undefined}
                             >
-                            <Text
-                              onClick={header.column.getToggleSortingHandler()}
-                              textAlign={header.id === "actions" ? "center" : undefined}
-                            >
                               {flexRender(header.column.columnDef.header, header.getContext())}
                               {{
                                 asc: " 🔼",
                                 desc: " 🔽"
                               }[header.column.getIsSorted() as string] ?? null}
                             </Text>
-                            {header.id !== "actions" && (
-                              <Input
-                                id={header.id}
-                                value={(header.column.getFilterValue() as string) ?? ""}
-                                onChange={(e) => {
-                                  header.column.setFilterValue(e.target.value);
-                                }}
-                              />
-                            )}
                             {header.id !== "actions" && (
                               <Input
                                 id={header.id}
@@ -554,15 +534,8 @@ export default function EnrollmentsPage() {
           Canvas Links
         </Heading>
         <Text fontSize="sm" color="fg.muted" mb={3}>
-      <Heading my="4">Enrollments</Heading>
-      <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4" mb="4">
-        <Heading size="sm" mb={3}>
-          Canvas Links
-        </Heading>
-        <Text fontSize="sm" color="fg.muted" mb={3}>
           Enrollments in this course are linked to the following Canvas sections:
         </Text>
-        <List.Root as="ul" pl="4" mb={3}>
         <List.Root as="ul" pl="4" mb={3}>
           {sections?.data?.map((section) => (
             <List.Item key={section.id} as="li" fontSize="sm">
