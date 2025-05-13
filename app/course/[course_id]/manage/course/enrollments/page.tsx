@@ -17,7 +17,6 @@ import {
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
-
 import { useParams } from "next/navigation";
 import { useMemo, useState, useEffect, useCallback } from "react";
 import AddSingleStudent from "./addSingleStudent";
@@ -424,8 +423,9 @@ function EnrollmentsTable() {
             />
           </HStack>
 
-          <NativeSelect.Root aria-label="Select page size" width="120px">
+          <NativeSelect.Root title="Select page size" aria-label="Select page size" width="120px">
             <NativeSelect.Field
+              title="Select page size"
               aria-label="Select page size"
               value={getState().pagination.pageSize}
               onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
