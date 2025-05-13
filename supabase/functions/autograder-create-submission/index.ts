@@ -82,10 +82,15 @@ async function handleRequest(req: Request) {
       if (extensionsError) {
         throw new UserVisibleError(`Failed to find extensions: ${extensionsError.message}`);
       }
+      console.log(`Timezone: ${timeZone}`);
       const totalExtensions = extensions?.map((e) => e.hours).reduce((a, b) => a + b, 0);
+      console.log(`Total extensions: ${totalExtensions}`);
       const originalDueDate = new TZDate(repoData.assignments.due_date, timeZone);
       const newDueDate = addHours(originalDueDate, totalExtensions);
-      if (new TZDate(new Date(), timeZone) > newDueDate) {
+      console.log(`New due date: ${newDueDate}`);
+      const currentDate = TZDate.tz(timeZone);
+      console.log(`Current date: ${currentDate}`);
+      if (currentDate > newDueDate) {
         //Fail the check run
         await updateCheckRun({
           owner: repository.split("/")[0],

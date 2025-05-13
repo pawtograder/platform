@@ -1,13 +1,14 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { TZDate } from "npm:@date-fns/tz";
 import { AssignmentGroupJoinRequest } from "../_shared/FunctionTypes.d.ts";
+import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
   SecurityError,
   assertUserIsInCourse,
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
-import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 async function handleAssignmentGroupJoin(req: Request): Promise<{ message: string; joined_group: boolean }> {
   const { assignment_group_id } = (await req.json()) as AssignmentGroupJoinRequest;
@@ -17,15 +18,15 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
   );
   const { data: assignmentGroup } = await adminSupabase
     .from("assignment_groups")
-    .select("*, assignments(*), classes(github_org, slug), repositories(*)")
+    .select("*, assignments(*), classes(github_org, slug, time_zone), repositories(*)")
     .eq("id", assignment_group_id)
     .single();
   if (!assignmentGroup) {
     throw new IllegalArgumentError("Assignment group not found");
   }
+  const timeZone = assignmentGroup.classes.time_zone || "America/New_York";
   const groupFormationDeadline = assignmentGroup.assignments.group_formation_deadline;
-  if (groupFormationDeadline && new Date(groupFormationDeadline) < new Date()) {
-    //TODO timezones
+  if (groupFormationDeadline && new TZDate(groupFormationDeadline, timeZone) < TZDate.tz(timeZone)) {
     throw new SecurityError("Group formation deadline has passed");
   }
   //Validate user for this course

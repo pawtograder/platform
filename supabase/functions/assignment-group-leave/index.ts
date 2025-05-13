@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { TZDate } from "npm:@date-fns/tz";
+import { archiveRepoAndLock, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
   SecurityError,
@@ -7,20 +9,23 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { syncRepoPermissions, archiveRepoAndLock } from "../_shared/GitHubWrapper.ts";
 async function handleAssignmentGroupLeave(req: Request): Promise<{ message: string }> {
   const { assignment_id } = (await req.json()) as { assignment_id: number };
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  const { data: assignment } = await adminSupabase.from("assignments").select("*").eq("id", assignment_id).single();
+  const { data: assignment } = await adminSupabase
+    .from("assignments")
+    .select("*, classes(time_zone)")
+    .eq("id", assignment_id)
+    .single();
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found");
   }
+  const timeZone = assignment.classes.time_zone || "America/New_York";
   const groupFormationDeadline = assignment.group_formation_deadline;
-  if (groupFormationDeadline && new Date(groupFormationDeadline) < new Date()) {
-    //TODO timezones
+  if (groupFormationDeadline && new TZDate(groupFormationDeadline, timeZone) < TZDate.tz(timeZone)) {
     throw new SecurityError("Group formation deadline has passed");
   }
   const { enrollment } = await assertUserIsInCourse(assignment.class_id, req.headers.get("Authorization")!);
