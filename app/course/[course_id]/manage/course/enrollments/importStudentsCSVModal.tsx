@@ -19,6 +19,7 @@ type CSVRecord = {
   email: string;
   name: string;
   role?: string;
+  canvas_id?: string;
 };
 
 type FormValues = {
@@ -35,9 +36,11 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirmingImport, setIsConfirmingImport] = useState(false);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
-  const [usersToPreviewAdd, setUsersToPreviewAdd] = useState<Array<{ email: string; name: string; role: AppRole }>>([]);
+  const [usersToPreviewAdd, setUsersToPreviewAdd] = useState<
+    Array<{ email: string; name: string; role: AppRole; canvas_id?: number }>
+  >([]);
   const [usersToPreviewIgnore, setUsersToPreviewIgnore] = useState<
-    Array<{ email: string; name: string; role: AppRole }>
+    Array<{ email: string; name: string; role: AppRole; canvas_id?: number }>
   >([]);
 
   const invalidate = useInvalidate();
@@ -91,7 +94,6 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
 
         const processedUsers = records
           .map((record: CSVRecord) => {
-            // Explicitly type record
             const csvRole = record.role?.trim().toLowerCase();
             let role: AppRole = "student";
             if (csvRole && (allowedRoles as ReadonlyArray<string>).includes(csvRole)) {
@@ -103,13 +105,22 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
                 type: "warning"
               });
             }
+            const rawCanvasId = record.canvas_id?.trim();
+            const canvasIdAsNumber =
+              rawCanvasId && rawCanvasId !== "" && !isNaN(parseInt(rawCanvasId, 10))
+                ? parseInt(rawCanvasId, 10)
+                : undefined;
             return {
               email: record.email?.trim(),
               name: record.name?.trim(),
-              role: role
+              role: role,
+              canvas_id: canvasIdAsNumber
             };
           })
-          .filter((user): user is { email: string; name: string; role: AppRole } => !!user.email && !!user.name);
+          .filter(
+            (user): user is { email: string; name: string; role: AppRole; canvas_id: number | undefined } =>
+              !!user.email && !!user.name
+          );
 
         if (processedUsers.length === 0) {
           toaster.create({
@@ -140,8 +151,8 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
         const existingUserEmails =
           (existingEnrollmentsData?.map((er) => er.users?.email).filter((email) => !!email) as string[]) || [];
 
-        const toAdd: Array<{ email: string; name: string; role: AppRole }> = [];
-        const toIgnore: Array<{ email: string; name: string; role: AppRole }> = [];
+        const toAdd: Array<{ email: string; name: string; role: AppRole; canvas_id?: number }> = [];
+        const toIgnore: Array<{ email: string; name: string; role: AppRole; canvas_id?: number }> = [];
 
         processedUsers.forEach((user) => {
           if (existingUserEmails.includes(user.email!)) {
@@ -192,7 +203,13 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
         usersToPreviewAdd.map(async (user) => {
           try {
             await enrollmentAdd(
-              { courseId: Number(course_id), email: user.email!, name: user.name!, role: user.role },
+              {
+                courseId: Number(course_id),
+                email: user.email!,
+                name: user.name!,
+                role: user.role,
+                canvasId: user.canvas_id
+              },
               supabase
             );
             return { email: user.email, name: user.name, status: "fulfilled" };
@@ -297,11 +314,14 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
                         borderRadius="md"
                         p={2}
                       >
-                        {usersToPreviewAdd.map((user: { email: string; name: string; role: AppRole }) => (
-                          <Text as="li" key={user.email}>
-                            {user.name} ({user.email}) - Role: {user.role}
-                          </Text>
-                        ))}
+                        {usersToPreviewAdd.map(
+                          (user: { email: string; name: string; role: AppRole; canvas_id?: number }) => (
+                            <Text as="li" key={user.email}>
+                              {user.name} ({user.email}) - Role: {user.role}{" "}
+                              {user.canvas_id !== undefined ? ` (Canvas ID: ${user.canvas_id})` : ""}
+                            </Text>
+                          )
+                        )}
                       </VStack>
                     </Box>
                   )}
@@ -320,11 +340,14 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
                         borderRadius="md"
                         p={2}
                       >
-                        {usersToPreviewIgnore.map((user: { email: string; name: string; role: AppRole }) => (
-                          <Text as="li" key={user.email}>
-                            {user.name} ({user.email}) - Role: {user.role}
-                          </Text>
-                        ))}
+                        {usersToPreviewIgnore.map(
+                          (user: { email: string; name: string; role: AppRole; canvas_id?: number }) => (
+                            <Text as="li" key={user.email}>
+                              {user.name} ({user.email}) - Role: {user.role}{" "}
+                              {user.canvas_id !== undefined ? ` (Canvas ID: ${user.canvas_id})` : ""}
+                            </Text>
+                          )
+                        )}
                       </VStack>
                     </Box>
                   )}
@@ -354,7 +377,8 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
                       <Text fontSize="sm" color="fg.subtle" mt={1}>
                         Upload a CSV file with columns named &apos;email&apos;, &apos;name&apos;, and optionally
                         &apos;role&apos; (student, grader, instructor). Each row should represent a user. If
-                        &apos;role&apos; is not provided or invalid, it defaults to &apos;student&apos;.
+                        &apos;role&apos; is not provided or invalid, it defaults to &apos;student&apos;. You can also
+                        include an optional &apos;canvas_id&apos; column.
                       </Text>
                     )}
                   </Field>

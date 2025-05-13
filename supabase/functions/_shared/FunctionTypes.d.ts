@@ -83,6 +83,8 @@ export type AddEnrollmentRequest = {
   name: string;
   role: Database["public"]["Enums"]["app_role"];
   courseId: number;
+  canvasId?: number;
+  classSectionId?: number;
 };
 
 export type LiveMeetingForHelpRequestRequest = {

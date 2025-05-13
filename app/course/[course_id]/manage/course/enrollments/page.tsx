@@ -26,7 +26,7 @@ import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { FaLink, FaEdit, FaUserCog, FaTrash, FaFileImport } from "react-icons/fa";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import EditStudentProfileModal from "./editStudentProfileModal";
+import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
 import RemoveStudentModal from "./removeStudentModal";
 import useAuthState from "@/hooks/useAuthState";
@@ -35,7 +35,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import { Button } from "@/components/ui/button";
 
-type EditProfileModalData = string; // studentId
+type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
   userRoleId: string;
   currentRole: UserRoleWithPrivateProfileAndUser["role"];
@@ -55,7 +55,7 @@ function EnrollmentsTable() {
 
   const {
     isOpen: isEditProfileModalOpen,
-    modalData: editingStudentId,
+    modalData: editingUserId,
     openModal: openEditProfileModal,
     closeModal: closeEditProfileModal
   } = useModalManager<EditProfileModalData>();
@@ -459,18 +459,18 @@ function EnrollmentsTable() {
           <AddSingleStudent />
         </HStack>
       </Box>
-      {editingStudentId && (
+      {editingUserId && (
         <Dialog.Root open={isEditProfileModalOpen} onOpenChange={(details) => !details.open && closeEditProfileModal()}>
           <Portal>
             <Dialog.Backdrop />
             <Dialog.Positioner>
               <Dialog.Content>
                 <Dialog.Header>
-                  <Dialog.Title>Edit Student Profile</Dialog.Title>
+                  <Dialog.Title>Edit User Profile</Dialog.Title>
                   <Dialog.CloseTrigger onClick={closeEditProfileModal} />
                 </Dialog.Header>
                 <Dialog.Body>
-                  <EditStudentProfileModal studentProfileId={editingStudentId} onClose={closeEditProfileModal} />
+                  <EditUserProfileModal userId={editingUserId} onClose={closeEditProfileModal} />
                 </Dialog.Body>
               </Dialog.Content>
             </Dialog.Positioner>
