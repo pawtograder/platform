@@ -15,7 +15,7 @@ import {
   YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, HStack, List, Text, VStack } from "@chakra-ui/react";
+import { Accordion, Box, Button, Container, Flex, Heading, HStack, List, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDelete, useShow, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
@@ -205,15 +205,56 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
     ) as (keyof T)[];
 }
 
+enum RubricType {
+  "student",
+  "grader"
+}
+
 export default function RubricPage() {
+  const rubrics = [
+    { title: "Student Rubric", content: <RubricElement type={RubricType.student} /> },
+    { title: "Grader Rubric", content: <RubricElement type={RubricType.grader} /> }
+  ];
+
+  return (
+    <Container>
+      <Accordion.Root collapsible>
+        {rubrics.map((item, index) => (
+          <Accordion.Item key={index} value={item.title}>
+            <Accordion.ItemTrigger>
+              {item.title}
+              <Accordion.ItemIndicator color="black" />
+            </Accordion.ItemTrigger>
+            <Accordion.ItemContent>
+              <Accordion.ItemBody>{item.content}</Accordion.ItemBody>
+            </Accordion.ItemContent>
+          </Accordion.Item>
+        ))}
+      </Accordion.Root>
+    </Container>
+  );
+}
+
+/**
+ * Gets either the assignment with the student rubric or the grader rubric depending on which one is being edited.
+ */
+function useAssignment(type: RubricType) {
   const { assignment_id } = useParams();
   const { query: assignment } = useShow<AssignmentWithRubric>({
     resource: "assignments",
     id: assignment_id as string,
     meta: {
-      select: "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
+      select:
+        type === RubricType.grader
+          ? "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
+          : "*, rubrics!assignments_student_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
     }
   });
+  return assignment!;
+}
+function RubricElement({ type }: { type: RubricType }) {
+  const assignment = useAssignment(type);
+
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
       getWorker(moduleId, label) {
@@ -558,7 +599,9 @@ export default function RubricPage() {
           <HStack w="100%" mt={2} mb={2} justifyContent="space-between">
             <Toaster />
             <HStack>
-              <Heading size="md">Handgrading Rubric</Heading>
+              <Heading size="md">
+                {type === RubricType.grader ? "Handgrading Rubric" : "Self Evaluation Rubric"}
+              </Heading>
               {canLoadDemo && (
                 <Button
                   variant="ghost"
