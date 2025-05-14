@@ -409,7 +409,6 @@ function UserSettingsMenu() {
     id: private_profile_id
   });
   const uid = user?.id;
-  console.log(uid);
   const { data: dbUser } = useList<{ user_id: string; github_username: string }>({
     resource: "users",
     meta: {
@@ -426,7 +425,6 @@ function UserSettingsMenu() {
       enabled: uid !== undefined
     }
   });
-  console.log(dbUser);
 
   useEffect(() => {
     if (dbUser) {
