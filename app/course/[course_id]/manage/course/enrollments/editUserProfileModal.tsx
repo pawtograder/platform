@@ -25,22 +25,22 @@ import { useInvalidate } from "@refinedev/core";
 
 type ProfileUpdate = Database["public"]["Tables"]["profiles"]["Update"];
 
-interface StudentProfileFormData {
+interface UserProfileFormData {
   name: string | null | undefined;
   avatar_url: string | null | undefined;
   flair: string | null | undefined;
   flair_color: string | null | undefined;
 }
 
-interface EditStudentProfileModalProps {
-  studentProfileId: string;
+interface EditUserProfileModalProps {
+  userId: string;
   onClose: () => void;
 }
 
-export default function EditStudentProfileModal({ studentProfileId, onClose }: EditStudentProfileModalProps) {
+export default function EditUserProfileModal({ userId, onClose }: EditUserProfileModalProps) {
   const supabase = createClient();
   const invalidate = useInvalidate();
-  const profileDataFromHook = useUserProfile(studentProfileId);
+  const profileDataFromHook = useUserProfile(userId);
 
   const {
     register,
@@ -48,7 +48,7 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
     reset,
     watch,
     formState: { errors, isSubmitting }
-  } = useForm<StudentProfileFormData>();
+  } = useForm<UserProfileFormData>();
 
   const watchedName = watch("name", profileDataFromHook?.name);
   const watchedAvatarUrl = watch("avatar_url", profileDataFromHook?.avatar_url);
@@ -80,11 +80,11 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
   }, [profileDataFromHook, reset]);
 
   const onSubmit = useCallback(
-    async (values: StudentProfileFormData) => {
-      if (!studentProfileId) {
+    async (values: UserProfileFormData) => {
+      if (!userId) {
         toaster.create({
           title: "Submission Error",
-          description: "Missing student profile ID.",
+          description: "Missing user profile ID.",
           type: "error"
         });
         return;
@@ -98,7 +98,7 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
       };
 
       try {
-        const { error } = await supabase.from("profiles").update(updatePayload).eq("id", studentProfileId);
+        const { error } = await supabase.from("profiles").update(updatePayload).eq("id", userId);
 
         if (error) {
           throw error;
@@ -106,14 +106,14 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
 
         toaster.create({
           title: "Profile Updated",
-          description: "The student\'s profile has been successfully updated.",
+          description: "The user\'s profile has been successfully updated.",
           type: "success"
         });
 
         invalidate({
           resource: "profiles",
           invalidates: ["list", "detail"],
-          id: studentProfileId
+          id: userId
         });
         invalidate({
           resource: "user_roles",
@@ -125,12 +125,12 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
         const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
         toaster.create({
           title: "Update Error",
-          description: `Failed to update student profile: ${errorMessage}`,
+          description: `Failed to update user profile: ${errorMessage}`,
           type: "error"
         });
       }
     },
-    [studentProfileId, supabase, invalidate, onClose]
+    [userId, supabase, invalidate, onClose]
   );
 
   if (!profileDataFromHook) {
@@ -149,10 +149,10 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
   return (
     <>
       <Heading size="md" mb={4} textAlign="start">
-        Editing: {profileDataFromHook.name || "Student"}
+        Editing: {profileDataFromHook.name || "User"}
       </Heading>
       <Text fontSize="sm" color="fg.muted" mb={4}>
-        Note: This form updates the student&apos;s private profile information (name, avatar, flair). It does not affect
+        Note: This form updates the user&apos;s private profile information (name, avatar, flair). It does not affect
         any anonymous profiles used in discussions or other areas.
       </Text>
       <Box borderWidth="1px" borderRadius="lg" p={4} mb={6} mt={2}>
@@ -161,12 +161,12 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
         </Heading>
         <HStack gap={4} align="center">
           <Avatar.Root size="lg">
-            <Avatar.Fallback name={watchedName || "Student Name"} />
-            {watchedAvatarUrl && <Avatar.Image src={watchedAvatarUrl} alt={watchedName || "Student Avatar"} />}
+            <Avatar.Fallback name={watchedName || "Username"} />
+            {watchedAvatarUrl && <Avatar.Image src={watchedAvatarUrl} alt={watchedName || "User Avatar"} />}
           </Avatar.Root>
           <VStack align="start" gap={1}>
             <Text fontWeight="bold" fontSize="xl">
-              {watchedName || "Student Name"}
+              {watchedName || "Username"}
             </Text>
             {watchedFlair && (
               <Badge colorPalette={watchedFlairColor ?? "gray"} variant="solid">
@@ -187,7 +187,7 @@ export default function EditStudentProfileModal({ studentProfileId, onClose }: E
           <Field label="Name" errorText={errors.name?.message?.toString()} invalid={!!errors.name} required>
             <Input
               id="modal-name"
-              placeholder="Student\'s full name"
+              placeholder="User\'s full name"
               {...register("name", { required: "Name is required." })}
             />
           </Field>
