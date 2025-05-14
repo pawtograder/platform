@@ -15,7 +15,7 @@ import {
   YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, HStack, List, Text, VStack } from "@chakra-ui/react";
+import { Accordion, Box, Button, Container, Flex, Heading, HStack, List, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDelete, useShow, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
@@ -55,6 +55,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
       artifact: valOrUndefined(check.artifact),
       max_annotations: valOrUndefined(check.max_annotations),
       points: check.points,
+      comment_regex: check.comment_regex,
       data: valOrUndefined(check.data),
       annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined
     }));
@@ -118,6 +119,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
     is_comment_required: check.is_comment_required,
     max_annotations: valOrNull(check.max_annotations),
     points: check.points,
+    comment_regex: valOrNull(check.comment_regex),
     is_required: check.is_required,
     annotation_target: valOrNull(check.annotation_target)
   }));
@@ -206,15 +208,56 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
     ) as (keyof T)[];
 }
 
+enum RubricType {
+  "student",
+  "grader"
+}
+
 export default function RubricPage() {
+  const rubrics = [
+    { title: "Student Rubric", content: <RubricElement type={RubricType.student} /> },
+    { title: "Grader Rubric", content: <RubricElement type={RubricType.grader} /> }
+  ];
+
+  return (
+    <Container>
+      <Accordion.Root collapsible>
+        {rubrics.map((item, index) => (
+          <Accordion.Item key={index} value={item.title}>
+            <Accordion.ItemTrigger>
+              {item.title}
+              <Accordion.ItemIndicator color="black" />
+            </Accordion.ItemTrigger>
+            <Accordion.ItemContent>
+              <Accordion.ItemBody>{item.content}</Accordion.ItemBody>
+            </Accordion.ItemContent>
+          </Accordion.Item>
+        ))}
+      </Accordion.Root>
+    </Container>
+  );
+}
+
+/**
+ * Gets either the assignment with the student rubric or the grader rubric depending on which one is being edited.
+ */
+function useAssignment(type: RubricType) {
   const { assignment_id } = useParams();
   const { query: assignment } = useShow<AssignmentWithRubric>({
     resource: "assignments",
     id: assignment_id as string,
     meta: {
-      select: "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
+      select:
+        type === RubricType.grader
+          ? "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
+          : "*, rubrics!assignments_self_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
     }
   });
+  return assignment!;
+}
+function RubricElement({ type }: { type: RubricType }) {
+  const assignment = useAssignment(type);
+
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
       getWorker(moduleId, label) {
@@ -271,6 +314,7 @@ export default function RubricPage() {
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value) {
+        console.log("received value " + value);
         setValue(value);
         if (debounceTimeoutRef.current) {
           clearTimeout(debounceTimeoutRef.current);
@@ -558,7 +602,9 @@ export default function RubricPage() {
           <HStack w="100%" mt={2} mb={2} justifyContent="space-between">
             <Toaster />
             <HStack>
-              <Heading size="md">Handgrading Rubric</Heading>
+              <Heading size="md">
+                {type === RubricType.grader ? "Handgrading Rubric" : "Self Evaluation Rubric"}
+              </Heading>
               {canLoadDemo && (
                 <Button
                   variant="ghost"

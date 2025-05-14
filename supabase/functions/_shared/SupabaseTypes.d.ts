@@ -514,6 +514,7 @@ export type Database = {
           max_late_tokens: number;
           min_group_size: number | null;
           release_date: string | null;
+          self_rubric_id: number | null;
           slug: string | null;
           student_repo_prefix: string | null;
           template_repo: string | null;
@@ -539,6 +540,7 @@ export type Database = {
           max_late_tokens?: number;
           min_group_size?: number | null;
           release_date?: string | null;
+          self_rubric_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -564,6 +566,7 @@ export type Database = {
           max_late_tokens?: number;
           min_group_size?: number | null;
           release_date?: string | null;
+          self_rubric_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -581,6 +584,13 @@ export type Database = {
           {
             foreignKeyName: "assignments_rubric_id_fkey";
             columns: ["grading_rubric_id"];
+            isOneToOne: false;
+            referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_self_rubric_id_fkey";
+            columns: ["self_rubric_id"];
             isOneToOne: false;
             referencedRelation: "rubrics";
             referencedColumns: ["id"];
@@ -2298,6 +2308,7 @@ export type Database = {
           annotation_target: string | null;
           artifact: string | null;
           class_id: number;
+          comment_regex: string | null;
           created_at: string;
           data: Json | null;
           description: string | null;
@@ -2317,6 +2328,7 @@ export type Database = {
           annotation_target?: string | null;
           artifact?: string | null;
           class_id: number;
+          comment_regex?: string | null;
           created_at?: string;
           data?: Json | null;
           description?: string | null;
@@ -2336,6 +2348,7 @@ export type Database = {
           annotation_target?: string | null;
           artifact?: string | null;
           class_id?: number;
+          comment_regex?: string | null;
           created_at?: string;
           data?: Json | null;
           description?: string | null;

@@ -15,7 +15,7 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/autograder`,
     icon: FaCode
   },
-  { label: "Configure Rubric", href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`, icon: FaPen },
+  { label: "Configure Rubrics", href: `/course/${courseId}/manage/assignments/${assignmentId}/rubric`, icon: FaPen },
   {
     label: "Manage Due Date Exceptions",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/due-date-exceptions`,

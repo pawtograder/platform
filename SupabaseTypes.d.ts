@@ -1,6 +1,31 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
+  graphql_public: {
+    Tables: {
+      [_ in never]: never;
+    };
+    Views: {
+      [_ in never]: never;
+    };
+    Functions: {
+      graphql: {
+        Args: {
+          operationName?: string;
+          query?: string;
+          variables?: Json;
+          extensions?: Json;
+        };
+        Returns: Json;
+      };
+    };
+    Enums: {
+      [_ in never]: never;
+    };
+    CompositeTypes: {
+      [_ in never]: never;
+    };
+  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -2308,7 +2333,6 @@ export type Database = {
           annotation_target: string | null;
           artifact: string | null;
           class_id: number;
-          comment_regex: string | null;
           created_at: string;
           data: Json | null;
           description: string | null;
@@ -2328,7 +2352,6 @@ export type Database = {
           annotation_target?: string | null;
           artifact?: string | null;
           class_id: number;
-          comment_regex?: string | null;
           created_at?: string;
           data?: Json | null;
           description?: string | null;
@@ -2348,7 +2371,6 @@ export type Database = {
           annotation_target?: string | null;
           artifact?: string | null;
           class_id?: number;
-          comment_regex?: string | null;
           created_at?: string;
           data?: Json | null;
           description?: string | null;
@@ -3928,6 +3950,9 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
+  graphql_public: {
+    Enums: {}
+  },
   pgmq_public: {
     Enums: {}
   },

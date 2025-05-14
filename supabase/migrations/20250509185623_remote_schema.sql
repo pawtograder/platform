@@ -402,6 +402,3 @@ as permissive
 for select
 to public
 using (authorizeforclassinstructor(class_id));
-
-
-
