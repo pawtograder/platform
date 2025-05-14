@@ -80,7 +80,7 @@ export async function assertUserIsInCourse(courseId: number, authHeader: string)
   }
   const { data: enrollment } = await supabase
     .from("user_roles")
-    .select("*")
+    .select("*, classes(*)")
     .eq("user_id", user.id)
     .eq("class_id", courseId)
     .single();

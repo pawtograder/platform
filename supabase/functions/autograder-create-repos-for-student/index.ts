@@ -1,9 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { TZDate } from "npm:@date-fns/tz";
 import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-
 async function handleRequest(req: Request) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
@@ -63,7 +63,7 @@ async function handleRequest(req: Request) {
   const { data: allAssignments, error: assignmentsError } = await adminSupabase
     .from("assignments")
     .select(
-      "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))),classes(slug,github_org,user_roles(role,users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
+      "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))),classes(slug,github_org,time_zone,user_roles(role,users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
     )
     .in(
       "class_id",
@@ -77,7 +77,7 @@ async function handleRequest(req: Request) {
   }
   const assignments = allAssignments.filter(
     (a) =>
-      (a.release_date && new Date(a.release_date) < new Date()) ||
+      (a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
       a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")
   );
 
