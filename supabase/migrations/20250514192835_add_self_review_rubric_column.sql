@@ -1,0 +1,5 @@
+alter table "public"."assignments" add column "self_rubric_id" bigint;
+
+alter table "public"."assignments" add constraint "assignments_self_rubric_id_fkey" FOREIGN KEY (self_rubric_id) REFERENCES rubrics(id) not valid;
+
+alter table "public"."assignments" validate constraint "assignments_self_rubric_id_fkey";

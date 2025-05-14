@@ -402,5 +402,3 @@ as permissive
 for select
 to public
 using (authorizeforclassinstructor(class_id));
-
-alter table "public"."assignments" add column "self_review_rubric_id" bigint;
