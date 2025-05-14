@@ -90,7 +90,9 @@ function HydratedRubricToYamlRubric(rubric: HydratedRubric): YmlRubricType {
   return {
     name: rubric.name,
     description: valOrUndefined(rubric.description),
-    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts)
+    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts),
+    is_private: rubric.is_private,
+    review_round: valOrNull(rubric.review_round)
   };
 }
 function valOrNull<T>(value: T | null | undefined): T | null {
@@ -100,7 +102,6 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
   if (!checks || checks.length === 0) {
     throw new Error("Criteria must have at least one check");
   }
-  console.log(checks.length);
   return checks.map((check, index) => ({
     id: check.id || -1,
     name: check.name,
@@ -183,7 +184,9 @@ function YamlRubricToHydratedRubric(yaml: YmlRubricType): HydratedRubric {
     created_at: "",
     name: yaml.name,
     description: valOrNull(yaml.description),
-    rubric_parts: YamlPartsToHydratedParts(yaml.parts)
+    rubric_parts: YamlPartsToHydratedParts(yaml.parts),
+    is_private: yaml.is_private,
+    review_round: yaml.review_round
   };
 }
 
