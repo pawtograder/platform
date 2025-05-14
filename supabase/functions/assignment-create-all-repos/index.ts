@@ -20,6 +20,8 @@ async function handleRequest(req: Request) {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+  const { data: classData } = await adminSupabase.from("classes").select("time_zone").eq("id", courseId).single();
+  const timeZone = classData?.time_zone;
   // Get the assignment from supabase
   const { data: assignment } = await adminSupabase
     .from("assignments")
@@ -27,7 +29,7 @@ async function handleRequest(req: Request) {
       "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
     ) // , classes(canvas_id), user_roles(user_id)')
     .eq("id", assignmentId)
-    .lte("release_date", new Date().toISOString())
+    .lte("release_date", TZDate.tz(timeZone).toISOString())
     .eq("class_id", courseId)
     .single();
   if (!assignment) {
