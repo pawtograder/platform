@@ -245,9 +245,9 @@ function useAssignment(type: RubricType) {
     id: assignment_id as string,
     meta: {
       select:
-      type === RubricType.grader ? 
-      "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
-      :  "*, rubrics!assignments_self_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
+        type === RubricType.grader
+          ? "*, rubrics!assignments_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
+          : "*, rubrics!assignments_self_rubric_id_fkey(*,rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
     }
   });
   return assignment!;
