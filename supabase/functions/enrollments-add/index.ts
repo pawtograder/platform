@@ -2,9 +2,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
-import { AddEnrollmentRequest } from "../_shared/FunctionTypes.d.ts";
+import type { AddEnrollmentRequest } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 async function handleRequest(req: Request) {
   const { email, name, role, courseId } = (await req.json()) as AddEnrollmentRequest;
