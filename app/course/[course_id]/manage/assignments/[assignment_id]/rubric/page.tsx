@@ -55,6 +55,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
       artifact: valOrUndefined(check.artifact),
       max_annotations: valOrUndefined(check.max_annotations),
       points: check.points,
+      comment_regex: check.comment_regex,
       data: valOrUndefined(check.data),
       annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined
     }));
@@ -117,6 +118,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
     is_comment_required: check.is_comment_required,
     max_annotations: valOrNull(check.max_annotations),
     points: check.points,
+    comment_regex: valOrNull(check.comment_regex),
     is_required: check.is_required,
     annotation_target: valOrNull(check.annotation_target)
   }));
@@ -312,6 +314,7 @@ function RubricElement({ type }: { type: RubricType }) {
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value) {
+        console.log("received value " + value);
         setValue(value);
         if (debounceTimeoutRef.current) {
           clearTimeout(debounceTimeoutRef.current);

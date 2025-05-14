@@ -2308,6 +2308,7 @@ export type Database = {
           annotation_target: string | null;
           artifact: string | null;
           class_id: number;
+          comment_regex: string | null;
           created_at: string;
           data: Json | null;
           description: string | null;
@@ -2327,6 +2328,7 @@ export type Database = {
           annotation_target?: string | null;
           artifact?: string | null;
           class_id: number;
+          comment_regex?: string | null;
           created_at?: string;
           data?: Json | null;
           description?: string | null;
@@ -2346,6 +2348,7 @@ export type Database = {
           annotation_target?: string | null;
           artifact?: string | null;
           class_id?: number;
+          comment_regex?: string | null;
           created_at?: string;
           data?: Json | null;
           description?: string | null;
