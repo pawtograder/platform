@@ -104,28 +104,31 @@ const DropBoxAvatar = ({
    * Uploads user image to avatar storage bucket under avatars/[userid]/[courseid]/uuid.extension
    * @param file jpg or png image file for new avatar
    */
-  const completeAvatarUpload = useCallback(async (file: File) => {
-    if (!profile || !user) {
-      return;
-    }
-    const uuid = crypto.randomUUID();
-    const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
-    const fileExtension = fileName.split(".").pop();
-    const { data, error } = await supabase.storage
-      .from("avatars")
-      .upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
+  const completeAvatarUpload = useCallback(
+    async (file: File) => {
+      if (!profile || !user) {
+        return;
+      }
+      const uuid = crypto.randomUUID();
+      const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
+      const fileExtension = fileName.split(".").pop();
+      const { data, error } = await supabase.storage
+        .from("avatars")
+        .upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
 
-    if (!data || error) {
-      toaster.error({
-        title: "Error uploading avatar image",
-        description: error instanceof Error ? error.message : "An unknown error occurred"
-      });
-    } else {
-      setAvatarLink(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
-      );
-    }
-  }, []);
+      if (!data || error) {
+        toaster.error({
+          title: "Error uploading avatar image",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
+      } else {
+        setAvatarLink(
+          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
+        );
+      }
+    },
+    [course_id, profile, setAvatarLink, supabase.storage, user]
+  );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 

@@ -38,7 +38,7 @@ import {
   getPaginationRowModel
 } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
 function SubmissionGraderTable({
@@ -53,21 +53,24 @@ function SubmissionGraderTable({
   const timeZone = course.classes.time_zone || "America/New_York";
   const [pageCount, setPageCount] = useState(0);
   console.log(latest_autograder_sha);
-  const renderAsLinkToSubmission = (props: CellContext<ActiveSubmissionsWithRegressionTestResults, unknown>) => {
-    const row = props.row;
-    const value = props.getValue();
-    if (value === null || value === undefined) {
-      return <Text></Text>;
-    }
-    if (row.original.activesubmissionid === null) {
-      return <Text>{value as string}</Text>;
-    }
-    return (
-      <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}>
-        <Text onClick={(e) => e.stopPropagation()}>{value as string}</Text>
-      </Link>
-    );
-  };
+  const renderAsLinkToSubmission = useCallback(
+    (props: CellContext<ActiveSubmissionsWithRegressionTestResults, unknown>) => {
+      const row = props.row;
+      const value = props.getValue();
+      if (value === null || value === undefined) {
+        return <Text></Text>;
+      }
+      if (row.original.activesubmissionid === null) {
+        return <Text>{value as string}</Text>;
+      }
+      return (
+        <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}>
+          <Text onClick={(e) => e.stopPropagation()}>{value as string}</Text>
+        </Link>
+      );
+    },
+    [course_id, assignment_id]
+  );
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithRegressionTestResults>[]>(
     () => [
       {
@@ -159,7 +162,7 @@ function SubmissionGraderTable({
         }
       }
     ],
-    [timeZone]
+    [timeZone, autograder_repo, renderAsLinkToSubmission]
   );
   const {
     getHeaderGroups,

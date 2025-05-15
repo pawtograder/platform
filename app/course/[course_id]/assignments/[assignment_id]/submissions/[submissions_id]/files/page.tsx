@@ -51,6 +51,7 @@ import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
 import JSZip from "jszip";
+import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
@@ -797,7 +798,7 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   }, [artifactKey, artifact.data?.display, artifact.data?.format]);
   if (artifact.data.format === "png") {
     if (artifactData) {
-      return <img src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
+      return <Image src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
     } else {
       return <Spinner />;
     }
