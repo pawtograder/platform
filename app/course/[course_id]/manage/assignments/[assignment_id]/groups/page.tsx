@@ -12,7 +12,8 @@ import { useInvalidate, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
 import CreateNewGroup from "./createNewGroupModal";
-import BulkAssignGroup from "./bulkAssignGroupModal";
+import BulkAssignGroup from "./bulkCreateGroupModal";
+import BulkModifyGroup from "./bulkModifyGroup";
 
 type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
@@ -27,7 +28,8 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     resource: "assignment_groups",
     meta: { select: "*, assignment_groups_members(*)" },
     filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }],
-    pagination: { pageSize: 1000 }
+    pagination: { pageSize: 1000 },
+    liveMode: "auto"
   });
   const { data: profiles } = useList<RolesWithProfilesAndGroupMemberships>({
     resource: "user_roles",
@@ -126,6 +128,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       <Flex gap="10px" flexDir={"row"}>
         <CreateNewGroup groups={groupsData} assignment={assignment} />
         <BulkAssignGroup groups={groupsData} assignment={assignment} />
+        <BulkModifyGroup groups={groupsData} assignment={assignment} />
       </Flex>
 
       <Table.Root maxW="4xl" striped>

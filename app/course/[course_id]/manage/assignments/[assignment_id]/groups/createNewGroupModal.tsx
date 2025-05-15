@@ -1,4 +1,3 @@
-import { useUngroupedProfiles } from "@/app/course/[course_id]/assignments/[assignment_id]/manageGroupWidget";
 import { toaster } from "@/components/ui/toaster";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, DialogActionTrigger, Field, Flex, Input, Portal } from "@chakra-ui/react";
@@ -6,6 +5,7 @@ import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useInvalidate } from "@refinedev/core";
+import { useUngroupedStudentProfiles } from "./bulkCreateGroupModal";
 
 export default function CreateNewGroup({
   groups,
@@ -24,7 +24,7 @@ export default function CreateNewGroup({
       value: string;
     }>
   >([]);
-  const ungroupedProfiles = useUngroupedProfiles(groups);
+  const ungroupedProfiles = useUngroupedStudentProfiles(groups);
 
   const createGroupWithAssignees = async () => {
     const {
@@ -51,8 +51,11 @@ export default function CreateNewGroup({
     invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
   };
 
-  const assignMemberToGroup = async (member: { label?: string | null; value: string; }, createdGroup: { id: number; } | null) => {
-    if(!createdGroup) {
+  const assignMemberToGroup = async (
+    member: { label?: string | null; value: string },
+    createdGroup: { id: number } | null
+  ) => {
+    if (!createdGroup) {
       return;
     }
     const {
@@ -71,6 +74,12 @@ export default function CreateNewGroup({
     });
   };
 
+  function isGroupInvalid() {
+    return (
+      (assignment.min_group_size !== null && selectedMembers.length < assignment.min_group_size) ||
+      (assignment.max_group_size !== null && selectedMembers.length > assignment.max_group_size)
+    );
+  }
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom">
       <Dialog.Trigger asChild>
@@ -105,12 +114,7 @@ export default function CreateNewGroup({
                     The name must consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters.
                   </Field.ErrorText>
                 </Field.Root>
-                <Field.Root
-                  invalid={
-                    (assignment.min_group_size !== null && selectedMembers.length < assignment.min_group_size) ||
-                    (assignment.max_group_size !== null && selectedMembers.length > assignment.max_group_size)
-                  }
-                >
+                <Field.Root invalid={isGroupInvalid()}>
                   <Field.Label>Select unassigned students to place in the group</Field.Label>
                   <Select
                     onChange={(e) => setSelectedMembers(e)}
@@ -131,7 +135,11 @@ export default function CreateNewGroup({
                 </Button>
               </Dialog.ActionTrigger>
               <DialogActionTrigger>
-                <Button onClick={createGroupWithAssignees} colorPalette={"green"}>
+                <Button
+                  onClick={createGroupWithAssignees}
+                  colorPalette={"green"}
+                  disabled={isGroupInvalid() || newGroupName.length === 0}
+                >
                   Save
                 </Button>
               </DialogActionTrigger>

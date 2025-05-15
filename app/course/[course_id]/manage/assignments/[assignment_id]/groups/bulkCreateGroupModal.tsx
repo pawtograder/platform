@@ -25,7 +25,7 @@ type SampleGroup = {
   members: UserProfile[];
 };
 
-function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
+export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
   const students = useStudentRoster();
   const ungroupedProfiles = useMemo(() => {
     if (!groups) {
@@ -39,7 +39,7 @@ function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJo
   return ungroupedProfiles;
 }
 
-export default function BulkAssignGroup({
+export default function BulkCreateGroup({
   groups,
   assignment
 }: {
@@ -51,14 +51,13 @@ export default function BulkAssignGroup({
 
   const [groupTextField, setGroupTextField] = useState<string>("");
   const [groupSize, setGroupSize] = useState<number>(0);
-  const ungroupedProfiles = useUngroupedProfiles(groups);
+  const ungroupedProfiles = useUngroupedStudentProfiles(groups);
   const [generatedGroups, setGeneratedGroups] = useState<SampleGroup[]>([]);
 
   /**
    * When group field is changed to a new number, update groupsize
    */
   useEffect(() => {
-    console.log("text field changed to: " + groupTextField);
     if (typeof parseInt(groupTextField) === "number") {
       setGroupSize(parseInt(groupTextField));
     }
@@ -68,10 +67,10 @@ export default function BulkAssignGroup({
     generatedGroups.forEach((group) => {
       createGroupWithAssignees(group);
     });
-    toaster.create({ title: "Groups created", description: "", type: "success" });
     invalidate({ resource: "assignment_groups", invalidates: ["all"] });
     invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
     invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+    toaster.create({ title: "Groups created", description: "", type: "success" });
   };
 
   const createGroupWithAssignees = async (group: SampleGroup) => {
@@ -93,13 +92,27 @@ export default function BulkAssignGroup({
       return;
     }
     group.members.map((member) => {
-      supabase.from("assignment_groups_members").insert({
-        added_by: member.id,
-        assignment_group_id: createdGroup?.id,
-        profile_id: member.id,
-        class_id: assignment.class_id,
-        assignment_id: assignment.id
-      });
+      assignMemberToGroup(member, createdGroup);
+    });
+  };
+
+  const assignMemberToGroup = async (member: UserProfile, createdGroup: { id: number } | null) => {
+    if (!createdGroup) {
+      return;
+    }
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+    if (!user?.id || !createdGroup?.id) {
+      console.log("not all data available");
+      return;
+    }
+    await supabase.from("assignment_groups_members").insert({
+      added_by: member.id,
+      assignment_group_id: createdGroup?.id,
+      profile_id: member.id,
+      class_id: assignment.class_id,
+      assignment_id: assignment.id
     });
   };
 
@@ -126,11 +139,15 @@ export default function BulkAssignGroup({
     setGeneratedGroups(newGroups);
   };
 
+  function isGroupSizeInvalid(size: number) {
+    return size > (assignment.min_group_size ?? ungroupedProfiles.length) || size < (assignment.min_group_size ?? 1);
+  }
+
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom" size="lg">
       <Dialog.Trigger asChild>
         <Button size="sm" variant="outline">
-          Bulk Assign Groups
+          Bulk Create Groups
         </Button>
       </Dialog.Trigger>
       <Portal>
@@ -143,10 +160,10 @@ export default function BulkAssignGroup({
             <Dialog.Body>
               <Flex flexDir="column" gap="10px">
                 <Heading size="md">
-                  {ungroupedProfiles.length} student profile{ungroupedProfiles.length > 1 ? "s are" : " is"} unassigned
-                  for this assignment.
+                  {ungroupedProfiles.length} student profile{ungroupedProfiles.length !== 1 ? "s are" : " is"}{" "}
+                  unassigned for this assignment.
                 </Heading>
-                <Field.Root invalid={groupSize > ungroupedProfiles.length || groupSize < 1}>
+                <Field.Root invalid={isGroupSizeInvalid(groupSize)}>
                   <Field.Label>How many students would you like in each group?</Field.Label>
                   <NumberInput.Root
                     value={groupTextField}
@@ -157,7 +174,7 @@ export default function BulkAssignGroup({
                   >
                     <NumberInput.Input />
                   </NumberInput.Root>
-                  {(groupSize < 1 || groupSize > ungroupedProfiles.length) && (
+                  {isGroupSizeInvalid(groupSize) && (
                     <Field.ErrorText>
                       Please enter a number from {assignment.min_group_size ?? "1"} -{" "}
                       {assignment.max_group_size ?? ungroupedProfiles.length}
@@ -168,7 +185,7 @@ export default function BulkAssignGroup({
                 <Button
                   onClick={() => generateGroups()}
                   colorPalette={"gray"}
-                  disabled={Number.isNaN(groupSize) || groupSize < 1 || groupSize > ungroupedProfiles.length}
+                  disabled={Number.isNaN(groupSize) || isGroupSizeInvalid(groupSize)}
                 >
                   Generate Groups
                 </Button>
