@@ -155,9 +155,10 @@ const DropBoxAvatar = ({
   return (
     <>
       <input
+        title="Avatar upload"
         type="file"
         ref={fileInputRef}
-        style={{ display: "none" }}
+        className="hidden"
         accept="image/jpeg,image/png"
         onChange={handleFileChange}
       />

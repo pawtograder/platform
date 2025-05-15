@@ -4,40 +4,48 @@ import {
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useInvalidate } from "@refinedev/core";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import MessageInput from "./message-input";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useSubmissionReview } from "@/hooks/useSubmission";
-
-// type GroupedRubricOptions = { readonly label: string; readonly options: readonly RubricOption[] };
-// type RubricOption = {
-//   readonly label: string;
-//   readonly value: string;
-//   readonly points: number;
-//   readonly description?: string;
-//   readonly isOther?: boolean;
-//   readonly rubric_id: number;
-// };
-
-function LineCommentForm({
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useSubmissionReviewByAssignmentId } from "@/hooks/useSubmission";
+import { Checkbox } from "./checkbox";
+import { Box, Text } from "@chakra-ui/react";
+import { toaster } from "./toaster";
+export default function LineCommentForm({
   lineNumber,
   submission,
-  file
+  file,
+  reviewAssignmentId
 }: {
   lineNumber: number;
   submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
   file: SubmissionFile;
+  reviewAssignmentId?: number;
 }) {
-  // const rubrics = submission.assignments.rubrics.filter((rubric) => rubric.is_annotation);
-  // rubrics.sort((a, b) => a.ordinal - b.ordinal);
+  const { mutateAsync: createComment, isLoading: isCreatingComment } = useCreate<SubmissionFileComment>({
+    resource: "submission_file_comments"
+  });
+  const {
+    submissionReview,
+    isLoading: isLoadingReview,
+    error: reviewError
+  } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
 
-  const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({ resource: "submission_file_comments" });
-  const review = useSubmissionReview();
   const invalidateQuery = useInvalidate();
   const { private_profile_id } = useClassProfiles();
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const [eventuallyVisible, setEventuallyVisible] = useState(true);
 
   const postComment = useCallback(
     async (message: string) => {
+      if (reviewAssignmentId && !submissionReview?.id) {
+        toaster.error({
+          title: "Error posting comment",
+          description: "Submission review context not loaded, cannot post comment for this review assignment."
+        });
+        return;
+      }
+
       const values = {
         submission_id: submission.id,
         submission_file_id: file.id,
@@ -45,22 +53,59 @@ function LineCommentForm({
         author: private_profile_id!,
         line: lineNumber,
         comment: message,
-        submission_review_id: review?.id,
-        released: review ? false : true
+        submission_review_id: submissionReview?.id,
+        released: submissionReview ? submissionReview.released : !reviewAssignmentId,
+        eventually_visible: eventuallyVisible
       };
       await createComment({ values: values });
       invalidateQuery({ resource: "submission_files", id: file.id, invalidates: ["all"] });
     },
-    [submission, file, lineNumber, createComment, private_profile_id, invalidateQuery, review]
+    [
+      submission,
+      file,
+      lineNumber,
+      createComment,
+      private_profile_id,
+      invalidateQuery,
+      submissionReview,
+      eventuallyVisible,
+      reviewAssignmentId
+    ]
   );
 
+  if (isLoadingReview && reviewAssignmentId) {
+    return <Text fontSize="sm">Loading review context...</Text>;
+  }
+
+  if (reviewError && reviewAssignmentId) {
+    return (
+      <Text color="red.500" fontSize="sm">
+        Error loading review context: {reviewError.message}
+      </Text>
+    );
+  }
+
   return (
-    <MessageInput
-      className="w-full p-2 border rounded"
-      defaultSingleLine={true}
-      sendMessage={postComment}
-      sendButtonText="Save"
-    />
+    <Box w="100%">
+      <MessageInput
+        className="w-full p-2 border rounded"
+        defaultSingleLine={true}
+        sendMessage={postComment}
+        sendButtonText="Save"
+      />
+      {isGraderOrInstructor && (
+        <Box mt={2} mb={1}>
+          <Checkbox
+            inputProps={{
+              checked: eventuallyVisible,
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked),
+              disabled: isCreatingComment || (!!reviewAssignmentId && !submissionReview?.id)
+            }}
+          >
+            Visible to student upon release
+          </Checkbox>
+        </Box>
+      )}
+    </Box>
   );
 }
-export default LineCommentForm;

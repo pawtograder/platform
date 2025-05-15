@@ -1,11 +1,11 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useRubricCheck,
   useSubmission,
   useSubmissionFile,
   useSubmissionFileComments,
-  useSubmissionReview
+  useSubmissionReviewByAssignmentId
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
@@ -21,9 +21,19 @@ import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
-import { Element, ElementContent, Root, RootContent } from "hast";
+import { Element, ElementContent, Root, RootContent, Properties } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
-import { createContext, Dispatch, SetStateAction, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  Dispatch,
+  SetStateAction,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType
+} from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import LineCommentForm from "./line-comments-form";
@@ -33,6 +43,9 @@ import PersonAvatar from "./person-avatar";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
 import { CommentActions } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
+import { Checkbox } from "./checkbox";
+import { toaster } from "./toaster";
+
 type CodeLineCommentContextType = {
   submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
   comments: SubmissionFileComment[];
@@ -41,8 +54,11 @@ type CodeLineCommentContextType = {
   close: (line: number) => void;
   open: (line: number) => void;
   showCommentsFeature: boolean;
+  submissionReviewId?: number;
 };
+
 const CodeLineCommentContext = createContext<CodeLineCommentContextType | undefined>(undefined);
+
 function useCodeLineCommentContext() {
   const context = useContext(CodeLineCommentContext);
   if (!context) {
@@ -51,20 +67,21 @@ function useCodeLineCommentContext() {
   return context;
 }
 
-export default function CodeFile({ file }: { file: SubmissionFile }) {
+export default function CodeFile({ file, reviewAssignmentId }: { file: SubmissionFile; reviewAssignmentId?: number }) {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const submission = useSubmission();
   const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
 
   const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
-  const [lineActionPopup, setLineActionPopup] = useState<LineActionPopupProps>({
+  const [lineActionPopup, setLineActionPopup] = useState<LineActionPopupProps>(() => ({
     lineNumber: 0,
     top: 0,
     left: 0,
     visible: false,
     mode: "select",
-    close: () => {}
-  });
+    close: () => {},
+    submissionReviewId: reviewAssignmentId
+  }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
   const _comments = useSubmissionFileComments({
@@ -76,36 +93,11 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           return [...expanded, ...newExpanded];
         });
       }
-    },
-    onJumpTo: (comment) => {
-      setExpanded((prev) => {
-        if (prev.includes(comment.line)) {
-          return prev;
-        }
-        return [...prev, comment.line];
-      });
     }
   });
   const comments = useMemo(() => {
-    return _comments.sort((a, b) => {
-      const createdSort = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      if (createdSort !== 0) {
-        return createdSort;
-      }
-      return a.line - b.line;
-    });
-  }, [_comments]);
-  useEffect(() => {
-    if (comments.length === 0) {
-      setExpanded([]);
-    } else {
-      if (comments[0].submission_file_id === file.id) {
-        setExpanded(comments.map((comment) => comment.line));
-      } else {
-        setExpanded([]);
-      }
-    }
-  }, [file, comments]);
+    return _comments.filter((comment) => expanded.includes(comment.line));
+  }, [_comments, expanded]);
 
   useEffect(() => {
     async function highlight() {
@@ -124,10 +116,9 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     jsx,
     jsxs,
     components: {
-      // @ts-expect-error - This is a valid type I guess?
       CodeLineComments: CodeLineComments,
       LineNumber: LineNumber
-    }
+    } as Record<string, ComponentType<{ lineNumber: number }>>
   });
   const commentsCSS = showCommentsFeature
     ? {
@@ -222,7 +213,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           )}
         </HStack>
       </Flex>
-      <LineActionPopup {...lineActionPopup} />
+      <LineActionPopup {...lineActionPopup} submissionReviewId={reviewAssignmentId} />
       <CodeLineCommentContext.Provider
         value={{
           submission,
@@ -240,7 +231,8 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           close: (line: number) => {
             setExpanded((prev) => prev.filter((l) => l !== line));
           },
-          showCommentsFeature
+          showCommentsFeature,
+          submissionReviewId: reviewAssignmentId
         }}
       >
         <VStack
@@ -311,8 +303,7 @@ export function starryNightGutter(
 
         // Add a line, and the eol.
         lineNumber += 1;
-        // @ts-expect-error - This is a valid type I guess?
-        replacement.push(createLine(line, lineNumber, setExpanded, setLineActionPopup), {
+        replacement.push(createLine(line as ElementContent[], lineNumber, setLineActionPopup), {
           type: "text",
           value: match[0]
         });
@@ -338,8 +329,7 @@ export function starryNightGutter(
 
   if (line.length > 0) {
     lineNumber += 1;
-    // @ts-expect-error - This is a valid type I guess?
-    replacement.push(createLine(line, lineNumber, setExpanded));
+    replacement.push(createLine(line as ElementContent[], lineNumber, setLineActionPopup));
   }
 
   // Replace children with new array.
@@ -353,7 +343,9 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
-  const gradingReview = useSubmissionReview(comment.submission_review_id);
+  const { submissionReview: gradingReview } = useSubmissionReviewByAssignmentId(
+    comment.submission_review_id ?? undefined
+  );
 
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
@@ -429,20 +421,25 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
 }
 function CodeLineComment({
   comment,
-  submission
+  reviewAssignmentId
 }: {
   comment: SubmissionFileComment;
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  reviewAssignmentId?: number;
 }) {
   const authorProfile = useUserProfile(comment.author);
-  const isAuthor =
-    submission.profile_id === comment.author ||
-    submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
+  const { private_profile_id } = useClassProfiles();
+  const isAuthor = private_profile_id === comment.author;
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
+  useSubmissionReviewByAssignmentId(reviewAssignmentId ?? comment.submission_review_id ?? undefined);
+
+  if (!authorProfile) {
+    return <Skeleton height="100px" width="100%" />;
+  }
+
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -513,6 +510,7 @@ export type LineActionPopupProps = {
   onClose?: () => void;
   close: () => void;
   mode: "marking" | "select";
+  submissionReviewId?: number;
 };
 
 export type RubricCriteriaSelectGroupOption = {
@@ -531,6 +529,7 @@ export type RubricCheckSelectOption = {
 export type RubricCheckSubOptions = {
   readonly label: string;
   readonly index: string;
+  readonly value: string;
   readonly comment: string;
   readonly points: number;
   readonly check: RubricCheckSelectOption;
@@ -545,16 +544,18 @@ export function formatPoints(option: {
   }
   return ``;
 }
-function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineActionPopupProps) {
+function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissionReviewId }: LineActionPopupProps) {
   const submission = useSubmission();
   const file = useSubmissionFile();
-  const review = useSubmissionReview();
+  const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
   const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const [eventuallyVisible, setEventuallyVisible] = useState(true);
 
   const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
     resource: "submission_file_comments"
@@ -598,7 +599,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
   if (!visible) {
     return null;
   }
-  //Only show criteria that have annotation checks
+  // Only show criteria that have annotation checks
   const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) =>
     criteria.rubric_checks.some(
       (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
@@ -622,6 +623,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
             label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
             comment: subOption.label,
             index: index.toString(),
+            value: index.toString(),
             points: subOption.points,
             check: option
           }));
@@ -748,6 +750,18 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
                 {formatPoints(selectedCheckOption.check)}
               </Text>
             )}
+            {isGraderOrInstructor && (
+              <Box mt={2} mb={1}>
+                <Checkbox
+                  inputProps={{
+                    checked: eventuallyVisible,
+                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked)
+                  }}
+                >
+                  Visible to student upon release
+                </Checkbox>
+              </Box>
+            )}
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
@@ -769,6 +783,14 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
                 if (selectedSubOption) {
                   comment = selectedSubOption.comment + "\n" + comment;
                 }
+                const finalSubmissionReviewId = submissionReviewId ?? review?.id;
+                if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
+                  toaster.error({
+                    title: "Error saving comment",
+                    description: "Submission review ID is missing, cannot save rubric annotation."
+                  });
+                  return;
+                }
                 const values = {
                   comment,
                   line: lineNumber,
@@ -779,7 +801,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
                   author: profile_id,
                   released: review ? review.released : true,
                   points,
-                  submission_review_id: review?.id
+                  submission_review_id: finalSubmissionReviewId,
+                  eventually_visible: eventuallyVisible
                 };
                 await createComment({ values });
                 setCurrentMode(mode);
@@ -793,7 +816,14 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
   );
 }
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
-  const { submission, showCommentsFeature, comments: allCommentsForFile, file, expanded } = useCodeLineCommentContext();
+  const {
+    submission,
+    showCommentsFeature,
+    comments: allCommentsForFile,
+    file,
+    expanded,
+    submissionReviewId
+  } = useCodeLineCommentContext();
   const comments = allCommentsForFile.filter((comment) => comment.line === lineNumber);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
@@ -831,11 +861,16 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
           comment.rubric_check_id ? (
             <LineCheckAnnotation key={comment.id} comment={comment} />
           ) : (
-            <CodeLineComment key={comment.id} comment={comment} submission={submission} />
+            <CodeLineComment key={comment.id} comment={comment} reviewAssignmentId={submissionReviewId} />
           )
         )}
         {showReply ? (
-          <LineCommentForm lineNumber={lineNumber} submission={submission} file={file} />
+          <LineCommentForm
+            lineNumber={lineNumber}
+            submission={submission}
+            file={file}
+            reviewAssignmentId={submissionReviewId}
+          />
         ) : (
           <Box display="flex" justifyContent="flex-end">
             <Button colorPalette="green" onClick={() => setShowReply(true)}>
@@ -872,6 +907,7 @@ function LineNumber({ lineNumber }: { lineNumber: number }) {
   }
   return <div className="line-number">{lineNumber}</div>;
 }
+
 /**
  * @param {Array<ElementContent>} children
  * @param {number} line
@@ -880,7 +916,6 @@ function LineNumber({ lineNumber }: { lineNumber: number }) {
 function createLine(
   children: ElementContent[],
   line: number,
-  setExpanded: Dispatch<SetStateAction<number[]>>,
   setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>
 ): Element {
   return {
@@ -888,7 +923,7 @@ function createLine(
     tagName: "div",
     properties: {
       className: "source-code-line-container"
-    },
+    } as Properties,
     children: [
       {
         type: "element",
@@ -897,7 +932,6 @@ function createLine(
           className: "source-code-line",
           id: `L${line}`,
 
-          //@ts-expect-error - This is a valid type I guess?
           onMouseDown: (ev: MouseEvent) => {
             if (ev.button !== 0) {
               return;
@@ -909,13 +943,15 @@ function createLine(
                 prev.onClose?.();
               }
               return {
+                ...prev,
                 lineNumber: line,
                 top: ev.clientY,
                 left: ev.clientX,
                 visible: true,
                 mode: "marking",
                 close: () => {
-                  setLineActionPopup({
+                  setLineActionPopup((prevClose) => ({
+                    ...prevClose,
                     lineNumber: line,
                     top: 0,
                     left: 0,
@@ -923,12 +959,11 @@ function createLine(
                     onClose: undefined,
                     close: () => {},
                     mode: "marking"
-                  });
+                  }));
                 }
               };
             });
           },
-          //@ts-expect-error - This is a valid type I guess?
           oncontextmenu: (ev: MouseEvent) => {
             ev.preventDefault();
             ev.stopPropagation();
@@ -942,6 +977,7 @@ function createLine(
                 prev.onClose?.();
               }
               return {
+                ...prev,
                 lineNumber: line,
                 top: ev.clientY,
                 left: ev.clientX,
@@ -949,7 +985,8 @@ function createLine(
                 mode: "select",
                 close: () => {
                   onClose();
-                  setLineActionPopup({
+                  setLineActionPopup((prevClose) => ({
+                    ...prevClose,
                     lineNumber: line,
                     top: 0,
                     left: 0,
@@ -957,13 +994,13 @@ function createLine(
                     onClose: undefined,
                     close: () => {},
                     mode: "select"
-                  });
+                  }));
                 },
                 onClose
               };
             });
           }
-        },
+        } as unknown as Properties,
         children: [
           {
             type: "element",

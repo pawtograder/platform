@@ -17,7 +17,6 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
-import { RubricCriteria } from "@/components/ui/rubric-sidebar";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
@@ -26,17 +25,18 @@ import {
   useRubricCriteriaInstances,
   useSubmission,
   useSubmissionReview,
-  useSubmissionRubric
+  useSubmissionRubric,
+  useReviewAssignment
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
-import { formatRelative } from "date-fns";
+import { formatRelative, format } from "date-fns";
 import NextLink from "next/link";
-import { useParams, usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useState, ElementType as ReactElementType } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -56,9 +56,10 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
+import RubricSidebar from "@/components/ui/rubric-sidebar";
+
 // Create a mapping of icon names to their components
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const iconMap: { [key: string]: any } = {
+const iconMap: { [key: string]: ReactElementType } = {
   FaBell,
   FaCheckCircle,
   FaFile,
@@ -598,8 +599,23 @@ function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const review = useSubmissionReview();
-  const showHandGrading = isGraderOrInstructor || review?.released;
-  const criteria = submission.assignments.rubrics?.rubric_criteria as HydratedRubricCriteria[];
+  const searchParams = useSearchParams();
+
+  const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
+  const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
+
+  const {
+    reviewAssignment,
+    isLoading: isLoadingReviewAssignment,
+    error: reviewAssignmentError
+  } = useReviewAssignment(reviewAssignmentId);
+
+  const defaultAssignmentRubric = submission.assignments.rubrics;
+
+  const displayScoreFromReview = reviewAssignmentId && reviewAssignment ? undefined : review;
+
+  const showHandGradingControls = isGraderOrInstructor || review?.released || !!reviewAssignmentId;
+
   return (
     <Box
       position="sticky"
@@ -614,16 +630,40 @@ function RubricView() {
       overflowY="auto"
     >
       <VStack align="start">
-        {review && (
+        {isLoadingReviewAssignment && reviewAssignmentId && <Skeleton height="100px" />}
+        {reviewAssignmentError && reviewAssignmentId && (
+          <Text color="red.500">Error loading review details: {reviewAssignmentError.message}</Text>
+        )}
+        {reviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
+          <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
+            <Heading size="md">
+              Review Task: {reviewAssignment.rubrics?.name} ({reviewAssignment.rubrics?.review_round})
+            </Heading>
+            <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
+            <Text fontSize="sm">
+              Due: {reviewAssignment.due_date ? format(new Date(reviewAssignment.due_date), "Pp") : "N/A"}
+            </Text>
+            {reviewAssignment.release_date && (
+              <Text fontSize="sm">
+                Grading visible to student after: {format(new Date(reviewAssignment.release_date), "Pp")}
+              </Text>
+            )}
+          </Box>
+        )}
+
+        {displayScoreFromReview && (
           <Heading size="xl">
-            Grading Summary ({review?.total_score}/{submission.assignments.total_points})
+            Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
           </Heading>
         )}
-        {!review && <UnGradedGradingSummary />}
+        {!reviewAssignmentId && !review && <UnGradedGradingSummary />}
+
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
-        {showHandGrading && <Heading size="md">Hand Check Results</Heading>}
-        {showHandGrading && criteria?.map((criteria) => <RubricCriteria key={criteria.id} criteria={criteria} />)}
+        {showHandGradingControls && (
+          <RubricSidebar initialRubric={defaultAssignmentRubric ?? undefined} reviewAssignmentId={reviewAssignmentId} />
+        )}
+        {!showHandGradingControls && <Text>Rubric and manual grading are not available.</Text>}
       </VStack>
     </Box>
   );
