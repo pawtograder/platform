@@ -1,10 +1,11 @@
-import { Accordion, Container } from "@chakra-ui/react";
+import { Accordion } from "@chakra-ui/react";
 import RubricElement from "./rubricElement";
 
 export enum RubricType {
   "student",
   "grader"
 }
+
 export default function RubricPage() {
   const rubrics = [
     { title: "Student Rubric", content: <RubricElement type={RubricType.student} /> },
@@ -12,20 +13,18 @@ export default function RubricPage() {
   ];
 
   return (
-    <Container>
-      <Accordion.Root collapsible>
-        {rubrics.map((item, index) => (
-          <Accordion.Item key={index} value={item.title}>
-            <Accordion.ItemTrigger>
-              {item.title}
-              <Accordion.ItemIndicator color="black" />
-            </Accordion.ItemTrigger>
-            <Accordion.ItemContent>
-              <Accordion.ItemBody>{item.content}</Accordion.ItemBody>
-            </Accordion.ItemContent>
-          </Accordion.Item>
-        ))}
-      </Accordion.Root>
-    </Container>
+    <Accordion.Root lazyMount unmountOnExit collapsible>
+      {rubrics.map((item, index) => (
+        <Accordion.Item key={index} value={item.title}>
+          <Accordion.ItemTrigger>
+            {item.title}
+            <Accordion.ItemIndicator color="black" />
+          </Accordion.ItemTrigger>
+          <Accordion.ItemContent>
+            <Accordion.ItemBody>{item.content}</Accordion.ItemBody>
+          </Accordion.ItemContent>
+        </Accordion.Item>
+      ))}
+    </Accordion.Root>
   );
 }

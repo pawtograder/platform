@@ -420,15 +420,11 @@ export default function RubricElement({ type }: { type: RubricType }) {
 
       const partChanges = findChanges(rubric.rubric_parts, existingRubric.rubric_parts);
 
-      const allExistingCriteria = existingRubric.rubric_parts.flatMap(
-        (part) => part.rubric_criteria
-      );
+      const allExistingCriteria = existingRubric.rubric_parts.flatMap((part) => part.rubric_criteria);
       const allNewCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria);
       const criteriaChanges = findChanges(allNewCriteria, allExistingCriteria);
 
-      const allExistingChecks = allExistingCriteria.flatMap(
-        (criteria) => criteria.rubric_checks
-      );
+      const allExistingChecks = allExistingCriteria.flatMap((criteria) => criteria.rubric_checks);
       const allNewChecks = allNewCriteria.flatMap((criteria) => criteria.rubric_checks);
       const checkChanges = findChanges(allNewChecks, allExistingChecks);
 
