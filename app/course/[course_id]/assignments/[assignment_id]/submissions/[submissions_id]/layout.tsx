@@ -4,7 +4,7 @@ import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger 
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
-  LegacyRubricWithCriteriaAndChecks,
+  HydratedRubricPart,
   Submission,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
@@ -57,6 +57,7 @@ import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
 import RubricSidebar from "@/components/ui/rubric-sidebar";
+import { Tables } from "@/utils/supabase/SupabaseTypes";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -342,7 +343,7 @@ function ReviewStats() {
 }
 
 function incompleteRubricChecks(
-  rubric: LegacyRubricWithCriteriaAndChecks,
+  rubric: Tables<"rubrics"> & { rubric_parts: Array<HydratedRubricPart> },
   comments: { rubric_check_id: number | null; submission_review_id: number | null }[]
 ): {
   required_checks: HydratedRubricCheck[];
@@ -356,31 +357,33 @@ function incompleteRubricChecks(
     check_count_applied: number;
   }[];
 } {
-  const required_checks = rubric.rubric_criteria.flatMap((criteria) =>
+  const allRubricCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria || []);
+
+  const required_checks = allRubricCriteria.flatMap((criteria) =>
     criteria.rubric_checks.filter(
       (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
     )
   ) as HydratedRubricCheck[];
-  const optional_checks = rubric.rubric_criteria
+  const optional_checks = allRubricCriteria
     .filter((criteria) => criteria.min_checks_per_submission === null)
     .flatMap((criteria) =>
       criteria.rubric_checks.filter(
         (check) => !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
       )
     ) as HydratedRubricCheck[];
-  const criteria = rubric.rubric_criteria.map((criteria) => ({
+  const criteriaEvaluation = allRubricCriteria.map((criteria) => ({
     criteria: criteria as HydratedRubricCriteria,
     check_count_applied: criteria.rubric_checks.filter((check) =>
       comments.some((comment) => comment.rubric_check_id === check.id)
     ).length
   }));
-  const required_criteria = criteria.filter(
-    (criteria) =>
-      criteria.criteria.min_checks_per_submission !== null &&
-      criteria.check_count_applied < criteria.criteria.min_checks_per_submission
+  const required_criteria = criteriaEvaluation.filter(
+    (item) =>
+      item.criteria.min_checks_per_submission !== null &&
+      item.check_count_applied < item.criteria.min_checks_per_submission
   );
-  const optional_criteria = criteria.filter(
-    (criteria) => criteria.criteria.min_checks_per_submission === null && criteria.check_count_applied === 0
+  const optional_criteria = criteriaEvaluation.filter(
+    (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
   );
   return {
     required_checks,
@@ -391,37 +394,29 @@ function incompleteRubricChecks(
 }
 function CompleteRubricButton() {
   const review = useSubmissionReview();
-  const rubric = useSubmissionRubric();
+  const { rubric: actualRubric, isLoading: isLoadingRubric } = useSubmissionRubric();
   const comments = useAllRubricCheckInstances(review?.id);
-  const { required_checks, optional_checks, required_criteria, optional_criteria } = incompleteRubricChecks(
-    rubric!,
-    comments
-  );
-  //   //TODO: Check if all required parts are graded, and show an error if not.
-  //             // If non-required parts are not graded, show a warning that the grader must click-through.
-  //             if(required_checks.length > 0 || required_criteria.length > 0) {
-  //                 toaster.create({
-  //                     title: "Incomplete Rubric Checks",
-  //                     description: "Please grade all required checks before marking the submission as graded.\n\nMissing checks: " + required_checks.map((check) => check.name).join(", ") + " and " + required_criteria.map((criteria) => criteria.criteria.name).join(", "),
-  //                     type: "error"
-  //                 });
-  //                 console.log("Incomplete checks", required_checks, required_criteria);
-  //             } else if (optional_checks.length > 0 || optional_criteria.length > 0) {
-  //                 toaster.create({
-  //                     title: "Incomplete Rubric Checks",
-  //                     description: "Please grade all optional checks before marking the submission as graded.\n\nMissing checks: " + optional_checks.map((check) => check.name).join(", ") + " and " + optional_criteria.map((criteria) => criteria.criteria.name).join(", "),
-  //                     type: "warning"
-  //                 });
-  //             } else {
-  //                 // updateReview({ id: review.id, values: { completed_at: new Date(), completed_by: private_profile_id } });
-  //                 console.log("Marking as graded");
-  //             }
-  const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
-  const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
   const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
     resource: "submission_reviews"
   });
   const { private_profile_id } = useClassProfiles();
+
+  if (isLoadingRubric || !actualRubric) {
+    // Render a loading state or disabled button
+    return (
+      <Button variant="surface" loading>
+        Graded <Icon as={FaRegCheckCircle} />
+      </Button>
+    );
+  }
+
+  const { required_checks, optional_checks, required_criteria, optional_criteria } = incompleteRubricChecks(
+    actualRubric,
+    comments
+  );
+  const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
+  const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
+
   return (
     <Popover.Root>
       <Popover.Trigger asChild>

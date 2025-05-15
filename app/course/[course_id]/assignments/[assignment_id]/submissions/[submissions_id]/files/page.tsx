@@ -27,19 +27,22 @@ import {
   useRubricCheck,
   useSubmission,
   useSubmissionArtifactComments,
-  useSubmissionController,
   useSubmissionFileComments,
   useSubmissionReview,
-  useReviewAssignment
+  useReviewAssignment,
+  useSubmissionReviewByAssignmentId,
+  useSubmissionMaybe
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
+import { Tables } from "@/utils/supabase/SupabaseTypes";
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
   SubmissionArtifact,
   SubmissionArtifactComment,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithFilesGraderResultsOutputTestsAndRubric,
+  SubmissionFile
 } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -62,11 +65,12 @@ import { format } from "date-fns";
 import JSZip from "jszip";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 import zipToHTMLBlobs from "./zipToHTMLBlobs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toaster } from "@/components/ui/toaster";
+import NotFound from "@/components/ui/not-found";
 
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
@@ -370,63 +374,40 @@ function ArtifactComments({
   reviewAssignmentId?: number;
 }) {
   const allArtifactComments = useSubmissionArtifactComments({});
-  const comments = allArtifactComments.filter((comment) => comment.submission_artifact_id === artifact.id);
   const submission = useSubmission();
-
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
-  const [showReply, setShowReply] = useState(isReplyEnabled);
-  const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
 
-  if (!submission || !artifact || !showCommentsFeature) {
+  const commentsToDisplay = useMemo(() => {
+    return allArtifactComments.filter((comment) => {
+      if (comment.submission_artifact_id !== artifact.id) return false;
+      if (!isGraderOrInstructor && submission.released !== null) {
+        return comment.eventually_visible === true;
+      }
+      return true;
+    });
+  }, [allArtifactComments, artifact.id, isGraderOrInstructor, submission.released]);
+
+  const { reviewAssignment } = useReviewAssignment(reviewAssignmentId);
+
+  if (!submission) {
     return null;
   }
+
   return (
-    <Box
-      width="100%"
-      p={4}
-      whiteSpace="normal"
-      position="relative"
-      m={0}
-      borderTop="1px solid"
-      borderBottom="1px solid"
-      borderColor="border.emphasized"
-    >
-      <Box position="absolute" left={0} w="40px" h="100%" borderRight="1px solid #ccc"></Box>
-      <Box
-        position="relative"
-        w="100%"
-        fontFamily={"sans-serif"}
-        m={0}
-        borderWidth="1px"
-        borderColor="border.emphasized"
-        borderRadius="md"
-        p={0}
-        backgroundColor="bg"
-        boxShadow="sm"
-      >
-        {comments.map((comment) =>
-          comment.rubric_check_id ? (
-            <ArtifactAnnotation key={comment.id} comment={comment} reviewAssignmentId={reviewAssignmentId} />
-          ) : (
-            <ArtifactComment key={comment.id} comment={comment} submission={submission} />
-          )
-        )}
-        {showReply ? (
-          <ArtifactCommentsForm
-            submission={submission}
-            artifact={artifact}
-            defaultValue={comments.length > 0 ? "Reply" : "Add Comment"}
-            reviewAssignmentId={reviewAssignmentId}
-          />
+    <Box mt={4}>
+      {commentsToDisplay.map((comment) =>
+        comment.rubric_check_id ? (
+          <ArtifactAnnotation key={comment.id} comment={comment} reviewAssignmentId={reviewAssignmentId} />
         ) : (
-          <Box display="flex" justifyContent="flex-end">
-            <Button colorPalette="green" onClick={() => setShowReply(true)}>
-              Add Comment
-            </Button>
-          </Box>
-        )}
-      </Box>
+          <ArtifactComment key={comment.id} comment={comment} submission={submission} />
+        )
+      )}
+      <ArtifactCommentsForm
+        submission={submission}
+        artifact={artifact}
+        defaultValue=""
+        reviewAssignmentId={reviewAssignmentId ?? reviewAssignment?.id}
+      />
     </Box>
   );
 }
@@ -838,75 +819,88 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
 }
 
 export default function FilesView() {
-  const submission = useSubmission();
-  const submissionController = useSubmissionController();
   const searchParams = useSearchParams();
+  const submissionData = useSubmissionMaybe();
+  const isLoadingSubmission = submissionData === undefined;
+
+  const reviewAssignmentIdFromQuery = searchParams.get("review_assignment_id");
+  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(
+    reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined
+  );
+
+  const { submissionReview: currentSubmissionReview, isLoading: isLoadingSubmissionReviewList } =
+    useSubmissionReviewByAssignmentId(reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined);
+
+  const currentSubmissionReviewRecordId = currentSubmissionReview?.id;
+
+  const activeSubmissionReviewIdToUse = reviewAssignmentIdFromQuery
+    ? currentSubmissionReviewRecordId
+    : submissionData?.grading_review_id;
+
   const fileId = searchParams.get("file_id");
   const artifactId = searchParams.get("artifact_id");
-  const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
 
-  const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
+  const curFileIndex = submissionData?.submission_files.findIndex((file: SubmissionFile) => file.id === Number(fileId));
+  const selectedFile =
+    curFileIndex !== undefined && curFileIndex !== -1
+      ? submissionData?.submission_files[curFileIndex]
+      : submissionData?.submission_files[0];
 
-  const curFile = submission.submission_files.findIndex((file) => file.id === Number(fileId));
-  const curArtifact = submission.submission_artifacts?.findIndex((artifact) => artifact.id === Number(artifactId));
+  const curArtifactIndex = submissionData?.submission_artifacts?.findIndex(
+    (artifact: Tables<"submission_artifacts">) => artifact.id === Number(artifactId)
+  );
+  const selectedArtifact =
+    curArtifactIndex !== undefined && curArtifactIndex !== -1
+      ? submissionData?.submission_artifacts?.[curArtifactIndex]
+      : submissionData?.submission_artifacts?.[0];
 
-  useEffect(() => {
-    if (curFile !== -1) {
-      submissionController.file = submission.submission_files[curFile];
-      submissionController.artifact = undefined;
-    } else if (curArtifact !== -1 && submission.submission_artifacts) {
-      submissionController.artifact = submission.submission_artifacts[curArtifact] as SubmissionArtifact;
-      submissionController.file = undefined;
-    } else if (submission.submission_files.length > 0) {
-      submissionController.file = submission.submission_files[0];
-      submissionController.artifact = undefined;
-    } else if (submission.submission_artifacts && submission.submission_artifacts.length > 0) {
-      submissionController.artifact = submission.submission_artifacts[0] as SubmissionArtifact;
-      submissionController.file = undefined;
-    }
-  }, [submission, curFile, curArtifact, submissionController]);
+  const isLoading =
+    isLoadingSubmission || isLoadingReviewAssignment || (!!reviewAssignment && isLoadingSubmissionReviewList);
 
-  if (
-    submission.submission_files.length === 0 &&
-    (!submission.submission_artifacts || submission.submission_artifacts.length === 0)
-  ) {
-    return <Text>No files or artifacts in this submission</Text>;
+  // Resolve prop types
+  const filePickerDisplayIndex = curFileIndex === undefined || curFileIndex === -1 ? 0 : curFileIndex;
+  const artifactPickerDisplayIndex = curArtifactIndex === undefined || curArtifactIndex === -1 ? 0 : curArtifactIndex;
+  const finalActiveSubmissionReviewId =
+    activeSubmissionReviewIdToUse === null ? undefined : activeSubmissionReviewIdToUse;
+
+  if (isLoading) {
+    return <Spinner />;
   }
 
-  const selectedFile = curFile !== -1 ? submission.submission_files[curFile] : submission.submission_files[0];
-  const selectedArtifact =
-    curArtifact !== -1 && submission.submission_artifacts
-      ? submission.submission_artifacts[curArtifact]
-      : submission.submission_artifacts && submission.submission_artifacts.length > 0
-        ? submission.submission_artifacts[0]
-        : undefined;
+  const submission = submissionData;
+
+  if (!submission) {
+    return <NotFound />;
+  }
 
   return (
     <>
-      <HStack alignItems="flex-start" w="100%">
-        <VStack w="250px">
-          <FilePicker curFile={curFile === -1 ? 0 : curFile} />
+      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column", md: "row" }}>
+        <Box w={{ base: "100%", md: "300px" }} minW={{ base: "100%", md: "300px" }}>
+          <FilePicker curFile={filePickerDisplayIndex} />
           {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
-            <ArtifactPicker curArtifact={curArtifact === -1 ? 0 : curArtifact} />
+            <ArtifactPicker curArtifact={artifactPickerDisplayIndex} />
           )}
-        </VStack>
+        </Box>
+        <Separator orientation={{ base: "horizontal", md: "vertical" }} />
         <Box flex="1" overflow="auto">
-          {fileId || (curFile === -1 && curArtifact === -1 && submission.submission_files.length > 0) ? (
-            selectedFile && <CodeFile file={selectedFile} reviewAssignmentId={reviewAssignmentId} />
+          {fileId ||
+          (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
+            selectedFile && <CodeFile file={selectedFile} submissionReviewId={finalActiveSubmissionReviewId} />
           ) : selectedArtifact ? (
             selectedArtifact.data !== null ? (
               <ArtifactWithComments
                 artifact={selectedArtifact as SubmissionArtifact}
-                reviewAssignmentId={reviewAssignmentId}
+                reviewAssignmentId={finalActiveSubmissionReviewId}
               />
             ) : (
-              <Text>Artifact has no data to display.</Text>
+              <ArtifactView artifact={selectedArtifact as SubmissionArtifact} />
             )
           ) : (
             <Text>Select a file or artifact to view.</Text>
           )}
         </Box>
-      </HStack>
+      </Flex>
     </>
   );
 }

@@ -67,7 +67,7 @@ function useCodeLineCommentContext() {
   return context;
 }
 
-export default function CodeFile({ file, reviewAssignmentId }: { file: SubmissionFile; reviewAssignmentId?: number }) {
+export default function CodeFile({ file, submissionReviewId }: { file: SubmissionFile; submissionReviewId?: number }) {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const submission = useSubmission();
   const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
@@ -80,7 +80,7 @@ export default function CodeFile({ file, reviewAssignmentId }: { file: Submissio
     visible: false,
     mode: "select",
     close: () => {},
-    submissionReviewId: reviewAssignmentId
+    submissionReviewId: submissionReviewId
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -213,7 +213,7 @@ export default function CodeFile({ file, reviewAssignmentId }: { file: Submissio
           )}
         </HStack>
       </Flex>
-      <LineActionPopup {...lineActionPopup} submissionReviewId={reviewAssignmentId} />
+      <LineActionPopup {...lineActionPopup} submissionReviewId={submissionReviewId} />
       <CodeLineCommentContext.Provider
         value={{
           submission,
@@ -232,7 +232,7 @@ export default function CodeFile({ file, reviewAssignmentId }: { file: Submissio
             setExpanded((prev) => prev.filter((l) => l !== line));
           },
           showCommentsFeature,
-          submissionReviewId: reviewAssignmentId
+          submissionReviewId: submissionReviewId
         }}
       >
         <VStack
@@ -421,10 +421,10 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
 }
 function CodeLineComment({
   comment,
-  reviewAssignmentId
+  submissionReviewId
 }: {
   comment: SubmissionFileComment;
-  reviewAssignmentId?: number;
+  submissionReviewId?: number;
 }) {
   const authorProfile = useUserProfile(comment.author);
   const { private_profile_id } = useClassProfiles();
@@ -434,7 +434,7 @@ function CodeLineComment({
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
-  useSubmissionReviewByAssignmentId(reviewAssignmentId ?? comment.submission_review_id ?? undefined);
+  useSubmissionReviewByAssignmentId(submissionReviewId ?? comment.submission_review_id ?? undefined);
 
   if (!authorProfile) {
     return <Skeleton height="100px" width="100%" />;
@@ -824,10 +824,21 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
     expanded,
     submissionReviewId
   } = useCodeLineCommentContext();
-  const comments = allCommentsForFile.filter((comment) => comment.line === lineNumber);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
   const [showReply, setShowReply] = useState(isReplyEnabled);
+
+  const commentsToDisplay = useMemo(() => {
+    return allCommentsForFile.filter((comment) => {
+      if (comment.line !== lineNumber) return false;
+      // Apply eventually_visible filter only for students after release
+      if (!isGraderOrInstructor && submission.released !== null) {
+        return comment.eventually_visible === true;
+      }
+      return true; // Graders/instructors see all (RLS still applies for data fetching)
+    });
+  }, [allCommentsForFile, lineNumber, isGraderOrInstructor, submission.released]);
+
   if (!submission || !file || !showCommentsFeature) {
     return null;
   }
@@ -857,11 +868,11 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
         backgroundColor="bg"
         boxShadow="sm"
       >
-        {comments.map((comment) =>
+        {commentsToDisplay.map((comment) =>
           comment.rubric_check_id ? (
             <LineCheckAnnotation key={comment.id} comment={comment} />
           ) : (
-            <CodeLineComment key={comment.id} comment={comment} reviewAssignmentId={submissionReviewId} />
+            <CodeLineComment key={comment.id} comment={comment} submissionReviewId={submissionReviewId} />
           )
         )}
         {showReply ? (
@@ -869,7 +880,7 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
             lineNumber={lineNumber}
             submission={submission}
             file={file}
-            reviewAssignmentId={submissionReviewId}
+            submissionReviewId={submissionReviewId}
           />
         ) : (
           <Box display="flex" justifyContent="flex-end">

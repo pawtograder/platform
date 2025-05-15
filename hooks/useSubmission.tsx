@@ -11,7 +11,9 @@ import {
   SubmissionFileComment,
   SubmissionReview,
   SubmissionReviewWithRubric,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric
+  SubmissionWithFilesGraderResultsOutputTestsAndRubric,
+  HydratedRubricCriteria,
+  HydratedRubricCheck
 } from "@/utils/supabase/DatabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
@@ -572,24 +574,59 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
   const comments = [...fileComments, ...submissionComments, ...artifactComments];
   return comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
 }
-export function useSubmissionRubric(reviewAssignmentId?: number | null) {
-  const ctx = useContext(SubmissionContext);
-  const { reviewAssignment, isLoading: reviewAssignmentLoading } = useReviewAssignment(reviewAssignmentId ?? undefined);
+export function useSubmissionRubric(reviewAssignmentId?: number | null): {
+  rubric: (Database["public"]["Tables"]["rubrics"]["Row"] & { rubric_parts: HydratedRubricPart[] }) | undefined;
+  isLoading: boolean;
+} {
+  const context = useContext(SubmissionContext);
+  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(
+    reviewAssignmentId ?? undefined
+  );
 
-  if (!ctx) {
-    return undefined;
+  // Get submission details, but only if context is available
+  const submission = context?.submissionController?.submission;
+  const rubricIdFromSubmission = submission?.assignments?.grading_rubric_id;
+  const rubricIdFromReviewAssignment = reviewAssignment?.rubric_id;
+
+  const finalRubricId = reviewAssignmentId != null ? rubricIdFromReviewAssignment : rubricIdFromSubmission;
+
+  const { query: rubricQuery } = useShow<
+    Database["public"]["Tables"]["rubrics"]["Row"] & {
+      rubric_parts: HydratedRubricPart[];
+    }
+  >({
+    resource: "rubrics",
+    id: finalRubricId || -1,
+    queryOptions: {
+      enabled: !!finalRubricId && !!context // Also ensure context is loaded before enabling
+    },
+    meta: {
+      select:
+        "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references_referencing_rubric_check_id(*, rubric_checks!referenced_rubric_check_id(*)))))"
+    }
+  });
+
+  const rubricDataResult = rubricQuery?.data;
+  const isLoadingRubricFromHook = rubricQuery?.isLoading ?? !rubricQuery;
+
+  if (!context) {
+    return { rubric: undefined, isLoading: true }; // Still loading if context isn't ready
   }
 
-  if (reviewAssignmentId && !reviewAssignmentLoading && reviewAssignment?.rubrics) {
-    return reviewAssignment.rubrics as Database["public"]["Tables"]["rubrics"]["Row"] & {
-      rubric_criteria: (Database["public"]["Tables"]["rubric_criteria"]["Row"] & {
-        rubric_checks: Database["public"]["Tables"]["rubric_checks"]["Row"][];
-      })[];
-    };
+  let isLoading = isLoadingRubricFromHook;
+  if (reviewAssignmentId != null) {
+    isLoading = isLoadingReviewAssignment || isLoadingRubricFromHook;
   }
 
-  // Fallback to the assignment's default rubric
-  return ctx.submissionController.submission.assignments.rubrics;
+  if (!finalRubricId && !isLoading) {
+    return { rubric: undefined, isLoading: false };
+  }
+  if (reviewAssignmentId != null && !rubricIdFromReviewAssignment && !isLoadingReviewAssignment) {
+    // If review assignment was specified, but it (or its rubric_id) wasn't found, and we're done loading it.
+    return { rubric: undefined, isLoading: false };
+  }
+
+  return { rubric: rubricDataResult?.data, isLoading }; // Refine's useShow often has { data: { data: actualRecord } }
 }
 export function useRubricCriteriaInstances({
   criteria,
@@ -602,7 +639,7 @@ export function useRubricCriteriaInstances({
 }) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
-  const rubric = useSubmissionRubric();
+  const rubricData = useSubmissionRubric(review_id); // Pass review_id to useSubmissionRubric
   if (!review_id) {
     return [];
   }
@@ -611,16 +648,19 @@ export function useRubricCriteriaInstances({
     return comments.filter(
       (eachComment) =>
         eachComment.submission_review_id === review_id &&
-        criteria.rubric_checks.find((eachCheck) => eachCheck.id === eachComment.rubric_check_id)
+        criteria.rubric_checks.find((eachCheck: RubricChecks) => eachCheck.id === eachComment.rubric_check_id)
     );
   }
   if (rubric_id) {
-    const allCriteria = rubric?.rubric_criteria || [];
-    const allChecks = allCriteria.flatMap((eachCriteria) => eachCriteria.rubric_checks || []);
+    const allCriteria: HydratedRubricCriteria[] =
+      rubricData?.rubric?.rubric_parts?.flatMap((part) => part.rubric_criteria || []) || [];
+    const allChecks: HydratedRubricCheck[] = allCriteria.flatMap(
+      (eachCriteria: HydratedRubricCriteria) => eachCriteria.rubric_checks || []
+    );
     return comments.filter(
       (eachComment) =>
         eachComment.submission_review_id === review_id &&
-        allChecks.find((eachCheck) => eachCheck.id === eachComment.rubric_check_id)
+        allChecks.find((eachCheck: HydratedRubricCheck) => eachCheck.id === eachComment.rubric_check_id)
     );
   }
   throw new Error("Either criteria or rubric_id must be provided");

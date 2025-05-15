@@ -4,61 +4,87 @@ import {
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useInvalidate } from "@refinedev/core";
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect } from "react";
 import MessageInput from "./message-input";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useSubmissionReviewByAssignmentId } from "@/hooks/useSubmission";
+import { useSubmissionReview } from "@/hooks/useSubmission";
 import { Checkbox } from "./checkbox";
 import { Box, Text } from "@chakra-ui/react";
 import { toaster } from "./toaster";
+
 export default function LineCommentForm({
   lineNumber,
   submission,
   file,
-  reviewAssignmentId
+  submissionReviewId,
+  rubricCheckId,
+  defaultText,
+  defaultEventuallyVisible,
+  defaultPoints,
+  onCancel,
+  onSubmitted
 }: {
   lineNumber: number;
   submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
   file: SubmissionFile;
-  reviewAssignmentId?: number;
+  submissionReviewId?: number;
+  rubricCheckId?: number;
+  defaultText?: string;
+  defaultEventuallyVisible?: boolean;
+  defaultPoints?: number;
+  onCancel?: () => void;
+  onSubmitted?: (comment: SubmissionFileComment) => void;
 }) {
   const { mutateAsync: createComment, isLoading: isCreatingComment } = useCreate<SubmissionFileComment>({
     resource: "submission_file_comments"
   });
-  const {
-    submissionReview,
-    isLoading: isLoadingReview,
-    error: reviewError
-  } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
-
-  const invalidateQuery = useInvalidate();
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const [eventuallyVisible, setEventuallyVisible] = useState(true);
+  const invalidateQuery = useInvalidate();
+  const [eventuallyVisible, setEventuallyVisible] = useState(defaultEventuallyVisible ?? true);
+
+  const fetchedSubmissionReview = useSubmissionReview(submissionReviewId);
+  const isLoadingReviewDetails = submissionReviewId !== undefined && fetchedSubmissionReview === undefined;
+
+  useEffect(() => {
+    setEventuallyVisible(defaultEventuallyVisible ?? true);
+  }, [defaultEventuallyVisible]);
 
   const postComment = useCallback(
     async (message: string) => {
-      if (reviewAssignmentId && !submissionReview?.id) {
+      if (!message && !rubricCheckId) {
         toaster.error({
           title: "Error posting comment",
-          description: "Submission review context not loaded, cannot post comment for this review assignment."
+          description: "Comment cannot be empty."
         });
         return;
       }
+      if (submissionReviewId && !fetchedSubmissionReview && isLoadingReviewDetails) {
+        toaster.error({ title: "Error posting comment", description: "Review context not fully loaded." });
+        return;
+      }
 
-      const values = {
+      const values: Partial<SubmissionFileComment> = {
         submission_id: submission.id,
         submission_file_id: file.id,
         class_id: file.class_id,
         author: private_profile_id!,
         line: lineNumber,
         comment: message,
-        submission_review_id: submissionReview?.id,
-        released: submissionReview ? submissionReview.released : !reviewAssignmentId,
-        eventually_visible: eventuallyVisible
+        submission_review_id: submissionReviewId,
+        rubric_check_id: rubricCheckId ?? null,
+        points: defaultPoints ?? null,
+        eventually_visible: isGraderOrInstructor ? eventuallyVisible : true
       };
-      await createComment({ values: values });
-      invalidateQuery({ resource: "submission_files", id: file.id, invalidates: ["all"] });
+      try {
+        const created = await createComment({ values: values as SubmissionFileComment });
+        invalidateQuery({ resource: "submission_files", id: file.id, invalidates: ["all"] });
+        if (onSubmitted) onSubmitted(created.data as SubmissionFileComment);
+        if (onCancel) onCancel();
+        toaster.success({ title: "Comment posted" });
+      } catch (err) {
+        toaster.error({ title: "Error posting comment", description: (err as Error).message });
+      }
     },
     [
       submission,
@@ -67,42 +93,49 @@ export default function LineCommentForm({
       createComment,
       private_profile_id,
       invalidateQuery,
-      submissionReview,
+      submissionReviewId,
+      fetchedSubmissionReview,
+      isLoadingReviewDetails,
       eventuallyVisible,
-      reviewAssignmentId
+      rubricCheckId,
+      defaultPoints,
+      isGraderOrInstructor,
+      onSubmitted,
+      onCancel
     ]
   );
 
-  if (isLoadingReview && reviewAssignmentId) {
+  if (isLoadingReviewDetails && submissionReviewId) {
     return <Text fontSize="sm">Loading review context...</Text>;
   }
 
-  if (reviewError && reviewAssignmentId) {
-    return (
-      <Text color="red.500" fontSize="sm">
-        Error loading review context: {reviewError.message}
-      </Text>
-    );
-  }
-
   return (
-    <Box w="100%">
+    <Box>
       <MessageInput
+        defaultValue={defaultText ?? ""}
+        placeholder={rubricCheckId ? "Add an optional comment for this check..." : "Add a comment..."}
         className="w-full p-2 border rounded"
         defaultSingleLine={true}
         sendMessage={postComment}
         sendButtonText="Save"
+        enableAnonymousModeToggle={false}
+        enableFilePicker={false}
+        enableGiphyPicker={false}
+        enableEmojiPicker={true}
+        allowEmptyMessage={!!rubricCheckId}
+        onClose={onCancel}
       />
       {isGraderOrInstructor && (
-        <Box mt={2} mb={1}>
+        <Box mt={2}>
           <Checkbox
             inputProps={{
               checked: eventuallyVisible,
               onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked),
-              disabled: isCreatingComment || (!!reviewAssignmentId && !submissionReview?.id)
+              disabled:
+                isCreatingComment || (!!submissionReviewId && !fetchedSubmissionReview && isLoadingReviewDetails)
             }}
           >
-            Visible to student upon release
+            Visible to student only after release
           </Checkbox>
         </Box>
       )}
