@@ -490,6 +490,7 @@ export type YmlRubricChecksType = Omit<
   | "max_annotations"
   | "artifact"
   | "annotation_target"
+  | "comment_regex"
 > & {
   id?: number;
   description?: string;
@@ -497,6 +498,7 @@ export type YmlRubricChecksType = Omit<
   artifact?: string;
   max_annotations?: number;
   annotation_target?: "file" | "artifact";
+  comment_regex?: string;
 };
 
 export type AssignmentDueDateException = GetResult<
