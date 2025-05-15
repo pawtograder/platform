@@ -196,7 +196,7 @@ export default function CodeFile({ file, submissionReviewId }: { file: Submissio
                   variant={expanded.length > 0 ? "solid" : "outline"}
                   size="xs"
                   p={0}
-                  colorScheme="teal"
+                  colorPalette="teal"
                   onClick={() => {
                     setExpanded((prev) => {
                       if (prev.length === 0) {
@@ -468,7 +468,7 @@ function CodeLineComment({
             </HStack>
             <HStack>
               {isAuthor || authorProfile?.flair ? (
-                <Tag.Root size="md" colorScheme={isAuthor ? "green" : "gray"} variant="surface">
+                <Tag.Root size="md" colorPalette={isAuthor ? "green" : "gray"} variant="surface">
                   <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
                 </Tag.Root>
               ) : (

@@ -139,7 +139,7 @@ export default function GradingConflictsPage() {
                     onConfirm={() => handleDelete(conflict.id)}
                     onCancel={() => {}}
                     trigger={
-                      <IconButton aria-label="Delete conflict" colorScheme="red" variant="ghost" size="sm">
+                      <IconButton aria-label="Delete conflict" colorPalette="red" variant="ghost" size="sm">
                         <FaTrash />
                       </IconButton>
                     }

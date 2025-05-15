@@ -21,7 +21,7 @@ import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
-import { useSupabaseClient } from "@supabase/auth-helpers-react";
+import { createClient } from "@/utils/supabase/client";
 import { PostgrestError } from "@supabase/supabase-js";
 
 type ListUpdateCallback<T> = (
@@ -894,7 +894,7 @@ export function useReferencedRubricCheckInstances(
   referencing_check_id: number | undefined | null,
   submission_id: number | undefined | null
 ): { instances: ReferencedRubricCheckInstance[]; isLoading: boolean; error: PostgrestError | Error | null } {
-  const supabase = useSupabaseClient<Database>();
+  const supabase = createClient();
   const [instances, setInstances] = useState<ReferencedRubricCheckInstance[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<PostgrestError | Error | null>(null);

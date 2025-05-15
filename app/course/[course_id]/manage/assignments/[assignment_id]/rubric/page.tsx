@@ -590,7 +590,7 @@ export default function RubricPage() {
               {canLoadDemo && (
                 <Button
                   variant="ghost"
-                  colorScheme="gray"
+                  colorPalette="gray"
                   onClick={() => {
                     setValue(defaultRubric);
                     setRubric(YamlRubricToHydratedRubric(YAML.parse(defaultRubric)));
@@ -603,7 +603,7 @@ export default function RubricPage() {
             <HStack pr={2}>
               <Button
                 variant="ghost"
-                colorScheme="gray"
+                colorPalette="gray"
                 onClick={() => {
                   window.history.back();
                 }}

@@ -332,7 +332,7 @@ function ArtifactComment({
             </HStack>
             <HStack>
               {isAuthor || authorProfile?.flair ? (
-                <Tag.Root size="md" colorScheme={isAuthor ? "green" : "gray"} variant="surface">
+                <Tag.Root size="md" colorPalette={isAuthor ? "green" : "gray"} variant="surface">
                   <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
                 </Tag.Root>
               ) : (

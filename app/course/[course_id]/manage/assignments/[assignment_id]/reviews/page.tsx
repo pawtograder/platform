@@ -5,6 +5,7 @@ import { Heading, IconButton, Container, HStack, Table, Text, Spinner } from "@c
 import { useList, useDelete } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { FaTrash, FaEdit, FaPlus } from "react-icons/fa";
+import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import PersonName from "@/components/ui/person-name";
@@ -61,7 +62,7 @@ export default function ReviewAssignmentsPage() {
     sorters: [{ field: "created_at", order: "desc" }],
     meta: {
       select:
-        "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews(completed_at, grader, rubric_id, submission_id))"
+        "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id))"
     }
   });
 
@@ -127,7 +128,6 @@ export default function ReviewAssignmentsPage() {
             openAssignModal(null);
           }}
           variant="solid"
-          colorPalette="blue"
         >
           <FaPlus style={{ marginRight: "8px" }} /> Assign Reviews
         </Button>
@@ -172,7 +172,7 @@ export default function ReviewAssignmentsPage() {
                   </Table.Cell>
                   <Table.Cell>{submitterName}</Table.Cell>
                   <Table.Cell>{ra.rubrics?.name || "N/A"}</Table.Cell>
-                  <Table.Cell>{ra.due_date ? new Date(ra.due_date).toLocaleDateString() : "N/A"}</Table.Cell>
+                  <Table.Cell>{ra.due_date ? format(new Date(ra.due_date), "P") : "N/A"}</Table.Cell>
                   <Table.Cell>{displayStatus}</Table.Cell>
                   <Table.Cell textAlign="center">
                     <HStack gap={1} justifyContent="center">
@@ -192,7 +192,12 @@ export default function ReviewAssignmentsPage() {
                         onConfirm={() => handleDelete(ra.id)}
                         onCancel={() => {}}
                         trigger={
-                          <IconButton aria-label="Delete review assignment" colorScheme="red" variant="ghost" size="sm">
+                          <IconButton
+                            aria-label="Delete review assignment"
+                            colorPalette="red"
+                            variant="ghost"
+                            size="sm"
+                          >
                             <FaTrash />
                           </IconButton>
                         }
