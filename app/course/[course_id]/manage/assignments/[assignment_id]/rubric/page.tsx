@@ -893,4 +893,6 @@ parts:
             is_required: false
             is_comment_required: true
             points: 2
+is_private: false
+review_round: "grading-review"
 `;

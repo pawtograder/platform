@@ -543,6 +543,9 @@ export function useSubmissionMaybe() {
 }
 export function useSubmission() {
   const controller = useSubmissionController();
+  if (!controller) {
+    throw new Error("useSubmission must be used within a SubmissionProvider");
+  }
   return controller.submission;
 }
 export function useAllRubricCheckInstances(review_id: number | undefined) {
@@ -725,15 +728,12 @@ export function useRubricCheck(rubric_check_id: number | null) {
 
 export function useSubmissionFile() {
   const controller = useSubmissionController();
-  return controller.file;
+  return controller?.file;
 }
 
-export function useSubmissionController(): SubmissionController {
+export function useSubmissionController(): SubmissionController | undefined {
   const ctx = useContext(SubmissionContext);
-  if (!ctx) {
-    throw new Error("SubmissionContext not found");
-  }
-  return ctx.submissionController;
+  return ctx?.submissionController;
 }
 
 export type ReviewAssignmentWithDetails = Database["public"]["Tables"]["review_assignments"]["Row"] & {
