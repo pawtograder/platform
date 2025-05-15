@@ -5,7 +5,6 @@ import {
   CardHeader,
   CardRoot,
   CardTitle,
-  FieldHelperText,
   Fieldset,
   Input,
   NativeSelectField,
@@ -59,7 +58,7 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
               <NativeSelectField
                 name="group_config"
                 onChange={(e) => {
-                  e.target.value === "individual" ? setWithGroups(false) : setWithGroups(true);
+                  setWithGroups(e.target.value !== "individual");
                 }}
               >
                 <option value="individual">Individual Submissions Only</option>
