@@ -1,11 +1,7 @@
 import { useUngroupedProfiles } from "@/app/course/[course_id]/assignments/[assignment_id]/manageGroupWidget";
 import { toaster } from "@/components/ui/toaster";
-import { assignmentGroupCreate, EdgeFunctionError } from "@/lib/edgeFunctions";
-import {
-  Assignment,
-  AssignmentGroupWithMembersInvitationsAndJoinRequests
-} from "@/utils/supabase/DatabaseTypes";
-import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
+import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import { Button, Dialog, DialogActionTrigger, Field, Flex, Input, Portal } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { createClient } from "@/utils/supabase/client";
@@ -22,32 +18,59 @@ export default function CreateNewGroup({
   const invalidate = useInvalidate();
 
   const [newGroupName, setNewGroupName] = useState<string>("");
-  const [selectedMembers, setSelectedMembers] = useState<MultiValue<{ label: string | null; value: string }>>([]);
+  const [selectedMembers, setSelectedMembers] = useState<
+    MultiValue<{
+      label: string | null;
+      value: string;
+    }>
+  >([]);
   const ungroupedProfiles = useUngroupedProfiles(groups);
 
   const createGroupWithAssignees = async () => {
-    assignmentGroupCreate(
-      {
-        course_id: assignment.class_id,
-        assignment_id: assignment.id,
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+
+    const { data: createdGroup } = await supabase
+      .from("assignment_groups")
+      .insert({
         name: newGroupName,
-        invitees: selectedMembers.map((member) => member.value)
-      },
-      supabase
-    )
-      .then(() => {
-        toaster.create({ title: "Group created", description: "", type: "success" });
-        setNewGroupName("");
-        invalidate({ resource: "assignment_groups", invalidates: ["all"] });
-        invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
-        invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+        assignment_id: assignment.id,
+        class_id: assignment.class_id
       })
-      .catch((e) => {
-        if (e instanceof EdgeFunctionError) {
-          toaster.create({ title: "Error: " + e.message, description: e.details, type: "error" });
-        }
-      });
+      .select("id")
+      .single();
+    console.log(selectedMembers);
+    selectedMembers.map((member) => {
+      assignMemberToGroup(member, createdGroup);
+    });
+    toaster.create({ title: "Group created", description: "", type: "success" });
+    setNewGroupName("");
+    invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+    invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
   };
+
+  const assignMemberToGroup = async (member: { label?: string | null; value: string; }, createdGroup: { id: number; } | null) => {
+    if(!createdGroup) {
+      return;
+    }
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+    if (!user?.id || !createdGroup?.id) {
+      console.log("not all data available");
+      return;
+    }
+    await supabase.from("assignment_groups_members").insert({
+      added_by: member.value,
+      assignment_group_id: createdGroup?.id,
+      profile_id: member.value,
+      class_id: assignment.class_id,
+      assignment_id: assignment.id
+    });
+  };
+
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom">
       <Dialog.Trigger asChild>
@@ -95,7 +118,7 @@ export default function CreateNewGroup({
                     options={ungroupedProfiles.map((p) => ({ label: p.name, value: p.id }))}
                   />
                   <Field.ErrorText>
-                    Groups for this assignment must contain minimum ${assignment.min_group_size ?? "1"} and maximum $
+                    Groups for this assignment must contain minimum {assignment.min_group_size ?? "1"} and maximum{" "}
                     {assignment.max_group_size ?? "any"} members.
                   </Field.ErrorText>
                 </Field.Root>
@@ -107,9 +130,11 @@ export default function CreateNewGroup({
                   Cancel
                 </Button>
               </Dialog.ActionTrigger>
-              <Button onClick={createGroupWithAssignees} colorPalette={"green"}>
-                Save
-              </Button>
+              <DialogActionTrigger>
+                <Button onClick={createGroupWithAssignees} colorPalette={"green"}>
+                  Save
+                </Button>
+              </DialogActionTrigger>
             </Dialog.Footer>
           </Dialog.Content>
         </Dialog.Positioner>

@@ -1,11 +1,20 @@
 import { toaster } from "@/components/ui/toaster";
-import { assignmentGroupCreate, EdgeFunctionError } from "@/lib/edgeFunctions";
 import {
   Assignment,
   AssignmentGroupWithMembersInvitationsAndJoinRequests,
   UserProfile
 } from "@/utils/supabase/DatabaseTypes";
-import { Button, Dialog, Field, Flex, Heading, NumberInput, Portal, Table } from "@chakra-ui/react";
+import {
+  Button,
+  Dialog,
+  DialogActionTrigger,
+  Field,
+  Flex,
+  Heading,
+  NumberInput,
+  Portal,
+  Table
+} from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useInvalidate } from "@refinedev/core";
@@ -55,27 +64,43 @@ export default function BulkAssignGroup({
     }
   }, [setGroupTextField]);
 
-  const createGroupWithAssignees = async () => {
-    assignmentGroupCreate(
-      {
-        course_id: assignment.class_id,
+  const createGroupsWithAssignees = async () => {
+    generatedGroups.forEach((group) => {
+      createGroupWithAssignees(group);
+    });
+    toaster.create({ title: "Groups created", description: "", type: "success" });
+    invalidate({ resource: "assignment_groups", invalidates: ["all"] });
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+    invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+  };
+
+  const createGroupWithAssignees = async (group: SampleGroup) => {
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+
+    const { data: createdGroup } = await supabase
+      .from("assignment_groups")
+      .insert({
+        name: group.name,
         assignment_id: assignment.id,
-        name: crypto.randomUUID(),
-        invitees: []
-      },
-      supabase
-    )
-      .then(() => {
-        toaster.create({ title: "Group created", description: "", type: "success" });
-        invalidate({ resource: "assignment_groups", invalidates: ["all"] });
-        invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
-        invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+        class_id: assignment.class_id
       })
-      .catch((e) => {
-        if (e instanceof EdgeFunctionError) {
-          toaster.create({ title: "Error: " + e.message, description: e.details, type: "error" });
-        }
+      .select("id")
+      .single();
+
+    if (!createdGroup?.id) {
+      return;
+    }
+    group.members.map((member) => {
+      supabase.from("assignment_groups_members").insert({
+        added_by: member.id,
+        assignment_group_id: createdGroup?.id,
+        profile_id: member.id,
+        class_id: assignment.class_id,
+        assignment_id: assignment.id
       });
+    });
   };
 
   const generateGroups = async () => {
@@ -176,9 +201,15 @@ export default function BulkAssignGroup({
                   Cancel
                 </Button>
               </Dialog.ActionTrigger>
-              <Button onClick={createGroupWithAssignees} colorPalette={"green"} disabled={generatedGroups.length === 0}>
-                Assign
-              </Button>
+              <DialogActionTrigger>
+                <Button
+                  onClick={createGroupsWithAssignees}
+                  colorPalette={"green"}
+                  disabled={generatedGroups.length === 0}
+                >
+                  Assign these groups
+                </Button>
+              </DialogActionTrigger>
             </Dialog.Footer>
           </Dialog.Content>
         </Dialog.Positioner>
