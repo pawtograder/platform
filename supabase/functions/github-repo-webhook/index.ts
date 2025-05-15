@@ -37,7 +37,9 @@ async function handlePushToStudentRepo(
   const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${studentRepo.class_id}/assignments/${studentRepo.assignment_id}`;
 
   for (const commit of payload.commits) {
+    console.log(`Adding check run for ${commit.id}`);
     const checkRunId = await createCheckRun(repoName, commit.id, detailsUrl);
+    console.log(`Check run created: ${checkRunId}`);
     const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
       repository_id: studentRepo.id,
       check_run_id: checkRunId,
@@ -280,8 +282,12 @@ eventHandler.on("push", async ({ id, name, payload }) => {
   }
 });
 eventHandler.on("check_run", async ({ id, name, payload }) => {
-  console.log(`Received check_run event for ${payload.repository.full_name}, action: ${payload.action}`);
-  if (payload.action === "requested_action") {
+  console.log(
+    `Received check_run event for ${payload.repository.full_name}, action: ${payload.action}, check_run_id: ${payload.check_run.id}`
+  );
+  if (payload.action === "created") {
+    console.log(`Check run created: ${payload.check_run.id}, check suite: ${payload.check_run.check_suite.id}`);
+  } else if (payload.action === "requested_action") {
     if (payload.requested_action?.identifier === "submit") {
       const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL") || "",
@@ -347,12 +353,76 @@ Deno.serve(async (req) => {
   const body = await req.json();
   const eventName = body["detail-type"];
   const id = body.id;
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+
   console.log(`Received webhook for ${eventName} id ${id}`);
-  await eventHandler.receive({
-    id: id || "",
-    name: eventName as "push" | "check_run",
-    payload: body.detail
-  });
+  try {
+    const { error: repoError } = await adminSupabase.from("webhook_process_status").insert({
+      webhook_id: id,
+      completed: false
+    });
+    if (repoError) {
+      if (repoError.code === "23505") {
+        console.log(`Ignoring duplicate webhook id ${id}`);
+        return Response.json(
+          {
+            message: "Duplicate webhook received"
+          },
+          {
+            status: 200
+          }
+        );
+      }
+      console.error(repoError);
+      return Response.json(
+        {
+          message: "Error processing webhook"
+        },
+        {
+          status: 500
+        }
+      );
+    }
+    try {
+      await eventHandler.receive({
+        id: id || "",
+        name: eventName as "push" | "check_run",
+        payload: body.detail
+      });
+      await adminSupabase
+        .from("webhook_process_status")
+        .update({
+          completed: true
+        })
+        .eq("webhook_id", id);
+    } catch (err) {
+      console.log(`Error processing webhook for ${eventName} id ${id}`);
+      console.error(err);
+      return Response.json(
+        {
+          message: "Error processing webhook"
+        },
+        {
+          status: 500
+        }
+      );
+    }
+    console.log(`Completed processing webhook for ${eventName} id ${id}`);
+  } catch (err) {
+    console.log(`Error processing webhook for ${eventName} id ${id}`);
+    console.error(err);
+    return Response.json(
+      {
+        message: "Error processing webhook"
+      },
+      {
+        status: 500
+      }
+    );
+  }
   return Response.json({
     message: "Triggered webhook"
   });

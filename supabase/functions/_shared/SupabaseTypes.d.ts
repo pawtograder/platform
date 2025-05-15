@@ -3516,6 +3516,27 @@ export type Database = {
           }
         ];
       };
+      webhook_process_status: {
+        Row: {
+          completed: boolean;
+          created_at: string;
+          id: number;
+          webhook_id: string;
+        };
+        Insert: {
+          completed: boolean;
+          created_at?: string;
+          id?: number;
+          webhook_id: string;
+        };
+        Update: {
+          completed?: boolean;
+          created_at?: string;
+          id?: number;
+          webhook_id?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {
       autograder_regression_test_by_grader: {
