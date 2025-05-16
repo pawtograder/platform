@@ -84,7 +84,11 @@ export default function MessageInput(props: MessageInputProps) {
         .from("uploads")
         .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
       if (error) {
-        console.error("Error uploading image:", error);
+        toaster.error({
+          title: "Error uploading image: " + error.name,
+          description: error.message
+        });
+        return;
       }
       const urlEncodedFilename = encodeURIComponent(fileName);
 
@@ -128,7 +132,7 @@ export default function MessageInput(props: MessageInputProps) {
   );
   if (singleLine) {
     return (
-      <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
+      <VStack align="stretch" spaceY="0" p="0" gap="2" w="100%">
         {showMarkdownPreview && (
           <Box width="100%" p="2" bg="bg.muted" border={"1px solid"} borderColor="border.subtle" rounded="md" m="0">
             <Markdown>{value}</Markdown>

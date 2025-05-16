@@ -32,7 +32,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentType
+  type ComponentType,
+  useCallback
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -84,16 +85,26 @@ export default function CodeFile({ file, submissionReviewId }: { file: Submissio
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
-  const _comments = useSubmissionFileComments({
-    file_id: file.id,
-    onEnter: (comments) => {
+
+  const onCommentsEnter = useCallback(
+    (newlyEnteredComments: SubmissionFileComment[]) => {
       if (showCommentsFeature) {
-        setExpanded((expanded) => {
-          const newExpanded = comments.map((comment) => comment.line).filter((line) => !expanded.includes(line));
-          return [...expanded, ...newExpanded];
+        setExpanded((currentExpanded) => {
+          const linesFromNewComments = newlyEnteredComments.map((comment) => comment.line);
+          const linesToAdd = linesFromNewComments.filter((line) => !currentExpanded.includes(line));
+          if (linesToAdd.length > 0) {
+            return [...currentExpanded, ...linesToAdd];
+          }
+          return currentExpanded; // Return current state if no change
         });
       }
-    }
+    },
+    [showCommentsFeature]
+  );
+
+  const _comments = useSubmissionFileComments({
+    file_id: file.id,
+    onEnter: onCommentsEnter
   });
   const comments = useMemo(() => {
     return _comments.filter((comment) => expanded.includes(comment.line));
@@ -562,15 +573,23 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
   });
 
   useEffect(() => {
+    if (!visible) {
+      return; // Exit early if not visible
+    }
+
     const handleClickOutside = (event: MouseEvent) => {
       if (popupRef.current && !popupRef.current.contains(event.target as Node)) {
         close();
       }
     };
-    if (visible) {
+
+    // Defer adding the listener
+    const timerId = setTimeout(() => {
       document.addEventListener("mousedown", handleClickOutside);
-    }
+    }, 0);
+
     return () => {
+      clearTimeout(timerId); // Make sure to clear the timeout
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [visible, close]);
@@ -700,15 +719,16 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
       left={left}
       position="fixed"
       bg="bg.subtle"
-      w="lg"
-      p={2}
+      w="md"
+      p={3}
       border="1px solid"
       borderColor="border.emphasized"
       borderRadius="md"
+      boxShadow="lg"
       ref={popupRef}
     >
-      <Box width="lg">
-        <Text fontSize="sm" color="fg.muted">
+      <VStack gap={2} align="stretch">
+        <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
           Annotate line {lineNumber} with a check:
         </Text>
         <Select
@@ -723,6 +743,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
               setSelectedCheckOption(e);
             }
           }}
+          placeholder="Select a rubric check or leave a comment..."
+          size="sm"
         />
         {selectedCheckOption && (
           <>
@@ -743,24 +765,40 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
                 onChange={(e: RubricCheckSubOptions | null) => {
                   setSelectedSubOption(e);
                 }}
+                placeholder="Select an option for this check..."
+                size="sm"
               />
             )}
-            {!selectedSubOption && selectedCheckOption.check && (
-              <Text fontSize="sm" color="fg.muted">
-                {formatPoints(selectedCheckOption.check)}
+            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points !== undefined && (
+              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
+                {formatPoints({
+                  check: selectedCheckOption.check,
+                  criteria: selectedCheckOption.criteria,
+                  points: selectedCheckOption.check.points
+                })}
+              </Text>
+            )}
+            {selectedSubOption && selectedCheckOption.check && (
+              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
+                {formatPoints({
+                  check: selectedCheckOption.check,
+                  criteria: selectedCheckOption.criteria,
+                  points: selectedSubOption.points
+                })}
               </Text>
             )}
             {isGraderOrInstructor && (
-              <Box mt={2} mb={1}>
+              <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>
                 <Checkbox
                   inputProps={{
                     checked: eventuallyVisible,
                     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked)
                   }}
+                  size="sm"
                 >
                   Visible to student upon release
                 </Checkbox>
-              </Box>
+              </HStack>
             )}
             <MessageInput
               textAreaRef={messageInputRef}
@@ -781,7 +819,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
                 }
                 let comment = message || "";
                 if (selectedSubOption) {
-                  comment = selectedSubOption.comment + "\n" + comment;
+                  comment = selectedSubOption.comment + (comment ? "\\n" + comment : "");
                 }
                 const finalSubmissionReviewId = submissionReviewId ?? review?.id;
                 if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
@@ -811,7 +849,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
             />
           </>
         )}
-      </Box>
+      </VStack>
     </Box>
   );
 }
@@ -942,7 +980,9 @@ function createLine(
         properties: {
           className: "source-code-line",
           id: `L${line}`,
-
+          onClick: (ev: MouseEvent) => {
+            ev.stopPropagation();
+          },
           onMouseDown: (ev: MouseEvent) => {
             if (ev.button !== 0) {
               return;

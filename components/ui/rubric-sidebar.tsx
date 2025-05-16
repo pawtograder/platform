@@ -26,8 +26,8 @@ import {
   useRubricCriteriaInstances,
   useSubmissionMaybe,
   useReviewAssignment,
-  useSubmissionReviewByAssignmentId,
-  useReferencedRubricCheckInstances
+  useReferencedRubricCheckInstances,
+  useSubmissionRubric
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
@@ -41,6 +41,7 @@ import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
 import { toaster } from "./toaster";
 import PersonAvatar from "./person-avatar";
 import { Tooltip } from "./tooltip";
+
 export function CommentActions({
   comment,
   setIsEditing
@@ -760,46 +761,28 @@ export function RubricPart({
 
 export default function RubricSidebar({
   initialRubric,
-  reviewAssignmentId
+  reviewAssignmentId,
+  submissionReview
 }: {
-  initialRubric?:
-    | HydratedRubric
-    | import("@/utils/supabase/SupabaseTypes").Database["public"]["Tables"]["rubrics"]["Row"];
+  initialRubric?: HydratedRubric;
   reviewAssignmentId?: number;
+  submissionReview?: SubmissionReview;
 }) {
   const {
     reviewAssignment,
     isLoading: isLoadingReviewAssignment,
-    error: reviewAssignmentError
+    error: reviewAssignmentErrorObj
   } = useReviewAssignment(reviewAssignmentId);
 
-  const {
-    submissionReview,
-    isLoading: isLoadingSubmissionReview,
-    error: submissionReviewError
-  } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
+  const { rubric: fetchedRubricFromHook, isLoading: isLoadingFetchedRubricFromHook } =
+    useSubmissionRubric(reviewAssignmentId);
 
-  const submission = useSubmissionMaybe();
+  const displayRubric = !reviewAssignmentId && initialRubric ? initialRubric : fetchedRubricFromHook;
+  const isLoadingEffectiveRubric = !reviewAssignmentId && initialRubric ? false : isLoadingFetchedRubricFromHook;
 
-  let displayRubric: HydratedRubric | undefined | null = null;
-  if (reviewAssignmentId && reviewAssignment?.rubrics) {
-    const fetchedReviewRubric = reviewAssignment.rubrics;
-    displayRubric = {
-      ...fetchedReviewRubric,
-      rubric_parts: fetchedReviewRubric.rubric_parts || []
-    } as unknown as HydratedRubric;
-  } else if (initialRubric) {
-    displayRubric = {
-      ...initialRubric,
-      rubric_parts: (initialRubric as HydratedRubric).rubric_parts || []
-    } as unknown as HydratedRubric;
-  } else if (submission?.assignments?.rubrics) {
-    const defaultAssignmentRubric = submission.assignments.rubrics;
-    displayRubric = {
-      ...defaultAssignmentRubric,
-      rubric_parts: []
-    } as unknown as HydratedRubric;
-  }
+  const isLoading = isLoadingEffectiveRubric || (reviewAssignmentId && isLoadingReviewAssignment);
+
+  const combinedError = reviewAssignmentId ? reviewAssignmentErrorObj : null;
 
   let partsToDisplay: HydratedRubricPart[] = [];
   if (displayRubric) {
@@ -811,38 +794,58 @@ export default function RubricSidebar({
       partsToDisplay = reviewAssignment.review_assignment_rubric_parts
         .map((linkedPart) => linkedPart.rubric_parts as HydratedRubricPart)
         .filter((part): part is HydratedRubricPart => !!part)
-        .sort((a, b) => (a?.ordinal ?? 0) - (b?.ordinal ?? 0));
+        .sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
     } else if (displayRubric.rubric_parts) {
-      partsToDisplay = [...displayRubric.rubric_parts].sort((a, b) => a.ordinal - b.ordinal);
-    } else {
-      partsToDisplay = [];
+      partsToDisplay = [...displayRubric.rubric_parts].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
     }
   }
 
-  const isLoading = (isLoadingReviewAssignment || isLoadingSubmissionReview) && reviewAssignmentId;
-
   if (isLoading) {
     return (
-      <Box p={2} minW="md" maxW="lg">
+      <Box p={2} minW="md" maxW="lg" key="loading-sidebar">
         <Skeleton height="100vh" />
       </Box>
     );
   }
 
-  if (reviewAssignmentError || submissionReviewError) {
+  if (combinedError) {
     return (
-      <Box p={2}>
-        <Text color="red.500">
-          Error loading review details: {reviewAssignmentError?.message || submissionReviewError?.message}
-        </Text>
+      <Box p={2} key="error-sidebar">
+        <Text color="red.500">Error loading review details: {combinedError.message}</Text>
       </Box>
     );
   }
 
   if (!displayRubric) {
     return (
-      <Box p={2} minW="md" maxW="lg">
+      <Box p={2} minW="md" maxW="lg" key="no-rubric-sidebar">
         <Text>No rubric information available.</Text>
+      </Box>
+    );
+  }
+
+  if (partsToDisplay.length === 0) {
+    return (
+      <Box
+        borderLeftWidth="1px"
+        borderColor="border.emphasized"
+        p={2}
+        ml={0}
+        minW="md"
+        maxW="lg"
+        height="100vh"
+        overflowY="auto"
+        overflowX="hidden"
+        key="empty-parts-sidebar"
+      >
+        <VStack align="start" w="100%">
+          <Heading size="xl">Grading Rubric</Heading>
+          <Text fontSize="lg" fontWeight="semibold">
+            {displayRubric.name}
+          </Text>
+          {displayRubric.description && <Markdown>{displayRubric.description}</Markdown>}
+          <Text mt={2}>This rubric does not have any parts configured for display in this context.</Text>
+        </VStack>
       </Box>
     );
   }

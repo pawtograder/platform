@@ -37,6 +37,7 @@ function format_result_output(result: { output: string | null | undefined; outpu
   }
   return <Text fontSize="sm">{result.output}</Text>;
 }
+
 function format_output(output: GraderResultOutput) {
   return format_result_output({ output: output.output, output_format: output.format as "text" | "markdown" });
 }

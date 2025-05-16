@@ -5,6 +5,7 @@ import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
+  HydratedRubric,
   Submission,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
@@ -26,7 +27,8 @@ import {
   useSubmission,
   useSubmissionReview,
   useSubmissionRubric,
-  useReviewAssignment
+  useReviewAssignment,
+  useSubmissionReviewByAssignmentId
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
@@ -593,9 +595,7 @@ function UnGradedGradingSummary() {
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const review = useSubmissionReview();
   const searchParams = useSearchParams();
-
   const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
   const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
 
@@ -605,11 +605,42 @@ function RubricView() {
     error: reviewAssignmentError
   } = useReviewAssignment(reviewAssignmentId);
 
-  const defaultAssignmentRubric = submission.assignments.rubrics;
+  const assignmentRubricData = submission.assignments.rubrics;
+  let preparedInitialRubric: HydratedRubric | undefined = undefined;
 
-  const displayScoreFromReview = reviewAssignmentId && reviewAssignment ? undefined : review;
+  if (assignmentRubricData) {
+    if ("rubric_parts" in assignmentRubricData && assignmentRubricData.rubric_parts !== undefined) {
+      preparedInitialRubric = assignmentRubricData as HydratedRubric;
+    } else if ("rubric_criteria" in assignmentRubricData && Array.isArray(assignmentRubricData.rubric_criteria)) {
+      const { rubric_criteria, ...baseRubricProperties } = assignmentRubricData;
+      preparedInitialRubric = {
+        ...(baseRubricProperties as Tables<"rubrics">),
+        rubric_parts: [
+          {
+            id: -1,
+            name: baseRubricProperties.name || "Rubric Part",
+            description: baseRubricProperties.description,
+            ordinal: 0,
+            class_id: baseRubricProperties.class_id,
+            rubric_id: baseRubricProperties.id,
+            created_at: baseRubricProperties.created_at || new Date().toISOString(),
+            data: undefined,
+            rubric_criteria: rubric_criteria as HydratedRubricCriteria[]
+          } as HydratedRubricPart
+        ]
+      };
+    }
+  }
 
-  const showHandGradingControls = isGraderOrInstructor || review?.released || !!reviewAssignmentId;
+  const mainSubmissionReviewData = useSubmissionReview();
+  const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
+
+  const activeReviewForSidebar = reviewAssignmentId ? peerReviewSubmissionData : mainSubmissionReviewData;
+
+  const displayScoreFromReview = activeReviewForSidebar;
+
+  const showHandGradingControls =
+    isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!reviewAssignmentId;
 
   return (
     <Box
@@ -646,17 +677,21 @@ function RubricView() {
           </Box>
         )}
 
-        {displayScoreFromReview && (
+        {displayScoreFromReview && submission.assignments.total_points !== null && (
           <Heading size="xl">
             Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
           </Heading>
         )}
-        {!reviewAssignmentId && !review && <UnGradedGradingSummary />}
+        {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
 
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
         {showHandGradingControls && (
-          <RubricSidebar initialRubric={defaultAssignmentRubric ?? undefined} reviewAssignmentId={reviewAssignmentId} />
+          <RubricSidebar
+            initialRubric={preparedInitialRubric}
+            reviewAssignmentId={reviewAssignmentId}
+            submissionReview={activeReviewForSidebar}
+          />
         )}
         {!showHandGradingControls && <Text>Rubric and manual grading are not available.</Text>}
       </VStack>

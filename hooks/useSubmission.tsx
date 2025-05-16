@@ -605,7 +605,7 @@ export function useSubmissionRubric(reviewAssignmentId?: number | null): {
     },
     meta: {
       select:
-        "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references_referencing_rubric_check_id(*, rubric_checks!referenced_rubric_check_id(*)))))"
+        "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*, rubric_checks!referenced_rubric_check_id(*)))))"
     }
   });
 
@@ -631,6 +631,7 @@ export function useSubmissionRubric(reviewAssignmentId?: number | null): {
 
   return { rubric: rubricDataResult?.data, isLoading }; // Refine's useShow often has { data: { data: actualRecord } }
 }
+
 export function useRubricCriteriaInstances({
   criteria,
   review_id,
@@ -747,11 +748,14 @@ export type ReviewAssignmentWithDetails = Database["public"]["Tables"]["review_a
 };
 
 export function useReviewAssignment(reviewAssignmentId?: number) {
+  const idForHook = reviewAssignmentId === undefined ? -1 : reviewAssignmentId;
+  const queryEnabled = !!reviewAssignmentId; // True if reviewAssignmentId is a truthy number
+
   const { query } = useShow<ReviewAssignmentWithDetails>({
     resource: "review_assignments",
-    id: reviewAssignmentId,
+    id: idForHook,
     queryOptions: {
-      enabled: !!reviewAssignmentId
+      enabled: queryEnabled
     },
     meta: {
       select:
@@ -759,9 +763,16 @@ export function useReviewAssignment(reviewAssignmentId?: number) {
     }
   });
 
+  // If the query was never meant to be enabled (original ID was undefined, 0, or NaN),
+  // return a non-loading, no-data state immediately.
+  if (!queryEnabled) {
+    return { reviewAssignment: undefined, isLoading: false, error: undefined };
+  }
+
   // query might be undefined if the hook is not ready or an issue occurs before it runs
   if (!query) {
-    // Return a loading state or an appropriate default if query is not yet available
+    // This state might occur if useShow is called but react-query hasn't fully initialized its result.
+    // Given queryEnabled is true, we expect it to be loading.
     return { reviewAssignment: undefined, isLoading: true, error: undefined };
   }
 
