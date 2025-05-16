@@ -33,7 +33,7 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
     pagination: { pageSize: 1000 }
   });
 
-  const [withGroups, setWithGroups] = useState<boolean>(false);
+  const [withGroups, setWithGroups] = useState<boolean>(form.getValues("group_config") !== "individual");
 
   const {
     register,
