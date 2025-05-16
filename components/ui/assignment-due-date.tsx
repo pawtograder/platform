@@ -1,16 +1,16 @@
 "use client";
 
-import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
-import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
-import { addHours, format } from "date-fns";
-import { TZDate } from "@date-fns/tz";
-import { Skeleton } from "./skeleton";
-import { Button } from "./button";
-import { Text, HStack, Dialog, Heading } from "@chakra-ui/react";
-import { Alert } from "./alert";
-import { useCreate, useList } from "@refinedev/core";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
+import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
+import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
+import { useCreate, useList } from "@refinedev/core";
+import { addHours, format } from "date-fns";
 import { useState } from "react";
+import { Alert } from "./alert";
+import { Button } from "./button";
+import { Skeleton } from "./skeleton";
 import { toaster, Toaster } from "./toaster";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
@@ -144,18 +144,21 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 }
 export function AssignmentDueDate({
   assignment,
-  showLateTokenButton = false
+  showLateTokenButton = false,
+  showTimeZone = false
 }: {
   assignment: Assignment;
   showLateTokenButton?: boolean;
+  showTimeZone?: boolean;
 }) {
-  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed } = useAssignmentDueDate(assignment);
+  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment);
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
   return (
-    <HStack>
+    <HStack gap={1}>
       <Text>{format(dueDate, "MMM d h:mm aaa")}</Text>
+      {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
       {hoursExtended > 0 && (
         <Text>
           ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)

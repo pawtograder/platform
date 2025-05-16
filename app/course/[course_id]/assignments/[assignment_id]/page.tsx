@@ -1,11 +1,11 @@
+import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
+import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, HStack, Link, Table, Text } from "@chakra-ui/react";
 import { format } from "date-fns";
-import ManageGroupWidget from "./manageGroupWidget";
-import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
-import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import { CommitHistoryDialog } from "./commitHistory";
+import ManageGroupWidget from "./manageGroupWidget";
 export default async function AssignmentPage({
   params
 }: {
@@ -21,7 +21,7 @@ export default async function AssignmentPage({
   }
   const { data: enrollment } = await client
     .from("user_roles")
-    .select("*")
+    .select("*, classes(time_zone)")
     .eq("class_id", Number.parseInt(course_id))
     .eq("user_id", user.id)
     .single();
@@ -55,7 +55,7 @@ export default async function AssignmentPage({
       <Heading size="lg">{assignment.title}</Heading>
       <HStack>
         <Text>Due: </Text>
-        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} />
+        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
       </HStack>
       <Markdown>{assignment.description}</Markdown>
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
