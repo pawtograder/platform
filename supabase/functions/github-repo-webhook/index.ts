@@ -47,6 +47,7 @@ async function handlePushToStudentRepo(
       assignment_group_id: studentRepo.assignment_group_id,
       commit_message: commit.message,
       sha: commit.id,
+      profile_id: studentRepo.profile_id,
       status: {
         created_at: new Date().toISOString(),
         commit_author: commit.author.name,

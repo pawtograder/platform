@@ -3,6 +3,7 @@ import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Heading, HStack, Link, Table, Text } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
@@ -25,6 +26,7 @@ export default async function AssignmentPage({
     .eq("class_id", Number.parseInt(course_id))
     .eq("user_id", user.id)
     .single();
+  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
   const { data: assignment } = await client
     .from("assignments")
     .select("*")
@@ -88,7 +90,7 @@ export default async function AssignmentPage({
               </Table.Cell>
               <Table.Cell>
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                  {format(new Date(submission.created_at), "MMM d h:mm aaa")}
+                  {format(new TZDate(submission.created_at, timeZone), "MMM d h:mm aaa")}
                 </Link>
               </Table.Cell>
               <Table.Cell>
