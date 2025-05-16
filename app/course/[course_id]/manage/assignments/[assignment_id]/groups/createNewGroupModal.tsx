@@ -16,7 +16,6 @@ export default function CreateNewGroup({
 }) {
   const supabase = createClient();
   const invalidate = useInvalidate();
-
   const [newGroupName, setNewGroupName] = useState<string>("");
   const [selectedMembers, setSelectedMembers] = useState<
     MultiValue<{
@@ -36,21 +35,23 @@ export default function CreateNewGroup({
       })
       .select("id")
       .single();
-    console.log(selectedMembers);
     selectedMembers.map((member) => {
       assignMemberToGroup(member, createdGroup);
     });
     toaster.create({ title: "Group created", description: "", type: "success" });
     setNewGroupName("");
-    invalidate({ resource: "assignment_groups", invalidates: ["all"] });
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
-    invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+    invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+    invalidate({ resource: "user_roles", invalidates: ["all", "list"] });
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
+    invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
   };
 
   const assignMemberToGroup = async (
     member: { label?: string | null; value: string },
     createdGroup: { id: number } | null
   ) => {
+    const supabase = createClient();
+
     if (!createdGroup) {
       return;
     }
@@ -58,7 +59,6 @@ export default function CreateNewGroup({
       data: { user }
     } = await supabase.auth.getUser();
     if (!user?.id || !createdGroup?.id) {
-      console.log("not all data available");
       return;
     }
     await supabase.from("assignment_groups_members").insert({
@@ -102,7 +102,7 @@ export default function CreateNewGroup({
                         setNewGroupName(crypto.randomUUID());
                       }}
                     >
-                      generate a random group id
+                      generate a random name
                     </Button>
                   </Field.Label>
                   <Input name="name" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
@@ -118,8 +118,8 @@ export default function CreateNewGroup({
                     options={ungroupedProfiles.map((p) => ({ label: p.name, value: p.id }))}
                   />
                   <Field.ErrorText>
-                    Groups for this assignment must contain minimum {assignment.min_group_size ?? "1"} and maximum{" "}
-                    {assignment.max_group_size ?? "any"} members.
+                    Warning: Groups for this assignment should contain minimum {assignment.min_group_size ?? "1"} and
+                    maximum {assignment.max_group_size ?? "any"} members.
                   </Field.ErrorText>
                 </Field.Root>
               </Flex>
@@ -127,7 +127,14 @@ export default function CreateNewGroup({
             <Dialog.Footer>
               <Flex gap="var(--chakra-spacing-3)">
                 <Dialog.ActionTrigger asChild>
-                  <Button variant="outline" colorPalette={"gray"}>
+                  <Button
+                    variant="outline"
+                    colorPalette={"gray"}
+                    onClick={() => {
+                      setNewGroupName("");
+                      setSelectedMembers([]);
+                    }}
+                  >
                     Cancel
                   </Button>
                 </Dialog.ActionTrigger>
@@ -135,7 +142,7 @@ export default function CreateNewGroup({
                   <Button
                     onClick={createGroupWithAssignees}
                     colorPalette={"green"}
-                    disabled={isGroupInvalid() || newGroupName.length === 0}
+                    disabled={newGroupName.length === 0}
                   >
                     Assign
                   </Button>

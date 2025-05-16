@@ -1,8 +1,8 @@
 "use client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
+import { Box, Field, Flex, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-
+import { MultiValue, Select } from "chakra-react-select";
 import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
@@ -14,6 +14,7 @@ import { useCallback, useState } from "react";
 import CreateNewGroup from "./createNewGroupModal";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
+import { updateGroupForStudent } from "./updateGroupForStudent";
 
 export type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
@@ -41,47 +42,15 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       { field: "role", operator: "eq", value: "student" },
       { field: "profiles.assignment_groups_members.assignment_id", operator: "eq", value: assignment.id }
     ],
-    pagination: { pageSize: 1000 }
+    pagination: { pageSize: 1000 },
+    liveMode: "auto"
   });
   const groupsData = groups?.data;
   const invalidate = useInvalidate();
   const supabase = createClient();
 
   const [loading, setLoading] = useState<boolean>(false);
-  const updateGroupForStudent = useCallback(
-    async (
-      group: AssignmentGroupWithMembersInvitationsAndJoinRequests | undefined,
-      student: RolesWithProfilesAndGroupMemberships
-    ) => {
-      try {
-        setLoading(true);
-        await assignmentGroupInstructorMoveStudent(
-          {
-            new_assignment_group_id: group?.id || null,
-            old_assignment_group_id:
-              student.profiles.assignment_groups_members.length > 0
-                ? student.profiles.assignment_groups_members[0].assignment_group_id
-                : null,
-            profile_id: student.private_profile_id,
-            class_id: course_id
-          },
-          supabase
-        );
-        toaster.create({ title: "Student moved", description: "", type: "success" });
-      } catch (e) {
-        console.error(e);
-        toaster.create({
-          title: "Error moving student",
-          description: e instanceof Error ? e.message : "Unknown error",
-          type: "error"
-        });
-      } finally {
-        setLoading(false);
-      }
-      invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
-    },
-    [supabase, invalidate, course_id]
-  );
+  const updateGroup = useCallback(updateGroupForStudent, [supabase, invalidate, course_id]);
 
   if (!groupsData || !assignment) {
     return (
@@ -181,7 +150,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                         const groupID = e.target.value;
                         console.log(groupID);
                         const group = groupsData?.find((group) => group.id === Number(groupID));
-                        updateGroupForStudent(group, profile);
+                        updateGroup(group, profile);
                       }}
                     >
                       <option value={undefined}>(No group)</option>

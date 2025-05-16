@@ -8,6 +8,7 @@ import { RolesWithProfilesAndGroupMemberships } from "./page";
 import { useParams } from "next/navigation";
 import { assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
 import { toaster } from "@/components/ui/toaster";
+import { updateGroupForStudent } from "./updateGroupForStudent";
 
 export default function BulkModifyGroup({
   groups,
@@ -32,40 +33,11 @@ export default function BulkModifyGroup({
 
   const addSelectedToGroup = async () => {
     if (!groupToMod) {
-      console.log("no group");
       return;
     }
     selectedMembers.forEach(async (member) => {
       await updateGroupForStudent(groupToMod, member.value);
     });
-  };
-  const updateGroupForStudent = async (
-    group: AssignmentGroupWithMembersInvitationsAndJoinRequests | undefined,
-    student: RolesWithProfilesAndGroupMemberships
-  ) => {
-    try {
-      await assignmentGroupInstructorMoveStudent(
-        {
-          new_assignment_group_id: group?.id || null,
-          old_assignment_group_id:
-            student.profiles.assignment_groups_members.length > 0
-              ? student.profiles.assignment_groups_members[0].assignment_group_id
-              : null,
-          profile_id: student.private_profile_id,
-          class_id: Number(course_id)
-        },
-        supabase
-      );
-      toaster.create({ title: "Student moved", description: "", type: "success" });
-    } catch (e) {
-      console.error(e);
-      toaster.create({
-        title: "Error moving student",
-        description: e instanceof Error ? e.message : "Unknown error",
-        type: "error"
-      });
-    }
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
   };
 
   return (
@@ -120,7 +92,7 @@ export default function BulkModifyGroup({
                     {!chosenStudentHasGroup && (
                       <Field.ErrorText>
                         The user you have selected is not currently in a group. To group this user, either select a
-                        group to add them to first, or create a new group.
+                        group to add them to, or create a new group.
                       </Field.ErrorText>
                     )}
                   </Field.Root>
@@ -136,11 +108,14 @@ export default function BulkModifyGroup({
                 )}
                 {groupToMod && (
                   <>
-                    <Flex flexDir="column" justifyContent={"left"}>
-                      <Text>Name: {groupToMod.name}</Text>
-                      <Text>Current member count: {groupToMod.assignment_groups_members?.length ?? 0}</Text>
-                    </Flex>
-
+                    <Field.Root>
+                      <Field.Label>Group name</Field.Label>
+                      {groupToMod.name}
+                    </Field.Root>
+                    <Field.Root>
+                      <Field.Label>Current member count </Field.Label>
+                      {groupToMod.assignment_groups_members?.length ?? 0}
+                    </Field.Root>
                     <Field.Root
                       invalid={
                         selectedMembers.length + groupToMod.assignment_groups_members?.length >
@@ -153,10 +128,17 @@ export default function BulkModifyGroup({
                           setSelectedMembers(e);
                         }}
                         isMulti={true}
-                        options={profiles?.map((profile: RolesWithProfilesAndGroupMemberships) => ({
-                          value: profile,
-                          label: profile.profiles.name
-                        }))}
+                        options={profiles
+                          ?.filter((profile) => {
+                            return (
+                              profile.profiles.assignment_groups_members[0] === undefined ||
+                              profile.profiles.assignment_groups_members[0].assignment_group_id !== groupToMod.id
+                            );
+                          })
+                          .map((profile: RolesWithProfilesAndGroupMemberships) => ({
+                            value: profile,
+                            label: profile.profiles.name
+                          }))}
                       />
                       <Field.ErrorText>
                         Warning: Adding {selectedMembers.length} new student{selectedMembers.length !== 1 ? "s" : ""} to

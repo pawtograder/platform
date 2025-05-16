@@ -64,12 +64,13 @@ export default function BulkCreateGroup({
   }, [setGroupTextField]);
 
   const createGroupsWithAssignees = async () => {
-    generatedGroups.forEach((group) => {
-      createGroupWithAssignees(group);
+    generatedGroups.forEach(async (group) => {
+      await createGroupWithAssignees(group);
     });
-    invalidate({ resource: "assignment_groups", invalidates: ["all"] });
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
-    invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
+    invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+    invalidate({ resource: "user_roles", invalidates: ["all", "list"] });
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
+    invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
     toaster.create({ title: "Groups created", description: "", type: "success" });
   };
 
@@ -100,7 +101,6 @@ export default function BulkCreateGroup({
       data: { user }
     } = await supabase.auth.getUser();
     if (!user?.id || !createdGroup?.id) {
-      console.log("not all data available");
       return;
     }
     await supabase.from("assignment_groups_members").insert({
@@ -136,7 +136,7 @@ export default function BulkCreateGroup({
   };
 
   function isGroupSizeInvalid(size: number) {
-    return size > (assignment.min_group_size ?? ungroupedProfiles.length) || size < (assignment.min_group_size ?? 1);
+    return size > (assignment.max_group_size ?? ungroupedProfiles.length) || size < (assignment.min_group_size ?? 1);
   }
 
   return (
@@ -170,22 +170,15 @@ export default function BulkCreateGroup({
                   >
                     <NumberInput.Input />
                   </NumberInput.Root>
-                  {isGroupSizeInvalid(groupSize) && (
-                    <Field.ErrorText>
-                      Please enter a number from {assignment.min_group_size ?? "1"} -{" "}
-                      {assignment.max_group_size ?? ungroupedProfiles.length}
-                    </Field.ErrorText>
-                  )}
+                  <Field.ErrorText>
+                    Warning: Groups for this assignment should be in range {assignment.min_group_size ?? "1"} -{" "}
+                    {assignment.max_group_size ?? ungroupedProfiles.length}
+                  </Field.ErrorText>
                   <Field.HelperText>In the case of an uneven number, we will prefer larger groups.</Field.HelperText>
                 </Field.Root>
-                <Button
-                  onClick={() => generateGroups()}
-                  colorPalette={"gray"}
-                  disabled={Number.isNaN(groupSize) || isGroupSizeInvalid(groupSize)}
-                >
+                <Button onClick={() => generateGroups()} colorPalette={"gray"} disabled={Number.isNaN(groupSize)}>
                   Generate Groups
                 </Button>
-                <Table.Root></Table.Root>
                 {generatedGroups.length > 0 && (
                   <Table.Root>
                     <Table.Header>
