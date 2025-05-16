@@ -15,7 +15,7 @@ import CreateNewGroup from "./createNewGroupModal";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 
-type RolesWithProfilesAndGroupMemberships = GetResult<
+export type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
   Database["public"]["Tables"]["user_roles"]["Row"],
   "user_roles",
@@ -125,10 +125,14 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       <Heading size="md" pt="10px">
         Options
       </Heading>
-      <Flex gap="10px" flexDir={"row"}>
+      <Flex gap="10px" flexDir={"row"} wrap={"wrap"}>
         <CreateNewGroup groups={groupsData} assignment={assignment} />
         <BulkAssignGroup groups={groupsData} assignment={assignment} />
-        <BulkModifyGroup groups={groupsData} assignment={assignment} />
+        <BulkModifyGroup
+          groups={groupsData}
+          assignment={assignment}
+          profiles={profiles?.data as RolesWithProfilesAndGroupMemberships[]}
+        />
       </Flex>
 
       <Table.Root maxW="4xl" striped>

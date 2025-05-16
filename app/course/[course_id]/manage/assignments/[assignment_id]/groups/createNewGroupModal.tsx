@@ -1,6 +1,6 @@
 import { toaster } from "@/components/ui/toaster";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Button, Dialog, DialogActionTrigger, Field, Flex, Input, Portal } from "@chakra-ui/react";
+import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { createClient } from "@/utils/supabase/client";
@@ -27,10 +27,6 @@ export default function CreateNewGroup({
   const ungroupedProfiles = useUngroupedStudentProfiles(groups);
 
   const createGroupWithAssignees = async () => {
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
     const { data: createdGroup } = await supabase
       .from("assignment_groups")
       .insert({
@@ -129,20 +125,22 @@ export default function CreateNewGroup({
               </Flex>
             </Dialog.Body>
             <Dialog.Footer>
-              <Dialog.ActionTrigger asChild>
-                <Button variant="outline" colorPalette={"gray"}>
-                  Cancel
-                </Button>
-              </Dialog.ActionTrigger>
-              <DialogActionTrigger>
-                <Button
-                  onClick={createGroupWithAssignees}
-                  colorPalette={"green"}
-                  disabled={isGroupInvalid() || newGroupName.length === 0}
-                >
-                  Save
-                </Button>
-              </DialogActionTrigger>
+              <Flex gap="var(--chakra-spacing-3)">
+                <Dialog.ActionTrigger asChild>
+                  <Button variant="outline" colorPalette={"gray"}>
+                    Cancel
+                  </Button>
+                </Dialog.ActionTrigger>
+                <Dialog.ActionTrigger asChild>
+                  <Button
+                    onClick={createGroupWithAssignees}
+                    colorPalette={"green"}
+                    disabled={isGroupInvalid() || newGroupName.length === 0}
+                  >
+                    Assign
+                  </Button>
+                </Dialog.ActionTrigger>
+              </Flex>
             </Dialog.Footer>
           </Dialog.Content>
         </Dialog.Positioner>

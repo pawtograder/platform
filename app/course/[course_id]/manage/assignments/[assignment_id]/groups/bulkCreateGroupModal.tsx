@@ -74,10 +74,6 @@ export default function BulkCreateGroup({
   };
 
   const createGroupWithAssignees = async (group: SampleGroup) => {
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
     const { data: createdGroup } = await supabase
       .from("assignment_groups")
       .insert({
@@ -155,7 +151,7 @@ export default function BulkCreateGroup({
         <Dialog.Positioner>
           <Dialog.Content>
             <Dialog.Header>
-              <Dialog.Title>Bulk Assign Groups</Dialog.Title>
+              <Dialog.Title>Bulk Create Groups</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
               <Flex flexDir="column" gap="10px">
@@ -213,20 +209,22 @@ export default function BulkCreateGroup({
               </Flex>
             </Dialog.Body>
             <Dialog.Footer>
-              <Dialog.ActionTrigger asChild>
-                <Button variant="outline" colorPalette={"gray"}>
-                  Cancel
-                </Button>
-              </Dialog.ActionTrigger>
-              <DialogActionTrigger>
-                <Button
-                  onClick={createGroupsWithAssignees}
-                  colorPalette={"green"}
-                  disabled={generatedGroups.length === 0}
-                >
-                  Assign these groups
-                </Button>
-              </DialogActionTrigger>
+              <Flex gap="var(--chakra-spacing-3)">
+                <Dialog.ActionTrigger asChild>
+                  <Button variant="outline" colorPalette={"gray"}>
+                    Cancel
+                  </Button>
+                </Dialog.ActionTrigger>
+                <DialogActionTrigger asChild>
+                  <Button
+                    onClick={createGroupsWithAssignees}
+                    colorPalette={"green"}
+                    disabled={generatedGroups.length === 0}
+                  >
+                    Assign these groups
+                  </Button>
+                </DialogActionTrigger>
+              </Flex>
             </Dialog.Footer>
           </Dialog.Content>
         </Dialog.Positioner>
