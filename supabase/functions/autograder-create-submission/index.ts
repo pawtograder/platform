@@ -111,7 +111,7 @@ async function handleRequest(req: Request) {
           output: {
             title: "Submission failed",
             summary: "You cannot submit after the due date.",
-            text: `The due date for this assignment was ${newDueDate.toLocaleString()} (${timeZone}). Your code is still arhived on GitHub, and instructors and TAs can still manually submit it if needed.`
+            text: `The due date for this assignment was ${newDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
           }
         });
         throw new UserVisibleError("You cannot submit after the due date.");
