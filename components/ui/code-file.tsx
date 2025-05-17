@@ -3,7 +3,6 @@ import { useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfi
 import {
   useRubricCheck,
   useSubmission,
-  useSubmissionFile,
   useSubmissionFileComments,
   useSubmissionReviewByAssignmentId
 } from "@/hooks/useSubmission";
@@ -68,20 +67,34 @@ function useCodeLineCommentContext() {
   return context;
 }
 
+export type LineActionPopupDynamicProps = {
+  lineNumber: number;
+  top: number;
+  left: number;
+  visible: boolean;
+  onClose?: () => void;
+  close: () => void;
+  mode: "marking" | "select";
+};
+
+type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
+  file: SubmissionFile;
+  submissionReviewId?: number;
+};
+
 export default function CodeFile({ file, submissionReviewId }: { file: SubmissionFile; submissionReviewId?: number }) {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const submission = useSubmission();
   const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
 
   const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
-  const [lineActionPopup, setLineActionPopup] = useState<LineActionPopupProps>(() => ({
+  const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
     lineNumber: 0,
     top: 0,
     left: 0,
     visible: false,
     mode: "select",
-    close: () => {},
-    submissionReviewId: submissionReviewId
+    close: () => {}
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -121,7 +134,7 @@ export default function CodeFile({ file, submissionReviewId }: { file: Submissio
     return <Skeleton />;
   }
   const tree = starryNight.highlight(file.contents, "source.java");
-  starryNightGutter(tree, setExpanded, setLineActionPopup);
+  starryNightGutter(tree, setLineActionPopupProps);
   const reactNode = toJsxRuntime(tree, {
     Fragment,
     jsx,
@@ -224,7 +237,8 @@ export default function CodeFile({ file, submissionReviewId }: { file: Submissio
           )}
         </HStack>
       </Flex>
-      <LineActionPopup {...lineActionPopup} submissionReviewId={submissionReviewId} />
+      {/* Pass dynamic props from state, and other props directly */}
+      <LineActionPopup {...lineActionPopupProps} file={file} submissionReviewId={submissionReviewId} />
       <CodeLineCommentContext.Provider
         value={{
           submission,
@@ -251,13 +265,12 @@ export default function CodeFile({ file, submissionReviewId }: { file: Submissio
           onClick={(ev) => {
             ev.preventDefault();
             ev.stopPropagation();
-            setLineActionPopup((prev) => {
+            setLineActionPopupProps((prev) => {
               prev.onClose?.();
               return {
                 ...prev,
                 visible: false,
-                onClose: undefined,
-                close: () => {}
+                onClose: undefined
               };
             });
           }}
@@ -277,8 +290,7 @@ export default function CodeFile({ file, submissionReviewId }: { file: Submissio
  */
 export function starryNightGutter(
   tree: Root,
-  setExpanded: Dispatch<SetStateAction<number[]>>,
-  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>
+  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
 ) {
   const replacement: RootContent[] = [];
   const search = /\r?\n|\r/g;
@@ -346,6 +358,7 @@ export function starryNightGutter(
   // Replace children with new array.
   tree.children = replacement;
 }
+
 function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
   const commentAuthor = useUserProfile(comment.author);
@@ -430,6 +443,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     </Box>
   );
 }
+
 function CodeLineComment({
   comment,
   submissionReviewId
@@ -513,23 +527,13 @@ function CodeLineComment({
   );
 }
 
-export type LineActionPopupProps = {
-  lineNumber: number;
-  top: number;
-  left: number;
-  visible: boolean;
-  onClose?: () => void;
-  close: () => void;
-  mode: "marking" | "select";
-  submissionReviewId?: number;
-};
-
 export type RubricCriteriaSelectGroupOption = {
   readonly label: string;
   readonly value: string;
   readonly options: readonly RubricCheckSelectOption[];
   readonly criteria?: HydratedRubricCriteria;
 };
+
 export type RubricCheckSelectOption = {
   readonly label: string;
   readonly value: string;
@@ -537,6 +541,7 @@ export type RubricCheckSelectOption = {
   readonly criteria?: HydratedRubricCriteria;
   options?: RubricCheckSubOptions[];
 };
+
 export type RubricCheckSubOptions = {
   readonly label: string;
   readonly index: string;
@@ -545,6 +550,7 @@ export type RubricCheckSubOptions = {
   readonly points: number;
   readonly check: RubricCheckSelectOption;
 };
+
 export function formatPoints(option: {
   check?: HydratedRubricCheck;
   criteria?: HydratedRubricCriteria;
@@ -555,9 +561,18 @@ export function formatPoints(option: {
   }
   return ``;
 }
-function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissionReviewId }: LineActionPopupProps) {
+
+function LineActionPopup({
+  lineNumber,
+  top,
+  left,
+  visible,
+  close,
+  mode,
+  file,
+  submissionReviewId
+}: LineActionPopupComponentProps) {
   const submission = useSubmission();
-  const file = useSubmissionFile();
   const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -589,7 +604,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
     }, 0);
 
     return () => {
-      clearTimeout(timerId); // Make sure to clear the timeout
+      clearTimeout(timerId);
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [visible, close]);
@@ -833,8 +848,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
                   comment,
                   line: lineNumber,
                   rubric_check_id: selectedCheckOption.check?.id,
-                  class_id: file?.class_id,
-                  submission_file_id: file?.id,
+                  class_id: file.class_id,
+                  submission_file_id: file.id,
                   submission_id: submission.id,
                   author: profile_id,
                   released: review ? review.released : true,
@@ -853,6 +868,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, submissi
     </Box>
   );
 }
+
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
   const {
     submission,
@@ -869,11 +885,10 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
   const commentsToDisplay = useMemo(() => {
     return allCommentsForFile.filter((comment) => {
       if (comment.line !== lineNumber) return false;
-      // Apply eventually_visible filter only for students after release
       if (!isGraderOrInstructor && submission.released !== null) {
         return comment.eventually_visible === true;
       }
-      return true; // Graders/instructors see all (RLS still applies for data fetching)
+      return true;
     });
   }, [allCommentsForFile, lineNumber, isGraderOrInstructor, submission.released]);
 
@@ -965,7 +980,7 @@ function LineNumber({ lineNumber }: { lineNumber: number }) {
 function createLine(
   children: ElementContent[],
   line: number,
-  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>
+  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
 ): Element {
   return {
     type: "element",
@@ -1003,15 +1018,14 @@ function createLine(
                 close: () => {
                   setLineActionPopup((prevClose) => ({
                     ...prevClose,
-                    lineNumber: line,
-                    top: 0,
-                    left: 0,
                     visible: false,
-                    onClose: undefined,
-                    close: () => {},
-                    mode: "marking"
+                    // Clear onClose only if it was for the same line, otherwise preserve it
+                    onClose: prevClose.lineNumber === line && prevClose.visible ? undefined : prevClose.onClose
                   }));
-                }
+                },
+                // Reset onClose, it can be set by specific interactions like context menu,
+                // but ensure it's cleared if we are just clicking for marking
+                onClose: undefined
               };
             });
           },
@@ -1020,12 +1034,17 @@ function createLine(
             ev.stopPropagation();
             const target = ev.currentTarget as HTMLElement;
             target.classList.add("selected");
-            const onClose = () => {
+            const closeAndCleanup = () => {
               target.classList.remove("selected");
+              setLineActionPopup((prevClose) => ({
+                ...prevClose,
+                visible: false,
+                onClose: undefined // Clear the onClose specific to this instance
+              }));
             };
             setLineActionPopup((prev) => {
               if (line !== prev.lineNumber) {
-                prev.onClose?.();
+                prev.onClose?.(); // Call previous onClose if changing lines
               }
               return {
                 ...prev,
@@ -1034,20 +1053,11 @@ function createLine(
                 left: ev.clientX,
                 visible: true,
                 mode: "select",
-                close: () => {
-                  onClose();
-                  setLineActionPopup((prevClose) => ({
-                    ...prevClose,
-                    lineNumber: line,
-                    top: 0,
-                    left: 0,
-                    visible: false,
-                    onClose: undefined,
-                    close: () => {},
-                    mode: "select"
-                  }));
-                },
-                onClose
+                close: closeAndCleanup,
+                onClose: () => {
+                  // Specific cleanup for this context menu
+                  target.classList.remove("selected");
+                }
               };
             });
           }

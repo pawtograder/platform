@@ -703,7 +703,12 @@ export function useSubmissionReview(reviewId?: number | null) {
   }
 
   if (effectiveReviewId === undefined || (effectiveReviewId === null && reviewId === undefined)) {
-    // console.warn("No review ID available for useSubmissionReview and no default found.");
+    toaster.create({
+      title: "No review ID available",
+      description:
+        "No review ID available for useSubmissionReview and no default found. This is likely a bug. Please contact support.",
+      type: "warning"
+    });
   }
 
   return review;
@@ -729,12 +734,15 @@ export function useRubricCheck(rubric_check_id: number | null) {
 
 export function useSubmissionFile() {
   const controller = useSubmissionController();
-  return controller?.file;
+  return controller.file;
 }
 
-export function useSubmissionController(): SubmissionController | undefined {
+export function useSubmissionController(): SubmissionController {
   const ctx = useContext(SubmissionContext);
-  return ctx?.submissionController;
+  if (!ctx) {
+    throw new Error("SubmissionContext not found");
+  }
+  return ctx.submissionController;
 }
 
 export type ReviewAssignmentWithDetails = Database["public"]["Tables"]["review_assignments"]["Row"] & {
@@ -889,7 +897,7 @@ export type ReferencedRubricCheckInstance = {
   submissionReview?: Tables<"submission_reviews">;
   rubric?: Pick<Tables<"rubrics">, "id" | "name" | "review_round">;
   reviewRound?: Enums<"review_round"> | null;
-  authorProfile?: Partial<Tables<"profiles">> | null; // Consolidate author profile here
+  authorProfile?: Partial<Tables<"profiles">> | null;
 };
 
 // Define a more specific type for comments with author_profile from eager loading
