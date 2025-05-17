@@ -464,10 +464,8 @@ function ArtifactCommentsForm({
       {isGraderOrInstructor && (
         <Box mt={2}>
           <Checkbox
-            inputProps={{
-              checked: eventuallyVisible,
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked)
-            }}
+            checked={eventuallyVisible}
+            onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
           >
             Visible to student upon release
           </Checkbox>
@@ -616,10 +614,8 @@ function ArtifactCheckPopover({
                 </Text>
                 {isGraderOrInstructor && (
                   <Checkbox
-                    inputProps={{
-                      checked: eventuallyVisible,
-                      onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked)
-                    }}
+                    checked={eventuallyVisible}
+                    onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
                   >
                     Visible to student upon release
                   </Checkbox>
