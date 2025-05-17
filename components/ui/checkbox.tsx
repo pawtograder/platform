@@ -8,7 +8,6 @@ export interface CheckboxProps extends Omit<ChakraCheckbox.RootProps, "defaultCh
   rootRef?: React.Ref<HTMLLabelElement>;
 }
 
-/* eslint-disable react/display-name */
 export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
   ({ icon, children, inputProps, rootRef, ...rest }, ref) => (
     <ChakraCheckbox.Root ref={rootRef} {...rest}>
@@ -18,3 +17,4 @@ export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
     </ChakraCheckbox.Root>
   )
 );
+Checkbox.displayName = "Checkbox";
