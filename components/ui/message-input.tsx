@@ -84,7 +84,11 @@ export default function MessageInput(props: MessageInputProps) {
         .from("uploads")
         .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
       if (error) {
-        console.error("Error uploading image:", error);
+        toaster.error({
+          title: "Error uploading image: " + error.name,
+          description: error.message
+        });
+        return;
       }
       const urlEncodedFilename = encodeURIComponent(fileName);
 
@@ -128,7 +132,7 @@ export default function MessageInput(props: MessageInputProps) {
   );
   if (singleLine) {
     return (
-      <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
+      <VStack align="stretch" spaceY="0" p="0" gap="2" w="100%">
         {showMarkdownPreview && (
           <Box width="100%" p="2" bg="bg.muted" border={"1px solid"} borderColor="border.subtle" rounded="md" m="0">
             <Markdown>{value}</Markdown>
@@ -211,7 +215,7 @@ export default function MessageInput(props: MessageInputProps) {
                   onClick={toggleAnonymousMode}
                   variant={anonymousMode ? "solid" : "ghost"}
                   size="xs"
-                  colorScheme={anonymousMode ? "red" : "teal"}
+                  colorPalette={anonymousMode ? "red" : "teal"}
                   p={0}
                 >
                   <FaUserSecret />
@@ -225,7 +229,7 @@ export default function MessageInput(props: MessageInputProps) {
                   onClick={() => fileInputRef.current?.click()}
                   variant="ghost"
                   size="xs"
-                  colorScheme="teal"
+                  colorPalette="teal"
                   p={0}
                 >
                   <FaPaperclip />
@@ -238,7 +242,7 @@ export default function MessageInput(props: MessageInputProps) {
                 onClick={() => setShowMarkdownPreview(!showMarkdownPreview)}
                 variant="ghost"
                 size="xs"
-                colorScheme="teal"
+                colorPalette="teal"
                 p={0}
               >
                 <TbMathFunction />
@@ -260,7 +264,7 @@ export default function MessageInput(props: MessageInputProps) {
                     aria-label="Toggle giphy picker"
                     variant="ghost"
                     size="xs"
-                    colorScheme="teal"
+                    colorPalette="teal"
                     p={0}
                     onClick={() => setShowGiphyPicker(!showGiphyPicker)}
                   >
@@ -287,7 +291,7 @@ export default function MessageInput(props: MessageInputProps) {
                   onClick={toggleEmojiPicker}
                   variant="ghost"
                   size="xs"
-                  colorScheme="teal"
+                  colorPalette="teal"
                   p={0}
                 >
                   <FaSmile />
@@ -356,7 +360,7 @@ export default function MessageInput(props: MessageInputProps) {
                 onClick={toggleAnonymousMode}
                 variant={anonymousMode ? "solid" : "ghost"}
                 size="xs"
-                colorScheme={anonymousMode ? "red" : "teal"}
+                colorPalette={anonymousMode ? "red" : "teal"}
                 p={0}
               >
                 <FaUserSecret />
@@ -370,7 +374,7 @@ export default function MessageInput(props: MessageInputProps) {
                 onClick={() => fileInputRef.current?.click()}
                 variant="ghost"
                 size="xs"
-                colorScheme="teal"
+                colorPalette="teal"
                 p={0}
               >
                 <FaPaperclip />
@@ -383,7 +387,7 @@ export default function MessageInput(props: MessageInputProps) {
               onClick={() => setShowMarkdownPreview(!showMarkdownPreview)}
               variant="ghost"
               size="xs"
-              colorScheme="teal"
+              colorPalette="teal"
               p={0}
             >
               <TbMathFunction />
@@ -405,7 +409,7 @@ export default function MessageInput(props: MessageInputProps) {
                   aria-label="Toggle giphy picker"
                   variant="ghost"
                   size="xs"
-                  colorScheme="teal"
+                  colorPalette="teal"
                   p={0}
                   onClick={() => setShowGiphyPicker(!showGiphyPicker)}
                 >
@@ -432,7 +436,7 @@ export default function MessageInput(props: MessageInputProps) {
                 onClick={toggleEmojiPicker}
                 variant="ghost"
                 size="xs"
-                colorScheme="teal"
+                colorPalette="teal"
                 p={0}
               >
                 <FaSmile />

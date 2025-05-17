@@ -1,5 +1,5 @@
 "use client";
-import { UserProfile, UserRole, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
 import { User } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext } from "react";

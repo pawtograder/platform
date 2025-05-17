@@ -41,18 +41,11 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { FaSort, FaSortDown, FaSortUp } from "react-icons/fa";
 
-function SubmissionGraderTable({
-  autograder_repo,
-  latest_autograder_sha
-}: {
-  autograder_repo: string;
-  latest_autograder_sha: string | null;
-}) {
+function SubmissionGraderTable({ autograder_repo }: { autograder_repo: string }) {
   const { assignment_id, course_id } = useParams();
   const course = useCourse();
   const timeZone = course.classes.time_zone || "America/New_York";
   const [pageCount, setPageCount] = useState(0);
-  console.log(latest_autograder_sha);
   const renderAsLinkToSubmission = useCallback(
     (props: CellContext<ActiveSubmissionsWithRegressionTestResults, unknown>) => {
       const row = props.row;
@@ -386,7 +379,6 @@ function SubmissionGraderTable({
               <NativeSelect.Field
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
-                  console.log(event.target.value);
                   setPageSize(Number(event.target.value));
                 }}
               >
@@ -461,7 +453,7 @@ export default function RerunAutograderPage() {
       select: "*, autograder(*)"
     }
   });
-  const { data: autograder_commits, isLoading: isAutograderCommitsLoading } = useList<AutograderCommit>({
+  const { isLoading: isAutograderCommitsLoading } = useList<AutograderCommit>({
     resource: "autograder_commits",
     meta: {
       select: "*"
@@ -475,7 +467,6 @@ export default function RerunAutograderPage() {
       }
     ]
   });
-  console.log(autograder_commits);
   if (isAssignmentLoading || isAutograderCommitsLoading) {
     return <Skeleton height="100px" />;
   }
@@ -521,10 +512,7 @@ export default function RerunAutograderPage() {
         <Code>{assignment.data.autograder.latest_autograder_sha?.slice(0, 7)}</Code>.
       </Box>
 
-      <SubmissionGraderTable
-        autograder_repo={assignment?.data.autograder.grader_repo}
-        latest_autograder_sha={assignment.data.autograder.latest_autograder_sha}
-      />
+      <SubmissionGraderTable autograder_repo={assignment?.data.autograder.grader_repo} />
     </Box>
   );
 }

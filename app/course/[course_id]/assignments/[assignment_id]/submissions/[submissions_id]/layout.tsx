@@ -4,7 +4,8 @@ import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger 
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
-  LegacyRubricWithCriteriaAndChecks,
+  HydratedRubricPart,
+  HydratedRubric,
   Submission,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
@@ -17,7 +18,6 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
-import { RubricCriteria } from "@/components/ui/rubric-sidebar";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
@@ -26,17 +26,19 @@ import {
   useRubricCriteriaInstances,
   useSubmission,
   useSubmissionReview,
-  useSubmissionRubric
+  useSubmissionRubric,
+  useReviewAssignment,
+  useSubmissionReviewByAssignmentId
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
-import { formatRelative } from "date-fns";
+import { formatRelative, format } from "date-fns";
 import NextLink from "next/link";
-import { useParams, usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useState, ElementType as ReactElementType } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -56,9 +58,11 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
+import RubricSidebar from "@/components/ui/rubric-sidebar";
+import { Tables } from "@/utils/supabase/SupabaseTypes";
+
 // Create a mapping of icon names to their components
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const iconMap: { [key: string]: any } = {
+const iconMap: { [key: string]: ReactElementType } = {
   FaBell,
   FaCheckCircle,
   FaFile,
@@ -341,7 +345,7 @@ function ReviewStats() {
 }
 
 function incompleteRubricChecks(
-  rubric: LegacyRubricWithCriteriaAndChecks,
+  rubric: Tables<"rubrics"> & { rubric_parts: Array<HydratedRubricPart> },
   comments: { rubric_check_id: number | null; submission_review_id: number | null }[]
 ): {
   required_checks: HydratedRubricCheck[];
@@ -355,31 +359,33 @@ function incompleteRubricChecks(
     check_count_applied: number;
   }[];
 } {
-  const required_checks = rubric.rubric_criteria.flatMap((criteria) =>
+  const allRubricCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria || []);
+
+  const required_checks = allRubricCriteria.flatMap((criteria) =>
     criteria.rubric_checks.filter(
       (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
     )
   ) as HydratedRubricCheck[];
-  const optional_checks = rubric.rubric_criteria
+  const optional_checks = allRubricCriteria
     .filter((criteria) => criteria.min_checks_per_submission === null)
     .flatMap((criteria) =>
       criteria.rubric_checks.filter(
         (check) => !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
       )
     ) as HydratedRubricCheck[];
-  const criteria = rubric.rubric_criteria.map((criteria) => ({
+  const criteriaEvaluation = allRubricCriteria.map((criteria) => ({
     criteria: criteria as HydratedRubricCriteria,
     check_count_applied: criteria.rubric_checks.filter((check) =>
       comments.some((comment) => comment.rubric_check_id === check.id)
     ).length
   }));
-  const required_criteria = criteria.filter(
-    (criteria) =>
-      criteria.criteria.min_checks_per_submission !== null &&
-      criteria.check_count_applied < criteria.criteria.min_checks_per_submission
+  const required_criteria = criteriaEvaluation.filter(
+    (item) =>
+      item.criteria.min_checks_per_submission !== null &&
+      item.check_count_applied < item.criteria.min_checks_per_submission
   );
-  const optional_criteria = criteria.filter(
-    (criteria) => criteria.criteria.min_checks_per_submission === null && criteria.check_count_applied === 0
+  const optional_criteria = criteriaEvaluation.filter(
+    (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
   );
   return {
     required_checks,
@@ -390,37 +396,29 @@ function incompleteRubricChecks(
 }
 function CompleteRubricButton() {
   const review = useSubmissionReview();
-  const rubric = useSubmissionRubric();
+  const { rubric: actualRubric, isLoading: isLoadingRubric } = useSubmissionRubric();
   const comments = useAllRubricCheckInstances(review?.id);
-  const { required_checks, optional_checks, required_criteria, optional_criteria } = incompleteRubricChecks(
-    rubric!,
-    comments
-  );
-  //   //TODO: Check if all required parts are graded, and show an error if not.
-  //             // If non-required parts are not graded, show a warning that the grader must click-through.
-  //             if(required_checks.length > 0 || required_criteria.length > 0) {
-  //                 toaster.create({
-  //                     title: "Incomplete Rubric Checks",
-  //                     description: "Please grade all required checks before marking the submission as graded.\n\nMissing checks: " + required_checks.map((check) => check.name).join(", ") + " and " + required_criteria.map((criteria) => criteria.criteria.name).join(", "),
-  //                     type: "error"
-  //                 });
-  //                 console.log("Incomplete checks", required_checks, required_criteria);
-  //             } else if (optional_checks.length > 0 || optional_criteria.length > 0) {
-  //                 toaster.create({
-  //                     title: "Incomplete Rubric Checks",
-  //                     description: "Please grade all optional checks before marking the submission as graded.\n\nMissing checks: " + optional_checks.map((check) => check.name).join(", ") + " and " + optional_criteria.map((criteria) => criteria.criteria.name).join(", "),
-  //                     type: "warning"
-  //                 });
-  //             } else {
-  //                 // updateReview({ id: review.id, values: { completed_at: new Date(), completed_by: private_profile_id } });
-  //                 console.log("Marking as graded");
-  //             }
-  const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
-  const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
   const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
     resource: "submission_reviews"
   });
   const { private_profile_id } = useClassProfiles();
+
+  if (isLoadingRubric || !actualRubric) {
+    // Render a loading state or disabled button
+    return (
+      <Button variant="surface" loading>
+        Graded <Icon as={FaRegCheckCircle} />
+      </Button>
+    );
+  }
+
+  const { required_checks, optional_checks, required_criteria, optional_criteria } = incompleteRubricChecks(
+    actualRubric,
+    comments
+  );
+  const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
+  const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
+
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -597,9 +595,53 @@ function UnGradedGradingSummary() {
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const review = useSubmissionReview();
-  const showHandGrading = isGraderOrInstructor || review?.released;
-  const criteria = submission.assignments.rubrics?.rubric_criteria as HydratedRubricCriteria[];
+  const searchParams = useSearchParams();
+  const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
+  const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
+
+  const {
+    reviewAssignment,
+    isLoading: isLoadingReviewAssignment,
+    error: reviewAssignmentError
+  } = useReviewAssignment(reviewAssignmentId);
+
+  const assignmentRubricData = submission.assignments.rubrics;
+  let preparedInitialRubric: HydratedRubric | undefined = undefined;
+
+  if (assignmentRubricData) {
+    if ("rubric_parts" in assignmentRubricData && assignmentRubricData.rubric_parts !== undefined) {
+      preparedInitialRubric = assignmentRubricData as HydratedRubric;
+    } else if ("rubric_criteria" in assignmentRubricData && Array.isArray(assignmentRubricData.rubric_criteria)) {
+      const { rubric_criteria, ...baseRubricProperties } = assignmentRubricData;
+      preparedInitialRubric = {
+        ...(baseRubricProperties as Tables<"rubrics">),
+        rubric_parts: [
+          {
+            id: -1,
+            name: baseRubricProperties.name || "Rubric Part",
+            description: baseRubricProperties.description,
+            ordinal: 0,
+            class_id: baseRubricProperties.class_id,
+            rubric_id: baseRubricProperties.id,
+            created_at: baseRubricProperties.created_at || new Date().toISOString(),
+            data: undefined,
+            rubric_criteria: rubric_criteria as HydratedRubricCriteria[]
+          } as HydratedRubricPart
+        ]
+      };
+    }
+  }
+
+  const mainSubmissionReviewData = useSubmissionReview();
+  const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
+
+  const activeReviewForSidebar = reviewAssignmentId ? peerReviewSubmissionData : mainSubmissionReviewData;
+
+  const displayScoreFromReview = activeReviewForSidebar;
+
+  const showHandGradingControls =
+    isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!reviewAssignmentId;
+
   return (
     <Box
       position="sticky"
@@ -614,16 +656,44 @@ function RubricView() {
       overflowY="auto"
     >
       <VStack align="start">
-        {review && (
+        {isLoadingReviewAssignment && reviewAssignmentId && <Skeleton height="100px" />}
+        {reviewAssignmentError && reviewAssignmentId && (
+          <Text color="red.500">Error loading review details: {reviewAssignmentError.message}</Text>
+        )}
+        {reviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
+          <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
+            <Heading size="md">
+              Review Task: {reviewAssignment.rubrics?.name} ({reviewAssignment.rubrics?.review_round})
+            </Heading>
+            <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
+            <Text fontSize="sm">
+              Due: {reviewAssignment.due_date ? format(new Date(reviewAssignment.due_date), "Pp") : "N/A"}
+            </Text>
+            {reviewAssignment.release_date && (
+              <Text fontSize="sm">
+                Grading visible to student after: {format(new Date(reviewAssignment.release_date), "Pp")}
+              </Text>
+            )}
+          </Box>
+        )}
+
+        {displayScoreFromReview && submission.assignments.total_points !== null && (
           <Heading size="xl">
-            Grading Summary ({review?.total_score}/{submission.assignments.total_points})
+            Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
           </Heading>
         )}
-        {!review && <UnGradedGradingSummary />}
+        {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
+
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
-        {showHandGrading && <Heading size="md">Hand Check Results</Heading>}
-        {showHandGrading && criteria?.map((criteria) => <RubricCriteria key={criteria.id} criteria={criteria} />)}
+        {showHandGradingControls && (
+          <RubricSidebar
+            initialRubric={preparedInitialRubric}
+            reviewAssignmentId={reviewAssignmentId}
+            submissionReview={activeReviewForSidebar}
+          />
+        )}
+        {!showHandGradingControls && <Text>Rubric and manual grading are not available.</Text>}
       </VStack>
     </Box>
   );

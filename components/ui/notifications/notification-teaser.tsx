@@ -225,7 +225,7 @@ export default function NotificationTeaser({
         top="0"
         size="xs"
         variant="ghost"
-        colorScheme="gray"
+        colorPalette="gray"
         m={0}
         p={0}
         aria-label="Dismiss notification"

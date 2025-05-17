@@ -130,7 +130,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
                   </HStack>
                 )}
                 {(readStatus?.numReadDescendants ?? 0) < (readStatus?.current_children_count ?? 0) && (
-                  <Badge colorScheme="blue">
+                  <Badge colorPalette="blue">
                     {Math.max(0, (readStatus?.current_children_count ?? 0) - (readStatus?.numReadDescendants ?? 0))} new
                   </Badge>
                 )}
@@ -242,7 +242,7 @@ export default function DiscussionThreadList() {
         <Heading size="md" mb="2">
           Discussion Feed
         </Heading>
-        <Button asChild size="sm" variant="surface" colorScheme="green" mb="4" width="100%">
+        <Button asChild size="sm" variant="surface" colorPalette="green" mb="4" width="100%">
           <NextLink prefetch={true} href={`/course/${course_id}/discussion/new`}>
             <Icon as={FaPlus} mr="1" />
             New Thread

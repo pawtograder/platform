@@ -376,6 +376,30 @@ export default function RubricPage() {
     async (value: string) => {
       const rubric = YamlRubricToHydratedRubric(YAML.parse(value));
       if (!rubric || !existingRubric) return;
+
+      // Update top-level rubric properties if they changed
+      const topLevelRubricChanges: Partial<HydratedRubric> = {};
+      if (rubric.name !== existingRubric.name) {
+        topLevelRubricChanges.name = rubric.name;
+      }
+      if (rubric.description !== existingRubric.description) {
+        topLevelRubricChanges.description = rubric.description;
+      }
+      if (rubric.is_private !== existingRubric.is_private) {
+        topLevelRubricChanges.is_private = rubric.is_private;
+      }
+      if (rubric.review_round !== existingRubric.review_round) {
+        topLevelRubricChanges.review_round = rubric.review_round;
+      }
+
+      if (Object.keys(topLevelRubricChanges).length > 0) {
+        await updateResource({
+          id: existingRubric.id,
+          resource: "rubrics",
+          values: topLevelRubricChanges
+        });
+      }
+
       const findChanges = <T extends { id: number | undefined }>(
         newItems: T[],
         existingItems: T[]
@@ -550,7 +574,8 @@ export default function RubricPage() {
       createResource,
       updateCriteriaIfChanged,
       updatePartIfChanged,
-      updateCheckIfChanged
+      updateCheckIfChanged,
+      updateResource
     ]
   );
 
@@ -565,7 +590,7 @@ export default function RubricPage() {
               {canLoadDemo && (
                 <Button
                   variant="ghost"
-                  colorScheme="gray"
+                  colorPalette="gray"
                   onClick={() => {
                     setValue(defaultRubric);
                     setRubric(YamlRubricToHydratedRubric(YAML.parse(defaultRubric)));
@@ -578,7 +603,7 @@ export default function RubricPage() {
             <HStack pr={2}>
               <Button
                 variant="ghost"
-                colorScheme="gray"
+                colorPalette="gray"
                 onClick={() => {
                   window.history.back();
                 }}
@@ -654,7 +679,7 @@ export default function RubricPage() {
       </Box>
       <Box w="lg" position="relative">
         {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
-        {!error && rubric && <RubricSidebar rubric={rubric} />}
+        {!error && rubric && <RubricSidebar initialRubric={rubric} />}
         {error && (
           <Box
             position="absolute"
@@ -868,4 +893,6 @@ parts:
             is_required: false
             is_comment_required: true
             points: 2
+is_private: false
+review_round: "grading-review"
 `;
