@@ -4,12 +4,12 @@ import {
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useInvalidate } from "@refinedev/core";
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState } from "react";
 import MessageInput from "./message-input";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmissionReview } from "@/hooks/useSubmission";
-import { Checkbox } from "./checkbox";
 import { Box, Text } from "@chakra-ui/react";
+import { Checkbox } from "./checkbox";
 import { toaster } from "./toaster";
 
 export default function LineCommentForm({
@@ -45,10 +45,6 @@ export default function LineCommentForm({
 
   const fetchedSubmissionReview = useSubmissionReview(submissionReviewId);
   const isLoadingReviewDetails = submissionReviewId !== undefined && fetchedSubmissionReview === undefined;
-
-  useEffect(() => {
-    setEventuallyVisible(defaultEventuallyVisible ?? true);
-  }, [defaultEventuallyVisible]);
 
   const postComment = useCallback(
     async (message: string) => {
@@ -126,16 +122,14 @@ export default function LineCommentForm({
         onClose={onCancel}
       />
       {isGraderOrInstructor && (
-        <Box mt={2}>
+        <Box mt={2} onClick={(e) => e.stopPropagation()}>
           <Checkbox
-            inputProps={{
-              checked: eventuallyVisible,
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked),
-              disabled:
-                isCreatingComment || (!!submissionReviewId && !fetchedSubmissionReview && isLoadingReviewDetails)
-            }}
+            checked={eventuallyVisible}
+            onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
+            size="sm"
+            disabled={isCreatingComment || (!!submissionReviewId && isLoadingReviewDetails)}
           >
-            Visible to student only after release
+            Visible to student upon release
           </Checkbox>
         </Box>
       )}

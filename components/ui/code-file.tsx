@@ -805,10 +805,8 @@ function LineActionPopup({
             {isGraderOrInstructor && (
               <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>
                 <Checkbox
-                  inputProps={{
-                    checked: eventuallyVisible,
-                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEventuallyVisible(e.target.checked)
-                  }}
+                  checked={eventuallyVisible}
+                  onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
                   size="sm"
                 >
                   Visible to student upon release
