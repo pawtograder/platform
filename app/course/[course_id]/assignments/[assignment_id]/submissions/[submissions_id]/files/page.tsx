@@ -411,6 +411,7 @@ function ArtifactComments({
     </Box>
   );
 }
+
 function ArtifactCommentsForm({
   submission,
   artifact,

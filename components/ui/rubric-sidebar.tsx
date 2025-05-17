@@ -743,7 +743,7 @@ export function RubricPart({
     <Box>
       <Heading size="md">{part.name}</Heading>
       <Markdown>{part.description}</Markdown>
-      <VStack align="start" w="100%">
+      <VStack align="start" w="100%" gap={2}>
         {part.rubric_criteria
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((criteria, index) => (
@@ -863,7 +863,6 @@ export default function RubricSidebar({
       overflowX="hidden"
     >
       <VStack align="start" w="100%">
-        <Heading size="xl">Grading Rubric</Heading>
         {reviewAssignment && (
           <Box fontSize="sm" color="text.muted" mb={2}>
             {reviewAssignment.due_date && (
