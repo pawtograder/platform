@@ -34,6 +34,7 @@ type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"] & {
   profiles?: Pick<ProfileRow, "id" | "name">;
 };
 type SubmissionReviewRow = Database["public"]["Tables"]["submission_reviews"]["Row"];
+type GradingConflictRow = Database["public"]["Tables"]["grading_conflicts"]["Row"];
 
 type PopulatedSubmission = SubmissionRow & {
   profiles?: ProfileRow;
@@ -48,9 +49,6 @@ type PopulatedReviewAssignment = ReviewAssignmentRow & {
   profiles?: ProfileRow;
   submissions?: PopulatedSubmission;
   rubrics?: RubricRow;
-  meta: {
-    select: "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews(completed_at, grader, rubric_id, submission_id))";
-  };
   review_assignment_rubric_parts?: { rubric_part_id: number }[];
 };
 
@@ -124,6 +122,7 @@ export default function AssignReviewModal({
 
   const supabaseClient = createClient();
   const selectedRubricId = watch("rubric_id");
+  const selectedSubmissionId = watch("submission_id");
 
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
     resource: "user_roles",
@@ -135,16 +134,11 @@ export default function AssignReviewModal({
     queryOptions: { enabled: isOpen }
   });
 
-  const assigneeOptions = useMemo(
-    () =>
-      courseUsersData?.data.map((userRole) => ({
-        value: userRole.private_profile_id,
-        label: userRole.profiles?.name
-          ? `${userRole.profiles.name}`
-          : `Name Missing (User ID: ${userRole.private_profile_id})`
-      })) || [],
-    [courseUsersData]
-  );
+  const { data: gradingConflictsData, isLoading: isLoadingGradingConflicts } = useList<GradingConflictRow>({
+    resource: "grading_conflicts",
+    filters: [{ field: "class_id", operator: "eq", value: courseId }],
+    queryOptions: { enabled: isOpen }
+  });
 
   const { data: submissionsData, isLoading: isLoadingSubmissions } = useList<PopulatedSubmission>({
     resource: "submissions",
@@ -158,6 +152,46 @@ export default function AssignReviewModal({
     },
     queryOptions: { enabled: isOpen }
   });
+
+  const assigneeOptions = useMemo(() => {
+    if (!courseUsersData?.data) return [];
+
+    let availableAssignees = courseUsersData.data;
+
+    if (selectedSubmissionId && submissionsData?.data && gradingConflictsData?.data) {
+      const selectedSubmission = submissionsData.data.find((sub) => sub.id === selectedSubmissionId);
+      if (selectedSubmission) {
+        const studentIdsForSubmission: string[] = [];
+        if (selectedSubmission.profiles?.id) {
+          studentIdsForSubmission.push(selectedSubmission.profiles.id);
+        }
+        selectedSubmission.assignment_groups?.assignment_groups_members?.forEach((member) => {
+          if (member.profiles?.id) {
+            studentIdsForSubmission.push(member.profiles.id);
+          }
+        });
+
+        if (studentIdsForSubmission.length > 0) {
+          availableAssignees = courseUsersData.data.filter((userRole) => {
+            const isConflicted = gradingConflictsData.data.some(
+              (conflict) =>
+                conflict.grader_profile_id === userRole.private_profile_id &&
+                studentIdsForSubmission.includes(conflict.student_profile_id)
+            );
+            return !isConflicted;
+          });
+        }
+      }
+    }
+
+    return availableAssignees.map((userRole) => ({
+      value: userRole.private_profile_id,
+      label: userRole.profiles?.name
+        ? `${userRole.profiles.name}`
+        : `Name Missing (User ID: ${userRole.private_profile_id})`
+    }));
+  }, [courseUsersData, selectedSubmissionId, submissionsData, gradingConflictsData]);
+
   const submissionsOptions = useMemo(() => {
     return (
       submissionsData?.data.map((sub) => {
@@ -373,31 +407,6 @@ export default function AssignReviewModal({
         <DialogBody>
           <form onSubmit={handleSubmit(onSubmitHanlder)} id="review-assignment-form">
             <VStack gap={4} p={4} align="stretch">
-              <Field label="Assignee" invalid={!!errors.assignee_profile_id}>
-                <Controller
-                  name="assignee_profile_id"
-                  control={control}
-                  rules={{ required: "Assignee is required" }}
-                  render={({ field }) => (
-                    <ChakraReactSelect
-                      {...field}
-                      inputId="assignee_profile_id"
-                      options={assigneeOptions}
-                      isLoading={isLoadingCourseUsers}
-                      placeholder="Select Assignee..."
-                      onChange={(option) => field.onChange(option?.value)}
-                      value={assigneeOptions.find((opt) => opt.value === field.value)}
-                      chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
-                    />
-                  )}
-                />
-                {errors.assignee_profile_id && (
-                  <Text color="red.500" fontSize="sm">
-                    {errors.assignee_profile_id.message}
-                  </Text>
-                )}
-              </Field>
-
               <Field label="Submission" invalid={!!errors.submission_id}>
                 <Controller
                   name="submission_id"
@@ -419,6 +428,38 @@ export default function AssignReviewModal({
                 {errors.submission_id && (
                   <Text color="red.500" fontSize="sm">
                     {errors.submission_id.message}
+                  </Text>
+                )}
+              </Field>
+
+              <Field label="Assignee" invalid={!!errors.assignee_profile_id}>
+                <Controller
+                  name="assignee_profile_id"
+                  control={control}
+                  rules={{ required: "Assignee is required" }}
+                  render={({ field }) => (
+                    <ChakraReactSelect
+                      {...field}
+                      inputId="assignee_profile_id"
+                      options={assigneeOptions}
+                      isLoading={
+                        isLoadingCourseUsers ||
+                        isLoadingGradingConflicts ||
+                        (!!selectedSubmissionId && isLoadingSubmissions)
+                      }
+                      placeholder={
+                        selectedSubmissionId ? "Select Assignee..." : "Select Submission first to see Assignees"
+                      }
+                      isDisabled={!selectedSubmissionId || isLoadingCourseUsers || isLoadingGradingConflicts}
+                      onChange={(option) => field.onChange(option?.value)}
+                      value={assigneeOptions.find((opt) => opt.value === field.value)}
+                      chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
+                    />
+                  )}
+                />
+                {errors.assignee_profile_id && (
+                  <Text color="red.500" fontSize="sm">
+                    {errors.assignee_profile_id.message}
                   </Text>
                 )}
               </Field>

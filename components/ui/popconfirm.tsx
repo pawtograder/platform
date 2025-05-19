@@ -21,7 +21,7 @@ export const PopConfirm = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   return (
-    <PopoverRoot closeOnInteractOutside={false} open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
+    <PopoverRoot closeOnInteractOutside={true} open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
       <PopoverTrigger aria-label={triggerLabel} asChild>
         {trigger}
       </PopoverTrigger>

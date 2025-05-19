@@ -22,7 +22,16 @@ import NextLink from "next/link";
 import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef } from "react";
 import { FaScroll } from "react-icons/fa";
-import { FiClipboard, FiCompass, FiMenu, FiMessageSquare, FiSettings, FiStar, FiUsers } from "react-icons/fi";
+import {
+  FiClipboard,
+  FiCompass,
+  FiMenu,
+  FiMessageSquare,
+  FiSettings,
+  FiStar,
+  FiUsers,
+  FiAlertCircle
+} from "react-icons/fi";
 import UserMenu from "../UserMenu";
 
 const LinkItems = (courseID: number) => [
@@ -59,6 +68,7 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/course/`,
     submenu: [
       { name: "Enrollments", icon: FiUsers, target: `/course/${courseID}/manage/course/enrollments` },
+      { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` }
     ]
   }

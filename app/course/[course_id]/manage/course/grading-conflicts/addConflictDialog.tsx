@@ -64,7 +64,7 @@ export default function AddConflictDialog({
       { field: "role", operator: "in", value: ["instructor", "grader"] }
     ],
     meta: {
-      select: "*, profiles!user_roles_public_profile_id_fkey(id, name, sortable_name)"
+      select: "*, profiles!private_profile_id(id, name, sortable_name)"
     }
   });
 
@@ -86,7 +86,7 @@ export default function AddConflictDialog({
       { field: "role", operator: "eq", value: "student" }
     ],
     meta: {
-      select: "*, profiles!user_roles_public_profile_id_fkey(id, name, sortable_name)"
+      select: "*, profiles!private_profile_id(id, name, sortable_name)"
     }
   });
 
@@ -186,11 +186,12 @@ export default function AddConflictDialog({
                         closeModal();
                         reset();
                       }}
+                      colorPalette="red"
                     >
                       Cancel
                     </Button>
                   </Dialog.CloseTrigger>
-                  <Button type="submit" loading={isCreating}>
+                  <Button type="submit" loading={isCreating} colorPalette="green">
                     Save Conflict
                   </Button>
                 </HStack>
