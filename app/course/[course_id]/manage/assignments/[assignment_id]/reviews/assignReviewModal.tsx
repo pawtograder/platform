@@ -135,6 +135,7 @@ export default function AssignReviewModal({
     resource: "user_roles",
     filters: [
       { field: "class_id", operator: "eq", value: courseId },
+      // Add student when self-reviews are implemented
       { field: "role", operator: "in", value: ["grader", "instructor"] }
     ],
     meta: { select: "private_profile_id, profiles!user_roles_private_profile_id_fkey!inner(id, name)" },
