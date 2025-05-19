@@ -267,7 +267,7 @@ function TestResults() {
   const totalMaxScore = testResults?.reduce((acc, test) => acc + (test.max_score || 0), 0);
   return (
     <Box>
-      <Heading size="md">
+      <Heading size="md" mt={2}>
         Automated Check Results ({totalScore}/{totalMaxScore})
       </Heading>
       {testResults?.map((test) => {
@@ -282,7 +282,7 @@ function TestResults() {
         }
         const showScore = extraData?.hide_score !== "true";
         return (
-          <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={1} w="100%">
+          <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
             <Link href={linkToSubPage(pathname, "results") + `#test-${test.id}`}>
               <Heading size="sm">
@@ -655,7 +655,7 @@ function RubricView() {
       height="100vh"
       overflowY="auto"
     >
-      <VStack align="start">
+      <VStack align="start" gap={2}>
         {isLoadingReviewAssignment && reviewAssignmentId && <Skeleton height="100px" />}
         {reviewAssignmentError && reviewAssignmentId && (
           <Text color="red.500">Error loading review details: {reviewAssignmentError.message}</Text>

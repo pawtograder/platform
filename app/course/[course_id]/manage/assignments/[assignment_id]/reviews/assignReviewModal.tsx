@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { HttpError, useCreate, useList, useUpdate } from "@refinedev/core";
+import { HttpError, useCreate, useList, useUpdate, useOne } from "@refinedev/core";
 import { useForm, Controller } from "react-hook-form";
 import { format } from "date-fns";
 import { VStack, Text, Input } from "@chakra-ui/react";
@@ -124,6 +124,13 @@ export default function AssignReviewModal({
   const selectedRubricId = watch("rubric_id");
   const selectedSubmissionId = watch("submission_id");
 
+  const { data: assignmentData, isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
+    resource: "assignments",
+    id: assignmentId,
+    queryOptions: { enabled: isOpen && !!assignmentId },
+    meta: { select: "id, grading_rubric_id" }
+  });
+
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
     resource: "user_roles",
     filters: [
@@ -206,12 +213,29 @@ export default function AssignReviewModal({
     );
   }, [submissionsData]);
 
+  const gradingRubricIdFromAssignment = assignmentData?.data?.grading_rubric_id;
+
+  const rubricsFilters = useMemo(() => {
+    if (isLoadingAssignment) {
+      return undefined; // Query will be disabled
+    }
+    if (gradingRubricIdFromAssignment) {
+      return [{ field: "id", operator: "eq" as const, value: gradingRubricIdFromAssignment }];
+    }
+    // No specific rubric for assignment, or assignment has no grading_rubric_id.
+    // Show no rubrics by using a filter that won't match.
+    return [{ field: "id", operator: "eq" as const, value: -1 }]; // Assuming rubric IDs are positive
+  }, [isLoadingAssignment, gradingRubricIdFromAssignment]);
+
   const { data: rubricsData, isLoading: isLoadingRubrics } = useList<RubricRow>({
     resource: "rubrics",
-    filters: [{ field: "class_id", operator: "eq", value: courseId }],
+    filters: rubricsFilters,
     meta: { select: "id, name, review_round" },
-    queryOptions: { enabled: isOpen }
+    queryOptions: {
+      enabled: isOpen && !isLoadingAssignment && rubricsFilters !== undefined
+    }
   });
+
   const rubricOptions = useMemo(
     () =>
       rubricsData?.data.map((rubric) => ({
@@ -236,6 +260,9 @@ export default function AssignReviewModal({
 
   const onSubmitHanlder = async (data: ReviewAssignmentFormData) => {
     const { rubric_part_ids, ...restOfData } = data;
+    let reviewAssignmentId: number | undefined = undefined;
+    let mainOperationSuccessful = false;
+    let rubricPartsOperationSuccessful = true; // Assume success unless proven otherwise
 
     const valuesToSubmit = {
       ...restOfData,
@@ -250,8 +277,6 @@ export default function AssignReviewModal({
     };
 
     try {
-      let reviewAssignmentId: number;
-
       if (isEditing && initialData?.id) {
         reviewAssignmentId = initialData.id;
         await updateReviewAssignment({
@@ -267,6 +292,7 @@ export default function AssignReviewModal({
             type: "error"
           }
         });
+        mainOperationSuccessful = true; // If it doesn't throw, it's successful
       } else {
         const createdReviewAssignment = await createReviewAssignment({
           resource: "review_assignments",
@@ -282,85 +308,104 @@ export default function AssignReviewModal({
         });
         if (!createdReviewAssignment.data?.id) {
           toaster.error({ title: "Error", description: "Failed to get ID of the created review assignment." });
-          return;
+          // No further operations can proceed without reviewAssignmentId
+          rubricPartsOperationSuccessful = false;
+          // mainOperationSuccessful remains false
+        } else {
+          reviewAssignmentId = createdReviewAssignment.data.id;
+          mainOperationSuccessful = true; // If it doesn't throw and ID is present
         }
-        reviewAssignmentId = createdReviewAssignment.data.id;
       }
 
-      // ---- Handle rubric_part_ids ----
-      const newSelectedRubricPartIds = rubric_part_ids || [];
+      // Proceed with rubric parts only if main operation was potentially successful and ID is available
+      if (mainOperationSuccessful && reviewAssignmentId !== undefined) {
+        const newSelectedRubricPartIds = rubric_part_ids || [];
 
-      if (supabaseClient) {
-        // 1. Delete existing review_assignment_rubric_parts for this review_assignment_id
-        const { error: deleteError } = await supabaseClient
-          .from("review_assignment_rubric_parts")
-          .delete()
-          .eq("review_assignment_id", reviewAssignmentId);
+        if (supabaseClient) {
+          // 1. Delete existing review_assignment_rubric_parts
+          const { error: deleteError } = await supabaseClient
+            .from("review_assignment_rubric_parts")
+            .delete()
+            .eq("review_assignment_id", reviewAssignmentId);
 
-        if (deleteError) {
-          toaster.error({
-            title: "Error updating rubric parts",
-            description: `Could not remove old associations: ${deleteError.message}`
-          });
-          // Optionally, decide if the entire operation should fail here
-        } else {
-          // 2. Insert the new ones if delete was successful (or no error)
-          if (newSelectedRubricPartIds.length > 0) {
-            const partsToCreate = newSelectedRubricPartIds.map((partId) => ({
-              review_assignment_id: reviewAssignmentId,
-              rubric_part_id: partId,
-              class_id: courseId // class_id is required for review_assignment_rubric_parts
-            }));
+          if (deleteError) {
+            toaster.error({
+              title: "Error updating rubric parts",
+              description: `Could not remove old associations: ${deleteError.message}`
+            });
+            rubricPartsOperationSuccessful = false;
+          } else {
+            // 2. Insert the new ones if delete was successful
+            if (newSelectedRubricPartIds.length > 0) {
+              const partsToCreate = newSelectedRubricPartIds.map((partId) => ({
+                review_assignment_id: reviewAssignmentId!,
+                rubric_part_id: partId,
+                class_id: courseId
+              }));
 
-            let creationErrors = false;
-            for (const partToCreate of partsToCreate) {
-              try {
-                await createReviewAssignmentRubricPart({
-                  resource: "review_assignment_rubric_parts",
-                  values: partToCreate
-                });
-              } catch (partCreateError) {
+              let creationErrorsInLoop = false;
+              for (const partToCreate of partsToCreate) {
+                try {
+                  await createReviewAssignmentRubricPart({
+                    resource: "review_assignment_rubric_parts",
+                    values: partToCreate,
+                    successNotification: false,
+                    errorNotification: (error) => {
+                      creationErrorsInLoop = true;
+                      return {
+                        message: `Failed to associate rubric part (ID: ${partToCreate.rubric_part_id}): ${error?.message || "Unknown error"}`,
+                        type: "error"
+                      };
+                    }
+                  });
+                } catch (partCreateError) {
+                  creationErrorsInLoop = true;
+                  toaster.error({
+                    title: `Error associating rubric part (ID: ${partToCreate.rubric_part_id})`,
+                    description: `${partCreateError instanceof Error ? partCreateError.message : String(partCreateError)}`
+                  });
+                }
+              }
+              if (creationErrorsInLoop) {
+                rubricPartsOperationSuccessful = false;
+                // A general toast for loop errors, specific ones are handled by errorNotification or catch
                 toaster.error({
-                  title: "Error saving rubric parts",
-                  description: `Some rubric part associations could not be saved: ${partCreateError}`
+                  id: "batch-rubric-part-error",
+                  title: "Error saving some rubric parts",
+                  description:
+                    "Not all rubric part associations could be saved. Please check notifications for details."
                 });
-                creationErrors = true;
               }
             }
-            if (creationErrors) {
-              toaster.error({
-                title: "Error saving rubric parts",
-                description: "Some rubric part associations could not be saved."
-              });
-            }
           }
+        } else {
+          toaster.create({
+            title: "Configuration Warning",
+            description:
+              "Could not manage specific rubric parts due to a setup issue. Skipping delete/create of parts.",
+            type: "warning"
+          });
+          rubricPartsOperationSuccessful = false; // Cannot manage parts without client
         }
-      } else {
-        toaster.create({
-          title: "Configuration Warning",
-          description:
-            "Could not manage specific rubric parts due to a setup issue. Skipping delete/create of parts. Please contact support.",
-          type: "warning"
-        });
+      } else if (reviewAssignmentId === undefined && mainOperationSuccessful) {
+        // This case should ideally be caught by the !createdReviewAssignment.data?.id check earlier
+        // but as a fallback, if mainOp was flagged successful but ID is missing.
+        rubricPartsOperationSuccessful = false;
       }
-
-      onSuccess();
-      onClose();
     } catch (error) {
-      // Errors from createReviewAssignment/updateReviewAssignment are handled by their respective notifications.
-      // This catch is for other unexpected errors during the process.
+      // This primarily catches errors from createReviewAssignment/updateReviewAssignment
+      // if they throw an error not handled by their own errorNotification.
+      // mainOperationSuccessful will remain false or be set to false.
+      mainOperationSuccessful = false;
       toaster.error({
         title: "Error in review assignment submission process",
-        description: error instanceof Error ? error.message : "An unknown error occurred during the process."
+        description: error instanceof Error ? error.message : "An unknown error occurred during the main operation."
       });
-      // Check if the error is likely an HttpError by looking for its characteristic properties
-      const isHttpError = typeof error === "object" && error !== null && "statusCode" in error && "message" in error;
-      if (!isHttpError) {
-        toaster.error({
-          title: "Error in submission",
-          description: error instanceof Error ? error.message : "An unknown error occurred during the process."
-        });
+    } finally {
+      if (mainOperationSuccessful && rubricPartsOperationSuccessful) {
+        onSuccess();
       }
+      onClose(); // Always close the modal
     }
   };
 
@@ -474,8 +519,14 @@ export default function AssignReviewModal({
                       {...field}
                       inputId="rubric_id"
                       options={rubricOptions}
-                      isLoading={isLoadingRubrics}
-                      placeholder="Select Rubric..."
+                      isLoading={isLoadingAssignment || isLoadingRubrics}
+                      placeholder={
+                        isLoadingAssignment
+                          ? "Loading assignment info..."
+                          : rubricOptions.length === 0
+                            ? "No rubric specified for this assignment"
+                            : "Select Rubric..."
+                      }
                       onChange={(option) => field.onChange(option?.value)}
                       value={rubricOptions.find((opt) => opt.value === field.value)}
                       chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
