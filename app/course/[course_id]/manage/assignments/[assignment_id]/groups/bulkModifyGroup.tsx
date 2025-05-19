@@ -1,14 +1,14 @@
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Button, Dialog, Field, Flex, Portal, Text } from "@chakra-ui/react";
+import { Button, Dialog, Field, Flex, Portal } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useInvalidate } from "@refinedev/core";
 import { RolesWithProfilesAndGroupMemberships } from "./page";
 import { useParams } from "next/navigation";
+import { updateGroupForStudent } from "./updateGroupForStudent";
 import { assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
 import { toaster } from "@/components/ui/toaster";
-import { updateGroupForStudent } from "./updateGroupForStudent";
 
 export default function BulkModifyGroup({
   groups,
@@ -35,8 +35,33 @@ export default function BulkModifyGroup({
     if (!groupToMod) {
       return;
     }
-    selectedMembers.forEach(async (member) => {
-      await updateGroupForStudent(groupToMod, member.value);
+    selectedMembers.forEach(async (member) => {    
+      try {
+        await assignmentGroupInstructorMoveStudent(
+          {
+            new_assignment_group_id: groupToMod?.id || null,
+            old_assignment_group_id:
+              member.value.profiles.assignment_groups_members.length > 0
+                ? member.value.profiles.assignment_groups_members[0].assignment_group_id
+                : null,
+            profile_id: member.value.private_profile_id,
+            class_id: Number(course_id)
+          },
+          supabase
+        );
+        toaster.create({ title: "Student moved", description: "", type: "success" });
+      } catch (e) {
+        console.error(e);
+        toaster.create({
+          title: "Error moving student",
+          description: e instanceof Error ? e.message : "Unknown error",
+          type: "error"
+        });
+      }
+      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+      invalidate({ resource: "user_roles", invalidates: ["all", "list"] });
+      invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
+      invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
     });
   };
 

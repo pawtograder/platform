@@ -1,10 +1,7 @@
 "use client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Box, Field, Flex, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
+import { Box, Flex, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { MultiValue, Select } from "chakra-react-select";
-import { toaster } from "@/components/ui/toaster";
-import { assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Heading, Skeleton, Text } from "@chakra-ui/react";
@@ -45,6 +42,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     pagination: { pageSize: 1000 },
     liveMode: "auto"
   });
+  console.log(profiles);
   const groupsData = groups?.data;
   const invalidate = useInvalidate();
   const supabase = createClient();
@@ -119,6 +117,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                 ? profile.profiles.assignment_groups_members[0].assignment_group_id
                 : undefined;
             const group = groupsData?.find((group) => group.id === groupID);
+            console.log(groupID);
             let errorMessage;
             let error = false;
             if (assignment.group_config === "groups" && !group) {

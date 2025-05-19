@@ -6,6 +6,8 @@ import { useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useInvalidate } from "@refinedev/core";
 import { useUngroupedStudentProfiles } from "./bulkCreateGroupModal";
+import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
+import { useCourseController } from "@/hooks/useCourseController";
 
 export default function CreateNewGroup({
   groups,
@@ -23,7 +25,59 @@ export default function CreateNewGroup({
       value: string;
     }>
   >([]);
+  const { courseId } = useCourseController();
   const ungroupedProfiles = useUngroupedStudentProfiles(groups);
+
+  /**
+   * Draft using edge functions instead
+   */
+  const createAssignment = async () => {
+    try {
+      const { id } = await assignmentGroupInstructorCreateGroup(
+        {
+          name: newGroupName,
+          course_id: courseId,
+          assignment_id: assignment.id
+        },
+        supabase
+      );
+      selectedMembers.map(async (member) => {
+        try {
+          await assignmentGroupInstructorMoveStudent(
+            {
+              new_assignment_group_id: id || null,
+              old_assignment_group_id: null,
+              profile_id: member.value,
+              class_id: Number(courseId)
+            },
+            supabase
+          );
+          toaster.create({ title: "Student moved", description: "", type: "success" });
+        } catch (e) {
+          console.error(e);
+          toaster.create({
+            title: "Error moving student",
+            description: e instanceof Error ? e.message : "Unknown error",
+            type: "error"
+          });
+        }
+      });
+      toaster.create({ title: "New group created", description: "", type: "success" });
+      setNewGroupName("");
+      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+      invalidate({ resource: "user_roles", invalidates: ["list"] });
+            invalidate({ resource: "profiles", invalidates: ["all", "list"] });
+      invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
+      invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
+    } catch (e) {
+      console.error(e);
+      toaster.create({
+        title: "Error creating group",
+        description: e instanceof Error ? e.message : "Unknown error",
+        type: "error"
+      });
+    }
+  };
 
   const createGroupWithAssignees = async () => {
     const { data: createdGroup } = await supabase
@@ -41,7 +95,7 @@ export default function CreateNewGroup({
     toaster.create({ title: "Group created", description: "", type: "success" });
     setNewGroupName("");
     invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-    invalidate({ resource: "user_roles", invalidates: ["all", "list"] });
+    invalidate({ resource: "user_roles", invalidates: ["list"] });
     invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
     invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
   };

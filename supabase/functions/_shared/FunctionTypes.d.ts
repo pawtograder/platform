@@ -182,6 +182,13 @@ export type CheckRunStatus = {
   submission_id?: number;
   requested_at?: string;
 };
+
+export type AssignmentGroupInstructorCreateRequest = {
+  name: string;
+  course_id: number;
+  assignment_id: number;
+};
+
 export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_check_runs"]["Row"], "status"> & {
   status: CheckRunStatus;
 };

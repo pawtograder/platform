@@ -19,6 +19,8 @@ import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useInvalidate } from "@refinedev/core";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
+import { useCourseController } from "@/hooks/useCourseController";
 
 type SampleGroup = {
   name: string;
@@ -48,7 +50,7 @@ export default function BulkCreateGroup({
 }) {
   const supabase = createClient();
   const invalidate = useInvalidate();
-
+  const { courseId } = useCourseController();
   const [groupTextField, setGroupTextField] = useState<string>("");
   const [groupSize, setGroupSize] = useState<number>(0);
   const ungroupedProfiles = useUngroupedStudentProfiles(groups);
@@ -72,6 +74,52 @@ export default function BulkCreateGroup({
     invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
     invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
     toaster.create({ title: "Groups created", description: "", type: "success" });
+  };
+
+  /**
+   * put this where create group with assignees is
+   * @param group
+   */
+  const createAssignment = async (group: SampleGroup) => {
+    try {
+      const { id } = await assignmentGroupInstructorCreateGroup(
+        {
+          name: group.name,
+          course_id: courseId,
+          assignment_id: assignment.id
+        },
+        supabase
+      );
+      group.members.map(async (member) => {
+        try {
+          await assignmentGroupInstructorMoveStudent(
+            {
+              new_assignment_group_id: id || null,
+              old_assignment_group_id: null,
+              profile_id: member.id,
+              class_id: Number(courseId)
+            },
+            supabase
+          );
+          toaster.create({ title: "Student moved", description: "", type: "success" });
+        } catch (e) {
+          console.error(e);
+          toaster.create({
+            title: "Error moving student",
+            description: e instanceof Error ? e.message : "Unknown error",
+            type: "error"
+          });
+        }
+      });
+      toaster.create({ title: "New group created", description: "", type: "success" });
+    } catch (e) {
+      console.error(e);
+      toaster.create({
+        title: "Error creating group",
+        description: e instanceof Error ? e.message : "Unknown error",
+        type: "error"
+      });
+    }
   };
 
   const createGroupWithAssignees = async (group: SampleGroup) => {
