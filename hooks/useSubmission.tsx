@@ -413,7 +413,7 @@ function SubmissionControllerCreator({
     id: submission_id,
     meta: {
       select:
-        "*, assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
+        "*, assignments(*, rubrics!assignments_rubric_id_fkey(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
     }
   });
   const { data: liveFileComments, isLoading: liveFileCommentsLoading } = useList<SubmissionFileComment>({
@@ -895,7 +895,7 @@ export type ReferencedRubricCheckInstance = {
     author_profile?: Partial<Tables<"profiles">> | null;
   };
   submissionReview?: Tables<"submission_reviews">;
-  rubric?: Pick<Tables<"rubrics">, "id" | "name" | "review_round">;
+  rubric?: Pick<Tables<"rubrics">, "id" | "name" | "review_round" | "assignment_id">;
   reviewRound?: Enums<"review_round"> | null;
   authorProfile?: Partial<Tables<"profiles">> | null;
 };
@@ -1036,7 +1036,8 @@ export function useReferencedRubricCheckInstances(
               } as ReferencedRubricCheckInstance["comment"];
 
               let submissionReview: Tables<"submission_reviews"> | undefined = undefined;
-              let rubric: Pick<Tables<"rubrics">, "id" | "name" | "review_round"> | undefined = undefined;
+              let rubric: Pick<Tables<"rubrics">, "id" | "name" | "review_round" | "assignment_id"> | undefined =
+                undefined;
               let reviewRound: Enums<"review_round"> | null = null;
               const authorProfile = comment.author_profile || undefined;
 
@@ -1058,7 +1059,7 @@ export function useReferencedRubricCheckInstances(
                 if (submissionReview && submissionReview.rubric_id) {
                   const { data: rubricData, error: rubricError } = await supabase
                     .from("rubrics")
-                    .select("id, name, review_round")
+                    .select("id, name, review_round, assignment_id")
                     .eq("id", submissionReview.rubric_id)
                     .single();
                   if (rubricError) {

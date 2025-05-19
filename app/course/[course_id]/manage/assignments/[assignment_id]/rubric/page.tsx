@@ -89,6 +89,7 @@ function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): YmlRubricP
 function HydratedRubricToYamlRubric(rubric: HydratedRubric): YmlRubricType {
   return {
     name: rubric.name,
+    assignment_id: rubric.assignment_id,
     description: valOrUndefined(rubric.description),
     parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts),
     is_private: rubric.is_private,
@@ -183,6 +184,7 @@ function YamlRubricToHydratedRubric(yaml: YmlRubricType): HydratedRubric {
     class_id: 0,
     created_at: "",
     name: yaml.name,
+    assignment_id: yaml.assignment_id,
     description: valOrNull(yaml.description),
     rubric_parts: YamlPartsToHydratedParts(yaml.parts),
     is_private: yaml.is_private,
