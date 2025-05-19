@@ -135,6 +135,9 @@
     }
   },
   "properties": {
+    "assignment_id": {
+      "type": "number"
+    },
     "description": {
       "type": "string"
     },
@@ -162,6 +165,6 @@
       ]
     }
   },
-  "required": ["is_private", "name", "parts", "review_round"],
+  "required": ["assignment_id", "is_private", "name", "parts", "review_round"],
   "type": "object"
 }
