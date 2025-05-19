@@ -5,15 +5,17 @@ import { Box, CloseButton, Dialog, Flex, Heading, Skeleton, Table, Text } from "
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import Link from "@/components/ui/link";
+import { useCourse } from "@/hooks/useCourseController";
 import { triggerWorkflow } from "@/lib/edgeFunctions";
+import { RepositoryCheckRun } from "@/supabase/functions/_shared/FunctionTypes";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { FaGitAlt } from "react-icons/fa";
-import { RepositoryCheckRun } from "@/supabase/functions/_shared/FunctionTypes";
 
 function TriggerWorkflowButton({ repository, sha }: { repository: string; sha: string }) {
   const { course_id } = useParams();
@@ -57,6 +59,7 @@ function CommitHistory({
   repository_id: number;
   repository_full_name: string;
 }) {
+  const { time_zone } = useCourse();
   const { data } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: { select: "*, assignments(*), grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)" },
@@ -84,6 +87,10 @@ function CommitHistory({
         <Table.Body>
           {commits?.data.map((commit) => {
             const relatedSubmission = data?.data.find((submission) => submission.sha === commit.sha);
+            const commitDate = new TZDate(
+              commit.status.commit_date || new Date().toUTCString(),
+              time_zone || "America/New_York"
+            );
             return (
               <Table.Row key={commit.sha}>
                 <Table.Cell>
@@ -91,7 +98,7 @@ function CommitHistory({
                     {commit.sha.slice(0, 7)}
                   </Link>
                 </Table.Cell>
-                <Table.Cell>{formatRelative(commit.status.commit_date || new Date(), new Date())}</Table.Cell>
+                <Table.Cell>{formatRelative(commitDate, TZDate.tz(time_zone || "America/New_York"))}</Table.Cell>
                 <Table.Cell>{commit.status.commit_author}</Table.Cell>
                 <Table.Cell>{commit.commit_message}</Table.Cell>
                 <Table.Cell>
