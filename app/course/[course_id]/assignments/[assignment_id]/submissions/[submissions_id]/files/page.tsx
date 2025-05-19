@@ -572,7 +572,7 @@ function ArtifactCheckPopover({
   return (
     <PopoverRoot open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="outline" size="sm" mt={2} mb={2}>
           Annotate Artifact
         </Button>
       </PopoverTrigger>

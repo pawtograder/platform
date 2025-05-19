@@ -890,12 +890,13 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
     });
   }, [allCommentsForFile, lineNumber, isGraderOrInstructor, submission.released]);
 
-  if (!submission || !file || !showCommentsFeature) {
+  if (!submission || !file || !showCommentsFeature || commentsToDisplay.length === 0) {
     return null;
   }
   if (!expanded.includes(lineNumber)) {
     return <></>;
   }
+
   return (
     <Box
       width="100%"
