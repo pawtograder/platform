@@ -20,6 +20,7 @@ import PersonName from "@/components/ui/person-name";
 import { RubricCriteria } from "@/components/ui/rubric-sidebar";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
   useAllRubricCheckInstances,
@@ -32,6 +33,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
@@ -141,6 +143,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
       invalidate({ resource: "submissions", invalidates: ["list"] });
     }
   });
+  const { time_zone } = useCourse();
   const supabase = createClient();
   const isGraderInterface = pathname.includes("/grade");
   if (isLoading || !submission.assignments) {
@@ -206,7 +209,15 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
-                        <Link href={link}>{formatRelative(historical_submission.created_at, new Date())}</Link>
+                        <Link href={link}>
+                          {formatRelative(
+                            new TZDate(
+                              historical_submission.created_at || new Date().toUTCString(),
+                              time_zone || "America/New_York"
+                            ),
+                            TZDate.tz(time_zone || "America/New_York")
+                          )}
+                        </Link>
                       </Table.Cell>
                       <Table.Cell>
                         <Link href={link}>
