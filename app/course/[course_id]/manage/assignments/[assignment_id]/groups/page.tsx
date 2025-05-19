@@ -1,6 +1,6 @@
 "use client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Link, NativeSelect, Spinner, Table } from "@chakra-ui/react";
+import { Box, Flex, Link, NativeSelect, SegmentGroup, Spinner, Switch, Table } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -44,12 +44,9 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   });
   console.log(profiles);
   const groupsData = groups?.data;
-  const invalidate = useInvalidate();
-  const supabase = createClient();
-
   const [loading, setLoading] = useState<boolean>(false);
-  const updateGroup = useCallback(updateGroupForStudent, [supabase, invalidate, course_id]);
 
+  const [groupViewOn, setGroupViewOn] = useState<boolean>(false);
   if (!groupsData || !assignment) {
     return (
       <Box>
@@ -102,76 +99,188 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         />
       </Flex>
 
-      <Table.Root maxW="4xl" striped>
-        <Table.Header>
-          <Table.Row>
-            <Table.ColumnHeader>Student</Table.ColumnHeader>
-            <Table.ColumnHeader>Group</Table.ColumnHeader>
-            <Table.ColumnHeader>Error</Table.ColumnHeader>
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {profiles?.data?.map((profile) => {
-            const groupID =
-              profile.profiles.assignment_groups_members.length > 0
-                ? profile.profiles.assignment_groups_members[0].assignment_group_id
-                : undefined;
-            const group = groupsData?.find((group) => group.id === groupID);
-            console.log(groupID);
-            let errorMessage;
-            let error = false;
-            if (assignment.group_config === "groups" && !group) {
-              errorMessage = "Student is not in a group";
-              error = true;
-            } else if (
-              group &&
-              assignment.min_group_size !== null &&
-              group.assignment_groups_members.length < assignment.min_group_size
-            ) {
-              errorMessage = `Group is too small (min: ${assignment.min_group_size}, current: ${group.assignment_groups_members.length})`;
-              error = true;
-            } else if (
-              group &&
-              assignment.max_group_size !== null &&
-              group.assignment_groups_members.length > assignment.max_group_size
-            ) {
-              errorMessage = `Group is too large (max: ${assignment.max_group_size}, current: ${group.assignment_groups_members.length})`;
-              error = true;
-            }
-            return (
-              <Table.Row key={profile.id}>
-                <Table.Cell>{profile.profiles.name}</Table.Cell>
-                <Table.Cell>
-                  <NativeSelect.Root disabled={loading}>
-                    <NativeSelect.Field
-                      value={group?.id}
-                      onChange={(e) => {
-                        const groupID = e.target.value;
-                        console.log(groupID);
-                        const group = groupsData?.find((group) => group.id === Number(groupID));
-                        updateGroup(group, profile);
-                      }}
-                    >
-                      <option value={undefined}>(No group)</option>
-                      {groupsData?.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.name}
-                        </option>
-                      ))}
-                    </NativeSelect.Field>
-                  </NativeSelect.Root>
-                </Table.Cell>
-                <Table.Cell>
-                  {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
-                </Table.Cell>
-              </Table.Row>
-            );
-          })}
-        </Table.Body>
-      </Table.Root>
+      <Switch.Root float="right" size="md" checked={groupViewOn} onCheckedChange={(e) => setGroupViewOn(e.checked)}>
+        <Switch.HiddenInput />
+        <Switch.Control>
+          <Switch.Thumb />
+        </Switch.Control>
+        <Switch.Label>View by group</Switch.Label>
+      </Switch.Root>
+
+      {groupViewOn ? (
+        <TableByGroups
+          assignment={assignment}
+          course_id={course_id}
+          profiles={profiles?.data}
+          groupsData={groupsData}
+        />
+      ) : (
+        <TableByStudents
+          assignment={assignment}
+          course_id={course_id}
+          groupsData={groupsData}
+          profiles={profiles?.data}
+          loading={loading}
+        />
+      )}
     </Box>
   );
 }
+
+function TableByGroups({
+  assignment,
+  course_id,
+  profiles,
+  groupsData
+}: {
+  assignment: Assignment;
+  course_id: number;
+  profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
+  groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+}) {
+  console.log(profiles);
+  console.log(groupsData);
+  return (
+    <Table.Root maxW="4xl" striped>
+      <Table.Header>
+        <Table.Row>
+          <Table.ColumnHeader>Group</Table.ColumnHeader>
+          <Table.ColumnHeader>Members</Table.ColumnHeader>
+          <Table.ColumnHeader>Error</Table.ColumnHeader>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body>
+        {groupsData.map((group) => {
+          const groupID = group.id;
+          console.log(groupID);
+          let errorMessage;
+          let error = false;
+          if (assignment.group_config === "groups" && !group) {
+            errorMessage = "Student is not in a group";
+            error = true;
+          } else if (
+            group &&
+            assignment.min_group_size !== null &&
+            group.assignment_groups_members.length < assignment.min_group_size
+          ) {
+            errorMessage = `Group is too small (min: ${assignment.min_group_size}, current: ${group.assignment_groups_members.length})`;
+            error = true;
+          } else if (
+            group &&
+            assignment.max_group_size !== null &&
+            group.assignment_groups_members.length > assignment.max_group_size
+          ) {
+            errorMessage = `Group is too large (max: ${assignment.max_group_size}, current: ${group.assignment_groups_members.length})`;
+            error = true;
+          }
+
+          return (
+            <Table.Row key={group.id}>
+              <Table.Cell>{group.name}</Table.Cell>
+              <Table.Cell>
+                {group.assignment_groups_members.map((member, key) => {
+                  return (
+                    profiles?.find((prof) => {
+                      return prof.private_profile_id == member.profile_id;
+                    })?.profiles.name + (key < group.assignment_groups_members.length - 1 ? ", " : "")
+                  );
+                })}
+              </Table.Cell>
+              <Table.Cell>{error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}</Table.Cell>
+            </Table.Row>
+          );
+        })}
+      </Table.Body>
+    </Table.Root>
+  );
+}
+
+function TableByStudents({
+  assignment,
+  course_id,
+  groupsData,
+  profiles,
+  loading
+}: {
+  assignment: Assignment;
+  course_id: number;
+  groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
+  profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
+  loading: boolean;
+}) {
+  const invalidate = useInvalidate();
+  const supabase = createClient();
+  const updateGroup = useCallback(updateGroupForStudent, [supabase, invalidate, course_id]);
+
+  return (
+    <Table.Root maxW="4xl" striped>
+      <Table.Header>
+        <Table.Row>
+          <Table.ColumnHeader>Student</Table.ColumnHeader>
+          <Table.ColumnHeader>Group</Table.ColumnHeader>
+          <Table.ColumnHeader>Error</Table.ColumnHeader>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body>
+        {profiles?.map((profile) => {
+          const groupID =
+            profile.profiles.assignment_groups_members.length > 0
+              ? profile.profiles.assignment_groups_members[0].assignment_group_id
+              : undefined;
+          const group = groupsData?.find((group) => group.id === groupID);
+          console.log(groupID);
+          let errorMessage;
+          let error = false;
+          if (assignment.group_config === "groups" && !group) {
+            errorMessage = "Student is not in a group";
+            error = true;
+          } else if (
+            group &&
+            assignment.min_group_size !== null &&
+            group.assignment_groups_members.length < assignment.min_group_size
+          ) {
+            errorMessage = `Group is too small (min: ${assignment.min_group_size}, current: ${group.assignment_groups_members.length})`;
+            error = true;
+          } else if (
+            group &&
+            assignment.max_group_size !== null &&
+            group.assignment_groups_members.length > assignment.max_group_size
+          ) {
+            errorMessage = `Group is too large (max: ${assignment.max_group_size}, current: ${group.assignment_groups_members.length})`;
+            error = true;
+          }
+          return (
+            <Table.Row key={profile.id}>
+              <Table.Cell>{profile.profiles.name}</Table.Cell>
+              <Table.Cell>
+                <NativeSelect.Root disabled={loading}>
+                  <NativeSelect.Field
+                    value={group?.id}
+                    onChange={(e) => {
+                      const groupID = e.target.value;
+                      console.log(groupID);
+                      const group = groupsData?.find((group) => group.id === Number(groupID));
+                      updateGroup(group, profile);
+                    }}
+                  >
+                    <option value={undefined}>(No group)</option>
+                    {groupsData?.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name}
+                      </option>
+                    ))}
+                  </NativeSelect.Field>
+                </NativeSelect.Root>
+              </Table.Cell>
+              <Table.Cell>{error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}</Table.Cell>
+            </Table.Row>
+          );
+        })}
+      </Table.Body>
+    </Table.Root>
+  );
+}
+
 export default function AssignmentGroupsPage() {
   const { course_id, assignment_id } = useParams();
   const assignmentQuery = useShow<Assignment>({ resource: "assignments", id: Number(assignment_id) });

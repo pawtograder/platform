@@ -66,7 +66,7 @@ export default function CreateNewGroup({
       setNewGroupName("");
       invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
       invalidate({ resource: "user_roles", invalidates: ["list"] });
-            invalidate({ resource: "profiles", invalidates: ["all", "list"] });
+      invalidate({ resource: "profiles", invalidates: ["all", "list"] });
       invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
       invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
     } catch (e) {

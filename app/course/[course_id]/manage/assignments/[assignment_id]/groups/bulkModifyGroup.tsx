@@ -35,7 +35,7 @@ export default function BulkModifyGroup({
     if (!groupToMod) {
       return;
     }
-    selectedMembers.forEach(async (member) => {    
+    selectedMembers.forEach(async (member) => {
       try {
         await assignmentGroupInstructorMoveStudent(
           {
