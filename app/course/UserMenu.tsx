@@ -1,21 +1,38 @@
 "use client";
 
-import { SkeletonCircle } from "@/components/ui/skeleton";
-import { Button, CloseButton, Drawer, HStack, Icon, IconButton, Menu, Portal, Text, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  CloseButton,
+  Dialog,
+  Drawer,
+  Flex,
+  HStack,
+  Icon,
+  IconButton,
+  Menu,
+  Portal,
+  Text,
+  VStack
+} from "@chakra-ui/react";
+import { FaCircleUser } from "react-icons/fa6";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
 
-import { Avatar } from "@/components/ui/avatar";
+import { useInvalidate, useList, useOne } from "@refinedev/core";
+
 import { ColorModeButton } from "@/components/ui/color-mode";
+import Link from "@/components/ui/link";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import useAuthState from "@/hooks/useAuthState";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import useAuthState, { useCourse } from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { Avatar } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
-import Link from "@/components/ui/link";
 import { HiOutlineSupport } from "react-icons/hi";
 
 function SupportMenu() {
@@ -66,52 +83,357 @@ function SupportMenu() {
     </Menu.Root>
   );
 }
+
+const DropBoxAvatar = ({
+  avatarLink,
+  setAvatarLink,
+  avatarType,
+  profile
+}: {
+  avatarLink: string | null | undefined;
+  setAvatarLink: Dispatch<SetStateAction<string | null>>;
+  avatarType: string;
+  profile: UserProfile | null;
+}) => {
+  const [isHovered, setIsHovered] = useState<boolean>(false);
+  const supabase = createClient();
+  const { course_id } = useParams();
+  const { user } = useAuthState();
+
+  /**
+   * Uploads user image to avatar storage bucket under avatars/[userid]/[courseid]/uuid.extension
+   * @param file jpg or png image file for new avatar
+   */
+  const completeAvatarUpload = useCallback(
+    async (file: File) => {
+      if (!profile || !user) {
+        return;
+      }
+      const uuid = crypto.randomUUID();
+      const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
+      const fileExtension = fileName.split(".").pop();
+      const { data, error } = await supabase.storage
+        .from("avatars")
+        .upload(`${user?.id}/${course_id}/${uuid}.${fileExtension}`, file);
+
+      if (!data || error) {
+        toaster.error({
+          title: "Error uploading avatar image",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
+      } else {
+        setAvatarLink(
+          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
+        );
+      }
+    },
+    [course_id, profile, setAvatarLink, supabase.storage, user]
+  );
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) {
+        return;
+      }
+      const file = files[0];
+      if (file.type === "image/jpeg" || file.type === "image/png") {
+        completeAvatarUpload(file);
+      } else {
+        alert("Please upload a valid JPEG or PNG image file.");
+      }
+      // Reset the input value so the same file can be selected again if needed
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    },
+    [completeAvatarUpload]
+  );
+
+  return (
+    <>
+      <input
+        type="file"
+        ref={fileInputRef}
+        style={{ display: "none" }}
+        accept="image/jpeg,image/png"
+        onChange={handleFileChange}
+      />
+      <Toaster />
+      <Flex alignItems="center" justifyContent={"center"} flexDirection="column" gap="5px">
+        <Box position="relative" width="100px" height="100px">
+          <Menu.Root positioning={{ placement: "bottom" }}>
+            <Text fontWeight={"700"}>{avatarType} Avatar</Text>
+            <Menu.Trigger asChild>
+              <Button background="transparent" height="100%" width="100%" borderRadius={"full"}>
+                <Avatar.Root
+                  colorPalette="gray"
+                  width="100px"
+                  height="100px"
+                  _hover={{
+                    boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.25)",
+                    background: "rgba(0, 0, 0, 0.5)",
+                    opacity: 0.2,
+                    zIndex: 10
+                  }}
+                  onMouseEnter={() => setIsHovered(true)}
+                  onMouseLeave={() => setIsHovered(false)}
+                >
+                  <Avatar.Image src={avatarLink || undefined} />
+                  <Avatar.Fallback name={profile?.name?.charAt(0) ?? "?"} />
+                </Avatar.Root>
+                {isHovered && (
+                  <Flex
+                    position="absolute"
+                    w="100%"
+                    h="100%"
+                    top="0"
+                    alignItems="center"
+                    justifyContent="center"
+                    color="black"
+                    fontWeight={700}
+                    _hover={{
+                      opacity: 1,
+                      zIndex: 20
+                    }}
+                  >
+                    <Text textAlign={"center"}>Edit Avatar</Text>
+                  </Flex>
+                )}
+              </Button>
+            </Menu.Trigger>
+            <Menu.Positioner>
+              <Menu.Content>
+                <Menu.Item
+                  value="new-img"
+                  onClick={() => {
+                    fileInputRef?.current?.click();
+                  }}
+                >
+                  Choose from computer
+                </Menu.Item>
+                <Menu.Item
+                  value="delete"
+                  color="fg.error"
+                  _hover={{ bg: "bg.error", color: "fg.error" }}
+                  onClick={() => setAvatarLink(`https://api.dicebear.com/9.x/identicon/svg?seed=${profile?.name}`)}
+                >
+                  Remove current picture
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Positioner>
+          </Menu.Root>
+        </Box>
+      </Flex>
+    </>
+  );
+};
+
+/**
+ * Modal that handles user profile updates, currently only avatar changes.
+ */
+const ProfileChangesMenu = () => {
+  const [publicAvatarLink, setPublicAvatarLink] = useState<string | null>(null);
+  const [privateAvatarLink, setPrivateAvatarLink] = useState<string | null>(null);
+  const supabase = createClient();
+  const { course_id } = useParams();
+  const { user } = useAuthState();
+  const invalidate = useInvalidate();
+  const { private_profile_id, public_profile_id } = useCourse();
+
+  const { data: privateProfile } = useOne<UserProfile>({
+    resource: "profiles",
+    id: private_profile_id
+  });
+
+  const { data: publicProfile } = useOne<UserProfile>({
+    resource: "profiles",
+    id: public_profile_id
+  });
+
+  useEffect(() => {
+    if (publicProfile) {
+      setPublicAvatarLink(publicProfile?.data.avatar_url);
+    }
+    if (privateProfile) {
+      setPrivateAvatarLink(privateProfile?.data.avatar_url);
+    }
+  }, [publicProfile, privateProfile]);
+
+  /**
+   * Updates user profile on "Save" by replacing avatar_url in database with new file.  Removes extra files in user's avatar
+   * storage bucket.
+   */
+  const updateProfile = async () => {
+    removeUnusedImages(privateAvatarLink ?? null, publicAvatarLink ?? null);
+    if (publicAvatarLink && publicProfile) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ avatar_url: publicAvatarLink })
+        .eq("id", publicProfile.data.id)
+        .single();
+      if (error) {
+        toaster.error({
+          title: "Error updating user public profile",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
+      }
+    }
+    if (privateAvatarLink && privateProfile) {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ avatar_url: privateAvatarLink })
+        .eq("id", privateProfile.data.id)
+        .single();
+      if (error) {
+        toaster.error({
+          title: "Error updating user private profile",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
+        });
+      }
+    }
+    invalidate({
+      resource: "profiles",
+      invalidates: ["list", "detail"],
+      id: publicProfile?.data.id
+    });
+    invalidate({
+      resource: "profiles",
+      invalidates: ["list", "detail"],
+      id: privateProfile?.data.id
+    });
+  };
+  /**
+   * Removes extra images from storage that may have been populated if the user attempted to open the menu and reselect multiple times.
+   */
+  const removeUnusedImages = async (privateLink: string | null, publicLink: string | null) => {
+    const { data: storedImages, error } = await supabase.storage.from("avatars").list(`${user?.id}/${course_id}`);
+    if (!storedImages || error) {
+      toaster.error({
+        title: "Error finding stored images",
+        description: error instanceof Error ? error.message : "An unknown error occurred"
+      });
+
+      return;
+    }
+    const pathsToRemove = storedImages
+      .filter((image) => !publicLink?.includes(image.name) && !privateLink?.includes(image.name))
+      .map((imageToRemove) => `${user?.id}/${course_id}/${imageToRemove.name}`);
+    if (pathsToRemove.length > 0) {
+      const { error: removeError } = await supabase.storage.from("avatars").remove(pathsToRemove);
+      if (removeError) {
+        toaster.error({
+          title: "Error removing extra files from storage",
+          description: removeError instanceof Error ? removeError.message : "An unknown error occurred"
+        });
+      }
+    }
+  };
+
+  return (
+    <>
+      <Toaster />
+      <Dialog.Root size={"md"} placement={"center"}>
+        <Dialog.Trigger asChild>
+          <Button variant="ghost" colorPalette={"gray"} w="100%" justifyContent="flex-start" size="sm" py={0}>
+            <Icon as={FaCircleUser} size="md" />
+            Edit Avatar
+          </Button>
+        </Dialog.Trigger>
+        <Portal>
+          <Dialog.Backdrop />
+          <Dialog.Positioner>
+            <Dialog.Content>
+              <Dialog.Header>
+                <Dialog.Title>Edit Avatar</Dialog.Title>
+              </Dialog.Header>
+              <Dialog.Body>
+                <Flex flexDirection={"column"} gap="50px">
+                  <Flex alignItems="center" justifyContent={"center"} gap="30px" flexWrap={"wrap"}>
+                    <DropBoxAvatar
+                      avatarLink={publicAvatarLink}
+                      setAvatarLink={setPublicAvatarLink}
+                      avatarType="Public"
+                      profile={publicProfile?.data ?? null}
+                    />
+                    <DropBoxAvatar
+                      avatarLink={privateAvatarLink}
+                      setAvatarLink={setPrivateAvatarLink}
+                      avatarType="Private"
+                      profile={privateProfile?.data ?? null}
+                    />
+                  </Flex>
+                  <Text fontSize="sm" color="fg.muted">
+                    Your public avatar will be used on anonymous posts along with your pseudonym, &quot;
+                    {publicProfile?.data.name}&quot;.
+                  </Text>
+                </Flex>
+              </Dialog.Body>
+              <Dialog.Footer>
+                <Dialog.ActionTrigger asChild>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setPrivateAvatarLink(privateProfile?.data.avatar_url ?? null);
+                      setPublicAvatarLink(publicProfile?.data.avatar_url ?? null);
+                      removeUnusedImages(
+                        privateProfile?.data.avatar_url ?? null,
+                        publicProfile?.data.avatar_url ?? null
+                      );
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </Dialog.ActionTrigger>
+                <Dialog.ActionTrigger asChild>
+                  <Button onClick={updateProfile} colorPalette="green">
+                    Save
+                  </Button>
+                </Dialog.ActionTrigger>
+              </Dialog.Footer>
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Portal>
+      </Dialog.Root>
+    </>
+  );
+};
+
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
   const supabase = createClient();
   const { user } = useAuthState();
-  const { course_id } = useParams();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
-  useEffect(() => {
-    // Fetch profile
-    const fetchProfile = async () => {
-      if (course_id) {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!private_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .eq("class_id", Number(course_id))
-          .single();
-        if (error) {
-          console.error(error);
-        }
-        if (data) {
-          setProfile(data.profiles!);
-          if (data.users) {
-            setGitHubUsername(data.users.github_username);
-          }
-        }
-      } else {
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("profiles!private_profile_id(*), users(*)")
-          .eq("user_id", user!.id)
-          .limit(1)
-          .single();
-        if (error) {
-          console.error(error);
-        }
-        if (data) {
-          setProfile(data.profiles!);
-          if (data.users) {
-            setGitHubUsername(data.users.github_username);
-          }
-        }
+  const { private_profile_id } = useCourse();
+  const { data: privateProfile } = useOne<UserProfile>({
+    resource: "profiles",
+    id: private_profile_id
+  });
+  const uid = user?.id;
+  const { data: dbUser } = useList<{ user_id: string; github_username: string }>({
+    resource: "users",
+    meta: {
+      select: "user_id, github_username"
+    },
+    filters: [
+      {
+        field: "user_id",
+        operator: "eq",
+        value: uid
       }
-    };
-    fetchProfile();
-  }, [course_id, user, supabase]);
+    ],
+    queryOptions: {
+      enabled: uid !== undefined
+    }
+  });
+
+  useEffect(() => {
+    if (dbUser) {
+      setGitHubUsername(dbUser.data[0].github_username);
+    }
+  }, [dbUser]);
 
   const unlinkGitHub = useCallback(async () => {
     const identities = await supabase.auth.getUserIdentities();
@@ -138,7 +460,10 @@ function UserSettingsMenu() {
   return (
     <Drawer.Root open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Drawer.Trigger>
-        {profile && profile.avatar_url ? <Avatar size={"sm"} src={profile.avatar_url} /> : <SkeletonCircle size="8" />}
+        <Avatar.Root size="sm" colorPalette="gray">
+          <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+          <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
+        </Avatar.Root>
       </Drawer.Trigger>
       <Portal>
         <Drawer.Backdrop />
@@ -148,40 +473,65 @@ function UserSettingsMenu() {
               <CloseButton size="sm" position="absolute" right={4} top={4} />
             </Drawer.CloseTrigger>
             <Drawer.Body p={2}>
-              <VStack alignItems="flex-start">
-                <HStack>
-                  <Avatar src={profile?.avatar_url || undefined} size="sm" />
-                  <VStack alignItems="flex-start">
-                    <Text fontWeight="bold">{profile?.name}</Text>
+              <VStack alignItems="flex-start" gap={0}>
+                <HStack pb={2}>
+                  <Avatar.Root size="sm" colorPalette="gray">
+                    <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+                    <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
+                  </Avatar.Root>{" "}
+                  <VStack alignItems="flex-start" gap={0}>
+                    <Text fontWeight="bold">{privateProfile?.data.name}</Text>
+                    {gitHubUsername && (
+                      <Text fontSize="sm">
+                        GitHub:{" "}
+                        <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
+                          {gitHubUsername}
+                        </Link>
+                      </Text>
+                    )}
                   </VStack>
                 </HStack>
-                <HStack>
-                  <Icon as={FaGithub} />
-                  {!gitHubUsername && (
-                    <Button onClick={linkGitHub} colorPalette="teal">
-                      Link GitHub
-                    </Button>
-                  )}
-                  {gitHubUsername && (
-                    <>
-                      <Text fontSize="sm">Linked to {gitHubUsername}</Text>{" "}
-                      <PopConfirm
-                        triggerLabel="Unlink GitHub"
-                        trigger={
-                          <Button variant="ghost" colorPalette="red" size="sm" p={0}>
-                            <Icon as={FaUnlink} />
-                          </Button>
-                        }
-                        confirmHeader="Unlink GitHub"
-                        confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
-                        onConfirm={() => {
-                          unlinkGitHub();
-                        }}
-                        onCancel={() => {}}
-                      ></PopConfirm>
-                    </>
-                  )}
-                </HStack>
+                {!gitHubUsername && (
+                  <Button
+                    onClick={linkGitHub}
+                    colorPalette="gray"
+                    w="100%"
+                    variant="ghost"
+                    size="sm"
+                    justifyContent="flex-start"
+                    py={0}
+                  >
+                    <Icon as={FaGithub} size="md" />
+                    Link GitHub
+                  </Button>
+                )}
+                {gitHubUsername && (
+                  <>
+                    <PopConfirm
+                      triggerLabel="Unlink GitHub"
+                      trigger={
+                        <Button
+                          variant="ghost"
+                          colorPalette="red"
+                          size="sm"
+                          w="100%"
+                          justifyContent="flex-start"
+                          py={0}
+                        >
+                          <Icon as={FaUnlink} size="md" />
+                          Unlink GitHub
+                        </Button>
+                      }
+                      confirmHeader="Unlink GitHub"
+                      confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
+                      onConfirm={() => {
+                        unlinkGitHub();
+                      }}
+                      onCancel={() => {}}
+                    ></PopConfirm>
+                  </>
+                )}
+                <ProfileChangesMenu />
                 <Button
                   variant="ghost"
                   pl={0}

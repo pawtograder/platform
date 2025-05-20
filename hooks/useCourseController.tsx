@@ -1,9 +1,4 @@
 "use client";
-import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
-import {
-  DiscussionThreadReadWithAllDescendants,
-  useDiscussionThreadsController
-} from "./useDiscussionThreadRootController";
 import {
   Assignment,
   AssignmentDueDateException,
@@ -14,13 +9,13 @@ import {
   UserProfile,
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
-import useAuthState from "./useAuthState";
-import { useCallback, createContext, useContext, useEffect, useRef, useState } from "react";
-import { assign } from "nodemailer/lib/shared";
-import { useClassProfiles } from "./useClassProfiles";
-import { Skeleton } from "@/components/ui/skeleton";
-import { addHours } from "date-fns";
 import { TZDate } from "@date-fns/tz";
+import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
+import { addHours } from "date-fns";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import useAuthState from "./useAuthState";
+import { useClassProfiles } from "./useClassProfiles";
+import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
@@ -715,6 +710,16 @@ export function CourseControllerProvider({ course_id, children }: { course_id: n
   );
 }
 
+export function formatWithTimeZone(date: string, timeZone: string) {
+  const dateObj = new Date(date);
+  const timeZoneDate = TZDate.tz(timeZone);
+  const offset = timeZoneDate.getTimezoneOffset();
+  const offsetHours = Math.abs(Math.floor(offset / 60));
+  const offsetMinutes = Math.abs(offset % 60);
+  const offsetStr = `${offset < 0 ? "+" : "-"}${offsetHours.toString().padStart(2, "0")}:${offsetMinutes.toString().padStart(2, "0")}`;
+  return `${dateObj.toLocaleString("en-US", { timeZone })} ${offsetStr}`;
+}
+
 export function useAssignmentDueDate(assignment: Assignment) {
   const controller = useCourseController();
   const course = useCourse();
@@ -738,14 +743,15 @@ export function useAssignmentDueDate(assignment: Assignment) {
     };
   }
   const hoursExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.hours, 0);
-  const originalDueDate = new TZDate(assignment.due_date, time_zone);
+  const originalDueDate = formatWithTimeZone(assignment.due_date, time_zone);
   const dueDate = addHours(originalDueDate, hoursExtended);
   const lateTokensConsumed = dueDateExceptions.reduce((acc, curr) => acc + curr.tokens_consumed, 0);
   return {
     originalDueDate,
     dueDate,
     hoursExtended,
-    lateTokensConsumed
+    lateTokensConsumed,
+    time_zone
   };
 }
 

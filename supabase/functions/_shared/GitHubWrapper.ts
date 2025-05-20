@@ -1,13 +1,15 @@
 import { decode, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
+import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { App, Octokit, RequestError, Endpoints } from "https://esm.sh/octokit?dts";
+import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
+
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
 
+import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
-import { createHash } from "node:crypto";
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GitHubOIDCToken = {
@@ -62,6 +64,8 @@ const installations: {
   id: number;
   octokit: Octokit;
 }[] = [];
+const MyOctokit = Octokit.plugin(throttling);
+
 async function getOctoKit(repoName: string) {
   if (installations.length === 0) {
     const _installations = await app.octokit.request("GET /app/installations");
@@ -69,12 +73,22 @@ async function getOctoKit(repoName: string) {
       installations.push({
         orgName: i.account?.login || "",
         id: i.id,
-        octokit: new Octokit({
+        octokit: new MyOctokit({
           authStrategy: createAppAuth,
           auth: {
             appId: Deno.env.get("GITHUB_APP_ID") || -1,
             privateKey: Deno.env.get("GITHUB_PRIVATE_KEY_STRING") || "",
             installationId: i.id
+          },
+          throttle: {
+            onRateLimit: (_retryAfter, options, _octokit, _retryCount) => {
+              console.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
+              return true;
+            },
+            onSecondaryRateLimit: (_retryAfter, options, _octokit) => {
+              octokit.log.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
+              return true;
+            }
           }
         })
       });
@@ -157,7 +171,11 @@ export async function getRepoTarballURL(repo: string, sha?: string) {
       .from("graders")
       .upload(`${repo}/${resolved_sha}/archive.tgz`, grader.data as ArrayBuffer);
     if (saveGraderError) {
-      throw new Error(`Failed to save grader: ${saveGraderError.message}`);
+      if (saveGraderError.message === "The resource already exists") {
+        //This is fine, just continue
+      } else {
+        throw new Error(`Failed to save grader: ${saveGraderError.message}`);
+      }
     }
     //Return the grader
     const { data: secondAttempt, error: secondError } = await adminSupabase.storage
@@ -324,7 +342,7 @@ export async function getRepos(org: string) {
   return repos;
 }
 
-export async function createRepo(org: string, repoName: string, template_repo: string) {
+export async function createRepo(org: string, repoName: string, template_repo: string): string {
   console.log("Creating repo", org, repoName, template_repo);
   const octokit = await getOctoKit(org);
   if (!octokit) {
@@ -342,6 +360,21 @@ export async function createRepo(org: string, repoName: string, template_repo: s
       name: repoName,
       private: true
     });
+    //Disable squash merging
+    await octokit.request("PATCH /repos/{owner}/{repo}", {
+      owner: org,
+      repo: repoName,
+      allow_squash_merge: false
+    });
+    //Get the head SHA
+    const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+      owner: org,
+      repo: repoName,
+      ref: "heads/main"
+    });
+    console.log(`Created repo ${org}/${repoName} with head SHA ${heads.data.object.sha}`);
+    console.log(`Heads: ${JSON.stringify(heads.data)}`);
+    return heads.data.object.sha;
   } catch (e) {
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
@@ -353,12 +386,6 @@ export async function createRepo(org: string, repoName: string, template_repo: s
       throw e;
     }
   }
-  //Disable squash merging
-  await octokit.request("PATCH /repos/{owner}/{repo}", {
-    owner: org,
-    repo: repoName,
-    allow_squash_merge: false
-  });
 }
 async function listFilesInRepoDirectory(
   octokit: Octokit,

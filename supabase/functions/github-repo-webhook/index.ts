@@ -1,4 +1,5 @@
 import { createEventHandler, WebhookPayload } from "https://esm.sh/@octokit/webhooks?dts";
+import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parse } from "jsr:@std/yaml";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -7,13 +8,20 @@ import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import { createCheckRun, getFileFromRepo, triggerWorkflow, updateCheckRun } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
 
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
+type GitHubCommit = {
+  message: string;
+  id: string;
+  author: {
+    name: string;
+    email: string;
+  };
+};
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
   payload: WebhookPayload,
@@ -29,7 +37,9 @@ async function handlePushToStudentRepo(
   const detailsUrl = `https://${Deno.env.get("APP_URL")}/course/${studentRepo.class_id}/assignments/${studentRepo.assignment_id}`;
 
   for (const commit of payload.commits) {
+    console.log(`Adding check run for ${commit.id}`);
     const checkRunId = await createCheckRun(repoName, commit.id, detailsUrl);
+    console.log(`Check run created: ${checkRunId}`);
     const { error: checkRunError } = await adminSupabase.from("repository_check_runs").insert({
       repository_id: studentRepo.id,
       check_run_id: checkRunId,
@@ -37,6 +47,7 @@ async function handlePushToStudentRepo(
       assignment_group_id: studentRepo.assignment_group_id,
       commit_message: commit.message,
       sha: commit.id,
+      profile_id: studentRepo.profile_id,
       status: {
         created_at: new Date().toISOString(),
         commit_author: commit.author.name,
@@ -61,59 +72,106 @@ async function handlePushToGraderSolution(
   payload: WebhookPayload,
   autograders: Database["public"]["Tables"]["autograder"]["Row"][]
 ) {
+  const ref = payload.ref;
   const repoName = payload.repository.full_name;
-  const isModified = payload.head_commit.modified.includes(PAWTOGRADER_YML_PATH);
-  const isRemoved = payload.head_commit.removed.includes(PAWTOGRADER_YML_PATH);
-  const isAdded = payload.head_commit.added.includes(PAWTOGRADER_YML_PATH);
-  if (isModified || isRemoved || isAdded) {
-    console.log("Pawtograder yml changed");
-    const file = await getFileFromRepo(repoName, PAWTOGRADER_YML_PATH);
-    const parsedYml = parse(file.content) as PawtograderConfig;
-    const totalAutograderPoints = parsedYml.gradedParts.reduce(
-      (acc, part) =>
-        acc +
-        part.gradedUnits.reduce(
-          (unitAcc, unit) =>
-            unitAcc +
-            (isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward : isRegularTestUnit(unit) ? unit.points : 0),
-          0
-        ),
-      0
-    );
-    console.log("Total autograder points", totalAutograderPoints);
-    for (const autograder of autograders) {
-      const { error: updateError } = await adminSupabase
-        .from("assignments")
-        .update({
-          autograder_points: totalAutograderPoints
+  /*
+  If we pushed to main, then update the autograder config and latest_autograder_sha
+  */
+  if (ref === "refs/heads/main") {
+    const isModified = payload.head_commit.modified.includes(PAWTOGRADER_YML_PATH);
+    const isRemoved = payload.head_commit.removed.includes(PAWTOGRADER_YML_PATH);
+    const isAdded = payload.head_commit.added.includes(PAWTOGRADER_YML_PATH);
+    if (isModified || isRemoved || isAdded) {
+      console.log("Pawtograder yml changed");
+      const file = await getFileFromRepo(repoName, PAWTOGRADER_YML_PATH);
+      const parsedYml = parse(file.content) as PawtograderConfig;
+      const totalAutograderPoints = parsedYml.gradedParts.reduce(
+        (acc, part) =>
+          acc +
+          part.gradedUnits.reduce(
+            (unitAcc, unit) =>
+              unitAcc +
+              (isMutationTestUnit(unit)
+                ? unit.breakPoints[0].pointsToAward
+                : isRegularTestUnit(unit)
+                  ? unit.points
+                  : 0),
+            0
+          ),
+        0
+      );
+      console.log("Total autograder points", totalAutograderPoints);
+      for (const autograder of autograders) {
+        const { error: updateError } = await adminSupabase
+          .from("assignments")
+          .update({
+            autograder_points: totalAutograderPoints
+          })
+          .eq("id", autograder.id);
+        if (updateError) {
+          console.error(updateError);
+        }
+      }
+      await Promise.all(
+        autograders.map(async (autograder) => {
+          const { error } = await adminSupabase
+            .from("autograder")
+            .update({
+              config: parsedYml as unknown as Json
+            })
+            .eq("id", autograder.id)
+            .single();
+          if (error) {
+            console.error(error);
+          }
         })
-        .eq("id", autograder.id);
-      if (updateError) {
-        console.error(updateError);
+      );
+      console.log("Updated pawtograder yml");
+    }
+    for (const autograder of autograders) {
+      const { error } = await adminSupabase
+        .from("autograder")
+        .update({
+          latest_autograder_sha: payload.commits[0].id
+        })
+        .eq("id", autograder.id)
+        .single();
+      if (error) {
+        console.error(error);
       }
     }
-    await Promise.all(
-      autograders.map(async (autograder) => {
-        const { error } = await adminSupabase
-          .from("autograder")
-          .update({
-            config: parsedYml as unknown as Json
-          })
-          .eq("id", autograder.id)
-          .single();
-        if (error) {
-          console.error(error);
-        }
-      })
+  }
+  /*
+  Regardless of where we pushed, update the commit list
+  */
+  for (const autograder of autograders) {
+    const { error } = await adminSupabase.from("autograder_commits").insert(
+      payload.commits.map((commit: GitHubCommit) => ({
+        autograder_id: autograder.id,
+        message: commit.message,
+        sha: commit.id,
+        author: commit.author.name,
+        class_id: autograder.class_id,
+        ref
+      }))
     );
-    console.log("Updated pawtograder yml");
+    if (error) {
+      console.error(error);
+      throw new Error("Failed to store autograder commits");
+    }
   }
 }
+
 async function handlePushToTemplateRepo(
   adminSupabase: SupabaseClient<Database>,
   payload: WebhookPayload,
   assignments: Database["public"]["Tables"]["assignments"]["Row"][]
 ) {
+  //Only process on the main branch
+  if (payload.ref !== "refs/heads/main") {
+    console.log(`Skipping non-main push to ${payload.repository.full_name} on ${payload.ref}`);
+    return;
+  }
   //Check for modifications
   const isModified = payload.head_commit.modified.includes(GRADER_WORKFLOW_PATH);
   const isRemoved = payload.head_commit.removed.includes(GRADER_WORKFLOW_PATH);
@@ -144,6 +202,32 @@ async function handlePushToTemplateRepo(
         console.error(error);
         throw new Error("Failed to update autograder workflow hash");
       }
+    }
+  }
+  for (const assignment of assignments) {
+    const { error: assignmentUpdateError } = await adminSupabase
+      .from("assignments")
+      .update({
+        latest_template_sha: payload.commits[0].id
+      })
+      .eq("id", assignment.id);
+    if (assignmentUpdateError) {
+      console.error(assignmentUpdateError);
+      throw new Error("Failed to update assignment");
+    }
+    //Store the commit for the template repo
+    const { error } = await adminSupabase.from("assignment_handout_commits").insert(
+      payload.commits.map((commit: GitHubCommit) => ({
+        assignment_id: assignment.id,
+        message: commit.message,
+        sha: commit.id,
+        author: commit.author.name,
+        class_id: assignment.class_id
+      }))
+    );
+    if (error) {
+      console.error(error);
+      throw new Error("Failed to store assignment handout commit");
     }
   }
 }
@@ -199,8 +283,12 @@ eventHandler.on("push", async ({ id, name, payload }) => {
   }
 });
 eventHandler.on("check_run", async ({ id, name, payload }) => {
-  console.log(`Received check_run event for ${payload.repository.full_name}, action: ${payload.action}`);
-  if (payload.action === "requested_action") {
+  console.log(
+    `Received check_run event for ${payload.repository.full_name}, action: ${payload.action}, check_run_id: ${payload.check_run.id}`
+  );
+  if (payload.action === "created") {
+    console.log(`Check run created: ${payload.check_run.id}, check suite: ${payload.check_run.check_suite.id}`);
+  } else if (payload.action === "requested_action") {
     if (payload.requested_action?.identifier === "submit") {
       const adminSupabase = createClient<Database>(
         Deno.env.get("SUPABASE_URL") || "",
@@ -253,14 +341,89 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
 }
 
 Deno.serve(async (req) => {
-  console.log(
-    `Received webhook for ${req.headers.get("x-github-event")} delivery ${req.headers.get("x-github-delivery")}`
+  if (req.headers.get("Authorization") !== Deno.env.get("EVENTBRIDGE_SECRET")) {
+    return Response.json(
+      {
+        message: "Unauthorized"
+      },
+      {
+        status: 401
+      }
+    );
+  }
+  const body = await req.json();
+  const eventName = body["detail-type"];
+  const id = body.id;
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
-  await eventHandler.receive({
-    id: req.headers.get("x-github-delivery") || "",
-    name: req.headers.get("x-github-event") as "push",
-    payload: await req.json()
-  });
+
+  console.log(`Received webhook for ${eventName} id ${id}`);
+  try {
+    const { error: repoError } = await adminSupabase.from("webhook_process_status").insert({
+      webhook_id: id,
+      completed: false
+    });
+    if (repoError) {
+      if (repoError.code === "23505") {
+        console.log(`Ignoring duplicate webhook id ${id}`);
+        return Response.json(
+          {
+            message: "Duplicate webhook received"
+          },
+          {
+            status: 200
+          }
+        );
+      }
+      console.error(repoError);
+      return Response.json(
+        {
+          message: "Error processing webhook"
+        },
+        {
+          status: 500
+        }
+      );
+    }
+    try {
+      await eventHandler.receive({
+        id: id || "",
+        name: eventName as "push" | "check_run",
+        payload: body.detail
+      });
+      await adminSupabase
+        .from("webhook_process_status")
+        .update({
+          completed: true
+        })
+        .eq("webhook_id", id);
+    } catch (err) {
+      console.log(`Error processing webhook for ${eventName} id ${id}`);
+      console.error(err);
+      return Response.json(
+        {
+          message: "Error processing webhook"
+        },
+        {
+          status: 500
+        }
+      );
+    }
+    console.log(`Completed processing webhook for ${eventName} id ${id}`);
+  } catch (err) {
+    console.log(`Error processing webhook for ${eventName} id ${id}`);
+    console.error(err);
+    return Response.json(
+      {
+        message: "Error processing webhook"
+      },
+      {
+        status: 500
+      }
+    );
+  }
   return Response.json({
     message: "Triggered webhook"
   });

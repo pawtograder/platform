@@ -138,6 +138,9 @@
     "description": {
       "type": "string"
     },
+    "is_private": {
+      "type": "boolean"
+    },
     "name": {
       "type": "string"
     },
@@ -146,8 +149,19 @@
         "$ref": "#/definitions/YmlRubricPartType"
       },
       "type": "array"
+    },
+    "review_round": {
+      "anyOf": [
+        {
+          "enum": ["grading-review", "meta-grading-review", "self-review"],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
-  "required": ["name", "parts"],
+  "required": ["is_private", "name", "parts", "review_round"],
   "type": "object"
 }

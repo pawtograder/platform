@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { TZDate } from "npm:@date-fns/tz";
 import { SecurityError, assertUserIsInCourse, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
@@ -20,8 +21,9 @@ async function handleAssignmentGroupApproveRequest(req: Request): Promise<{ mess
   if (error) {
     throw new Error("Failed to get join request");
   }
+  const timeZone = enrollment.classes.time_zone || "America/New_York";
   const groupFormationDeadline = data.assignment_groups.assignments.group_formation_deadline;
-  if (groupFormationDeadline && new Date(groupFormationDeadline) < new Date()) {
+  if (groupFormationDeadline && new TZDate(groupFormationDeadline, timeZone) < TZDate.tz(timeZone)) {
     //TODO timezones
     throw new SecurityError("Group formation deadline has passed");
   }

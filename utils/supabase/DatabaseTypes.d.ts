@@ -1,10 +1,14 @@
-import { Database } from "./SupabaseTypes";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { Database } from "./SupabaseTypes";
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
 export type ActiveSubmissionsWithGradesForAssignment =
   Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
+    id: number;
+  };
+export type ActiveSubmissionsWithRegressionTestResults =
+  Database["public"]["Views"]["submissions_with_grades_for_assignment_and_regression_test"]["Row"] & {
     id: number;
   };
 export type AuditEvent = Database["public"]["Tables"]["audit"]["Row"];
@@ -331,6 +335,14 @@ export type Autograder = GetResult<
   Database["public"]["Tables"]["autograder"]["Row"],
   "autograder",
   Database["public"]["Tables"]["autograder"]["Relationships"],
+  "*"
+>;
+
+export type AutograderCommit = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["autograder_commits"]["Row"],
+  "autograder_commits",
+  Database["public"]["Tables"]["autograder_commits"]["Relationships"],
   "*"
 >;
 

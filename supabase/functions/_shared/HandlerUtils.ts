@@ -1,7 +1,7 @@
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Database } from "./SupabaseTypes.d.ts";
-import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
 import { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
+import { Database } from "./SupabaseTypes.d.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,6 +36,35 @@ export async function assertUserIsInstructor(courseId: number, authHeader: strin
   }
   return { supabase, enrollment };
 }
+export async function assertUserIsInstructorOrGrader(courseId: number, authHeader: string) {
+  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+    global: {
+      headers: { Authorization: authHeader }
+    }
+  });
+  const token = authHeader.replace("Bearer ", "");
+  const {
+    data: { user },
+    error
+  } = await supabase.auth.getUser(token);
+  if (error) {
+    console.error(error);
+  }
+  if (!user) {
+    throw new SecurityError("User not found");
+  }
+  const { data: enrollment } = await supabase
+    .from("user_roles")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("class_id", courseId)
+    .in("role", ["instructor", "grader"])
+    .single();
+  if (!enrollment) {
+    throw new SecurityError("User is not an instructor or grader for this course");
+  }
+  return { supabase, enrollment };
+}
 export async function assertUserIsInCourse(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
@@ -51,7 +80,7 @@ export async function assertUserIsInCourse(courseId: number, authHeader: string)
   }
   const { data: enrollment } = await supabase
     .from("user_roles")
-    .select("*")
+    .select("*, classes(*)")
     .eq("user_id", user.id)
     .eq("class_id", courseId)
     .single();

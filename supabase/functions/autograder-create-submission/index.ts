@@ -5,18 +5,17 @@
 // Setup type definitions for built-in Supabase Runtime APIs
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-import { wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { UserVisibleError, SecurityError } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { validateOIDCToken, cloneRepository, getRepoTarballURL, updateCheckRun } from "../_shared/GitHubWrapper.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { Open as openZip } from "npm:unzipper";
 import { createHash } from "node:crypto";
-import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { addHours, addSeconds, format } from "npm:date-fns@4";
 import { TZDate } from "npm:@date-fns/tz";
-import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
+import { addHours, addSeconds, format } from "npm:date-fns@4";
 import micromatch from "npm:micromatch";
+import { Open as openZip } from "npm:unzipper";
+import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
+import { cloneRepository, getRepoTarballURL, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
+import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 function formatSeconds(seconds: number) {
   const days = Math.floor(seconds / 86400);
@@ -64,7 +63,7 @@ async function handleRequest(req: Request) {
       .select("*, user_roles(*), classes(time_zone)")
       .eq("repository_id", repoData.id)
       .eq("sha", sha)
-      .maybeSingle();
+      .maybeSingle(); //TODO: Select the MOST RECENT check run, so that when we call Regrade, we know who triggered it
     if (checkRunError || !checkRun) {
       throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError?.message}`);
     }
@@ -83,10 +82,25 @@ async function handleRequest(req: Request) {
       if (extensionsError) {
         throw new UserVisibleError(`Failed to find extensions: ${extensionsError.message}`);
       }
+      console.log(`Timezone: ${timeZone}`);
       const totalExtensions = extensions?.map((e) => e.hours).reduce((a, b) => a + b, 0);
-      const originalDueDate = new TZDate(repoData.assignments.due_date, timeZone);
+      console.log(`Total extensions: ${totalExtensions}`);
+      console.log(`Due date: ${repoData.assignments.due_date}`);
+
+      //omg why is this needed?
+      const tzDate = TZDate.tz(timeZone);
+      const offset = tzDate.getTimezoneOffset();
+      const offsetHours = Math.abs(Math.floor(offset / 60));
+      const offsetMinutes = Math.abs(offset % 60);
+      const offsetStr = `${offset < 0 ? "+" : "-"}${offsetHours.toString().padStart(2, "0")}:${offsetMinutes.toString().padStart(2, "0")}`;
+      const originalDueDate = new TZDate(repoData.assignments.due_date + offsetStr, timeZone);
+
+      console.log(`Original due date: ${originalDueDate}`);
       const newDueDate = addHours(originalDueDate, totalExtensions);
-      if (new TZDate(new Date(), timeZone) > newDueDate) {
+      console.log(`New due date: ${newDueDate}`);
+      const currentDate = TZDate.tz(timeZone);
+      console.log(`Current date: ${currentDate}`);
+      if (currentDate > newDueDate) {
         //Fail the check run
         await updateCheckRun({
           owner: repository.split("/")[0],
@@ -97,7 +111,7 @@ async function handleRequest(req: Request) {
           output: {
             title: "Submission failed",
             summary: "You cannot submit after the due date.",
-            text: `The due date for this assignment was ${newDueDate.toLocaleString()} (${timeZone}). Your code is still arhived on GitHub, and instructors and TAs can still manually submit it if needed.`
+            text: `The due date for this assignment was ${newDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
           }
         });
         throw new UserVisibleError("You cannot submit after the due date.");

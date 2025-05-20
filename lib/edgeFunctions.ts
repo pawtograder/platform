@@ -182,6 +182,18 @@ export async function repositoryListCommits(
   }
   return data as { commits: ListCommitsResponse["data"]; has_more: boolean };
 }
+
+export async function rerunGrader(
+  params: FunctionTypes.AutograderRerunGraderRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("autograder-rerun-grader", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as { message: string };
+}
 export async function triggerWorkflow(
   params: FunctionTypes.AutograderTriggerGradingWorkflowRequest,
   supabase: SupabaseClient<Database>
