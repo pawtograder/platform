@@ -18,11 +18,13 @@ async function insertComments({
   adminSupabase,
   class_id,
   submission_id,
+  grading_review_id,
   comments
 }: {
   adminSupabase: SupabaseClient;
   class_id: number;
   submission_id: number;
+  grading_review_id: number;
   comments: (FeedbackComment | FeedbackLineComment | FeedbackArtifactComment)[];
 }) {
   const profileMap = new Map<string, string>();
@@ -101,6 +103,7 @@ async function insertComments({
         rubric_check_id: eachComment.rubric_check_id,
         released: eachComment.released,
         eventually_visible: true,
+        submission_review_id: grading_review_id,
         class_id,
         author: profileMap.get(eachComment.author.name)
       }))
@@ -143,7 +146,8 @@ async function insertComments({
         rubric_check_id: eachComment.rubric_check_id,
         author: profileMap.get(eachComment.author.name),
         released: eachComment.released,
-        eventually_visible: true
+        eventually_visible: true,
+        submission_review_id: grading_review_id
       }))
     );
     if (submissionArtifactCommentsError) {
@@ -161,10 +165,13 @@ async function insertComments({
       submissionComments.map((eachComment) => ({
         submission_id,
         comment: eachComment.message,
+        points: eachComment.points,
+        rubric_check_id: eachComment.rubric_check_id,
         class_id,
         author: profileMap.get(eachComment.author.name),
         released: eachComment.released,
-        eventually_visible: true
+        eventually_visible: true,
+        submission_review_id: grading_review_id
       }))
     );
     if (submissionCommentsError) {
@@ -198,6 +205,7 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
   let submission_id: number | null = null;
   let profile_id: string | null = null;
   let assignment_group_id: number | null = null;
+  let grading_review_id: number | null = null;
   let checkRun: RepositoryCheckRun | null = null;
   if (autograder_regression_test_id) {
     //It's a regression test run
@@ -235,6 +243,7 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
     submission_id = submission.id;
     profile_id = submission.profile_id;
     assignment_group_id = submission.assignment_group_id;
+    grading_review_id = submission.grading_review_id;
     assignment_id = submission.assignment_id;
     checkRun = submission.repository_check_runs as RepositoryCheckRun;
   }
@@ -386,12 +395,13 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
 
   console.log("Submission ID", submission_id);
   console.log("Annotations", requestBody.feedback.annotations);
-  if (submission_id && requestBody.feedback.annotations) {
+  if (submission_id && grading_review_id && requestBody.feedback.annotations) {
     //Insert any comments
     await insertComments({
       adminSupabase,
       class_id,
       submission_id,
+      grading_review_id,
       comments: requestBody.feedback.annotations
     });
   }
