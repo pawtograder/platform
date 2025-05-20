@@ -1,17 +1,24 @@
 "use client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Link, NativeSelect, SegmentGroup, Spinner, Switch, Table } from "@chakra-ui/react";
+import { Box, Button, Dialog, Flex, Link, NativeSelect, Portal, Spinner, Switch, Table } from "@chakra-ui/react";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Heading, Skeleton, Text } from "@chakra-ui/react";
 import { useInvalidate, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import CreateNewGroup from "./createNewGroupModal";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
-import { updateGroupForStudent } from "./updateGroupForStudent";
+import {
+  GroupCreateData,
+  GroupManagementProvider,
+  StudentMoveData,
+  useGroupManagement
+} from "./GroupManagementContext";
+import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
+import { toaster } from "@/components/ui/toaster";
 
 export type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
@@ -42,11 +49,108 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     pagination: { pageSize: 1000 },
     liveMode: "auto"
   });
-  console.log(profiles);
   const groupsData = groups?.data;
   const [loading, setLoading] = useState<boolean>(false);
-
   const [groupViewOn, setGroupViewOn] = useState<boolean>(false);
+  const { groupsToCreate, movesToFulfill, clearGroupsToCreate, clearMovesToFulfill } = useGroupManagement();
+  const invalidate = useInvalidate();
+
+  const supabase = createClient();
+
+  /**
+   * Submits changes to all students
+   */
+  const publishChanges = async () => {
+    // move students where staged
+    movesToFulfill.forEach(async (move) => {
+      await updateGroupForStudent(move);
+    });
+    // create groups where staged
+    groupsToCreate.forEach(async (group) => {
+      await createGroupWithStudents(group);
+    });
+    // clear context
+    clearGroupsToCreate();
+    clearMovesToFulfill();
+    invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
+    invalidate({ resource: "user_roles", invalidates: ["list"] });
+  };
+
+  /**
+   * Create a new group for this assignment and add all students specified
+   */
+  const createGroupWithStudents = async (group: GroupCreateData) => {
+    try {
+      const { id } = await assignmentGroupInstructorCreateGroup(
+        {
+          name: group.name,
+          course_id: course_id,
+          assignment_id: assignment.id
+        },
+        supabase
+      );
+      group.member_ids.map(async (member_id) => {
+        try {
+          await assignmentGroupInstructorMoveStudent(
+            {
+              new_assignment_group_id: id || null,
+              old_assignment_group_id: null,
+              profile_id: member_id,
+              class_id: course_id
+            },
+            supabase
+          );
+          toaster.create({ title: "Student moved", description: "", type: "success" });
+        } catch (e) {
+          console.error(e);
+          toaster.create({
+            title: "Error moving student",
+            description: e instanceof Error ? e.message : "Unknown error",
+            type: "error"
+          });
+        }
+      });
+      toaster.create({ title: "New group created", description: "", type: "success" });
+    } catch (e) {
+      console.error(e);
+      toaster.create({
+        title: "Error creating group",
+        description: e instanceof Error ? e.message : "Unknown error",
+        type: "error"
+      });
+    }
+  };
+
+  /**
+   * Move student to the desired group
+   */
+  const updateGroupForStudent = async (move: StudentMoveData) => {
+    try {
+      setLoading(true);
+      await assignmentGroupInstructorMoveStudent(
+        {
+          new_assignment_group_id: move.new_group_id,
+          old_assignment_group_id: move.new_group_id,
+          profile_id: move.profile_id,
+          class_id: course_id
+        },
+        supabase
+      );
+      toaster.create({ title: "Student moved", description: "", type: "success" });
+    } catch (e) {
+      console.error(e);
+      toaster.create({
+        title: "Error moving student",
+        description: e instanceof Error ? e.message : "Unknown error",
+        type: "error"
+      });
+    } finally {
+      setLoading(false);
+    }
+    invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
+  };
+
   if (!groupsData || !assignment) {
     return (
       <Box>
@@ -54,6 +158,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       </Box>
     );
   }
+
   return (
     <Box>
       <Text fontSize="sm" color="text.muted">
@@ -83,7 +188,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
       <Text fontSize="sm" color="text.muted">
         This table allows you to tweak group configurations.{" "}
         <Text as="span" fontWeight="bold">
-          Changes are applied in real time: use with caution.
+          Changes will be staged and must be published to take effect
         </Text>
       </Text>
       <Heading size="md" pt="10px">
@@ -98,122 +203,245 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           profiles={profiles?.data as RolesWithProfilesAndGroupMemberships[]}
         />
       </Flex>
+      <Heading size="md" pt="10px">
+        Staged Changes
+      </Heading>
+      <Flex flexDir={"column"} gap="10px">
+        {groupsToCreate.length === 0 && movesToFulfill.length === 0 && (
+          <Text fontSize="sm">There are no staged changes at this time</Text>
+        )}
+        {groupsToCreate.length > 0 && (
+          <Flex flexDirection="column">
+            <Heading size="sm">Groups To Create:</Heading>
+            <Table.Root>
+              <Table.Header>
+                <Table.Row>
+                  <Table.ColumnHeader>Group</Table.ColumnHeader>
+                  <Table.ColumnHeader>Members</Table.ColumnHeader>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {groupsToCreate.map((group) => {
+                  return (
+                    <Table.Row key={group.name}>
+                      <Table.Cell>{group.name}</Table.Cell>
+                      <Table.Cell>
+                        {group.member_ids.map((member_id, key) => {
+                          return (
+                            profiles?.data?.find((prof: { private_profile_id: string }) => {
+                              return prof.private_profile_id == member_id;
+                            })?.profiles.name + (key < group.member_ids.length - 1 ? ", " : "")
+                          );
+                        })}
+                      </Table.Cell>
+                    </Table.Row>
+                  );
+                })}
+              </Table.Body>
+            </Table.Root>
+          </Flex>
+        )}
+        {movesToFulfill.length > 0 && (
+          <Flex flexDirection="column">
+            <Heading size="sm">Students To Move:</Heading>
+            <Table.Root>
+              <Table.Header>
+                <Table.Row>
+                  <Table.ColumnHeader>Student</Table.ColumnHeader>
+                  <Table.ColumnHeader>Current Group</Table.ColumnHeader>
+                  <Table.ColumnHeader>New Group</Table.ColumnHeader>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {movesToFulfill.map((move) => {
+                  return (
+                    <Table.Row key={move.profile_id}>
+                      <Table.Cell>
+                        {
+                          profiles?.data?.find((prof: { private_profile_id: string }) => {
+                            return prof.private_profile_id == move.profile_id;
+                          })?.profiles.name
+                        }
+                      </Table.Cell>
+                      <Table.Cell>
+                        {move.old_group_id === null
+                          ? "not in group"
+                          : groupsData.find((group) => {
+                              return group.id === move.old_group_id;
+                            })?.name}
+                      </Table.Cell>
+                      <Table.Cell>
+                        {
+                          groupsData.find((group) => {
+                            return group.id === move.new_group_id;
+                          })?.name
+                        }
+                      </Table.Cell>
+                    </Table.Row>
+                  );
+                })}
+              </Table.Body>
+            </Table.Root>
+          </Flex>
+        )}
 
-      <Switch.Root float="right" size="md" checked={groupViewOn} onCheckedChange={(e) => setGroupViewOn(e.checked)}>
-        <Switch.HiddenInput />
-        <Switch.Control>
-          <Switch.Thumb />
-        </Switch.Control>
-        <Switch.Label>View by group</Switch.Label>
-      </Switch.Root>
+        {(groupsToCreate.length !== 0 || movesToFulfill.length !== 0) && (
+          <Flex gap="10px">
+            {movesToFulfill.length !== 0 && (
+              <Button
+                colorPalette={"red"}
+                onClick={() => {
+                  clearMovesToFulfill();
+                }}
+              >
+                Clear Student Moves
+              </Button>
+            )}
+            {groupsToCreate.length !== 0 && (
+              <Button
+                colorPalette={"red"}
+                onClick={() => {
+                  clearGroupsToCreate();
+                }}
+              >
+                Clear Groups To Create
+              </Button>
+            )}
+            <Button
+              colorPalette={"green"}
+              onClick={() => {
+                publishChanges();
+              }}
+            >
+              Publish Changes
+            </Button>
+          </Flex>
+        )}
+      </Flex>
+      <Box width="100%" height="10px">
+        <Switch.Root
+          height="1"
+          float="right"
+          size="md"
+          checked={groupViewOn}
+          onCheckedChange={(e) => setGroupViewOn(e.checked)}
+        >
+          <Switch.HiddenInput />
+          <Switch.Control>
+            <Switch.Thumb />
+          </Switch.Control>
+          <Switch.Label>View by group</Switch.Label>
+        </Switch.Root>
+      </Box>
 
       {groupViewOn ? (
-        <TableByGroups
-          assignment={assignment}
-          course_id={course_id}
-          profiles={profiles?.data}
-          groupsData={groupsData}
-        />
+        <TableByGroups assignment={assignment} profiles={profiles?.data} groupsData={groupsData} />
       ) : (
-        <TableByStudents
-          assignment={assignment}
-          course_id={course_id}
-          groupsData={groupsData}
-          profiles={profiles?.data}
-          loading={loading}
-        />
+        <TableByStudents assignment={assignment} groupsData={groupsData} profiles={profiles?.data} loading={loading} />
       )}
     </Box>
   );
 }
 
+/**
+ * Display assignment data sorting by groups with ungrouped profiles at the bottom.  Shown when
+ * "View by group" is toggled on.
+ */
 function TableByGroups({
   assignment,
-  course_id,
   profiles,
   groupsData
 }: {
   assignment: Assignment;
-  course_id: number;
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
 }) {
-  console.log(profiles);
-  console.log(groupsData);
   return (
-    <Table.Root maxW="4xl" striped>
-      <Table.Header>
-        <Table.Row>
-          <Table.ColumnHeader>Group</Table.ColumnHeader>
-          <Table.ColumnHeader>Members</Table.ColumnHeader>
-          <Table.ColumnHeader>Error</Table.ColumnHeader>
-        </Table.Row>
-      </Table.Header>
-      <Table.Body>
-        {groupsData.map((group) => {
-          const groupID = group.id;
-          console.log(groupID);
-          let errorMessage;
-          let error = false;
-          if (assignment.group_config === "groups" && !group) {
-            errorMessage = "Student is not in a group";
-            error = true;
-          } else if (
-            group &&
-            assignment.min_group_size !== null &&
-            group.assignment_groups_members.length < assignment.min_group_size
-          ) {
-            errorMessage = `Group is too small (min: ${assignment.min_group_size}, current: ${group.assignment_groups_members.length})`;
-            error = true;
-          } else if (
-            group &&
-            assignment.max_group_size !== null &&
-            group.assignment_groups_members.length > assignment.max_group_size
-          ) {
-            errorMessage = `Group is too large (max: ${assignment.max_group_size}, current: ${group.assignment_groups_members.length})`;
-            error = true;
-          }
+    <Flex gap="15px" flexDir={"column"} paddingTop={"10px"}>
+      <Heading size="md">Groups</Heading>
+      <Table.Root width="100%" striped>
+        <Table.Header>
+          <Table.Row>
+            <Table.ColumnHeader>Group</Table.ColumnHeader>
+            <Table.ColumnHeader>Members</Table.ColumnHeader>
+            <Table.ColumnHeader>Error</Table.ColumnHeader>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {groupsData.map((group) => {
+            let errorMessage;
+            let error = false;
+            if (assignment.group_config === "groups" && !group) {
+              errorMessage = "Student is not in a group";
+              error = true;
+            } else if (
+              group &&
+              assignment.min_group_size !== null &&
+              group.assignment_groups_members.length < assignment.min_group_size
+            ) {
+              errorMessage = `Group is too small (min: ${assignment.min_group_size}, current: ${group.assignment_groups_members.length})`;
+              error = true;
+            } else if (
+              group &&
+              assignment.max_group_size !== null &&
+              group.assignment_groups_members.length > assignment.max_group_size
+            ) {
+              errorMessage = `Group is too large (max: ${assignment.max_group_size}, current: ${group.assignment_groups_members.length})`;
+              error = true;
+            }
 
-          return (
-            <Table.Row key={group.id}>
-              <Table.Cell>{group.name}</Table.Cell>
-              <Table.Cell>
-                {group.assignment_groups_members.map((member, key) => {
-                  return (
-                    profiles?.find((prof) => {
-                      return prof.private_profile_id == member.profile_id;
-                    })?.profiles.name + (key < group.assignment_groups_members.length - 1 ? ", " : "")
-                  );
-                })}
-              </Table.Cell>
-              <Table.Cell>{error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}</Table.Cell>
-            </Table.Row>
-          );
+            return (
+              <Table.Row key={group.id}>
+                <Table.Cell>{group.name}</Table.Cell>
+                <Table.Cell>
+                  {group.assignment_groups_members.map((member, key) => {
+                    return (
+                      profiles?.find((prof) => {
+                        return prof.private_profile_id == member.profile_id;
+                      })?.profiles.name + (key < group.assignment_groups_members.length - 1 ? ", " : "")
+                    );
+                  })}
+                </Table.Cell>
+                <Table.Cell>
+                  {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
+                </Table.Cell>
+              </Table.Row>
+            );
+          })}
+        </Table.Body>
+      </Table.Root>
+      <Heading size="md">Ungrouped Profiles</Heading>
+      <TableByStudents
+        assignment={assignment}
+        groupsData={groupsData}
+        profiles={profiles?.filter((profile) => {
+          return profile.profiles.assignment_groups_members.length === 0;
         })}
-      </Table.Body>
-    </Table.Root>
+        loading={false}
+      />
+    </Flex>
   );
 }
 
+/**
+ * Shows the table of students, their groups, and problems with their groups.  Displayed when
+ * "View by group" is toggled off and used to display ungrouped profiles in group view.
+ */
 function TableByStudents({
   assignment,
-  course_id,
   groupsData,
   profiles,
   loading
 }: {
   assignment: Assignment;
-  course_id: number;
   groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   loading: boolean;
 }) {
-  const invalidate = useInvalidate();
-  const supabase = createClient();
-  const updateGroup = useCallback(updateGroupForStudent, [supabase, invalidate, course_id]);
-
+  const { addMovesToFulfill } = useGroupManagement();
+  const [groupId, setGroupId] = useState<string | undefined>(undefined);
   return (
-    <Table.Root maxW="4xl" striped>
+    <Table.Root striped>
       <Table.Header>
         <Table.Row>
           <Table.ColumnHeader>Student</Table.ColumnHeader>
@@ -228,7 +456,6 @@ function TableByStudents({
               ? profile.profiles.assignment_groups_members[0].assignment_group_id
               : undefined;
           const group = groupsData?.find((group) => group.id === groupID);
-          console.log(groupID);
           let errorMessage;
           let error = false;
           if (assignment.group_config === "groups" && !group) {
@@ -253,24 +480,95 @@ function TableByStudents({
             <Table.Row key={profile.id}>
               <Table.Cell>{profile.profiles.name}</Table.Cell>
               <Table.Cell>
-                <NativeSelect.Root disabled={loading}>
-                  <NativeSelect.Field
-                    value={group?.id}
-                    onChange={(e) => {
-                      const groupID = e.target.value;
-                      console.log(groupID);
-                      const group = groupsData?.find((group) => group.id === Number(groupID));
-                      updateGroup(group, profile);
-                    }}
-                  >
-                    <option value={undefined}>(No group)</option>
-                    {groupsData?.map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.name}
-                      </option>
-                    ))}
-                  </NativeSelect.Field>
-                </NativeSelect.Root>
+                <Dialog.Root placement={"center"}>
+                  <Dialog.Trigger asChild>
+                    <Flex alignItems={"center"} gap="3px">
+                      <Text> {group ? group.name : "no group"}</Text>
+                      <Button
+                        backgroundColor={"transparent"}
+                        color="black"
+                        paddingLeft="0"
+                        _hover={{ textDecoration: "underline" }}
+                      >
+                        (edit)
+                      </Button>
+                    </Flex>
+                  </Dialog.Trigger>
+                  <Portal>
+                    <Dialog.Positioner>
+                      <Dialog.Backdrop />
+                      <Dialog.Content>
+                        <Dialog.Header>
+                          <Dialog.Title>Move student {profile.profiles.name}</Dialog.Title>
+                        </Dialog.Header>
+                        <Dialog.Body>
+                          <Text>
+                            <strong>Current group:</strong> {group ? group.name : "no group"}{" "}
+                          </Text>
+                          <Text>
+                            <strong>Move to:</strong>
+                          </Text>
+
+                          <NativeSelect.Root disabled={loading}>
+                            <NativeSelect.Field
+                              value={groupId ?? group?.id}
+                              onChange={(e) => {
+                                setGroupId(e.target.value);
+                              }}
+                            >
+                              <option value={undefined}>(No group)</option>
+                              {groupsData?.map((group) => (
+                                <option key={group.id} value={group.id}>
+                                  {group.name}
+                                </option>
+                              ))}
+                            </NativeSelect.Field>
+                          </NativeSelect.Root>
+
+                          <Dialog.Footer>
+                            <Dialog.ActionTrigger as="div">
+                              <Button
+                                colorPalette={"red"}
+                                onClick={() => {
+                                  setGroupId(undefined);
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </Dialog.ActionTrigger>
+                            <Dialog.ActionTrigger as="div">
+                              <Button
+                                colorPalette={"green"}
+                                onClick={() => {
+                                  if (group?.id == Number(groupId)) {
+                                    toaster.error({
+                                      title: "Failed to stage changes",
+                                      description: "Cannot move student to a group they are already in"
+                                    });
+                                  } else {
+                                    addMovesToFulfill([
+                                      {
+                                        profile_id: profile.private_profile_id,
+                                        old_group_id:
+                                          profile.profiles.assignment_groups_members.length > 0
+                                            ? profile.profiles.assignment_groups_members[0].assignment_group_id
+                                            : null,
+                                        new_group_id: Number(groupId)
+                                      }
+                                    ]);
+                                  }
+                                  setGroupId(undefined);
+                                }}
+                              >
+                                Stage Changes
+                              </Button>
+                            </Dialog.ActionTrigger>
+                          </Dialog.Footer>
+                        </Dialog.Body>
+                      </Dialog.Content>
+                    </Dialog.Positioner>
+                  </Portal>
+                </Dialog.Root>
               </Table.Cell>
               <Table.Cell>{error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}</Table.Cell>
             </Table.Row>
@@ -300,17 +598,18 @@ export default function AssignmentGroupsPage() {
     );
   }
   return (
-    <Box>
-      <Heading size="md">Configure Groups</Heading>
-
-      {(assignment.data.group_config === "groups" || assignment.data.group_config === "both") && (
-        <AssignmentGroupsTable assignment={assignment.data} course_id={Number(course_id)} />
-      )}
-      {assignment.data.group_config === "individual" && (
-        <Text fontSize="sm" color="text.muted">
-          This is an individual assignment, so group configuration is not applicable
-        </Text>
-      )}
-    </Box>
+    <GroupManagementProvider>
+      <Box>
+        <Heading size="md">Configure Groups</Heading>
+        {(assignment.data.group_config === "groups" || assignment.data.group_config === "both") && (
+          <AssignmentGroupsTable assignment={assignment.data} course_id={Number(course_id)} />
+        )}
+        {assignment.data.group_config === "individual" && (
+          <Text fontSize="sm" color="text.muted">
+            This is an individual assignment, so group configuration is not applicable
+          </Text>
+        )}
+      </Box>
+    </GroupManagementProvider>
   );
 }

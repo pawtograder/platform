@@ -1,9 +1,4 @@
-import { toaster } from "@/components/ui/toaster";
-import {
-  Assignment,
-  AssignmentGroupWithMembersInvitationsAndJoinRequests,
-  UserProfile
-} from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import {
   Button,
   Dialog,
@@ -16,16 +11,8 @@ import {
   Table
 } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-import { useInvalidate } from "@refinedev/core";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
-import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
-import { useCourseController } from "@/hooks/useCourseController";
-
-type SampleGroup = {
-  name: string;
-  members: UserProfile[];
-};
+import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 
 export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
   const students = useStudentRoster();
@@ -48,14 +35,11 @@ export default function BulkCreateGroup({
   groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
   assignment: Assignment;
 }) {
-  const supabase = createClient();
-  const invalidate = useInvalidate();
-  const { courseId } = useCourseController();
   const [groupTextField, setGroupTextField] = useState<string>("");
   const [groupSize, setGroupSize] = useState<number>(0);
   const ungroupedProfiles = useUngroupedStudentProfiles(groups);
-  const [generatedGroups, setGeneratedGroups] = useState<SampleGroup[]>([]);
-
+  const [generatedGroups, setGeneratedGroups] = useState<GroupCreateData[]>([]);
+  const { addGroupsToCreate } = useGroupManagement();
   /**
    * When group field is changed to a new number, update groupsize
    */
@@ -64,101 +48,6 @@ export default function BulkCreateGroup({
       setGroupSize(parseInt(groupTextField));
     }
   }, [setGroupTextField]);
-
-  const createGroupsWithAssignees = async () => {
-    generatedGroups.forEach(async (group) => {
-      await createGroupWithAssignees(group);
-    });
-    invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-    invalidate({ resource: "user_roles", invalidates: ["all", "list"] });
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
-    invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
-    toaster.create({ title: "Groups created", description: "", type: "success" });
-  };
-
-  /**
-   * put this where create group with assignees is
-   * @param group
-   */
-  const createAssignment = async (group: SampleGroup) => {
-    try {
-      const { id } = await assignmentGroupInstructorCreateGroup(
-        {
-          name: group.name,
-          course_id: courseId,
-          assignment_id: assignment.id
-        },
-        supabase
-      );
-      group.members.map(async (member) => {
-        try {
-          await assignmentGroupInstructorMoveStudent(
-            {
-              new_assignment_group_id: id || null,
-              old_assignment_group_id: null,
-              profile_id: member.id,
-              class_id: Number(courseId)
-            },
-            supabase
-          );
-          toaster.create({ title: "Student moved", description: "", type: "success" });
-        } catch (e) {
-          console.error(e);
-          toaster.create({
-            title: "Error moving student",
-            description: e instanceof Error ? e.message : "Unknown error",
-            type: "error"
-          });
-        }
-      });
-      toaster.create({ title: "New group created", description: "", type: "success" });
-    } catch (e) {
-      console.error(e);
-      toaster.create({
-        title: "Error creating group",
-        description: e instanceof Error ? e.message : "Unknown error",
-        type: "error"
-      });
-    }
-  };
-
-  const createGroupWithAssignees = async (group: SampleGroup) => {
-    const { data: createdGroup } = await supabase
-      .from("assignment_groups")
-      .insert({
-        name: group.name,
-        assignment_id: assignment.id,
-        class_id: assignment.class_id
-      })
-      .select("id")
-      .single();
-
-    if (!createdGroup?.id) {
-      return;
-    }
-    group.members.map((member) => {
-      assignMemberToGroup(member, createdGroup);
-    });
-  };
-
-  const assignMemberToGroup = async (member: UserProfile, createdGroup: { id: number } | null) => {
-    if (!createdGroup) {
-      return;
-    }
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-    if (!user?.id || !createdGroup?.id) {
-      return;
-    }
-    await supabase.from("assignment_groups_members").insert({
-      added_by: member.id,
-      assignment_group_id: createdGroup?.id,
-      profile_id: member.id,
-      class_id: assignment.class_id,
-      assignment_id: assignment.id
-    });
-  };
 
   const generateGroups = async () => {
     const newGroups = [];
@@ -170,22 +59,27 @@ export default function BulkCreateGroup({
     // create as many even groups as possible
     let index = 0;
     while (index <= ungroupedProfiles.length - groupSize) {
-      newGroups.push({ name: crypto.randomUUID(), members: ungroupedProfiles.slice(index, index + groupSize) });
+      newGroups.push({
+        name: crypto.randomUUID(),
+        member_ids: ungroupedProfiles.slice(index, index + groupSize).map((profile) => {
+          return profile.id;
+        })
+      });
       index += groupSize;
     }
     // spread extras across created groups
     while (index < ungroupedProfiles.length && newGroups.length > 0) {
-      const createdGroup: SampleGroup = newGroups.pop()!;
-      createdGroup?.members.push(ungroupedProfiles[index]);
+      const createdGroup: GroupCreateData = newGroups.pop()!;
+      createdGroup?.member_ids.push(ungroupedProfiles[index].id);
       newGroups.push(createdGroup);
       index += 1;
     }
     setGeneratedGroups(newGroups);
   };
 
-  function isGroupSizeInvalid(size: number) {
+  const isGroupSizeInvalid = (size: number) => {
     return size > (assignment.max_group_size ?? ungroupedProfiles.length) || size < (assignment.min_group_size ?? 1);
-  }
+  };
 
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom" size="lg">
@@ -240,7 +134,14 @@ export default function BulkCreateGroup({
                         return (
                           <Table.Row key={index}>
                             <Table.Cell>{group.name}</Table.Cell>
-                            <Table.Cell>{group.members.map((member) => member.name + " ")}</Table.Cell>
+                            <Table.Cell>
+                              {group.member_ids.map(
+                                (member_id) =>
+                                  ungroupedProfiles?.find((prof) => {
+                                    return prof.id == member_id;
+                                  })?.name + " "
+                              )}
+                            </Table.Cell>
                           </Table.Row>
                         );
                       })}
@@ -258,11 +159,11 @@ export default function BulkCreateGroup({
                 </Dialog.ActionTrigger>
                 <DialogActionTrigger asChild>
                   <Button
-                    onClick={createGroupsWithAssignees}
+                    onClick={() => addGroupsToCreate(generatedGroups)}
                     colorPalette={"green"}
                     disabled={generatedGroups.length === 0}
                   >
-                    Assign these groups
+                    Stage changes
                   </Button>
                 </DialogActionTrigger>
               </Flex>

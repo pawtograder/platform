@@ -1,13 +1,10 @@
-import { toaster } from "@/components/ui/toaster";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-import { useInvalidate } from "@refinedev/core";
 import { useUngroupedStudentProfiles } from "./bulkCreateGroupModal";
-import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useGroupManagement } from "./GroupManagementContext";
+import { createClient } from "@/utils/supabase/client";
 
 export default function CreateNewGroup({
   groups,
@@ -16,8 +13,6 @@ export default function CreateNewGroup({
   groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
   assignment: Assignment;
 }) {
-  const supabase = createClient();
-  const invalidate = useInvalidate();
   const [newGroupName, setNewGroupName] = useState<string>("");
   const [selectedMembers, setSelectedMembers] = useState<
     MultiValue<{
@@ -25,111 +20,15 @@ export default function CreateNewGroup({
       value: string;
     }>
   >([]);
-  const { courseId } = useCourseController();
   const ungroupedProfiles = useUngroupedStudentProfiles(groups);
-
-  /**
-   * Draft using edge functions instead
-   */
-  const createAssignment = async () => {
-    try {
-      const { id } = await assignmentGroupInstructorCreateGroup(
-        {
-          name: newGroupName,
-          course_id: courseId,
-          assignment_id: assignment.id
-        },
-        supabase
-      );
-      selectedMembers.map(async (member) => {
-        try {
-          await assignmentGroupInstructorMoveStudent(
-            {
-              new_assignment_group_id: id || null,
-              old_assignment_group_id: null,
-              profile_id: member.value,
-              class_id: Number(courseId)
-            },
-            supabase
-          );
-          toaster.create({ title: "Student moved", description: "", type: "success" });
-        } catch (e) {
-          console.error(e);
-          toaster.create({
-            title: "Error moving student",
-            description: e instanceof Error ? e.message : "Unknown error",
-            type: "error"
-          });
-        }
-      });
-      toaster.create({ title: "New group created", description: "", type: "success" });
-      setNewGroupName("");
-      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-      invalidate({ resource: "user_roles", invalidates: ["list"] });
-      invalidate({ resource: "profiles", invalidates: ["all", "list"] });
-      invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
-      invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
-    } catch (e) {
-      console.error(e);
-      toaster.create({
-        title: "Error creating group",
-        description: e instanceof Error ? e.message : "Unknown error",
-        type: "error"
-      });
-    }
-  };
-
-  const createGroupWithAssignees = async () => {
-    const { data: createdGroup } = await supabase
-      .from("assignment_groups")
-      .insert({
-        name: newGroupName,
-        assignment_id: assignment.id,
-        class_id: assignment.class_id
-      })
-      .select("id")
-      .single();
-    selectedMembers.map((member) => {
-      assignMemberToGroup(member, createdGroup);
-    });
-    toaster.create({ title: "Group created", description: "", type: "success" });
-    setNewGroupName("");
-    invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-    invalidate({ resource: "user_roles", invalidates: ["list"] });
-    invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
-    invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
-  };
-
-  const assignMemberToGroup = async (
-    member: { label?: string | null; value: string },
-    createdGroup: { id: number } | null
-  ) => {
-    const supabase = createClient();
-
-    if (!createdGroup) {
-      return;
-    }
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-    if (!user?.id || !createdGroup?.id) {
-      return;
-    }
-    await supabase.from("assignment_groups_members").insert({
-      added_by: member.value,
-      assignment_group_id: createdGroup?.id,
-      profile_id: member.value,
-      class_id: assignment.class_id,
-      assignment_id: assignment.id
-    });
-  };
-
-  function isGroupInvalid() {
+  const { addGroupsToCreate } = useGroupManagement();
+  const supabase = createClient();
+  const isGroupInvalid = () => {
     return (
       (assignment.min_group_size !== null && selectedMembers.length < assignment.min_group_size) ||
       (assignment.max_group_size !== null && selectedMembers.length > assignment.max_group_size)
     );
-  }
+  };
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom">
       <Dialog.Trigger asChild>
@@ -152,8 +51,10 @@ export default function CreateNewGroup({
                     <Button
                       size="sm"
                       colorPalette={"gray"}
-                      onClick={() => {
-                        setNewGroupName(crypto.randomUUID());
+                      onClick={async () => {
+                        await supabase.rpc("generate_anon_name").then((response) => {
+                          console.log(response);
+                        });
                       }}
                     >
                       generate a random name
@@ -194,11 +95,22 @@ export default function CreateNewGroup({
                 </Dialog.ActionTrigger>
                 <Dialog.ActionTrigger asChild>
                   <Button
-                    onClick={createGroupWithAssignees}
+                    onClick={() => {
+                      addGroupsToCreate([
+                        {
+                          name: newGroupName,
+                          member_ids: selectedMembers.map((member) => {
+                            return member.value;
+                          })
+                        }
+                      ]);
+                      setNewGroupName("");
+                      setSelectedMembers([]);
+                    }}
                     colorPalette={"green"}
                     disabled={newGroupName.length === 0}
                   >
-                    Assign
+                    Stage changes
                   </Button>
                 </Dialog.ActionTrigger>
               </Flex>

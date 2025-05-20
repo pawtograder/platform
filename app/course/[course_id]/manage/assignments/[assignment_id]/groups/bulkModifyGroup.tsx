@@ -2,13 +2,8 @@ import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from
 import { Button, Dialog, Field, Flex, Portal } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
-import { createClient } from "@/utils/supabase/client";
-import { useInvalidate } from "@refinedev/core";
 import { RolesWithProfilesAndGroupMemberships } from "./page";
-import { useParams } from "next/navigation";
-import { updateGroupForStudent } from "./updateGroupForStudent";
-import { assignmentGroupInstructorMoveStudent } from "@/lib/edgeFunctions";
-import { toaster } from "@/components/ui/toaster";
+import { useGroupManagement } from "./GroupManagementContext";
 
 export default function BulkModifyGroup({
   groups,
@@ -19,51 +14,14 @@ export default function BulkModifyGroup({
   assignment: Assignment;
   profiles: RolesWithProfilesAndGroupMemberships[];
 }) {
-  const supabase = createClient();
-  const invalidate = useInvalidate();
-
   const [selectedMembers, setSelectedMembers] = useState<
     MultiValue<{ value: RolesWithProfilesAndGroupMemberships; label: string | null }>
   >([]);
+  const { addMovesToFulfill } = useGroupManagement();
 
   const [findStrategy, setFindStrategy] = useState<string>("");
   const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(null);
-  const { course_id } = useParams();
   const [chosenStudentHasGroup, setChosenStudentHasGroup] = useState<boolean>(true);
-
-  const addSelectedToGroup = async () => {
-    if (!groupToMod) {
-      return;
-    }
-    selectedMembers.forEach(async (member) => {
-      try {
-        await assignmentGroupInstructorMoveStudent(
-          {
-            new_assignment_group_id: groupToMod?.id || null,
-            old_assignment_group_id:
-              member.value.profiles.assignment_groups_members.length > 0
-                ? member.value.profiles.assignment_groups_members[0].assignment_group_id
-                : null,
-            profile_id: member.value.private_profile_id,
-            class_id: Number(course_id)
-          },
-          supabase
-        );
-        toaster.create({ title: "Student moved", description: "", type: "success" });
-      } catch (e) {
-        console.error(e);
-        toaster.create({
-          title: "Error moving student",
-          description: e instanceof Error ? e.message : "Unknown error",
-          type: "error"
-        });
-      }
-      invalidate({ resource: "assignment_groups", invalidates: ["all", "list"] });
-      invalidate({ resource: "user_roles", invalidates: ["all", "list"] });
-      invalidate({ resource: "assignment_groups_members", invalidates: ["all", "list"] });
-      invalidate({ resource: "assignment_group_invitations", invalidates: ["all", "list"] });
-    });
-  };
 
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom">
@@ -194,11 +152,21 @@ export default function BulkModifyGroup({
                     colorPalette={"green"}
                     disabled={selectedMembers.length == 0 || groupToMod == null}
                     onClick={() => {
-                      addSelectedToGroup();
+                      if (groupToMod) {
+                        addMovesToFulfill(
+                          selectedMembers.map((member) => {
+                            return {
+                              profile_id: member.value.private_profile_id,
+                              old_group_id: member.value.profiles.assignment_groups_members[0].id,
+                              new_group_id: groupToMod.id
+                            };
+                          })
+                        );
+                      }
                     }}
                   >
                     {" "}
-                    Assign
+                    Stage changes
                   </Button>
                 </Dialog.CloseTrigger>
               </Flex>
