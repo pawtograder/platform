@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
 import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
+import { createClient } from "@/utils/supabase/client";
 
 export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
   const students = useStudentRoster();
@@ -40,6 +41,7 @@ export default function BulkCreateGroup({
   const ungroupedProfiles = useUngroupedStudentProfiles(groups);
   const [generatedGroups, setGeneratedGroups] = useState<GroupCreateData[]>([]);
   const { addGroupsToCreate } = useGroupManagement();
+  const supabase = createClient();
   /**
    * When group field is changed to a new number, update groupsize
    */
@@ -59,8 +61,9 @@ export default function BulkCreateGroup({
     // create as many even groups as possible
     let index = 0;
     while (index <= ungroupedProfiles.length - groupSize) {
+      const response = await supabase.rpc("generate_anon_name");
       newGroups.push({
-        name: crypto.randomUUID(),
+        name: response.data ?? "",
         member_ids: ungroupedProfiles.slice(index, index + groupSize).map((profile) => {
           return profile.id;
         })
