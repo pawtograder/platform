@@ -514,3 +514,11 @@ export type ClassSection = GetResult<
   Database["public"]["Tables"]["class_sections"]["Relationships"],
   "*"
 >;
+
+export type Tag = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["tags"]["Row"],
+  "tags",
+  Database["public"]["Tables"]["tags"]["Relationships"],
+  "*"
+>;

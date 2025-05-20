@@ -13,7 +13,8 @@ import {
   Text,
   VStack,
   Dialog,
-  Portal
+  Portal,
+  Flex
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
@@ -34,6 +35,9 @@ import useModalManager from "@/hooks/useModalManager";
 import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import { Button } from "@/components/ui/button";
+import useTags from "@/hooks/useTags";
+import CreateNewTagModal from "./CreateNewTagModal";
+import SpreadTagModal from "./SpreadTagModal";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -52,6 +56,7 @@ function EnrollmentsTable() {
   const { user: currentUser } = useAuthState();
   const invalidate = useInvalidate();
   const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
+  const tags = useTags();
 
   const {
     isOpen: isEditProfileModalOpen,
@@ -187,6 +192,24 @@ function EnrollmentsTable() {
             return <Icon aria-label="Linked to Canvas" as={FaLink} />;
           }
           return null;
+        }
+      },
+      {
+        id: "tags",
+        header: "Tags",
+        accessorKey: "tags",
+        cell: ({ row }) => {
+          return tags.tags
+            .filter((tag) => {
+              return tag.id == row.original.private_profile_id || tag.id == row.original.public_profile_id;
+            })
+            .map((tag) => {
+              return (
+                <Text background={tag.color} borderRadius={"50%"}>
+                  {tag.name}
+                </Text>
+              );
+            });
         }
       },
       {
@@ -326,6 +349,11 @@ function EnrollmentsTable() {
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
+        <Heading size="md">Tag Profiles:</Heading>
+        <Flex gap="15px" wrap={"wrap"}>
+          <CreateNewTagModal />
+          <SpreadTagModal />
+        </Flex>
         <Table.Root>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (

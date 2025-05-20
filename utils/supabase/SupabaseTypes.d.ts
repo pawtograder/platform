@@ -1,6 +1,31 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
+  graphql_public: {
+    Tables: {
+      [_ in never]: never;
+    };
+    Views: {
+      [_ in never]: never;
+    };
+    Functions: {
+      graphql: {
+        Args: {
+          operationName?: string;
+          query?: string;
+          variables?: Json;
+          extensions?: Json;
+        };
+        Returns: Json;
+      };
+    };
+    Enums: {
+      [_ in never]: never;
+    };
+    CompositeTypes: {
+      [_ in never]: never;
+    };
+  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -3375,6 +3400,51 @@ export type Database = {
           }
         ];
       };
+      tags: {
+        Row: {
+          class_id: number;
+          color: string;
+          created_at: string;
+          id: string;
+          name: string;
+          profile_id: string;
+          visible: boolean;
+        };
+        Insert: {
+          class_id: number;
+          color: string;
+          created_at?: string;
+          id: string;
+          name: string;
+          profile_id: string;
+          visible: boolean;
+        };
+        Update: {
+          class_id?: number;
+          color?: string;
+          created_at?: string;
+          id?: string;
+          name?: string;
+          profile_id?: string;
+          visible?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "tags_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "tags_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       user_roles: {
         Row: {
           canvas_id: number | null;
@@ -3936,6 +4006,9 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
+  graphql_public: {
+    Enums: {}
+  },
   pgmq_public: {
     Enums: {}
   },

@@ -10,16 +10,6 @@ CREATE TABLE IF NOT EXISTS "public"."tags" (
 
 alter table "public"."tags" enable row level security;
 
-CREATE POLICY "graders and instructors CRUD on class tags"
-on "public"."tags"
-as permissive
-for all 
-to public
-using (
-    authorizeforclassgrader(class_id)
-    OR authorizeforclassinstructor(class_id)
-);
-
 CREATE POLICY "graders and instructors can view all class tags"
 ON "public"."tags"
 AS PERMISSIVE
@@ -28,6 +18,34 @@ USING (
     authorizeforclassgrader(class_id)
     OR authorizeforclassinstructor(class_id)
 );
+
+CREATE POLICY "graders and instructors can update all class tags"
+ON "public"."tags"
+AS PERMISSIVE
+FOR UPDATE
+USING (
+    authorizeforclassgrader(class_id)
+    OR authorizeforclassinstructor(class_id)
+);
+
+CREATE POLICY "graders and instructors can delete all class tags"
+ON "public"."tags"
+AS PERMISSIVE
+FOR DELETE
+USING (
+    authorizeforclassgrader(class_id)
+    OR authorizeforclassinstructor(class_id)
+);
+
+ CREATE POLICY "graders and instructors can insert to class tags"
+ON "public"."tags"
+AS PERMISSIVE
+FOR INSERT
+WITH CHECK (
+    authorizeforclassgrader(class_id)
+    OR authorizeforclassinstructor(class_id)
+);
+
 
 CREATE POLICY "users can view their visible tags for class"
 ON "public"."tags"
