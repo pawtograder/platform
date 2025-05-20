@@ -4,7 +4,6 @@ import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { useUngroupedStudentProfiles } from "./bulkCreateGroupModal";
 import { useGroupManagement } from "./GroupManagementContext";
-import { createClient } from "@/utils/supabase/client";
 
 export default function CreateNewGroup({
   groups,
@@ -22,7 +21,6 @@ export default function CreateNewGroup({
   >([]);
   const ungroupedProfiles = useUngroupedStudentProfiles(groups);
   const { addGroupsToCreate } = useGroupManagement();
-  const supabase = createClient();
   const isGroupInvalid = () => {
     return (
       (assignment.min_group_size !== null && selectedMembers.length < assignment.min_group_size) ||
@@ -52,9 +50,12 @@ export default function CreateNewGroup({
                       size="sm"
                       colorPalette={"gray"}
                       onClick={async () => {
-                        await supabase.rpc("generate_anon_name").then((response) => {
+                        setNewGroupName(crypto.randomUUID());
+                        /* returns 200 OK but null data
+                        supabase.rpc("generate_anon_name").then((response) => {
                           console.log(response);
                         });
+                        */
                       }}
                     >
                       generate a random name
