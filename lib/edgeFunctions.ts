@@ -68,7 +68,10 @@ export async function githubRepoConfigureWebhook(
   supabase: SupabaseClient<Database>
 ) {
   const { data } = await supabase.functions.invoke("github-repo-configure-webhook", { body: params });
-
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
   return data as { message: string };
 }
 export async function enrollmentAdd(params: FunctionTypes.AddEnrollmentRequest, supabase: SupabaseClient<Database>) {

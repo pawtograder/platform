@@ -26,7 +26,7 @@ export default function NewAssignmentPage() {
           description: getValues("description"),
           max_late_tokens: getValues("max_late_tokens") || null,
           total_points: getValues("total_points"),
-          template_repo: "",
+          template_repo: getValues("template_repo"),
           submission_files: getValues("submission_files"),
           class_id: Number.parseInt(course_id as string),
           group_config: getValues("group_config"),
@@ -37,22 +37,26 @@ export default function NewAssignmentPage() {
         })
         .select("id")
         .single();
-      await githubRepoConfigureWebhook(
-        { assignment_id: data!.id, new_repo: getValues("template_repo"), watch_type: "template_repo" },
-        supabase
-      );
-      //Potentially copy groups from another assignment
-      if (getValues("copy_groups_from_assignment")) {
-        await assignmentGroupCopyGroupsFromAssignment(
-          {
-            source_assignment_id: getValues("copy_groups_from_assignment"),
-            target_assignment_id: data!.id,
-            class_id: Number.parseInt(course_id as string)
-          },
+      if (error || !data) {
+        console.error(error);
+      } else {
+        await githubRepoConfigureWebhook(
+          { assignment_id: data.id, new_repo: getValues("template_repo"), watch_type: "template_repo" },
           supabase
         );
+        //Potentially copy groups from another assignment
+        if (getValues("copy_groups_from_assignment")) {
+          await assignmentGroupCopyGroupsFromAssignment(
+            {
+              source_assignment_id: getValues("copy_groups_from_assignment"),
+              target_assignment_id: data.id,
+              class_id: Number.parseInt(course_id as string)
+            },
+            supabase
+          );
+        }
+        router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`);
       }
-      router.push(`/course/${course_id}/manage/assignments/${data!.id}/autograder`);
     }
     await create();
   }, [course_id, getValues, router]);
