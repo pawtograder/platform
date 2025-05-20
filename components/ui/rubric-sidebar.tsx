@@ -154,8 +154,15 @@ export function RubricCheckComment({
     }
   }
   return (
-    <Box border="1px solid" borderColor="border.info" borderRadius="md" p={0} w="100%" fontSize="sm">
-      <Box bg="bg.info" pl={1} borderTopRadius="md">
+    <Box
+      border="1px solid"
+      borderColor={criteria ? "border.info" : "border.muted"}
+      borderRadius="md"
+      p={0}
+      w="100%"
+      fontSize="sm"
+    >
+      <Box bg={criteria ? "bg.info" : "bg.muted"} pl={1} borderTopRadius="md">
         <HStack justify="space-between">
           <Text fontSize="sm" color="fg.muted">
             {author?.name} {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
