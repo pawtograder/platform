@@ -20,7 +20,7 @@ import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDelete, useShow, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as YAML from "yaml";
 
 function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataType | undefined {
@@ -97,9 +97,10 @@ function valOrNull<T>(value: T | null | undefined): T | null {
   return value === undefined ? null : value;
 }
 function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubricCheck[] {
-  if (checks.length === 0) {
+  if (!checks || checks.length === 0) {
     throw new Error("Criteria must have at least one check");
   }
+  console.log(checks.length);
   return checks.map((check, index) => ({
     id: check.id || -1,
     name: check.name,
@@ -253,7 +254,6 @@ export default function RubricPage() {
   const debounceTimeoutRef = useRef<NodeJS.Timeout>();
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
   const [canLoadDemo, setCanLoadDemo] = useState<boolean>(false);
-
   const debouncedParseYaml = useCallback(
     (value: string) => {
       if (errorMarkers.length === 0) {
@@ -602,7 +602,7 @@ export default function RubricPage() {
                   } catch (error) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const _error = error as any;
-                    if ("details" in _error && "message" in _error) {
+                    if ("details" in _error || "message" in _error) {
                       toaster.create({
                         title: "Failed to save rubric",
                         description:

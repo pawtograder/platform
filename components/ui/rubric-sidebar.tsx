@@ -13,13 +13,14 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Menu, Portal, RadioGroup, Text, VStack } from "@chakra-ui/react";
 
+import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useRubricCheckInstances,
   useRubricCriteriaInstances,
@@ -30,12 +31,11 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
+import { usePathname } from "next/navigation";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
-import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
-import { usePathname } from "next/navigation";
 export function CommentActions({
   comment,
   setIsEditing
@@ -196,7 +196,8 @@ export function RubricCheckAnnotation({
 }) {
   const review = useSubmissionReview();
   const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, review?.id);
-  const gradingIsRequired = review && check.is_required && rubricCheckComments.length == 0;
+  const isGrader = useIsGraderOrInstructor();
+  const gradingIsRequired = isGrader && review && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
   return (
     <Box
@@ -246,6 +247,7 @@ export function RubricCheckGlobal({
   const [selected, setSelected] = useState<boolean>(rubricCheckComments.length > 0);
   const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
   const submission = useSubmissionMaybe();
+  const isGrader = useIsGraderOrInstructor();
 
   const pathname = usePathname();
   const linkedAritfactId = check.artifact
@@ -269,6 +271,7 @@ export function RubricCheckGlobal({
   const points = criteria.is_additive ? `+${check.points}` : `-${check.points}`;
   const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
   const hasOptions = check.data?.options && check.data.options.length > 0; // If we have options, we will always show the options for this check as radios.
+  const showOptions = isGrader && hasOptions;
   const _selectedOptionIndex =
     hasOptions && rubricCheckComments.length == 1
       ? check.data!.options.findIndex((option) => option.points === rubricCheckComments[0].points)
@@ -276,13 +279,14 @@ export function RubricCheckGlobal({
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
   const gradingIsRequired = review && check.is_required && rubricCheckComments.length == 0;
   const gradingIsPermitted =
+    isGrader &&
     review &&
-    criteria.max_checks_per_submission !== null &&
-    criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000);
+    (criteria.max_checks_per_submission === null ||
+      criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000));
   return (
     <>
       <HStack>
-        {hasOptions && (
+        {showOptions && (
           <VStack
             align="flex-start"
             w="100%"
@@ -320,7 +324,7 @@ export function RubricCheckGlobal({
             >
               {check.data!.options.map((option, index) => (
                 <Radio
-                  disabled={rubricCheckComments.length > 0 || !review}
+                  disabled={rubricCheckComments.length > 0 || !review || !gradingIsPermitted}
                   key={option.label + "-" + index}
                   value={index.toString()}
                 >
@@ -451,7 +455,7 @@ function SubmissionCommentForm({
             submission_id: submission.id,
             author: profile_id,
             points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
-            released: false,
+            released: review?.released,
             submission_review_id: review!.id,
             ...artifactInfo
           };
@@ -498,7 +502,8 @@ export function RubricCriteria({ criteria }: { criteria: HydratedRubricCriteria 
   } else {
     pointsText = `${criteria.total_points - totalPoints}/${criteria.total_points}`;
   }
-  const gradingIsRequired = review && comments.length < (criteria.min_checks_per_submission || 0);
+  const isGrader = useIsGraderOrInstructor();
+  const gradingIsRequired = isGrader && review && comments.length < (criteria.min_checks_per_submission || 0);
   let instructions = "";
   if (criteria.min_checks_per_submission) {
     if (criteria.max_checks_per_submission) {

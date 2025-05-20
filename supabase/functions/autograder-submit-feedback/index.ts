@@ -1,15 +1,15 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {
   CheckRunStatus,
-  GradingScriptResult,
   GradeResponse,
+  GradingScriptResult,
   OutputVisibility,
   RepositoryCheckRun
 } from "../_shared/FunctionTypes.d.ts";
 import { resolveRef, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 async function handleRequest(req: Request): Promise<GradeResponse> {
   const token = req.headers.get("Authorization");
   const requestBody = (await req.json()) as GradingScriptResult;
@@ -83,7 +83,7 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
   const score =
     requestBody.feedback.score ||
     requestBody.feedback.tests
-      .filter((test) => !test.hide_until_released)
+      .filter((test) => !test.hide_until_released || autograder_regression_test_id)
       .reduce((acc, test) => acc + (test.score || 0), 0);
   const max_score =
     requestBody.feedback.max_score || requestBody.feedback.tests.reduce((acc, test) => acc + (test.max_score || 0), 0);

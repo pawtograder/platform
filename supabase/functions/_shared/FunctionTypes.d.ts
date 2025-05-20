@@ -83,6 +83,8 @@ export type AddEnrollmentRequest = {
   name: string;
   role: Database["public"]["Enums"]["app_role"];
   courseId: number;
+  canvasId?: number;
+  classSectionId?: number;
 };
 
 export type LiveMeetingForHelpRequestRequest = {
@@ -168,6 +170,11 @@ export type RepositoryListCommitsRequest = {
 export type AutograderTriggerGradingWorkflowRequest = {
   repository: string;
   sha: string;
+  class_id: number;
+};
+
+export type AutograderRerunGraderRequest = {
+  submission_ids: number[];
   class_id: number;
 };
 

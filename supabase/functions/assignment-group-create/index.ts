@@ -1,8 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { AssignmentGroupCreateRequest, GenericResponse } from "../_shared/FunctionTypes.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { TZDate } from "npm:@date-fns/tz";
+import { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
+import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { SecurityError, UserVisibleError, wrapRequestHandler, IllegalArgumentError } from "../_shared/HandlerUtils.ts";
 async function createAutograderGroup(req: Request): Promise<{ message: string }> {
   //Get the user
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
@@ -31,7 +32,7 @@ async function createAutograderGroup(req: Request): Promise<{ message: string }>
   //Validate that the user is in the course
   const { data: profile } = await supabase
     .from("user_roles")
-    .select("*")
+    .select("*, classes(*)")
     .eq("user_id", user.id)
     .eq("role", "student")
     .eq("class_id", course_id)
@@ -80,9 +81,9 @@ async function createAutograderGroup(req: Request): Promise<{ message: string }>
   if (!assignment) {
     throw new IllegalArgumentError("Assignment not found");
   }
+  const timeZone = profile.classes.time_zone || "America/New_York";
   const groupFormationDeadline = assignment.group_formation_deadline;
-  if (groupFormationDeadline && new Date(groupFormationDeadline) < new Date()) {
-    //TODO timezones
+  if (groupFormationDeadline && new TZDate(groupFormationDeadline, timeZone) < TZDate.tz(timeZone)) {
     throw new SecurityError("Group formation deadline has passed");
   }
   //Create a new group
