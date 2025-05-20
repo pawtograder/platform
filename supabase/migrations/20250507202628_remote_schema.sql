@@ -7,3 +7,5 @@ for select
 to authenticated
 using (((( SELECT auth.uid() AS uid) = user_id) OR authorizeforclassgrader((class_id)::bigint)));
 
+
+
