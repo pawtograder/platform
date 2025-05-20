@@ -4,7 +4,21 @@ import { assignmentGroupInstructorCreateGroup, assignmentGroupInstructorMoveStud
 import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, Dialog, Flex, Heading, Link, NativeSelect, Portal, Skeleton, Spinner, Switch, Table, Text } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  Dialog,
+  Flex,
+  Heading,
+  Link,
+  NativeSelect,
+  Portal,
+  Skeleton,
+  Spinner,
+  Switch,
+  Table,
+  Text
+} from "@chakra-ui/react";
 import { useInvalidate, useList, useShow } from "@refinedev/core";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams } from "next/navigation";
@@ -189,126 +203,130 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
         {groupsToCreate.length === 0 && movesToFulfill.length === 0 && (
           <Text fontSize="sm">There are no staged changes at this time</Text>
         )}
-        {groupsToCreate.length > 0 || movesToFulfill.length > 0 && (
-          <Box m="4" borderRadius="md" border="1px solid" borderColor="border.info">
-            <Heading size="md" w="100%" bg="bg.info" px="2" borderRadius="md">
-              Pending Changes
-            </Heading>
-            <Box px="2" py="1">
-              <Text fontSize="sm" color="text.muted">
-                The following changes are staged and must be published to take effect. Unless published, they will not be saved if you navigate away from this page.
-              </Text>
-              {groupsToCreate.length > 0 && (<Flex flexDirection="column">
-                <Heading size="sm">Groups To Create:</Heading>
-                <Table.Root>
-                  <Table.Header>
-                    <Table.Row>
-                      <Table.ColumnHeader>Group</Table.ColumnHeader>
-                      <Table.ColumnHeader>Members</Table.ColumnHeader>
-                    </Table.Row>
-                  </Table.Header>
-                  <Table.Body>
-                    {groupsToCreate.map((group) => {
-                      return (
-                        <Table.Row key={group.name}>
-                          <Table.Cell>{group.name}</Table.Cell>
-                          <Table.Cell>
-                            {group.member_ids.map((member_id, key) => {
-                              return (
-                                profiles?.data?.find((prof: { private_profile_id: string }) => {
-                                  return prof.private_profile_id == member_id;
-                                })?.profiles.name + (key < group.member_ids.length - 1 ? ", " : "")
-                              );
-                            })}
-                          </Table.Cell>
+        {groupsToCreate.length > 0 ||
+          (movesToFulfill.length > 0 && (
+            <Box m="4" borderRadius="md" border="1px solid" borderColor="border.info">
+              <Heading size="md" w="100%" bg="bg.info" px="2" borderRadius="md">
+                Pending Changes
+              </Heading>
+              <Box px="2" py="1">
+                <Text fontSize="sm" color="text.muted">
+                  The following changes are staged and must be published to take effect. Unless published, they will not
+                  be saved if you navigate away from this page.
+                </Text>
+                {groupsToCreate.length > 0 && (
+                  <Flex flexDirection="column">
+                    <Heading size="sm">Groups To Create:</Heading>
+                    <Table.Root>
+                      <Table.Header>
+                        <Table.Row>
+                          <Table.ColumnHeader>Group</Table.ColumnHeader>
+                          <Table.ColumnHeader>Members</Table.ColumnHeader>
                         </Table.Row>
-                      );
-                    })}
-                  </Table.Body>
-                </Table.Root>
-              </Flex>)}
+                      </Table.Header>
+                      <Table.Body>
+                        {groupsToCreate.map((group) => {
+                          return (
+                            <Table.Row key={group.name}>
+                              <Table.Cell>{group.name}</Table.Cell>
+                              <Table.Cell>
+                                {group.member_ids.map((member_id, key) => {
+                                  return (
+                                    profiles?.data?.find((prof: { private_profile_id: string }) => {
+                                      return prof.private_profile_id == member_id;
+                                    })?.profiles.name + (key < group.member_ids.length - 1 ? ", " : "")
+                                  );
+                                })}
+                              </Table.Cell>
+                            </Table.Row>
+                          );
+                        })}
+                      </Table.Body>
+                    </Table.Root>
+                  </Flex>
+                )}
 
-              {movesToFulfill.length > 0 && (
-                <Flex flexDirection="column">
-                  <Heading size="sm">Students To Move:</Heading>
-                  <Table.Root>
-                    <Table.Header>
-                      <Table.Row>
-                        <Table.ColumnHeader>Student</Table.ColumnHeader>
-                        <Table.ColumnHeader>Current Group</Table.ColumnHeader>
-                        <Table.ColumnHeader>New Group</Table.ColumnHeader>
-                      </Table.Row>
-                    </Table.Header>
-                    <Table.Body>
-                      {movesToFulfill.map((move) => {
-                        return (
-                          <Table.Row key={move.profile_id}>
-                            <Table.Cell>
-                              {
-                                profiles?.data?.find((prof: { private_profile_id: string }) => {
-                                  return prof.private_profile_id == move.profile_id;
-                                })?.profiles.name
-                              }
-                            </Table.Cell>
-                            <Table.Cell>
-                              {move.old_group_id === null
-                                ? "not in group"
-                                : groupsData.find((group) => {
-                                  return group.id === move.old_group_id;
-                                })?.name}
-                            </Table.Cell>
-                            <Table.Cell>
-                              {
-                                groupsData.find((group) => {
-                                  return group.id === move.new_group_id;
-                                })?.name
-                              }
-                            </Table.Cell>
-                          </Table.Row>
-                        );
-                      })}
-                    </Table.Body>
-                  </Table.Root>
-                </Flex>
-              )}
+                {movesToFulfill.length > 0 && (
+                  <Flex flexDirection="column">
+                    <Heading size="sm">Students To Move:</Heading>
+                    <Table.Root>
+                      <Table.Header>
+                        <Table.Row>
+                          <Table.ColumnHeader>Student</Table.ColumnHeader>
+                          <Table.ColumnHeader>Current Group</Table.ColumnHeader>
+                          <Table.ColumnHeader>New Group</Table.ColumnHeader>
+                        </Table.Row>
+                      </Table.Header>
+                      <Table.Body>
+                        {movesToFulfill.map((move) => {
+                          return (
+                            <Table.Row key={move.profile_id}>
+                              <Table.Cell>
+                                {
+                                  profiles?.data?.find((prof: { private_profile_id: string }) => {
+                                    return prof.private_profile_id == move.profile_id;
+                                  })?.profiles.name
+                                }
+                              </Table.Cell>
+                              <Table.Cell>
+                                {move.old_group_id === null
+                                  ? "not in group"
+                                  : groupsData.find((group) => {
+                                      return group.id === move.old_group_id;
+                                    })?.name}
+                              </Table.Cell>
+                              <Table.Cell>
+                                {
+                                  groupsData.find((group) => {
+                                    return group.id === move.new_group_id;
+                                  })?.name
+                                }
+                              </Table.Cell>
+                            </Table.Row>
+                          );
+                        })}
+                      </Table.Body>
+                    </Table.Root>
+                  </Flex>
+                )}
 
-              {(groupsToCreate.length !== 0 || movesToFulfill.length !== 0) && (
-                <Flex gap="10px" pt="4" justifyContent="flex-end">
-                  {movesToFulfill.length !== 0 && (
+                {(groupsToCreate.length !== 0 || movesToFulfill.length !== 0) && (
+                  <Flex gap="10px" pt="4" justifyContent="flex-end">
+                    {movesToFulfill.length !== 0 && (
+                      <Button
+                        colorPalette={"red"}
+                        variant="ghost"
+                        onClick={() => {
+                          clearMovesToFulfill();
+                        }}
+                      >
+                        Clear Student Moves
+                      </Button>
+                    )}
+                    {groupsToCreate.length !== 0 && (
+                      <Button
+                        colorPalette={"red"}
+                        variant="ghost"
+                        onClick={() => {
+                          clearGroupsToCreate();
+                        }}
+                      >
+                        Clear Groups To Create
+                      </Button>
+                    )}
                     <Button
-                      colorPalette={"red"}
-                      variant="ghost"
+                      colorPalette={"green"}
                       onClick={() => {
-                        clearMovesToFulfill();
+                        publishChanges();
                       }}
                     >
-                      Clear Student Moves
+                      Publish Changes
                     </Button>
-                  )}
-                  {groupsToCreate.length !== 0 && (
-                    <Button
-                      colorPalette={"red"}
-                      variant="ghost"
-                      onClick={() => {
-                        clearGroupsToCreate();
-                      }}
-                    >
-                      Clear Groups To Create
-                    </Button>
-                  )}
-                  <Button
-                    colorPalette={"green"}
-                    onClick={() => {
-                      publishChanges();
-                    }}
-                  >
-                    Publish Changes
-                  </Button>
-                </Flex>
-              )}
+                  </Flex>
+                )}
+              </Box>
             </Box>
-          </Box>
-        )}
+          ))}
       </Flex>
       <Box width="100%" height="10px">
         <Switch.Root
@@ -583,7 +601,9 @@ function TableByStudents({
                     </Portal>
                   </Dialog.Root>
                 </Table.Cell>
-                <Table.Cell>{error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}</Table.Cell>
+                <Table.Cell>
+                  {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
+                </Table.Cell>
               </Table.Row>
             );
           })}
