@@ -1,10 +1,10 @@
+import { createClient } from "@/utils/supabase/client";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { useUngroupedStudentProfiles } from "./bulkCreateGroupModal";
 import { useGroupManagement } from "./GroupManagementContext";
-import { createClient } from "@/utils/supabase/client";
 
 export default function CreateNewGroup({
   groups,
@@ -49,7 +49,8 @@ export default function CreateNewGroup({
                   <Field.Label>
                     Choose a name for the group or
                     <Button
-                      size="sm"
+                      size="xs"
+                      variant="subtle"
                       colorPalette={"gray"}
                       onClick={async () => {
                         supabase.rpc("generate_anon_name").then((response) => {
@@ -112,7 +113,7 @@ export default function CreateNewGroup({
                     colorPalette={"green"}
                     disabled={newGroupName.length === 0}
                   >
-                    Stage changes
+                    Save
                   </Button>
                 </Dialog.ActionTrigger>
               </Flex>

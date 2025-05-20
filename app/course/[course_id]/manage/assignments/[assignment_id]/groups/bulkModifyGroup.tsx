@@ -1,9 +1,10 @@
+import PersonName from "@/components/ui/person-name";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Button, Dialog, Field, Flex, Portal } from "@chakra-ui/react";
+import { Button, Dialog, Field, Flex, Portal, SegmentGroup } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
-import { RolesWithProfilesAndGroupMemberships } from "./page";
 import { useGroupManagement } from "./GroupManagementContext";
+import { RolesWithProfilesAndGroupMemberships } from "./page";
 
 export default function BulkModifyGroup({
   groups,
@@ -19,7 +20,7 @@ export default function BulkModifyGroup({
   >([]);
   const { addMovesToFulfill } = useGroupManagement();
 
-  const [findStrategy, setFindStrategy] = useState<string>("");
+  const [findStrategy, setFindStrategy] = useState<"by_member" | "by_team_name">("by_team_name");
   const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(null);
   const [chosenStudentHasGroup, setChosenStudentHasGroup] = useState<boolean>(true);
 
@@ -27,7 +28,7 @@ export default function BulkModifyGroup({
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom">
       <Dialog.Trigger asChild>
         <Button size="sm" variant="outline">
-          Bulk Modify Group
+          Tweak a Group
         </Button>
       </Dialog.Trigger>
       <Portal>
@@ -35,26 +36,32 @@ export default function BulkModifyGroup({
         <Dialog.Positioner>
           <Dialog.Content>
             <Dialog.Header>
-              <Dialog.Title>Bulk Modify Group</Dialog.Title>
+              <Dialog.Title>Tweak a Group</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
               <Flex flexDir="column" gap="15px">
                 <Field.Root>
-                  <Field.Label>Find group by</Field.Label>
-                  <Select
-                    onChange={(e) => {
+                  <SegmentGroup.Root
+                    value={findStrategy}
+                    onValueChange={(details) => {
                       setGroupToMod(null);
-                      setFindStrategy(e?.value ?? "");
+                      setFindStrategy(details.value as "by_member" | "by_team_name");
                     }}
-                    options={[
-                      { value: "by_member", label: "Member" },
-                      { value: "by_team_name", label: "Group name" }
-                    ]}
-                  />
+                  >
+                    <SegmentGroup.Indicator />
+                    <SegmentGroup.Item value="by_member">
+                      <SegmentGroup.ItemText>Find group by student</SegmentGroup.ItemText>
+                      <SegmentGroup.ItemHiddenInput />
+                    </SegmentGroup.Item>
+                    <SegmentGroup.Item value="by_team_name">
+                      <SegmentGroup.ItemText>Find group by name</SegmentGroup.ItemText>
+                      <SegmentGroup.ItemHiddenInput />
+                    </SegmentGroup.Item>
+                  </SegmentGroup.Root>
                 </Field.Root>
                 {findStrategy === "by_member" && (
                   <Field.Root invalid={!chosenStudentHasGroup}>
-                    <Field.Label>Search students</Field.Label>
+                    <Field.Label>Select a student to add others to their group</Field.Label>
                     <Select
                       id="chosen_student"
                       onChange={(e) => {
@@ -82,7 +89,7 @@ export default function BulkModifyGroup({
                 )}{" "}
                 {findStrategy === "by_team_name" && (
                   <Field.Root>
-                    <Field.Label>Search groups</Field.Label>
+                    <Field.Label>Select a group to add students to</Field.Label>
                     <Select
                       onChange={(e) => setGroupToMod(groups.find((group) => group.id === e?.value) ?? null)}
                       options={groups.map((group) => ({ value: group.id, label: group.name }))}
@@ -96,8 +103,10 @@ export default function BulkModifyGroup({
                       {groupToMod.name}
                     </Field.Root>
                     <Field.Root>
-                      <Field.Label>Current member count </Field.Label>
-                      {groupToMod.assignment_groups_members?.length ?? 0}
+                      <Field.Label>Current members ({groupToMod.assignment_groups_members.length})</Field.Label>
+                      {groupToMod.assignment_groups_members?.map((member) => (
+                        <PersonName key={member.id} uid={member.profile_id} />
+                      ))}
                     </Field.Root>
                     <Field.Root
                       invalid={
@@ -140,7 +149,7 @@ export default function BulkModifyGroup({
                   onClick={() => {
                     setGroupToMod(null);
                     setSelectedMembers([]);
-                    setFindStrategy("");
+                    setFindStrategy("by_team_name");
                   }}
                 >
                   <Button variant="outline" colorPalette={"gray"}>
