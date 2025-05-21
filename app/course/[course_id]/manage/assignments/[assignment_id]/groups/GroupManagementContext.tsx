@@ -9,7 +9,7 @@ export type GroupCreateData = {
 
 export type StudentMoveData = {
   profile_id: string;
-  new_group_id: number;
+  new_group_id: number | null;
   old_group_id: number | null;
 };
 

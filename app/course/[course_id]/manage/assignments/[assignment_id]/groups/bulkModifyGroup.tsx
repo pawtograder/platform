@@ -1,10 +1,11 @@
 import PersonName from "@/components/ui/person-name";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Button, Dialog, Field, Flex, Portal, SegmentGroup } from "@chakra-ui/react";
+import { Box, Button, Container, Dialog, Field, Flex, HStack, Portal, SegmentGroup, Text } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
-import { useState } from "react";
-import { useGroupManagement } from "./GroupManagementContext";
+import { useEffect, useState } from "react";
+import { StudentMoveData, useGroupManagement } from "./GroupManagementContext";
 import { RolesWithProfilesAndGroupMemberships } from "./page";
+import { LuSquareX, LuX } from "react-icons/lu";
 
 export default function BulkModifyGroup({
   groups,
@@ -15,17 +16,27 @@ export default function BulkModifyGroup({
   assignment: Assignment;
   profiles: RolesWithProfilesAndGroupMemberships[];
 }) {
-  const [selectedMembers, setSelectedMembers] = useState<
-    MultiValue<{ value: RolesWithProfilesAndGroupMemberships; label: string | null }>
-  >([]);
   const { addMovesToFulfill } = useGroupManagement();
-
+  const [membersToRemove, setMembersToRemove] = useState<string[]>([]);
   const [findStrategy, setFindStrategy] = useState<"by_member" | "by_team_name">("by_team_name");
   const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(null);
   const [chosenStudentHasGroup, setChosenStudentHasGroup] = useState<boolean>(true);
+  const [selectedMembers, setSelectedMembers] = useState<
+    MultiValue<{ value: RolesWithProfilesAndGroupMemberships; label: string | null }>
+  >([]);
 
   return (
-    <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom">
+    <Dialog.Root
+      key={"center"}
+      placement={"center"}
+      motionPreset="slide-in-bottom"
+      onExitComplete={() => {
+        setGroupToMod(null);
+        setSelectedMembers([]);
+        setMembersToRemove([]);
+        setFindStrategy("by_team_name");
+      }}
+    >
       <Dialog.Trigger asChild>
         <Button size="sm" variant="outline">
           Tweak a Group
@@ -105,12 +116,29 @@ export default function BulkModifyGroup({
                     <Field.Root>
                       <Field.Label>Current members ({groupToMod.assignment_groups_members.length})</Field.Label>
                       {groupToMod.assignment_groups_members?.map((member) => (
-                        <PersonName key={member.id} uid={member.profile_id} />
+                        <HStack key={member.id} alignItems={"center"} width="100%" justifyContent="space-between">
+                          <PersonName
+                            key={member.id}
+                            uid={member.profile_id}
+                            textProps={
+                              membersToRemove.includes(member.profile_id) ? { textDecoration: "line-through" } : {}
+                            }
+                          />
+                          {membersToRemove.includes(member.profile_id) ? (
+                            <Text
+                              onClick={() => setMembersToRemove(membersToRemove.filter((m) => m != member.profile_id))}
+                            >
+                              Restore
+                            </Text>
+                          ) : (
+                            <LuX onClick={() => setMembersToRemove([...membersToRemove, member.profile_id])} />
+                          )}
+                        </HStack>
                       ))}
                     </Field.Root>
                     <Field.Root
                       invalid={
-                        selectedMembers.length + groupToMod.assignment_groups_members?.length >
+                        selectedMembers?.length + groupToMod.assignment_groups_members?.length >
                         (assignment.max_group_size ?? Infinity)
                       }
                     >
@@ -133,9 +161,9 @@ export default function BulkModifyGroup({
                           }))}
                       />
                       <Field.ErrorText>
-                        Warning: Adding {selectedMembers.length} new student{selectedMembers.length !== 1 ? "s" : ""} to
-                        this group will make the group larger than the maximum group size of {assignment.max_group_size}{" "}
-                        for this assignment
+                        Warning: Adding {selectedMembers?.length} new student{selectedMembers?.length !== 1 ? "s" : ""}{" "}
+                        to this group will make the group larger than the maximum group size of{" "}
+                        {assignment.max_group_size} for this assignment
                       </Field.ErrorText>
                     </Field.Root>
                   </>
@@ -144,14 +172,7 @@ export default function BulkModifyGroup({
             </Dialog.Body>
             <Dialog.Footer>
               <Flex gap="var(--chakra-spacing-3)">
-                <Dialog.CloseTrigger
-                  asChild
-                  onClick={() => {
-                    setGroupToMod(null);
-                    setSelectedMembers([]);
-                    setFindStrategy("by_team_name");
-                  }}
-                >
+                <Dialog.CloseTrigger asChild>
                   <Button variant="outline" colorPalette={"gray"}>
                     Cancel
                   </Button>
@@ -159,18 +180,28 @@ export default function BulkModifyGroup({
                 <Dialog.CloseTrigger asChild>
                   <Button
                     colorPalette={"green"}
-                    disabled={selectedMembers.length == 0 || groupToMod == null}
+                    disabled={(selectedMembers.length == 0 && membersToRemove.length == 0) || groupToMod == null}
                     onClick={() => {
                       if (groupToMod) {
-                        addMovesToFulfill(
-                          selectedMembers.map((member) => {
-                            return {
-                              profile_id: member.value.private_profile_id,
-                              old_group_id: member.value.profiles.assignment_groups_members[0].id,
-                              new_group_id: groupToMod.id
-                            };
-                          })
-                        );
+                        const result: StudentMoveData[] = selectedMembers.map((member) => {
+                          return {
+                            profile_id: member.value.private_profile_id,
+                            old_group_id:
+                              member.value.profiles.assignment_groups_members.length > 0
+                                ? member.value.profiles.assignment_groups_members[0].assignment_group_id
+                                : null,
+
+                            new_group_id: groupToMod.id
+                          };
+                        });
+                        const result2: StudentMoveData[] = membersToRemove.map((member) => {
+                          return {
+                            profile_id: member,
+                            old_group_id: groupToMod.id,
+                            new_group_id: null
+                          };
+                        });
+                        addMovesToFulfill(result.concat(result2));
                       }
                     }}
                   >
