@@ -36,11 +36,11 @@ import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { CrudFilter, useInvalidate, useList, useUpdate, useShow } from "@refinedev/core";
 import { formatRelative, format } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useState, ElementType as ReactElementType } from "react";
+import { useState, ElementType as ReactElementType, useMemo, useEffect } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -62,6 +62,12 @@ import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
 import RubricSidebar from "@/components/ui/rubric-sidebar";
 import { Tables } from "@/utils/supabase/SupabaseTypes";
+import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+
+interface RubricOptionType extends OptionBase {
+  value: number;
+  label: string;
+}
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -609,6 +615,7 @@ function RubricView() {
   const searchParams = useSearchParams();
   const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
   const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
+  const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(undefined);
 
   const {
     reviewAssignment,
@@ -616,37 +623,71 @@ function RubricView() {
     error: reviewAssignmentError
   } = useReviewAssignment(reviewAssignmentId);
 
-  const assignmentRubricData = submission.assignments.rubrics;
+  const assignmentId = submission.assignments.id;
+
+  const { data: assignmentRubricsData, isLoading: isLoadingAssignmentRubrics } = useList<Tables<"rubrics">>({
+    resource: "rubrics",
+    filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
+    queryOptions: {
+      enabled: !!assignmentId
+    },
+    meta: {
+      select: "id, name, review_round"
+    }
+  });
+
+  useEffect(() => {
+    if (reviewAssignmentId && reviewAssignment?.rubric_id) {
+      setSelectedRubricIdState(reviewAssignment.rubric_id);
+    } else if (submission.assignments.grading_rubric_id) {
+      setSelectedRubricIdState(submission.assignments.grading_rubric_id);
+    } else if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
+      setSelectedRubricIdState(assignmentRubricsData.data[0].id);
+    }
+  }, [
+    reviewAssignmentId,
+    reviewAssignment?.rubric_id,
+    submission.assignments.grading_rubric_id,
+    assignmentRubricsData?.data
+  ]);
+
+  const rubricIdToDisplay =
+    reviewAssignmentId && reviewAssignment?.rubric_id ? reviewAssignment.rubric_id : selectedRubricIdState;
+
+  const { query: rubricToDisplayQuery } = useShow<HydratedRubric>({
+    resource: "rubrics",
+    id: rubricIdToDisplay,
+    queryOptions: {
+      enabled: !!rubricIdToDisplay
+    },
+    meta: {
+      select: "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))"
+    }
+  });
+  const rubricToDisplayData = rubricToDisplayQuery?.data?.data;
+  const isLoadingRubricToDisplay = rubricToDisplayQuery?.isLoading;
+
+  const assignmentRubricData = rubricToDisplayData;
   let preparedInitialRubric: HydratedRubric | undefined = undefined;
 
   if (assignmentRubricData) {
-    if ("rubric_parts" in assignmentRubricData && assignmentRubricData.rubric_parts !== undefined) {
-      preparedInitialRubric = assignmentRubricData as HydratedRubric;
-    } else if ("rubric_criteria" in assignmentRubricData && Array.isArray(assignmentRubricData.rubric_criteria)) {
-      const { rubric_criteria, ...baseRubricProperties } = assignmentRubricData;
-      preparedInitialRubric = {
-        ...(baseRubricProperties as Tables<"rubrics">),
-        rubric_parts: [
-          {
-            id: -1,
-            name: baseRubricProperties.name || "Rubric Part",
-            description: baseRubricProperties.description,
-            ordinal: 0,
-            class_id: baseRubricProperties.class_id,
-            rubric_id: baseRubricProperties.id,
-            created_at: baseRubricProperties.created_at || new Date().toISOString(),
-            data: undefined,
-            rubric_criteria: rubric_criteria as HydratedRubricCriteria[]
-          } as HydratedRubricPart
-        ]
-      };
-    }
+    // useShow with the correct select should directly return HydratedRubric
+    preparedInitialRubric = assignmentRubricData;
   }
 
   const mainSubmissionReviewData = useSubmissionReview();
   const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
 
   const activeReviewForSidebar = reviewAssignmentId ? peerReviewSubmissionData : mainSubmissionReviewData;
+
+  const rubricOptions: RubricOptionType[] = useMemo(() => {
+    return (
+      assignmentRubricsData?.data.map((rubric) => ({
+        value: rubric.id,
+        label: `${rubric.name} (${rubric.review_round || "N/A"})`
+      })) || []
+    );
+  }, [assignmentRubricsData]);
 
   const displayScoreFromReview = activeReviewForSidebar;
 
@@ -685,6 +726,22 @@ function RubricView() {
                 Grading visible to student after: {format(new Date(reviewAssignment.release_date), "Pp")}
               </Text>
             )}
+          </Box>
+        )}
+
+        {!reviewAssignmentId && !isLoadingAssignmentRubrics && rubricOptions.length > 1 && (
+          <Box w="full">
+            <Text fontSize="sm" fontWeight="bold" mb={1}>
+              Select Rubric to View:
+            </Text>
+            <ChakraReactSelect<RubricOptionType, false>
+              options={rubricOptions}
+              value={rubricOptions.find((option) => option.value === selectedRubricIdState)}
+              onChange={(option) => setSelectedRubricIdState(option?.value)}
+              isLoading={isLoadingAssignmentRubrics || isLoadingRubricToDisplay}
+              isDisabled={!!reviewAssignmentId}
+              chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
+            />
           </Box>
         )}
 
