@@ -1,15 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { AssignmentGroupInstructorMoveStudentRequest } from "../_shared/FunctionTypes.d.ts";
-import {
-  IllegalArgumentError,
-  SecurityError,
-  assertUserIsInCourse,
-  assertUserIsInstructor,
-  wrapRequestHandler
-} from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import { IllegalArgumentError, assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
 
 async function handleAssignmentGroupInstructorMoveStudent(req: Request): Promise<void> {
   const { new_assignment_group_id, old_assignment_group_id, profile_id, class_id } =
@@ -36,8 +30,9 @@ async function handleAssignmentGroupInstructorMoveStudent(req: Request): Promise
     const { error: remove_member_error } = await adminSupabase
       .from("assignment_groups_members")
       .delete()
-      .eq("id", currentGroup!.id);
+      .eq("id", currentGroup.id);
     if (remove_member_error) {
+      console.error(remove_member_error);
       throw new Error("Failed to remove member from group");
     }
     const { data: remaining_members, error: remaining_members_error } = await adminSupabase

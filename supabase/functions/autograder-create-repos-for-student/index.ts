@@ -33,7 +33,13 @@ async function handleRequest(req: Request) {
     throw new UserVisibleError(`User ${user.user!.id} has no Github username linked`);
   }
 
-  const { data: classes, error: classesError } = await supabase
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+
+  //Must use adminSupabase because students can't see each others' github usernames
+  const { data: classes, error: classesError } = await adminSupabase
     .from("user_roles")
     .select(
       // "*"
@@ -55,10 +61,7 @@ async function handleRequest(req: Request) {
   );
   const existingRepos = [...existingIndividualRepos, ...existingGroupRepos];
   //Find all assignments that the student is enrolled in that have been released
-  const adminSupabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+
   console.log(classes.map((c) => c.class_id));
   const { data: allAssignments, error: assignmentsError } = await adminSupabase
     .from("assignments")
@@ -122,6 +125,7 @@ async function handleRequest(req: Request) {
           c.classes!.slug!,
           group.assignment_groups_members
             .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
+            .filter((m) => m.user_roles.users.github_username)
             .map((m) => m.user_roles.users.github_username!)
         );
       })

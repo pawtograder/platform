@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
 import { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
+import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 async function createAutograderGroup(req: Request): Promise<{ message: string }> {
@@ -13,6 +14,9 @@ async function createAutograderGroup(req: Request): Promise<{ message: string }>
   });
   const { course_id, assignment_id, name, invitees } = (await req.json()) as AssignmentGroupCreateRequest;
   const trimmedName = name.trim();
+  console.log(
+    `Request to create group ${trimmedName} for assignment ${assignment_id} in course ${course_id} with invitees ${invitees}`
+  );
   if (trimmedName.length === 0) {
     throw new IllegalArgumentError("Group name cannot be empty");
   }
@@ -22,7 +26,6 @@ async function createAutograderGroup(req: Request): Promise<{ message: string }>
       "Group name consist only of alphanumeric, hyphens, or underscores, and be less than 36 characters"
     );
   }
-  console.log(course_id, assignment_id, trimmedName, invitees);
   const {
     data: { user }
   } = await supabase.auth.getUser();
@@ -32,7 +35,7 @@ async function createAutograderGroup(req: Request): Promise<{ message: string }>
   //Validate that the user is in the course
   const { data: profile } = await supabase
     .from("user_roles")
-    .select("*, classes(*)")
+    .select("*, classes(*), users(github_username)")
     .eq("user_id", user.id)
     .eq("role", "student")
     .eq("class_id", course_id)
@@ -124,6 +127,42 @@ async function createAutograderGroup(req: Request): Promise<{ message: string }>
   if (inviteesError) {
     console.error(inviteesError);
     throw new UserVisibleError("Failed to invite users to group");
+  }
+  console.log(
+    `Created group ${newGroup.id} for ${trimmedName} in assignment ${assignment_id}, initial member ${profile_id}, invitations sent to ${invitees.join(", ")}`
+  );
+  //Deactivate any individual submissions for this assignment for this student
+  const { error: deactivateError } = await adminSupabase
+    .from("submissions")
+    .update({
+      is_active: false
+    })
+    .eq("assignment_id", assignment_id)
+    .eq("profile_id", profile_id);
+  if (deactivateError) {
+    console.error(deactivateError);
+    throw new UserVisibleError("Failed to deactivate submissions");
+  }
+
+  //Create the repo for the group
+  const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${trimmedName}`;
+  const headSha = await createRepo(profile.classes!.github_org!, repoName, assignment.template_repo!);
+  const { error } = await adminSupabase.from("repositories").insert({
+    class_id: assignment.class_id!,
+    assignment_group_id: newGroup.id,
+    assignment_id: assignment.id,
+    repository: `${profile.classes!.github_org}/${repoName}`,
+    synced_repo_sha: headSha,
+    synced_handout_sha: assignment.latest_template_sha
+  });
+  if (error) {
+    console.error(error);
+    throw new UserVisibleError(`Error creating repo: ${error}`);
+  }
+  if (profile.users.github_username) {
+    await syncRepoPermissions(profile.classes!.github_org!, repoName, profile.classes!.slug!, [
+      profile.users.github_username!
+    ]);
   }
   return {
     message: `Group #${newGroup.id} created successfully`
