@@ -18,7 +18,7 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
-import { RubricCheckComment, RubricCriteria } from "@/components/ui/rubric-sidebar";
+import { RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
@@ -796,13 +796,28 @@ function RubricView() {
             </HStack>
           </Button>
         )}
-        {showHandGrading && <Heading size="md">Hand Check Results</Heading>}
-        {showHandGrading && criteria?.map((criteria) => <RubricCriteria key={criteria.id} criteria={criteria} />)}
         <Comments />
+        {addReferenceModalData &&
+          rubricToDisplayData &&
+          rubricToDisplayData.rubric_parts &&
+          submission.assignments.id &&
+          submission.class_id && (
+            <AddRubricReferenceModal
+              isOpen={isAddReferenceModalOpen}
+              onClose={closeAddReferenceModal}
+              currentRubricChecks={rubricToDisplayData.rubric_parts.flatMap((p) =>
+                p.rubric_criteria.flatMap((c) => c.rubric_checks)
+              )}
+              currentRubricId={addReferenceModalData.currentRubricId}
+              assignmentId={submission.assignments.id}
+              classId={submission.class_id}
+            />
+          )}
       </VStack>
     </Box>
   );
 }
+
 function Comments() {
   const comments = useSubmissionComments({}).filter((comment) => !comment.rubric_check_id);
   if (!comments) {
@@ -816,22 +831,6 @@ function Comments() {
           <RubricCheckComment key={comment.id} comment={comment} />
         ))}
       </VStack>
-      {addReferenceModalData &&
-        rubricToDisplayData &&
-        rubricToDisplayData.rubric_parts &&
-        submission.assignments.id &&
-        submission.class_id && (
-          <AddRubricReferenceModal
-            isOpen={isAddReferenceModalOpen}
-            onClose={closeAddReferenceModal}
-            currentRubricChecks={rubricToDisplayData.rubric_parts.flatMap((p) =>
-              p.rubric_criteria.flatMap((c) => c.rubric_checks)
-            )}
-            currentRubricId={addReferenceModalData.currentRubricId}
-            assignmentId={submission.assignments.id}
-            classId={submission.class_id}
-          />
-        )}
     </Box>
   );
 }

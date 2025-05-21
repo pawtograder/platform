@@ -26,9 +26,10 @@ export default function AddSingleStudent() {
   const invalidate = useInvalidate();
   const onSubmit = useCallback(
     async (data: FormData) => {
-      toaster.loading({
+      toaster.create({
         title: "Adding student",
-        description: "Please wait while we add the student to the course"
+        description: "Please wait while we add the student to the course",
+        type: "info"
       });
       const supabase = createClient();
       try {

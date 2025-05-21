@@ -136,8 +136,8 @@ export function RubricCheckComment({
   check
 }: {
   comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
-  criteria: HydratedRubricCriteria;
-  check: HydratedRubricCheck;
+  criteria?: HydratedRubricCriteria;
+  check?: HydratedRubricCheck;
 }) {
   const author = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
@@ -153,9 +153,9 @@ export function RubricCheckComment({
   const pathname = usePathname();
 
   const linkedFileId =
-    check.file && submission ? submission.submission_files.find((f) => f.name === check.file)?.id : undefined;
+    check?.file && submission ? submission.submission_files.find((f) => f.name === check.file)?.id : undefined;
   const linkedArtifactId =
-    check.artifact && submission
+    check?.artifact && submission
       ? submission.submission_artifacts.find((a) => a.name === check.artifact)?.id
       : undefined;
 
@@ -196,14 +196,14 @@ export function RubricCheckComment({
         <HStack gap={1}>
           {pointsText} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
           {isArtifactComment(comment) && <SubmissionArtifactCommentLink comment={comment} />}
-          {!isLineComment(comment) && !isArtifactComment(comment) && linkedFileId && submission && check.file && (
+          {!isLineComment(comment) && !isArtifactComment(comment) && linkedFileId && submission && check?.file && (
             <Link href={linkToSubPage(pathname, "files") + `?file_id=${linkedFileId}`}> (Ref: {check.file})</Link>
           )}
           {!isLineComment(comment) &&
             !isArtifactComment(comment) &&
             linkedArtifactId &&
             submission &&
-            check.artifact && (
+            check?.artifact && (
               <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${linkedArtifactId}`}>
                 {" "}
                 (Ref: {check.artifact})
