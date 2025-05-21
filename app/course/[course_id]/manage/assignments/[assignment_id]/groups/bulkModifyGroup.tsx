@@ -37,6 +37,8 @@ export default function BulkModifyGroup({
       placement={"center"}
       motionPreset="slide-in-bottom"
       onExitComplete={() => {
+        setGroupToMod(groupToModify ?? null);
+        setChosenStudentHasGroup(true);
         setSelectedMembers([]);
         setMembersToRemove([]);
         setFindStrategy("by_team_name");

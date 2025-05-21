@@ -386,6 +386,38 @@ function TableByGroups({
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   groupsData: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
 }) {
+  const { modProfiles, movesToFulfill } = useGroupManagement();
+
+  /**
+   * Creates the list of profile names being added to an exisitng group in table preview
+   */
+  const newProfilesForGroup = (group_id: number) => {
+    const movesForThisGroup = movesToFulfill.filter((move) => {
+      return move.new_group_id == group_id;
+    });
+    const profileIdsForThisGroup = movesForThisGroup.map((move) => {
+      return move.profile_id;
+    });
+
+    const profilesForGroup = profileIdsForThisGroup.map((profile) => {
+      return profiles?.find((p) => {
+        return p.private_profile_id == profile;
+      });
+    });
+
+    return (
+      <Flex>
+        {profilesForGroup.map((profile, key) => {
+          return (
+            <Text key={key} fontWeight="bold">
+              {profile?.profiles.name}{" "}
+            </Text>
+          );
+        })}
+      </Flex>
+    );
+  };
+
   return (
     <Flex gap="15px" flexDir={"column"} paddingTop={"10px"}>
       <Heading size="md">Groups</Heading>
@@ -433,12 +465,21 @@ function TableByGroups({
                 </Table.Cell>
                 <Table.Cell>
                   {group.assignment_groups_members.map((member, key) => {
-                    return (
+                    const name =
                       profiles?.find((prof) => {
                         return prof.private_profile_id == member.profile_id;
-                      })?.profiles.name + (key < group.assignment_groups_members.length - 1 ? ", " : "")
-                    );
+                      })?.profiles.name + " ";
+                    if (modProfiles.includes(member.profile_id)) {
+                      return (
+                        <Text textDecoration="line-through" key={key}>
+                          {name}
+                        </Text>
+                      );
+                    } else {
+                      return <Text key={key}>{name}</Text>;
+                    }
                   })}
+                  {newProfilesForGroup(group.id)}
                 </Table.Cell>
                 <Table.Cell>
                   {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
@@ -476,8 +517,27 @@ function TableByStudents({
   profiles: RolesWithProfilesAndGroupMemberships[] | undefined;
   loading: boolean;
 }) {
-  const { addMovesToFulfill } = useGroupManagement();
+  const { modProfiles, groupsToCreate, movesToFulfill, addMovesToFulfill } = useGroupManagement();
   const [groupId, setGroupId] = useState<string | undefined>(undefined);
+
+  const getNewGroup = (profile_id: string) => {
+    const move = movesToFulfill?.find((move) => {
+      return move.profile_id == profile_id;
+    });
+    const group = groupsToCreate?.find((group) => {
+      return group.member_ids.find((member) => member == profile_id);
+    });
+    if (move) {
+      return (
+        groupsData.find((group) => {
+          return group.id == move.new_group_id;
+        })?.name ?? "not in group"
+      );
+    } else if (group) {
+      return group.name;
+    }
+    return "not in group";
+  };
   return (
     <Flex gap="15px" flexDir={"column"} paddingTop={"10px"}>
       <Heading size="md">Students</Heading>
@@ -523,14 +583,23 @@ function TableByStudents({
                   <Dialog.Root placement={"center"}>
                     <Dialog.Trigger asChild>
                       <Flex alignItems={"center"} gap="3px">
-                        <Text> {group ? group.name : "no group"}</Text>
-                        <Button
-                          variant={"ghost"}
-                          paddingLeft="0"
-                          _hover={{ textDecoration: "underline", backgroundColor: "transparent" }}
-                        >
-                          (edit)
-                        </Button>
+                        {!modProfiles.includes(profile.private_profile_id) ? (
+                          <>
+                            <Text> {group ? group.name : "no group"}</Text>
+                            <Button
+                              variant={"ghost"}
+                              paddingLeft="0"
+                              _hover={{ textDecoration: "underline", backgroundColor: "transparent" }}
+                            >
+                              (edit)
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Text textDecoration={"line-through"}>{group ? group.name : "no group"}</Text>
+                            <Text fontWeight={"bold"}>{getNewGroup(profile.private_profile_id) ?? ""}</Text>
+                          </>
+                        )}
                       </Flex>
                     </Dialog.Trigger>
                     <Portal>
@@ -565,7 +634,7 @@ function TableByStudents({
                             </NativeSelect.Root>
 
                             <Dialog.Footer>
-                              <Dialog.ActionTrigger as="div">
+                              <Dialog.CloseTrigger as="div">
                                 <Button
                                   colorPalette={"red"}
                                   variant="surface"
@@ -575,8 +644,8 @@ function TableByStudents({
                                 >
                                   Cancel
                                 </Button>
-                              </Dialog.ActionTrigger>
-                              <Dialog.ActionTrigger as="div">
+                              </Dialog.CloseTrigger>
+                              <Dialog.CloseTrigger as="div">
                                 <Button
                                   colorPalette={"green"}
                                   onClick={() => {
@@ -602,7 +671,7 @@ function TableByStudents({
                                 >
                                   Stage Changes
                                 </Button>
-                              </Dialog.ActionTrigger>
+                              </Dialog.CloseTrigger>
                             </Dialog.Footer>
                           </Dialog.Body>
                         </Dialog.Content>

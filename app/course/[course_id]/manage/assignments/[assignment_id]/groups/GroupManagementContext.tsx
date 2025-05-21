@@ -20,6 +20,7 @@ export type GroupManagementContextType = {
   movesToFulfill: StudentMoveData[];
   clearMovesToFulfill: () => void;
   addMovesToFulfill: (data: StudentMoveData[]) => void;
+  modProfiles: string[];
 };
 
 export const GroupManagementContext = createContext<GroupManagementContextType>({} as GroupManagementContextType);
@@ -93,7 +94,7 @@ export function GroupManagementProvider({ children }: { children: React.ReactNod
   const clearMovesToFulfill = () => {
     setModProfiles(
       modProfiles.filter((profile) => {
-        movesToFulfill
+        return !movesToFulfill
           .map((move) => {
             return move.profile_id;
           })
@@ -111,7 +112,8 @@ export function GroupManagementProvider({ children }: { children: React.ReactNod
         addGroupsToCreate,
         movesToFulfill,
         clearMovesToFulfill,
-        addMovesToFulfill
+        addMovesToFulfill,
+        modProfiles
       }}
     >
       {children}
