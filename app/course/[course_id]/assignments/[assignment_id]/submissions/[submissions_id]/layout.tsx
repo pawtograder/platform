@@ -63,6 +63,10 @@ import { linkToSubPage } from "./utils";
 import RubricSidebar from "@/components/ui/rubric-sidebar";
 import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import useModalManager from "@/hooks/useModalManager";
+import AddRubricReferenceModal from "./AddRubricReferenceModal";
+import { FaLink } from "react-icons/fa";
+import { toaster } from "@/components/ui/toaster";
 
 interface RubricOptionType extends OptionBase {
   value: number;
@@ -618,6 +622,13 @@ function RubricView() {
   const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(undefined);
 
   const {
+    isOpen: isAddReferenceModalOpen,
+    openModal: openAddReferenceModal,
+    closeModal: closeAddReferenceModal,
+    modalData: addReferenceModalData
+  } = useModalManager<{ currentRubricId: number }>();
+
+  const {
     reviewAssignment,
     isLoading: isLoadingReviewAssignment,
     error: reviewAssignmentError
@@ -694,6 +705,18 @@ function RubricView() {
   const showHandGradingControls =
     isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!reviewAssignmentId;
 
+  const handleOpenAddReferenceModal = () => {
+    if (!rubricToDisplayData) {
+      toaster.error({ title: "Error", description: "Rubric data is not loaded yet." });
+      return;
+    }
+    if (!rubricIdToDisplay) {
+      toaster.error({ title: "Error", description: "Current rubric ID is not available." });
+      return;
+    }
+    openAddReferenceModal({ currentRubricId: rubricIdToDisplay });
+  };
+
   return (
     <Box
       position="sticky"
@@ -762,7 +785,32 @@ function RubricView() {
           />
         )}
         {!showHandGradingControls && <Text>Rubric and manual grading are not available.</Text>}
+
+        {isGraderOrInstructor && rubricIdToDisplay && !reviewAssignmentId && rubricToDisplayData && (
+          <Button onClick={handleOpenAddReferenceModal} variant="outline" size="sm" mt={2}>
+            <HStack>
+              <Icon as={FaLink} />
+              <Text>Reference Check from Another Rubric</Text>
+            </HStack>
+          </Button>
+        )}
       </VStack>
+      {addReferenceModalData &&
+        rubricToDisplayData &&
+        rubricToDisplayData.rubric_parts &&
+        submission.assignments.id &&
+        submission.class_id && (
+          <AddRubricReferenceModal
+            isOpen={isAddReferenceModalOpen}
+            onClose={closeAddReferenceModal}
+            currentRubricChecks={rubricToDisplayData.rubric_parts.flatMap((p) =>
+              p.rubric_criteria.flatMap((c) => c.rubric_checks)
+            )}
+            currentRubricId={addReferenceModalData.currentRubricId}
+            assignmentId={submission.assignments.id}
+            classId={submission.class_id}
+          />
+        )}
     </Box>
   );
 }
