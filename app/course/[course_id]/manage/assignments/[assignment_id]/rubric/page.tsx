@@ -23,7 +23,6 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import * as YAML from "yaml";
 
-// Define REVIEW_ROUNDS_AVAILABLE outside the component
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
   "grading-review",
@@ -320,7 +319,35 @@ export default function RubricPage() {
   const debounceTimeoutRef = useRef<NodeJS.Timeout>();
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
-  const [canLoadDemo, setCanLoadDemo] = useState<boolean>(false);
+
+  const createMinimalNewHydratedRubric = useCallback(
+    (
+      currentAssignmentId: string,
+      currentClassId: number,
+      reviewRound: HydratedRubric["review_round"]
+    ): HydratedRubric => {
+      const roundNameProper = reviewRound
+        ? reviewRound
+            .split("-")
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(" ")
+        : "New";
+      const name = `${roundNameProper} Rubric`;
+
+      return {
+        id: 0,
+        name: name,
+        description: null,
+        assignment_id: Number(currentAssignmentId),
+        class_id: currentClassId,
+        is_private: false,
+        review_round: reviewRound,
+        rubric_parts: [],
+        created_at: ""
+      };
+    },
+    []
+  );
 
   const createNewRubricTemplate = useCallback(
     (
@@ -329,11 +356,8 @@ export default function RubricPage() {
       reviewRound: HydratedRubric["review_round"]
     ): HydratedRubric => {
       const newRubricBase = YAML.parse(defaultRubric) as YmlRubricType;
-      const roundName = reviewRound || "new";
-      newRubricBase.name = `${roundName.charAt(0).toUpperCase() + roundName.slice(1).replace("-", " ")} Rubric (New)`;
       newRubricBase.assignment_id = Number(currentAssignmentId);
       newRubricBase.review_round = reviewRound;
-      newRubricBase.is_private = false;
 
       const hydrated = YamlRubricToHydratedRubric(newRubricBase);
       hydrated.id = 0;
@@ -371,12 +395,16 @@ export default function RubricPage() {
         setActiveRubric(existing);
         initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(existing));
       } else {
-        const newTemplate = createNewRubricTemplate(assignment_id as string, assignmentDetails.class_id, reviewRound);
+        const newTemplate = createMinimalNewHydratedRubric(
+          assignment_id as string,
+          assignmentDetails.class_id,
+          reviewRound
+        );
         setActiveRubric(newTemplate);
         initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(newTemplate));
       }
     },
-    [allRubricsForAssignment, assignmentDetails, assignment_id, createNewRubricTemplate]
+    [allRubricsForAssignment, assignmentDetails, assignment_id, createMinimalNewHydratedRubric]
   );
 
   useEffect(() => {
@@ -401,7 +429,7 @@ export default function RubricPage() {
 
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
-      getWorker(moduleId, label) {
+      getWorker(label) {
         switch (label) {
           case "editorWorkerService":
             return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
@@ -497,20 +525,6 @@ export default function RubricPage() {
     }
   }, [activeRubric, debouncedParseYaml]);
 
-  useEffect(() => {
-    if (
-      activeRubric &&
-      activeRubric.id === 0 &&
-      (!activeRubric.rubric_parts || activeRubric.rubric_parts.length === 0)
-    ) {
-      setCanLoadDemo(true);
-    } else if (activeRubric && activeRubric.rubric_parts && activeRubric.rubric_parts.length > 0) {
-      setCanLoadDemo(false);
-    } else if (!activeRubric) {
-      setCanLoadDemo(true);
-    }
-  }, [activeRubric]);
-
   const updatePartIfChanged = useCallback(
     async (part: HydratedRubricPart, existingPart: HydratedRubricPart) => {
       if (part.id !== existingPart.id) {
@@ -588,19 +602,50 @@ export default function RubricPage() {
       if (!activeRubric || !assignmentDetails || !activeReviewRound || !initialActiveRubricSnapshot.current) {
         toaster.create({
           title: "Error",
-          description: "Cannot save: Missing active rubric, assignment details, or review round.",
+          description: "Cannot save: Missing active rubric, assignment details, review round, or initial snapshot.",
           type: "error"
         });
         return;
       }
 
       const parsedRubricFromEditor = YamlRubricToHydratedRubric(YAML.parse(yamlStringValue));
-      const originalRubric = initialActiveRubricSnapshot.current;
 
-      let currentEffectiveRubricId = originalRubric.id;
-      const isNewRubricCreation = !originalRubric.id || originalRubric.id <= 0;
+      let currentEffectiveRubricId = 0;
+      let isNewRubricCreationFlow = false;
+      let baselineRubricForDiff: HydratedRubric;
 
-      if (isNewRubricCreation) {
+      const dbRubricForThisRound = allRubricsForAssignment.find(
+        (r: HydratedRubric) => r.review_round === activeReviewRound
+      );
+
+      if (initialActiveRubricSnapshot.current && initialActiveRubricSnapshot.current.id > 0) {
+        currentEffectiveRubricId = initialActiveRubricSnapshot.current.id;
+        isNewRubricCreationFlow = false;
+        baselineRubricForDiff = initialActiveRubricSnapshot.current;
+      } else if (dbRubricForThisRound) {
+        currentEffectiveRubricId = dbRubricForThisRound.id;
+        isNewRubricCreationFlow = false;
+        baselineRubricForDiff = dbRubricForThisRound;
+        if (initialActiveRubricSnapshot.current && initialActiveRubricSnapshot.current.id <= 0) {
+          const updatedActiveFromDb = {
+            ...dbRubricForThisRound,
+            name: parsedRubricFromEditor.name,
+            description: parsedRubricFromEditor.description,
+            is_private: parsedRubricFromEditor.is_private,
+            rubric_parts: parsedRubricFromEditor.rubric_parts
+          };
+          setActiveRubric(updatedActiveFromDb);
+          initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(updatedActiveFromDb));
+        }
+      } else {
+        isNewRubricCreationFlow = true;
+        baselineRubricForDiff = initialActiveRubricSnapshot.current
+          ? initialActiveRubricSnapshot.current
+          : createMinimalNewHydratedRubric(assignment_id as string, assignmentDetails.class_id, activeReviewRound);
+        currentEffectiveRubricId = 0;
+      }
+
+      if (isNewRubricCreationFlow) {
         const newRubricPayload: Omit<HydratedRubric, "id" | "created_at" | "class_id" | "rubric_parts"> & {
           class_id: number;
           assignment_id: number;
@@ -620,15 +665,15 @@ export default function RubricPage() {
           currentEffectiveRubricId = createdTopLevelRubric.data.id as number;
           if (!currentEffectiveRubricId) throw new Error("Failed to create rubric shell.");
 
-          const newlyCreatedRubricEntry = {
+          const newlySavedRubricEntry: HydratedRubric = {
             ...activeRubric,
             ...newRubricPayload,
             id: currentEffectiveRubricId,
             created_at: new Date().toISOString(),
             rubric_parts: parsedRubricFromEditor.rubric_parts
           };
-          setActiveRubric(newlyCreatedRubricEntry);
-          initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(newlyCreatedRubricEntry));
+          setActiveRubric(newlySavedRubricEntry);
+          initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(newlySavedRubricEntry));
         } catch (e) {
           toaster.create({ title: "Error Creating Rubric", description: (e as Error).message, type: "error" });
           setIsSaving(false);
@@ -636,14 +681,20 @@ export default function RubricPage() {
         }
       } else {
         const topLevelRubricChanges: Partial<HydratedRubric> = {};
-        if (parsedRubricFromEditor.name !== originalRubric.name)
+        if (parsedRubricFromEditor.name !== baselineRubricForDiff.name)
           topLevelRubricChanges.name = parsedRubricFromEditor.name;
-        if (parsedRubricFromEditor.description !== originalRubric.description)
+        if (parsedRubricFromEditor.description !== baselineRubricForDiff.description)
           topLevelRubricChanges.description = parsedRubricFromEditor.description;
-        if (parsedRubricFromEditor.is_private !== originalRubric.is_private)
+        if (parsedRubricFromEditor.is_private !== baselineRubricForDiff.is_private)
           topLevelRubricChanges.is_private = parsedRubricFromEditor.is_private;
-        if (parsedRubricFromEditor.review_round !== originalRubric.review_round)
+        if (
+          parsedRubricFromEditor.review_round !== baselineRubricForDiff.review_round &&
+          parsedRubricFromEditor.review_round
+        )
           topLevelRubricChanges.review_round = parsedRubricFromEditor.review_round;
+        else if (activeReviewRound !== baselineRubricForDiff.review_round) {
+          topLevelRubricChanges.review_round = activeReviewRound;
+        }
 
         if (Object.keys(topLevelRubricChanges).length > 0) {
           await updateResource({
@@ -654,18 +705,16 @@ export default function RubricPage() {
         }
       }
 
-      const partsToCompareAgainst = isNewRubricCreation ? [] : originalRubric.rubric_parts;
+      const partsToCompareAgainst = baselineRubricForDiff.rubric_parts;
       const partChanges = findChanges(parsedRubricFromEditor.rubric_parts, partsToCompareAgainst);
 
-      const criteriaToCompareAgainst = isNewRubricCreation
-        ? []
-        : originalRubric.rubric_parts.flatMap((part) => part.rubric_criteria);
+      const criteriaToCompareAgainst = baselineRubricForDiff.rubric_parts.flatMap((part) => part.rubric_criteria);
       const allNewCriteriaFromEditor = parsedRubricFromEditor.rubric_parts.flatMap((part) => part.rubric_criteria);
       const criteriaChanges = findChanges(allNewCriteriaFromEditor, criteriaToCompareAgainst);
 
-      const checksToCompareAgainst = isNewRubricCreation
-        ? []
-        : originalRubric.rubric_parts.flatMap((part) => part.rubric_criteria.flatMap((c) => c.rubric_checks));
+      const checksToCompareAgainst = baselineRubricForDiff.rubric_parts.flatMap((part) =>
+        part.rubric_criteria.flatMap((c) => c.rubric_checks)
+      );
       const allNewChecksFromEditor = allNewCriteriaFromEditor.flatMap(
         (criteria: HydratedRubricCriteria) => criteria.rubric_checks
       );
@@ -689,7 +738,10 @@ export default function RubricPage() {
 
       await Promise.all(
         partChanges.toUpdate.map((part: HydratedRubricPart) =>
-          updatePartIfChanged(part, originalRubric.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart)
+          updatePartIfChanged(
+            part,
+            baselineRubricForDiff.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart
+          )
         )
       );
 
@@ -730,7 +782,7 @@ export default function RubricPage() {
 
       await Promise.all(
         criteriaChanges.toUpdate.map((criteria: HydratedRubricCriteria) => {
-          const existingCrit = originalRubric.rubric_parts
+          const existingCrit = baselineRubricForDiff.rubric_parts
             .flatMap((p: HydratedRubricPart) => p.rubric_criteria)
             .find((c: HydratedRubricCriteria) => c.id === criteria.id);
           if (existingCrit) {
@@ -795,7 +847,7 @@ export default function RubricPage() {
 
       await Promise.all(
         checkChanges.toUpdate.map((check: HydratedRubricCheck) => {
-          const existingChk = originalRubric.rubric_parts
+          const existingChk = baselineRubricForDiff.rubric_parts
             .flatMap((p: HydratedRubricPart) => p.rubric_criteria)
             .flatMap((c: HydratedRubricCriteria) => c.rubric_checks)
             .find((ch: HydratedRubricCheck) => ch.id === check.id);
@@ -865,7 +917,9 @@ export default function RubricPage() {
       updateCheckIfChanged,
       updateResource,
       assignment_id,
-      activeReviewRound
+      activeReviewRound,
+      allRubricsForAssignment,
+      createMinimalNewHydratedRubric
     ]
   );
 
@@ -889,41 +943,33 @@ export default function RubricPage() {
           <Heading size="md">
             {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubric
           </Heading>
-          {canLoadDemo && (
-            <Button
-              variant="ghost"
-              colorScheme="gray"
-              onClick={() => {
-                if (activeRubric && assignmentDetails && activeReviewRound) {
-                  const demoTemplate = createNewRubricTemplate(
-                    assignment_id as string,
-                    assignmentDetails.class_id,
-                    activeReviewRound
-                  );
-                  if (activeRubric.name.endsWith("(New)")) {
-                    const demoYaml = YAML.parse(defaultRubric) as YmlRubricType;
-                    demoTemplate.name = demoYaml.name;
-                  } else {
-                    demoTemplate.name = activeRubric.name;
-                  }
-                  setActiveRubric(demoTemplate);
-                  initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(demoTemplate));
-                }
-              }}
-            >
-              Load Demo Rubric
-            </Button>
-          )}
+          <Button
+            variant="solid"
+            onClick={() => {
+              if (assignmentDetails && activeReviewRound) {
+                const demoTemplate = createNewRubricTemplate(
+                  assignment_id as string,
+                  assignmentDetails.class_id,
+                  activeReviewRound
+                );
+                setActiveRubric(demoTemplate);
+                initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(demoTemplate));
+              }
+            }}
+          >
+            Load Demo Rubric
+          </Button>
         </HStack>
         <HStack>
           <Button
             variant="ghost"
-            colorScheme="gray"
+            colorPalette="red"
             onClick={() => {
-              window.history.back();
+              setActiveRubric(undefined);
+              initialActiveRubricSnapshot.current = undefined;
             }}
           >
-            Cancel
+            Reset
           </Button>
           <Button
             colorPalette="green"
@@ -933,14 +979,14 @@ export default function RubricPage() {
                 setIsSaving(true);
                 await saveRubric(value);
                 toaster.success({
-                  title: "Rubric saved",
-                  description: "The rubric has been saved successfully"
+                  title: "Rubric Saved",
+                  description: "The rubric has been saved successfully."
                 });
                 await refetchAllRubrics();
                 if (activeReviewRound) {
                   const updatedList = await refetchAllRubrics();
-                  if (updatedList && updatedList.data) {
-                    const refreshedActive = updatedList.data.find(
+                  if (updatedList && updatedList.data && updatedList.data.data) {
+                    const refreshedActive = updatedList.data.data.find(
                       (r: HydratedRubric) => r.review_round === activeReviewRound
                     );
                     if (refreshedActive) {
@@ -995,7 +1041,7 @@ export default function RubricPage() {
         <Tabs.List>
           {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
             <Tabs.Trigger key={rr || "new"} value={rr || "new"}>
-              {rr ? rr.replace("-", " ") : "New Rubric"}
+              {rr ? rr : "New Rubric"}
             </Tabs.Trigger>
           ))}
         </Tabs.List>
@@ -1059,6 +1105,7 @@ export default function RubricPage() {
     </Flex>
   );
 }
+
 const defaultRubric = `
 name: Demo Rubric
 description: Edit or delete this rubric to create your own.
