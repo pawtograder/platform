@@ -64,7 +64,7 @@ import RubricSidebar from "@/components/ui/rubric-sidebar";
 import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import useModalManager from "@/hooks/useModalManager";
-import AddRubricReferenceModal from "./AddRubricReferenceModal";
+import AddRubricReferenceModal from "./addRubricReferenceModal";
 import { FaLink } from "react-icons/fa";
 import { toaster } from "@/components/ui/toaster";
 
