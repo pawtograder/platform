@@ -357,6 +357,11 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
           groups={groupsData}
           assignment={assignment}
           profiles={profiles?.data as RolesWithProfilesAndGroupMemberships[]}
+          trigger={
+            <Button size="sm" variant="outline">
+              Tweak a Group
+            </Button>
+          }
         />
       </Flex>
       {groupViewOn ? (
@@ -417,7 +422,15 @@ function TableByGroups({
 
             return (
               <Table.Row key={group.id}>
-                <Table.Cell>{group.name}</Table.Cell>
+                <Table.Cell>
+                  <BulkModifyGroup
+                    groups={groupsData}
+                    assignment={assignment}
+                    profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
+                    groupToModify={group}
+                    trigger={<Text _hover={{ textDecoration: "underline" }}>{group.name}</Text>}
+                  />
+                </Table.Cell>
                 <Table.Cell>
                   {group.assignment_groups_members.map((member, key) => {
                     return (
@@ -512,9 +525,9 @@ function TableByStudents({
                       <Flex alignItems={"center"} gap="3px">
                         <Text> {group ? group.name : "no group"}</Text>
                         <Button
-                          backgroundColor={"transparent"}
+                          variant={"ghost"}
                           paddingLeft="0"
-                          _hover={{ textDecoration: "underline" }}
+                          _hover={{ textDecoration: "underline", backgroundColor: "transparent" }}
                         >
                           (edit)
                         </Button>

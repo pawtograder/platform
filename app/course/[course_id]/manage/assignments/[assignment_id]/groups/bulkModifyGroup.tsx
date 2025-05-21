@@ -1,25 +1,31 @@
 import PersonName from "@/components/ui/person-name";
 import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Container, Dialog, Field, Flex, HStack, Portal, SegmentGroup, Text } from "@chakra-ui/react";
+import { Button, Dialog, Field, Flex, HStack, Portal, SegmentGroup, Text } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { StudentMoveData, useGroupManagement } from "./GroupManagementContext";
 import { RolesWithProfilesAndGroupMemberships } from "./page";
-import { LuSquareX, LuX } from "react-icons/lu";
+import { LuX } from "react-icons/lu";
 
 export default function BulkModifyGroup({
   groups,
   assignment,
-  profiles
+  profiles,
+  trigger,
+  groupToModify
 }: {
   groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[];
   assignment: Assignment;
   profiles: RolesWithProfilesAndGroupMemberships[];
+  trigger: JSX.Element;
+  groupToModify?: AssignmentGroupWithMembersInvitationsAndJoinRequests;
 }) {
   const { addMovesToFulfill } = useGroupManagement();
   const [membersToRemove, setMembersToRemove] = useState<string[]>([]);
   const [findStrategy, setFindStrategy] = useState<"by_member" | "by_team_name">("by_team_name");
-  const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(null);
+  const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(
+    groupToModify ?? null
+  );
   const [chosenStudentHasGroup, setChosenStudentHasGroup] = useState<boolean>(true);
   const [selectedMembers, setSelectedMembers] = useState<
     MultiValue<{ value: RolesWithProfilesAndGroupMemberships; label: string | null }>
@@ -31,17 +37,12 @@ export default function BulkModifyGroup({
       placement={"center"}
       motionPreset="slide-in-bottom"
       onExitComplete={() => {
-        setGroupToMod(null);
         setSelectedMembers([]);
         setMembersToRemove([]);
         setFindStrategy("by_team_name");
       }}
     >
-      <Dialog.Trigger asChild>
-        <Button size="sm" variant="outline">
-          Tweak a Group
-        </Button>
-      </Dialog.Trigger>
+      <Dialog.Trigger as="div">{trigger}</Dialog.Trigger>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
@@ -51,61 +52,66 @@ export default function BulkModifyGroup({
             </Dialog.Header>
             <Dialog.Body>
               <Flex flexDir="column" gap="15px">
-                <Field.Root>
-                  <SegmentGroup.Root
-                    value={findStrategy}
-                    onValueChange={(details) => {
-                      setGroupToMod(null);
-                      setFindStrategy(details.value as "by_member" | "by_team_name");
-                    }}
-                  >
-                    <SegmentGroup.Indicator />
-                    <SegmentGroup.Item value="by_member">
-                      <SegmentGroup.ItemText>Find group by student</SegmentGroup.ItemText>
-                      <SegmentGroup.ItemHiddenInput />
-                    </SegmentGroup.Item>
-                    <SegmentGroup.Item value="by_team_name">
-                      <SegmentGroup.ItemText>Find group by name</SegmentGroup.ItemText>
-                      <SegmentGroup.ItemHiddenInput />
-                    </SegmentGroup.Item>
-                  </SegmentGroup.Root>
-                </Field.Root>
-                {findStrategy === "by_member" && (
-                  <Field.Root invalid={!chosenStudentHasGroup}>
-                    <Field.Label>Select a student to add others to their group</Field.Label>
-                    <Select
-                      id="chosen_student"
-                      onChange={(e) => {
-                        setChosenStudentHasGroup(
-                          e?.value.profiles.assignment_groups_members[0] === undefined ? false : true
-                        );
-                        setGroupToMod(
-                          groups.find(
-                            (group) => group.id === e?.value.profiles.assignment_groups_members[0]?.assignment_group_id
-                          ) ?? null
-                        );
-                      }}
-                      options={profiles?.map((profile: RolesWithProfilesAndGroupMemberships) => ({
-                        value: profile,
-                        label: profile.profiles.name
-                      }))}
-                    />
-                    {!chosenStudentHasGroup && (
-                      <Field.ErrorText>
-                        The user you have selected is not currently in a group. To group this user, either select a
-                        group to add them to, or create a new group.
-                      </Field.ErrorText>
+                {!groupToModify && (
+                  <>
+                    <Field.Root>
+                      <SegmentGroup.Root
+                        value={findStrategy}
+                        onValueChange={(details) => {
+                          setGroupToMod(null);
+                          setFindStrategy(details.value as "by_member" | "by_team_name");
+                        }}
+                      >
+                        <SegmentGroup.Indicator />
+                        <SegmentGroup.Item value="by_member">
+                          <SegmentGroup.ItemText>Find group by student</SegmentGroup.ItemText>
+                          <SegmentGroup.ItemHiddenInput />
+                        </SegmentGroup.Item>
+                        <SegmentGroup.Item value="by_team_name">
+                          <SegmentGroup.ItemText>Find group by name</SegmentGroup.ItemText>
+                          <SegmentGroup.ItemHiddenInput />
+                        </SegmentGroup.Item>
+                      </SegmentGroup.Root>
+                    </Field.Root>
+                    {findStrategy === "by_member" && (
+                      <Field.Root invalid={!chosenStudentHasGroup}>
+                        <Field.Label>Select a student to add others to their group</Field.Label>
+                        <Select
+                          id="chosen_student"
+                          onChange={(e) => {
+                            setChosenStudentHasGroup(
+                              e?.value.profiles.assignment_groups_members[0] === undefined ? false : true
+                            );
+                            setGroupToMod(
+                              groups.find(
+                                (group) =>
+                                  group.id === e?.value.profiles.assignment_groups_members[0]?.assignment_group_id
+                              ) ?? null
+                            );
+                          }}
+                          options={profiles?.map((profile: RolesWithProfilesAndGroupMemberships) => ({
+                            value: profile,
+                            label: profile.profiles.name
+                          }))}
+                        />
+                        {!chosenStudentHasGroup && (
+                          <Field.ErrorText>
+                            The user you have selected is not currently in a group. To group this user, either select a
+                            group to add them to, or create a new group.
+                          </Field.ErrorText>
+                        )}
+                      </Field.Root>
+                    )}{" "}
+                    {findStrategy === "by_team_name" && (
+                      <Field.Root>
+                        <Field.Label>Select a group to add students to</Field.Label>
+                        <Select
+                          onChange={(e) => setGroupToMod(groups.find((group) => group.id === e?.value) ?? null)}
+                          options={groups.map((group) => ({ value: group.id, label: group.name }))}
+                        />
+                      </Field.Root>
                     )}
-                  </Field.Root>
-                )}{" "}
-                {findStrategy === "by_team_name" && (
-                  <Field.Root>
-                    <Field.Label>Select a group to add students to</Field.Label>
-                    <Select
-                      onChange={(e) => setGroupToMod(groups.find((group) => group.id === e?.value) ?? null)}
-                      options={groups.map((group) => ({ value: group.id, label: group.name }))}
-                    />
-                  </Field.Root>
+                  </>
                 )}
                 {groupToMod && (
                   <>
