@@ -376,7 +376,7 @@ function SubmissionControllerCreator({
     id: submission_id,
     meta: {
       select:
-        "*, assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
+        "*, assignments(*, rubrics!assignments_rubric_id_fkey(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
     }
   });
   const { data: liveFileComments, isLoading: liveFileCommentsLoading } = useList<SubmissionFileComment>({

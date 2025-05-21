@@ -180,7 +180,7 @@ export type SubmissionWithGraderResults = GetResult<
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*))"
+  "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*))"
 >;
 export type GraderResultTest = GetResult<
   Database["public"],

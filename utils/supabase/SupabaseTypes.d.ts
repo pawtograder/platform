@@ -1253,6 +1253,48 @@ export type Database = {
           }
         ];
       };
+      grader_result_test_output: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          grader_result_test_id: number;
+          id: number;
+          output: string;
+          output_format: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          grader_result_test_id: number;
+          id?: number;
+          output: string;
+          output_format: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          grader_result_test_id?: number;
+          id?: number;
+          output?: string;
+          output_format?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "grader_result_test_output_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "grader_result_test_output_grader_result_test_id_fkey";
+            columns: ["grader_result_test_id"];
+            isOneToOne: false;
+            referencedRelation: "grader_result_tests";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       grader_result_tests: {
         Row: {
           assignment_group_id: number | null;

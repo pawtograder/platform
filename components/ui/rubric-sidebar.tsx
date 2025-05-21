@@ -125,7 +125,7 @@ export function RubricCheckComment({
   criteria
 }: {
   comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
-  criteria: HydratedRubricCriteria;
+  criteria?: HydratedRubricCriteria;
 }) {
   const author = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
@@ -137,28 +137,42 @@ export function RubricCheckComment({
         ? "submission_file_comments"
         : "submission_comments"
   });
+  let pointsText = <></>;
+  if (comment.points) {
+    if (!criteria || criteria.is_additive) {
+      pointsText = (
+        <>
+          <Icon as={FaCheckCircle} color="green.500" /> + {comment.points}
+        </>
+      );
+    } else {
+      pointsText = (
+        <>
+          <Icon as={FaTimesCircle} color="red.500" /> - {comment.points}
+        </>
+      );
+    }
+  }
   return (
-    <Box border="1px solid" borderColor="border.info" borderRadius="md" p={0} w="100%" fontSize="sm">
-      <Box bg="bg.info" pl={1} borderTopRadius="md">
+    <Box
+      border="1px solid"
+      borderColor={criteria ? "border.info" : "border.muted"}
+      borderRadius="md"
+      p={0}
+      w="100%"
+      fontSize="sm"
+    >
+      <Box bg={criteria ? "bg.info" : "bg.muted"} pl={1} borderTopRadius="md">
         <HStack justify="space-between">
           <Text fontSize="sm" color="fg.muted">
-            {author?.name} applied {formatRelative(comment.created_at, new Date())}
+            {author?.name} {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
           </Text>
           <CommentActions comment={comment} setIsEditing={setIsEditing} />
         </HStack>
       </Box>
       <Box pl={1} pr={1} color="fg.muted">
         <HStack gap={1}>
-          {criteria.is_additive ? (
-            <>
-              <Icon as={FaCheckCircle} color="green.500" />+{comment.points}
-            </>
-          ) : (
-            <>
-              <Icon as={FaTimesCircle} color="red.500" />-{comment.points}
-            </>
-          )}{" "}
-          {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
+          {pointsText} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
           {isArtifactComment(comment) && <SubmissionArtifactCommentLink comment={comment} />}
         </HStack>
         {isEditing ? (
