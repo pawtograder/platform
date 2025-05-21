@@ -512,8 +512,10 @@ export type Database = {
           latest_template_sha: string | null;
           max_group_size: number | null;
           max_late_tokens: number;
+          meta_grading_rubric_id: number | null;
           min_group_size: number | null;
           release_date: string | null;
+          self_review_rubric_id: number | null;
           slug: string | null;
           student_repo_prefix: string | null;
           template_repo: string | null;
@@ -537,8 +539,10 @@ export type Database = {
           latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
+          meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           release_date?: string | null;
+          self_review_rubric_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -562,8 +566,10 @@ export type Database = {
           latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
+          meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           release_date?: string | null;
+          self_review_rubric_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -579,8 +585,22 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "assignments_meta_grading_rubric_id_fkey";
+            columns: ["meta_grading_rubric_id"];
+            isOneToOne: false;
+            referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "assignments_rubric_id_fkey";
             columns: ["grading_rubric_id"];
+            isOneToOne: false;
+            referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_self_review_rubric_id_fkey";
+            columns: ["self_review_rubric_id"];
             isOneToOne: false;
             referencedRelation: "rubrics";
             referencedColumns: ["id"];
