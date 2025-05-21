@@ -41,6 +41,7 @@ import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
 import { toaster } from "./toaster";
 import PersonAvatar from "./person-avatar";
 import { Tooltip } from "./tooltip";
+import { RubricCheckSubOption, isRubricCheckDataWithOptions } from "./code-file";
 
 export function CommentActions({
   comment,
@@ -397,11 +398,11 @@ export function RubricCheckGlobal({
 
   const points = criteria.is_additive ? `+${check.points}` : `-${check.points}`;
   const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
-  const hasOptions = check.data?.options && check.data.options.length > 0;
+  const hasOptions = isRubricCheckDataWithOptions(check.data) && check.data.options.length > 0;
   const showOptions = isGrader && hasOptions;
   const _selectedOptionIndex =
-    hasOptions && rubricCheckComments.length == 1
-      ? check.data!.options.findIndex((option) => option.points === rubricCheckComments[0].points)
+    hasOptions && rubricCheckComments.length == 1 && isRubricCheckDataWithOptions(check.data)
+      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
       : undefined;
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
   const gradingIsRequired = submissionReview && check.is_required && rubricCheckComments.length == 0;
@@ -442,25 +443,28 @@ export function RubricCheckGlobal({
               w="100%"
               value={selectedOptionIndex?.toString()}
               onValueChange={(value) => {
-                const selectedOption = check.data!.options[parseInt(value.value)];
-                if (selectedOption) {
-                  setSelectedOptionIndex(parseInt(value.value));
-                  if (gradingIsPermitted) {
-                    setIsEditing(true);
+                if (isRubricCheckDataWithOptions(check.data)) {
+                  const selectedOption = check.data.options[parseInt(value.value)];
+                  if (selectedOption) {
+                    setSelectedOptionIndex(parseInt(value.value));
+                    if (gradingIsPermitted) {
+                      setIsEditing(true);
+                    }
                   }
                 }
               }}
             >
-              {check.data!.options.map((option, index) => (
-                <Radio
-                  disabled={rubricCheckComments.length > 0 || !submissionReview || !gradingIsPermitted}
-                  key={option.label + "-" + index}
-                  value={index.toString()}
-                >
-                  {criteria.is_additive ? "+" : "-"}
-                  {option.points} {option.label}
-                </Radio>
-              ))}
+              {isRubricCheckDataWithOptions(check.data) &&
+                check.data.options.map((option: RubricCheckSubOption, index: number) => (
+                  <Radio
+                    disabled={rubricCheckComments.length > 0 || !submissionReview || !gradingIsPermitted}
+                    key={option.label + "-" + index}
+                    value={index.toString()}
+                  >
+                    {criteria.is_additive ? "+" : "-"}
+                    {option.points} {option.label}
+                  </Radio>
+                ))}
             </RadioGroup.Root>
           </VStack>
         )}
@@ -571,7 +575,10 @@ function SubmissionCommentForm({
     return <></>;
   }
 
-  const selectedOption = selectedOptionIndex !== undefined ? check.data!.options[selectedOptionIndex] : undefined;
+  const selectedOption =
+    selectedOptionIndex !== undefined && isRubricCheckDataWithOptions(check.data)
+      ? check.data.options[selectedOptionIndex]
+      : undefined;
   return (
     <Box border="1px solid" borderColor="border.inverted" borderRadius="md" p={0} w="100%" fontSize="sm">
       <Box bg="bg.inverted" pl={1} borderTopRadius="md">

@@ -10,6 +10,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
+  Json,
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
@@ -45,6 +46,25 @@ import { CommentActions } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { Checkbox } from "./checkbox";
 import { toaster } from "./toaster";
+
+export type RubricCheckSubOption = {
+  label: string;
+  points: number;
+  // Add other properties if they exist on subOption
+};
+
+export type RubricCheckDataWithOptions = {
+  options: RubricCheckSubOption[];
+};
+
+export function isRubricCheckDataWithOptions(data: Json | null | undefined): data is RubricCheckDataWithOptions {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "options" in data &&
+    Array.isArray((data as { options?: unknown }).options)
+  );
+}
 
 type CodeLineCommentContextType = {
   submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
@@ -652,8 +672,8 @@ function LineActionPopup({
           criteria: criteria as HydratedRubricCriteria,
           options: []
         };
-        if (check.data?.options) {
-          option.options = check.data.options.map((subOption, index) => ({
+        if (isRubricCheckDataWithOptions(check.data)) {
+          option.options = check.data.options.map((subOption: RubricCheckSubOption, index: number) => ({
             label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
             comment: subOption.label,
             index: index.toString(),
@@ -711,7 +731,7 @@ function LineActionPopup({
       return (
         <chakraComponents.SingleValue {...props}>
           {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
-          {props.data.check?.data?.options ? `(Select an option)` : `${points} points`}
+          {isRubricCheckDataWithOptions(props.data.check?.data) ? `(Select an option)` : `${points} points`}
         </chakraComponents.SingleValue>
       );
     },
@@ -763,10 +783,10 @@ function LineActionPopup({
         />
         {selectedCheckOption && (
           <>
-            {selectedCheckOption.check?.data?.options && (
+            {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
               <Select
                 options={selectedCheckOption.check.data.options.map(
-                  (option, index) =>
+                  (option: RubricCheckSubOption, index: number) =>
                     ({
                       label: option.label,
                       comment: option.label,
@@ -1028,7 +1048,7 @@ function createLine(
               };
             });
           },
-          oncontextmenu: (ev: MouseEvent) => {
+          onContextMenu: (ev: MouseEvent) => {
             ev.preventDefault();
             ev.stopPropagation();
             const target = ev.currentTarget as HTMLElement;
@@ -1065,7 +1085,7 @@ function createLine(
           {
             type: "element",
             tagName: "LineNumber",
-            properties: { lineNumber: line },
+            properties: { lineNumber: line } as Properties,
             children: []
           },
           {
@@ -1073,7 +1093,7 @@ function createLine(
             tagName: "div",
             properties: {
               className: "source-code-line-content"
-            },
+            } as Properties,
             children: children
           }
         ]
@@ -1081,7 +1101,7 @@ function createLine(
       {
         type: "element",
         tagName: "CodeLineComments",
-        properties: { lineNumber: line },
+        properties: { lineNumber: line } as Properties,
         children: []
       }
     ]

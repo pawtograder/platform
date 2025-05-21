@@ -413,7 +413,7 @@ function SubmissionControllerCreator({
     id: submission_id,
     meta: {
       select:
-        "*, assignments(*, rubrics!assignments_rubric_id_fkey(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
+        "*, assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
     }
   });
   const { data: liveFileComments, isLoading: liveFileCommentsLoading } = useList<SubmissionFileComment>({
@@ -722,10 +722,10 @@ export function useRubricCheck(rubric_check_id: number | null) {
     };
   }
   const controller = context.submissionController;
-  const criteria = controller.submission.assignments.rubrics?.rubric_criteria?.find((c) =>
-    c.rubric_checks?.some((c) => c.id === rubric_check_id)
+  const criteria = controller.submission.assignments.rubrics?.rubric_criteria?.find((c: HydratedRubricCriteria) =>
+    c.rubric_checks?.some((c: HydratedRubricCheck) => c.id === rubric_check_id)
   );
-  const check = criteria?.rubric_checks?.find((c) => c.id === rubric_check_id);
+  const check = criteria?.rubric_checks?.find((c: HydratedRubricCheck) => c.id === rubric_check_id);
   return {
     rubricCheck: check,
     rubricCriteria: criteria

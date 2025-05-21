@@ -1,5 +1,6 @@
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database } from "./SupabaseTypes";
+import { Database, Json } from "./SupabaseTypes";
+export type { Json };
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
@@ -166,7 +167,7 @@ export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"]["Tables"]["submissions"]["Row"],
   "submissions",
   Database["public"]["Tables"]["submissions"]["Relationships"],
-  "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
+  "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
 export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"],
@@ -422,11 +423,11 @@ export type HydratedRubricPart = Omit<Database["public"]["Tables"]["rubric_parts
 };
 export type HydratedRubricCriteria = Omit<Database["public"]["Tables"]["rubric_criteria"]["Row"], "data"> & {
   rubric_checks: HydratedRubricCheck[];
-  data?: RubricCriteriaDataType;
+  data: RubricCriteriaDataType | null;
 };
-export type RubricCriteriaDataType = {};
+export type RubricCriteriaDataType = Json;
 export type HydratedRubricCheck = Omit<Database["public"]["Tables"]["rubric_checks"]["Row"], "data"> & {
-  data?: RubricChecksDataType;
+  data: Json | null;
 };
 export type RubricChecksDataType = {
   options: {
@@ -439,7 +440,7 @@ export type HydratedRubricParts = Database["public"]["Tables"]["rubric_parts"]["
   rubric_criteria: HydratedRubricCriteria[];
   data: RubricPartsDataType;
 };
-export type RubricPartsDataType = {};
+export type RubricPartsDataType = Json;
 
 export type YmlRubricType = Omit<HydratedRubric, "id" | "description" | "rubric_parts" | "class_id" | "created_at"> & {
   parts: YmlRubricPartType[];

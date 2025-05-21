@@ -42,7 +42,8 @@ import {
   SubmissionArtifact,
   SubmissionArtifactComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
-  SubmissionFile
+  SubmissionFile,
+  RubricChecksDataType
 } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -475,6 +476,7 @@ function ArtifactCommentsForm({
     </Box>
   );
 }
+
 function ArtifactCheckPopover({
   artifact,
   reviewAssignmentId
@@ -530,8 +532,14 @@ function ArtifactCheckPopover({
           criteria: criteria as HydratedRubricCriteria,
           options: []
         };
-        if (check.data?.options) {
-          option.options = check.data.options.map((subOption, index) => ({
+        if (
+          check.data &&
+          typeof check.data === "object" &&
+          "options" in check.data &&
+          Array.isArray((check.data as RubricChecksDataType).options)
+        ) {
+          const optionsData = check.data as RubricChecksDataType;
+          option.options = optionsData.options.map((subOption, index) => ({
             label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
             comment: subOption.label,
             index: index.toString(),
@@ -591,22 +599,26 @@ function ArtifactCheckPopover({
               isClearable
             />
 
-            {selectedCheckOption?.check?.data?.options && selectedCheckOption.check.data.options.length > 0 && (
-              <Select<RubricCheckSubOptions, false>
-                options={selectedCheckOption.check.data.options.map((option, index) => ({
-                  label: option.label,
-                  comment: option.label,
-                  value: index.toString(),
-                  index: index.toString(),
-                  points: option.points,
-                  check: selectedCheckOption
-                }))}
-                value={selectedSubOption}
-                onChange={(e: RubricCheckSubOptions | null) => setSelectedSubOption(e)}
-                placeholder="Select an option..."
-                isClearable
-              />
-            )}
+            {selectedCheckOption?.check?.data &&
+              typeof selectedCheckOption.check.data === "object" &&
+              "options" in selectedCheckOption.check.data &&
+              Array.isArray((selectedCheckOption.check.data as RubricChecksDataType).options) &&
+              (selectedCheckOption.check.data as RubricChecksDataType).options.length > 0 && (
+                <Select<RubricCheckSubOptions, false>
+                  options={(selectedCheckOption.check.data as RubricChecksDataType).options.map((option, index) => ({
+                    label: option.label,
+                    comment: option.label,
+                    value: index.toString(),
+                    index: index.toString(),
+                    points: option.points,
+                    check: selectedCheckOption
+                  }))}
+                  value={selectedSubOption}
+                  onChange={(e: RubricCheckSubOptions | null) => setSelectedSubOption(e)}
+                  placeholder="Select an option..."
+                  isClearable
+                />
+              )}
 
             {selectedCheckOption && (
               <>

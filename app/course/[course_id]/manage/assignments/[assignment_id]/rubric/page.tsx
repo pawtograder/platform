@@ -74,18 +74,33 @@ function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataTyp
   if (!check.data) {
     return undefined;
   }
-  if (check.data.options?.length === 1) {
-    throw new Error("Checks may not have only one option - they must have at least two options, or can have none");
-  }
-  for (const option of check.data.options) {
-    if (option.points === undefined || option.points === null) {
-      throw new Error("Option points are required");
+
+  // Type guard for check.data
+  if (
+    typeof check.data === "object" &&
+    check.data !== null &&
+    "options" in check.data &&
+    Array.isArray((check.data as { options?: unknown }).options)
+  ) {
+    const specificData = check.data as RubricChecksDataType;
+
+    if (specificData.options?.length === 1) {
+      throw new Error("Checks may not have only one option - they must have at least two options, or can have none");
     }
-    if (!option.label) {
-      throw new Error("Option label is required");
+    for (const option of specificData.options) {
+      if (option.points === undefined || option.points === null) {
+        throw new Error("Option points are required");
+      }
+      if (!option.label) {
+        throw new Error("Option label is required");
+      }
     }
+    return specificData;
+  } else if (typeof check.data === "object" && check.data !== null && !("options" in check.data)) {
+    return undefined;
   }
-  return check.data as RubricChecksDataType;
+
+  return undefined;
 }
 
 function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRubricChecksType[] {
@@ -103,7 +118,7 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
       artifact: valOrUndefined(check.artifact),
       max_annotations: valOrUndefined(check.max_annotations),
       points: check.points,
-      data: valOrUndefined(check.data),
+      data: check.data,
       annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined
     }));
 }
@@ -116,7 +131,7 @@ function hydratedRubricCriteriaToYamlRubric(criteria: HydratedRubricCriteria[]):
   criteria.sort((a, b) => a.ordinal - b.ordinal);
   return criteria.map((criteria) => ({
     id: criteria.id,
-    data: valOrUndefined(criteria.data),
+    data: criteria.data,
     description: valOrUndefined(criteria.description),
     is_additive: criteria.is_additive,
     name: criteria.name,
@@ -165,7 +180,7 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
     rubric_id: 0,
     class_id: 0,
     created_at: "",
-    data: rubricCheckDataOrThrow(check),
+    data: rubricCheckDataOrThrow(check) ?? null,
     rubric_criteria_id: 0,
     file: valOrNull(check.file),
     artifact: valOrNull(check.artifact),
