@@ -31,16 +31,23 @@ export default function AddSingleStudent() {
         description: "Please wait while we add the student to the course"
       });
       const supabase = createClient();
-      await enrollmentAdd(
-        { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
-        supabase
-      );
-      toaster.create({
-        title: "Student added",
-        description: "Refreshing user_roles",
-        type: "info"
-      });
-      invalidate({ resource: "user_roles", invalidates: ["list"] });
+      try {
+        await enrollmentAdd(
+          { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
+          supabase
+        );
+        toaster.create({
+          title: "Student added",
+          description: "Refreshing user_roles",
+          type: "info"
+        });
+        invalidate({ resource: "user_roles", invalidates: ["list"] });
+      } catch (error) {
+        toaster.error({
+          title: "Error adding student",
+          description: error instanceof Error ? error.message : "An unexpected error occurred."
+        });
+      }
     },
     [course_id, invalidate]
   );
