@@ -2,12 +2,25 @@
 import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
+import { Switch } from "@/components/ui/switch";
 import { GraderResultOutput, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
-import { Box, CardBody, CardHeader, CardRoot, Container, Heading, Skeleton, Table, Tabs, Text } from "@chakra-ui/react";
+import {
+  Box,
+  CardBody,
+  CardHeader,
+  CardRoot,
+  Container,
+  Heading,
+  HStack,
+  Skeleton,
+  Table,
+  Tabs,
+  Text
+} from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 
 export type GraderResultTestData = {
   hide_score?: string;
@@ -48,9 +61,11 @@ export default function GraderResults() {
     resource: "submissions",
     id: Number(submissions_id),
     meta: {
-      select: "*, assignments(*), grader_results(*, grader_result_tests(*), grader_result_output(*))"
+      select:
+        "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*))"
     }
   });
+  const [showHiddenOutput, setShowHiddenOutput] = useState(true);
   if (query.isLoading) {
     return (
       <Box>
@@ -87,6 +102,9 @@ export default function GraderResults() {
       </Container>
     );
   }
+  const hasHiddenOutput = query.data.data.grader_results.grader_result_tests.some(
+    (result) => result.grader_result_test_output.length > 0 || !result.is_released
+  );
   const data = query.data.data;
   return (
     <Tabs.Root m={3} defaultValue="tests">
@@ -121,6 +139,17 @@ export default function GraderResults() {
           </Box>
         )}
         <Heading size="md">Test Results</Heading>
+        <HStack w="100%" justifyContent="flex-end">
+          {hasHiddenOutput && (
+            <Switch
+              checked={showHiddenOutput}
+              onChange={() => setShowHiddenOutput(!showHiddenOutput)}
+              colorPalette="green"
+            >
+              Instructor View
+            </Switch>
+          )}
+        </HStack>
         <Table.Root maxW="2xl">
           <Table.Header>
             <Table.Row>
@@ -140,7 +169,10 @@ export default function GraderResults() {
                 </Table.Row>
               )}
             {data.grader_results?.grader_result_tests
-              ?.filter((r) => (r.extra_data as GraderResultTestData)?.hide_score !== "true")
+              ?.filter(
+                (r) =>
+                  (r.extra_data as GraderResultTestData)?.hide_score !== "true" && (showHiddenOutput || r.is_released)
+              )
               .map((result, index) => {
                 const isNewPart = index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
                 return (
@@ -168,16 +200,43 @@ export default function GraderResults() {
               })}
           </Table.Body>
         </Table.Root>
-        {data.grader_results?.grader_result_tests?.map((result) => (
-          <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
-            <CardHeader bg="bg.muted" p={2}>
-              <Heading size="lg" color={result.score === result.max_score ? "green" : "red"}>
-                {result.name} ({result.score} / {result.max_score})
-              </Heading>
-            </CardHeader>
-            <CardBody>{format_result_output(result)}</CardBody>
-          </CardRoot>
-        ))}
+        {data.grader_results?.grader_result_tests
+          ?.filter((result) => result.is_released || showHiddenOutput)
+          .map((result) => {
+            const hasInstructorOutput = showHiddenOutput && result.grader_result_test_output.length > 0;
+            const maybeWrappedResult = (content: React.ReactNode) => {
+              if (hasInstructorOutput) {
+                return (
+                  <CardRoot key={result.id} m={2}>
+                    <CardHeader bg="bg.muted" p={2}>
+                      <Heading size="md">Student-Visible Output</Heading>
+                    </CardHeader>
+                    <CardBody>{content}</CardBody>
+                  </CardRoot>
+                );
+              }
+              return <CardBody>{content}</CardBody>;
+            };
+            return (
+              <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
+                <CardHeader bg="bg.muted" p={2}>
+                  <Heading size="lg" color={result.score === result.max_score ? "green" : "red"}>
+                    {result.name} ({result.score} / {result.max_score})
+                  </Heading>
+                </CardHeader>
+                {maybeWrappedResult(format_result_output(result))}
+                {hasInstructorOutput &&
+                  result.grader_result_test_output.map((output) => (
+                    <CardRoot key={output.id} m={2}>
+                      <CardHeader bg="bg.muted" p={2}>
+                        <Heading size="md">Instructor-Only Output</Heading>
+                      </CardHeader>
+                      <CardBody>{format_result_output(output)}</CardBody>
+                    </CardRoot>
+                  ))}
+              </CardRoot>
+            );
+          })}
       </Tabs.Content>
     </Tabs.Root>
   );

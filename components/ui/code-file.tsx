@@ -493,7 +493,7 @@ function CodeLineComment({
             </HStack>
             <HStack>
               {isAuthor || authorProfile?.flair ? (
-                <Tag.Root size="md" colorPalette={isAuthor ? "green" : "gray"} variant="surface">
+                <Tag.Root size="md" colorPalette={isAuthor ? "green" : authorProfile?.flair_color} variant="surface">
                   <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
                 </Tag.Root>
               ) : (

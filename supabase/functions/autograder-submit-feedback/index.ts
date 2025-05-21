@@ -1,7 +1,10 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {
   CheckRunStatus,
+  FeedbackArtifactComment,
+  FeedbackComment,
+  FeedbackLineComment,
   GradeResponse,
   GradingScriptResult,
   OutputVisibility,
@@ -10,6 +13,173 @@ import {
 import { resolveRef, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+
+async function insertComments({
+  adminSupabase,
+  class_id,
+  submission_id,
+  grading_review_id,
+  comments
+}: {
+  adminSupabase: SupabaseClient;
+  class_id: number;
+  submission_id: number;
+  grading_review_id: number;
+  comments: (FeedbackComment | FeedbackLineComment | FeedbackArtifactComment)[];
+}) {
+  const profileMap = new Map<string, string>();
+  for (const comment of comments) {
+    if (comment.author) {
+      if (!profileMap.has(comment.author.name)) {
+        //Check to see if there is a profile with this name in the class
+        const { data: profile, error: profileError } = await adminSupabase
+          .from("profiles")
+          .select("id")
+          .eq("name", comment.author.name)
+          .eq("class_id", class_id)
+          .maybeSingle();
+        if (profileError) {
+          console.error(profileError);
+          throw new UserVisibleError(
+            `Failed to find profile for comment: ${comment.author.name}, ${profileError.message}`
+          );
+        }
+        if (profile) {
+          profileMap.set(comment.author.name, profile.id);
+        } else {
+          //Create a new profile
+          const { data: newProfile, error: newProfileError } = await adminSupabase
+            .from("profiles")
+            .insert({
+              name: comment.author.name,
+              class_id,
+              avatar_url: comment.author.avatar_url,
+              flair: comment.author.flair,
+              flair_color: comment.author.flair_color,
+              is_private_profile: true
+            })
+            .select("id")
+            .single();
+          if (newProfile) {
+            profileMap.set(comment.author.name, newProfile.id);
+          } else {
+            console.error(newProfileError);
+            throw new UserVisibleError(
+              `Failed to create profile for comment: ${comment.author.name}, ${newProfileError.message}`
+            );
+          }
+        }
+      }
+    }
+  }
+  const submissionLineComments = comments.filter((eachComment) => "line" in eachComment);
+  if (submissionLineComments.length > 0) {
+    const fileMap = new Map<string, string>();
+    for (const comment of submissionLineComments) {
+      if (comment.file_name) {
+        if (!fileMap.has(comment.file_name)) {
+          const { data: file, error: fileError } = await adminSupabase
+            .from("submission_files")
+            .select("id")
+            .eq("name", comment.file_name)
+            .eq("submission_id", submission_id)
+            .maybeSingle();
+          if (file) {
+            fileMap.set(comment.file_name, file.id);
+          } else {
+            console.error(fileError);
+            throw new UserVisibleError(`Submission file not found: ${comment.file_name}, ${fileError?.message}`);
+          }
+        }
+      }
+    }
+    const { error: submissionFileCommentsError } = await adminSupabase.from("submission_file_comments").insert(
+      submissionLineComments.map((eachComment) => ({
+        submission_file_id: fileMap.get(eachComment.file_name),
+        submission_id,
+        comment: eachComment.message,
+        line: eachComment.line,
+        points: eachComment.points,
+        rubric_check_id: eachComment.rubric_check_id,
+        released: eachComment.released,
+        eventually_visible: true,
+        submission_review_id: grading_review_id,
+        class_id,
+        author: profileMap.get(eachComment.author.name)
+      }))
+    );
+    if (submissionFileCommentsError) {
+      console.error(submissionFileCommentsError);
+      throw new UserVisibleError(`Failed to insert submission file comments: ${submissionFileCommentsError.message}`);
+    }
+  }
+  const submissionArtifactComments = comments.filter((eachComment) => "artifact_name" in eachComment);
+  if (submissionArtifactComments.length > 0) {
+    const artifactMap = new Map<string, string>();
+    for (const comment of submissionArtifactComments) {
+      if (comment.artifact_name) {
+        if (!artifactMap.has(comment.artifact_name)) {
+          const { data: artifact, error: artifactError } = await adminSupabase
+            .from("submission_artifacts")
+            .select("id")
+            .eq("name", comment.artifact_name)
+            .eq("submission_id", submission_id)
+            .maybeSingle();
+          if (artifact) {
+            artifactMap.set(comment.artifact_name, artifact.id);
+          } else {
+            console.error(artifactError);
+            throw new UserVisibleError(
+              `Submission artifact not found: ${comment.artifact_name}, ${artifactError?.message}`
+            );
+          }
+        }
+      }
+    }
+    const { error: submissionArtifactCommentsError } = await adminSupabase.from("submission_artifact_comments").insert(
+      submissionArtifactComments.map((eachComment) => ({
+        submission_artifact_id: artifactMap.get(eachComment.artifact_name),
+        submission_id,
+        comment: eachComment.message,
+        class_id,
+        points: eachComment.points,
+        rubric_check_id: eachComment.rubric_check_id,
+        author: profileMap.get(eachComment.author.name),
+        released: eachComment.released,
+        eventually_visible: true,
+        submission_review_id: grading_review_id
+      }))
+    );
+    if (submissionArtifactCommentsError) {
+      console.error(submissionArtifactCommentsError);
+      throw new UserVisibleError(
+        `Failed to insert submission artifact comments: ${submissionArtifactCommentsError.message}`
+      );
+    }
+  }
+  const submissionComments = comments.filter(
+    (eachComment) => !("line" in eachComment) && !("artifact_name" in eachComment)
+  );
+  if (submissionComments.length > 0) {
+    const { error: submissionCommentsError } = await adminSupabase.from("submission_comments").insert(
+      submissionComments.map((eachComment) => ({
+        submission_id,
+        comment: eachComment.message,
+        points: eachComment.points,
+        rubric_check_id: eachComment.rubric_check_id,
+        class_id,
+        author: profileMap.get(eachComment.author.name),
+        released: eachComment.released,
+        eventually_visible: true,
+        submission_review_id: grading_review_id
+      }))
+    );
+    if (submissionCommentsError) {
+      console.error(submissionCommentsError);
+      throw new UserVisibleError(`Failed to insert submission comments: ${submissionCommentsError.message}`);
+    }
+  }
+}
 async function handleRequest(req: Request): Promise<GradeResponse> {
   const token = req.headers.get("Authorization");
   const requestBody = (await req.json()) as GradingScriptResult;
@@ -35,6 +205,7 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
   let submission_id: number | null = null;
   let profile_id: string | null = null;
   let assignment_group_id: number | null = null;
+  let grading_review_id: number | null = null;
   let checkRun: RepositoryCheckRun | null = null;
   if (autograder_regression_test_id) {
     //It's a regression test run
@@ -72,6 +243,7 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
     submission_id = submission.id;
     profile_id = submission.profile_id;
     assignment_group_id = submission.assignment_group_id;
+    grading_review_id = submission.grading_review_id;
     assignment_id = submission.assignment_id;
     checkRun = submission.repository_check_runs as RepositoryCheckRun;
   }
@@ -136,28 +308,50 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
     }
   }
   //Insert test results
-  const { error: testResultsError } = await adminSupabase.from("grader_result_tests").insert(
-    requestBody.feedback.tests.map((test) => ({
-      class_id: class_id,
-      student_id: profile_id,
-      assignment_group_id,
-      grader_result_id: resultID.id,
-      name: test.name,
-      output: test.output,
-      output_format: test.output_format || "text",
-      name_format: test.name_format || "text",
-      score: test.score,
-      max_score: test.max_score,
-      part: test.part,
-      extra_data: test.extra_data,
-      is_released: !test.hide_until_released,
-      submission_id
-    }))
-  );
+  const { error: testResultsError, data: testResultIDs } = await adminSupabase
+    .from("grader_result_tests")
+    .insert(
+      requestBody.feedback.tests.map((test) => ({
+        class_id: class_id,
+        student_id: profile_id,
+        assignment_group_id,
+        grader_result_id: resultID.id,
+        name: test.name,
+        output: test.output,
+        output_format: test.output_format || "text",
+        name_format: test.name_format || "text",
+        score: test.score,
+        max_score: test.max_score,
+        part: test.part,
+        extra_data: test.extra_data,
+        is_released: !test.hide_until_released,
+        submission_id
+      }))
+    )
+    .select("id");
   if (testResultsError) {
     throw new UserVisibleError(`Failed to insert test results: ${testResultsError.message}`);
   }
-
+  //Insert any hidden output
+  const hiddenTestOutputs = requestBody.feedback.tests
+    .map((eachTest, idx) => {
+      return {
+        grader_result_test_id: testResultIDs[idx].id,
+        class_id,
+        output: eachTest.hidden_output || "",
+        output_format: eachTest.hidden_output_format || "text"
+      };
+    })
+    .filter((eachTest) => eachTest.output.length > 0);
+  if (hiddenTestOutputs.length > 0) {
+    const { error: hiddenTestOutputsError } = await adminSupabase
+      .from("grader_result_test_output")
+      .insert(hiddenTestOutputs);
+    if (hiddenTestOutputsError) {
+      console.error(hiddenTestOutputsError);
+      throw new UserVisibleError(`Failed to insert hidden test outputs: ${hiddenTestOutputsError.message}`);
+    }
+  }
   let artifactUploadLinks: { name: string; token: string; path: string }[] = [];
   if (requestBody.feedback.artifacts) {
     // Prepare artifact uploads
@@ -198,6 +392,20 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
       })
     );
   }
+
+  console.log("Submission ID", submission_id);
+  console.log("Annotations", requestBody.feedback.annotations);
+  if (submission_id && grading_review_id && requestBody.feedback.annotations) {
+    //Insert any comments
+    await insertComments({
+      adminSupabase,
+      class_id,
+      submission_id,
+      grading_review_id,
+      comments: requestBody.feedback.annotations
+    });
+  }
+
   // Update the check run status to completed
   // await GitHubController.getInstance().completeCheckRun(submission, requestBody.feedback);
   if (submission_id) {

@@ -18,6 +18,7 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
+import { RubricCheckComment, RubricCriteria } from "@/components/ui/rubric-sidebar";
 import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
@@ -26,6 +27,7 @@ import {
   useAllRubricCheckInstances,
   useRubricCriteriaInstances,
   useSubmission,
+  useSubmissionComments,
   useSubmissionReview,
   useSubmissionRubric,
   useReviewAssignment,
@@ -794,6 +796,25 @@ function RubricView() {
             </HStack>
           </Button>
         )}
+        {showHandGrading && <Heading size="md">Hand Check Results</Heading>}
+        {showHandGrading && criteria?.map((criteria) => <RubricCriteria key={criteria.id} criteria={criteria} />)}
+        <Comments />
+      </VStack>
+    </Box>
+  );
+}
+function Comments() {
+  const comments = useSubmissionComments({}).filter((comment) => !comment.rubric_check_id);
+  if (!comments) {
+    return null;
+  }
+  return (
+    <Box>
+      <Heading size="md">Comments</Heading>
+      <VStack align="start" gap={2}>
+        {comments.map((comment) => (
+          <RubricCheckComment key={comment.id} comment={comment} />
+        ))}
       </VStack>
       {addReferenceModalData &&
         rubricToDisplayData &&
