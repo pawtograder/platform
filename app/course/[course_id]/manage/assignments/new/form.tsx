@@ -324,7 +324,7 @@ export default function AssignmentForm({
             <Field
               label="Points Possible"
               errorText={errors.total_points?.message?.toString()}
-              invalid={errors.total_points ? true : false}
+              invalid={!!errors.total_points}
               required={true}
             >
               <Input
