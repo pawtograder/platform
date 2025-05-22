@@ -512,8 +512,10 @@ export type Database = {
           latest_template_sha: string | null;
           max_group_size: number | null;
           max_late_tokens: number;
+          meta_grading_rubric_id: number | null;
           min_group_size: number | null;
           release_date: string | null;
+          self_review_rubric_id: number | null;
           slug: string | null;
           student_repo_prefix: string | null;
           template_repo: string | null;
@@ -537,8 +539,10 @@ export type Database = {
           latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
+          meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           release_date?: string | null;
+          self_review_rubric_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -562,8 +566,10 @@ export type Database = {
           latest_template_sha?: string | null;
           max_group_size?: number | null;
           max_late_tokens?: number;
+          meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           release_date?: string | null;
+          self_review_rubric_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -579,8 +585,22 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "assignments_meta_grading_rubric_id_fkey";
+            columns: ["meta_grading_rubric_id"];
+            isOneToOne: false;
+            referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "assignments_rubric_id_fkey";
             columns: ["grading_rubric_id"];
+            isOneToOne: false;
+            referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_self_review_rubric_id_fkey";
+            columns: ["self_review_rubric_id"];
             isOneToOne: false;
             referencedRelation: "rubrics";
             referencedColumns: ["id"];
@@ -2791,6 +2811,7 @@ export type Database = {
       };
       rubrics: {
         Row: {
+          assignment_id: number;
           class_id: number;
           created_at: string;
           description: string | null;
@@ -2800,6 +2821,7 @@ export type Database = {
           review_round: Database["public"]["Enums"]["review_round"] | null;
         };
         Insert: {
+          assignment_id: number;
           class_id: number;
           created_at?: string;
           description?: string | null;
@@ -2809,6 +2831,7 @@ export type Database = {
           review_round?: Database["public"]["Enums"]["review_round"] | null;
         };
         Update: {
+          assignment_id?: number;
           class_id?: number;
           created_at?: string;
           description?: string | null;
@@ -2824,6 +2847,27 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubrics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "rubrics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "rubrics_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
           }
         ];
       };

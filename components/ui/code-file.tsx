@@ -1,16 +1,16 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useRubricCheck,
   useSubmission,
-  useSubmissionFile,
   useSubmissionFileComments,
-  useSubmissionReview
+  useSubmissionReviewByAssignmentId
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
+  Json,
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
@@ -21,11 +21,23 @@ import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
-import { Element, ElementContent, Root, RootContent } from "hast";
+import { Element, ElementContent, Properties, Root, RootContent } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
-import { createContext, Dispatch, SetStateAction, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  Dispatch,
+  SetStateAction,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType
+} from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { Checkbox } from "./checkbox";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
@@ -33,6 +45,27 @@ import PersonAvatar from "./person-avatar";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
 import { CommentActions } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
+import { toaster } from "./toaster";
+
+export type RubricCheckSubOption = {
+  label: string;
+  points: number;
+  // Add other properties if they exist on subOption
+};
+
+export type RubricCheckDataWithOptions = {
+  options: RubricCheckSubOption[];
+};
+
+export function isRubricCheckDataWithOptions(data: Json | null | undefined): data is RubricCheckDataWithOptions {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "options" in data &&
+    Array.isArray((data as { options?: unknown }).options)
+  );
+}
+
 type CodeLineCommentContextType = {
   submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
   comments: SubmissionFileComment[];
@@ -41,8 +74,11 @@ type CodeLineCommentContextType = {
   close: (line: number) => void;
   open: (line: number) => void;
   showCommentsFeature: boolean;
+  submissionReviewId?: number;
 };
+
 const CodeLineCommentContext = createContext<CodeLineCommentContextType | undefined>(undefined);
+
 function useCodeLineCommentContext() {
   const context = useContext(CodeLineCommentContext);
   if (!context) {
@@ -51,61 +87,61 @@ function useCodeLineCommentContext() {
   return context;
 }
 
-export default function CodeFile({ file }: { file: SubmissionFile }) {
+export type LineActionPopupDynamicProps = {
+  lineNumber: number;
+  top: number;
+  left: number;
+  visible: boolean;
+  onClose?: () => void;
+  close: () => void;
+  mode: "marking" | "select";
+};
+
+type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
+  file: SubmissionFile;
+  submissionReviewId?: number;
+};
+
+export default function CodeFile({ file, submissionReviewId }: { file: SubmissionFile; submissionReviewId?: number }) {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const submission = useSubmission();
   const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
 
   const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
-  const [lineActionPopup, setLineActionPopup] = useState<LineActionPopupProps>({
+  const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
     lineNumber: 0,
     top: 0,
     left: 0,
     visible: false,
     mode: "select",
     close: () => {}
-  });
+  }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
-  const _comments = useSubmissionFileComments({
-    file_id: file.id,
-    onEnter: (comments) => {
+
+  const onCommentsEnter = useCallback(
+    (newlyEnteredComments: SubmissionFileComment[]) => {
       if (showCommentsFeature) {
-        setExpanded((expanded) => {
-          const newExpanded = comments.map((comment) => comment.line).filter((line) => !expanded.includes(line));
-          return [...expanded, ...newExpanded];
+        setExpanded((currentExpanded) => {
+          const linesFromNewComments = newlyEnteredComments.map((comment) => comment.line);
+          const linesToAdd = linesFromNewComments.filter((line) => !currentExpanded.includes(line));
+          if (linesToAdd.length > 0) {
+            return [...currentExpanded, ...linesToAdd];
+          }
+          return currentExpanded; // Return current state if no change
         });
       }
     },
-    onJumpTo: (comment) => {
-      setExpanded((prev) => {
-        if (prev.includes(comment.line)) {
-          return prev;
-        }
-        return [...prev, comment.line];
-      });
-    }
+    [showCommentsFeature]
+  );
+
+  const _comments = useSubmissionFileComments({
+    file_id: file.id,
+    onEnter: onCommentsEnter
   });
   const comments = useMemo(() => {
-    return _comments.sort((a, b) => {
-      const createdSort = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      if (createdSort !== 0) {
-        return createdSort;
-      }
-      return a.line - b.line;
-    });
-  }, [_comments]);
-  useEffect(() => {
-    if (comments.length === 0) {
-      setExpanded([]);
-    } else {
-      if (comments[0].submission_file_id === file.id) {
-        setExpanded(comments.map((comment) => comment.line));
-      } else {
-        setExpanded([]);
-      }
-    }
-  }, [file, comments]);
+    return _comments.filter((comment) => expanded.includes(comment.line));
+  }, [_comments, expanded]);
 
   useEffect(() => {
     async function highlight() {
@@ -118,16 +154,15 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     return <Skeleton />;
   }
   const tree = starryNight.highlight(file.contents, "source.java");
-  starryNightGutter(tree, setExpanded, setLineActionPopup);
+  starryNightGutter(tree, setLineActionPopupProps);
   const reactNode = toJsxRuntime(tree, {
     Fragment,
     jsx,
     jsxs,
     components: {
-      // @ts-expect-error - This is a valid type I guess?
       CodeLineComments: CodeLineComments,
       LineNumber: LineNumber
-    }
+    } as Record<string, ComponentType<{ lineNumber: number }>>
   });
   const commentsCSS = showCommentsFeature
     ? {
@@ -205,7 +240,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
                   variant={expanded.length > 0 ? "solid" : "outline"}
                   size="xs"
                   p={0}
-                  colorScheme="teal"
+                  colorPalette="teal"
                   onClick={() => {
                     setExpanded((prev) => {
                       if (prev.length === 0) {
@@ -222,7 +257,8 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           )}
         </HStack>
       </Flex>
-      <LineActionPopup {...lineActionPopup} />
+      {/* Pass dynamic props from state, and other props directly */}
+      <LineActionPopup {...lineActionPopupProps} file={file} submissionReviewId={submissionReviewId} />
       <CodeLineCommentContext.Provider
         value={{
           submission,
@@ -240,7 +276,8 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           close: (line: number) => {
             setExpanded((prev) => prev.filter((l) => l !== line));
           },
-          showCommentsFeature
+          showCommentsFeature,
+          submissionReviewId: submissionReviewId
         }}
       >
         <VStack
@@ -248,13 +285,12 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
           onClick={(ev) => {
             ev.preventDefault();
             ev.stopPropagation();
-            setLineActionPopup((prev) => {
+            setLineActionPopupProps((prev) => {
               prev.onClose?.();
               return {
                 ...prev,
                 visible: false,
-                onClose: undefined,
-                close: () => {}
+                onClose: undefined
               };
             });
           }}
@@ -274,8 +310,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
  */
 export function starryNightGutter(
   tree: Root,
-  setExpanded: Dispatch<SetStateAction<number[]>>,
-  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>
+  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
 ) {
   const replacement: RootContent[] = [];
   const search = /\r?\n|\r/g;
@@ -311,8 +346,7 @@ export function starryNightGutter(
 
         // Add a line, and the eol.
         lineNumber += 1;
-        // @ts-expect-error - This is a valid type I guess?
-        replacement.push(createLine(line, lineNumber, setExpanded, setLineActionPopup), {
+        replacement.push(createLine(line as ElementContent[], lineNumber, setLineActionPopup), {
           type: "text",
           value: match[0]
         });
@@ -338,13 +372,13 @@ export function starryNightGutter(
 
   if (line.length > 0) {
     lineNumber += 1;
-    // @ts-expect-error - This is a valid type I guess?
-    replacement.push(createLine(line, lineNumber, setExpanded));
+    replacement.push(createLine(line as ElementContent[], lineNumber, setLineActionPopup));
   }
 
   // Replace children with new array.
   tree.children = replacement;
 }
+
 function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
   const commentAuthor = useUserProfile(comment.author);
@@ -353,7 +387,9 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
-  const gradingReview = useSubmissionReview(comment.submission_review_id);
+  const { submissionReview: gradingReview } = useSubmissionReviewByAssignmentId(
+    comment.submission_review_id ?? undefined
+  );
 
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
@@ -427,22 +463,28 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     </Box>
   );
 }
+
 function CodeLineComment({
   comment,
-  submission
+  submissionReviewId
 }: {
   comment: SubmissionFileComment;
-  submission: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+  submissionReviewId?: number;
 }) {
   const authorProfile = useUserProfile(comment.author);
-  const isAuthor =
-    submission.profile_id === comment.author ||
-    submission?.assignment_groups?.assignment_groups_members?.some((member) => member.profile_id === comment.author);
+  const { private_profile_id } = useClassProfiles();
+  const isAuthor = private_profile_id === comment.author;
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
+  useSubmissionReviewByAssignmentId(submissionReviewId ?? comment.submission_review_id ?? undefined);
+
+  if (!authorProfile) {
+    return <Skeleton height="100px" width="100%" />;
+  }
+
   return (
     <Box key={comment.id} m={0} pb={1} w="100%">
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
@@ -505,22 +547,13 @@ function CodeLineComment({
   );
 }
 
-export type LineActionPopupProps = {
-  lineNumber: number;
-  top: number;
-  left: number;
-  visible: boolean;
-  onClose?: () => void;
-  close: () => void;
-  mode: "marking" | "select";
-};
-
 export type RubricCriteriaSelectGroupOption = {
   readonly label: string;
   readonly value: string;
   readonly options: readonly RubricCheckSelectOption[];
   readonly criteria?: HydratedRubricCriteria;
 };
+
 export type RubricCheckSelectOption = {
   readonly label: string;
   readonly value: string;
@@ -528,13 +561,16 @@ export type RubricCheckSelectOption = {
   readonly criteria?: HydratedRubricCriteria;
   options?: RubricCheckSubOptions[];
 };
+
 export type RubricCheckSubOptions = {
   readonly label: string;
   readonly index: string;
+  readonly value: string;
   readonly comment: string;
   readonly points: number;
   readonly check: RubricCheckSelectOption;
 };
+
 export function formatPoints(option: {
   check?: HydratedRubricCheck;
   criteria?: HydratedRubricCriteria;
@@ -545,31 +581,50 @@ export function formatPoints(option: {
   }
   return ``;
 }
-function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineActionPopupProps) {
+
+function LineActionPopup({
+  lineNumber,
+  top,
+  left,
+  visible,
+  close,
+  mode,
+  file,
+  submissionReviewId
+}: LineActionPopupComponentProps) {
   const submission = useSubmission();
-  const file = useSubmissionFile();
-  const review = useSubmissionReview();
+  const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
   const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
+  const isGraderOrInstructor = useIsGraderOrInstructor();
+  const [eventuallyVisible, setEventuallyVisible] = useState(true);
 
   const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
     resource: "submission_file_comments"
   });
 
   useEffect(() => {
+    if (!visible) {
+      return; // Exit early if not visible
+    }
+
     const handleClickOutside = (event: MouseEvent) => {
       if (popupRef.current && !popupRef.current.contains(event.target as Node)) {
         close();
       }
     };
-    if (visible) {
+
+    // Defer adding the listener
+    const timerId = setTimeout(() => {
       document.addEventListener("mousedown", handleClickOutside);
-    }
+    }, 0);
+
     return () => {
+      clearTimeout(timerId);
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [visible, close]);
@@ -598,7 +653,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
   if (!visible) {
     return null;
   }
-  //Only show criteria that have annotation checks
+  // Only show criteria that have annotation checks
   const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) =>
     criteria.rubric_checks.some(
       (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
@@ -617,11 +672,12 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
           criteria: criteria as HydratedRubricCriteria,
           options: []
         };
-        if (check.data?.options) {
-          option.options = check.data.options.map((subOption, index) => ({
+        if (isRubricCheckDataWithOptions(check.data)) {
+          option.options = check.data.options.map((subOption: RubricCheckSubOption, index: number) => ({
             label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
             comment: subOption.label,
             index: index.toString(),
+            value: index.toString(),
             points: subOption.points,
             check: option
           }));
@@ -675,7 +731,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
       return (
         <chakraComponents.SingleValue {...props}>
           {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
-          {props.data.check?.data?.options ? `(Select an option)` : `${points} points`}
+          {isRubricCheckDataWithOptions(props.data.check?.data) ? `(Select an option)` : `${points} points`}
         </chakraComponents.SingleValue>
       );
     },
@@ -698,15 +754,16 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
       left={left}
       position="fixed"
       bg="bg.subtle"
-      w="lg"
-      p={2}
+      w="md"
+      p={3}
       border="1px solid"
       borderColor="border.emphasized"
       borderRadius="md"
+      boxShadow="lg"
       ref={popupRef}
     >
-      <Box width="lg">
-        <Text fontSize="sm" color="fg.muted">
+      <VStack gap={2} align="stretch">
+        <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
           Annotate line {lineNumber} with a check:
         </Text>
         <Select
@@ -721,13 +778,15 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
               setSelectedCheckOption(e);
             }
           }}
+          placeholder="Select a rubric check or leave a comment..."
+          size="sm"
         />
         {selectedCheckOption && (
           <>
-            {selectedCheckOption.check?.data?.options && (
+            {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
               <Select
                 options={selectedCheckOption.check.data.options.map(
-                  (option, index) =>
+                  (option: RubricCheckSubOption, index: number) =>
                     ({
                       label: option.label,
                       comment: option.label,
@@ -741,12 +800,38 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
                 onChange={(e: RubricCheckSubOptions | null) => {
                   setSelectedSubOption(e);
                 }}
+                placeholder="Select an option for this check..."
+                size="sm"
               />
             )}
-            {!selectedSubOption && selectedCheckOption.check && (
-              <Text fontSize="sm" color="fg.muted">
-                {formatPoints(selectedCheckOption.check)}
+            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points !== undefined && (
+              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
+                {formatPoints({
+                  check: selectedCheckOption.check,
+                  criteria: selectedCheckOption.criteria,
+                  points: selectedCheckOption.check.points
+                })}
               </Text>
+            )}
+            {selectedSubOption && selectedCheckOption.check && (
+              <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
+                {formatPoints({
+                  check: selectedCheckOption.check,
+                  criteria: selectedCheckOption.criteria,
+                  points: selectedSubOption.points
+                })}
+              </Text>
+            )}
+            {isGraderOrInstructor && (
+              <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>
+                <Checkbox
+                  checked={eventuallyVisible}
+                  onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
+                  size="sm"
+                >
+                  Visible to student when submission is released
+                </Checkbox>
+              </HStack>
             )}
             <MessageInput
               textAreaRef={messageInputRef}
@@ -767,19 +852,28 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
                 }
                 let comment = message || "";
                 if (selectedSubOption) {
-                  comment = selectedSubOption.comment + "\n" + comment;
+                  comment = selectedSubOption.comment + (comment ? "\\n" + comment : "");
+                }
+                const finalSubmissionReviewId = submissionReviewId ?? review?.id;
+                if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
+                  toaster.error({
+                    title: "Error saving comment",
+                    description: "Submission review ID is missing, cannot save rubric annotation."
+                  });
+                  return;
                 }
                 const values = {
                   comment,
                   line: lineNumber,
                   rubric_check_id: selectedCheckOption.check?.id,
-                  class_id: file?.class_id,
-                  submission_file_id: file?.id,
+                  class_id: file.class_id,
+                  submission_file_id: file.id,
                   submission_id: submission.id,
                   author: profile_id,
                   released: review ? review.released : true,
                   points,
-                  submission_review_id: review?.id
+                  submission_review_id: finalSubmissionReviewId,
+                  eventually_visible: eventuallyVisible
                 };
                 await createComment({ values });
                 setCurrentMode(mode);
@@ -788,22 +882,41 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode }: LineAc
             />
           </>
         )}
-      </Box>
+      </VStack>
     </Box>
   );
 }
+
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
-  const { submission, showCommentsFeature, comments: allCommentsForFile, file, expanded } = useCodeLineCommentContext();
-  const comments = allCommentsForFile.filter((comment) => comment.line === lineNumber);
+  const {
+    submission,
+    showCommentsFeature,
+    comments: allCommentsForFile,
+    file,
+    expanded,
+    submissionReviewId
+  } = useCodeLineCommentContext();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
   const [showReply, setShowReply] = useState(isReplyEnabled);
-  if (!submission || !file || !showCommentsFeature) {
+
+  const commentsToDisplay = useMemo(() => {
+    return allCommentsForFile.filter((comment) => {
+      if (comment.line !== lineNumber) return false;
+      if (!isGraderOrInstructor && submission.released !== null) {
+        return comment.eventually_visible === true;
+      }
+      return true;
+    });
+  }, [allCommentsForFile, lineNumber, isGraderOrInstructor, submission.released]);
+
+  if (!submission || !file || !showCommentsFeature || commentsToDisplay.length === 0) {
     return null;
   }
   if (!expanded.includes(lineNumber)) {
     return <></>;
   }
+
   return (
     <Box
       width="100%"
@@ -827,15 +940,20 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
         backgroundColor="bg"
         boxShadow="sm"
       >
-        {comments.map((comment) =>
+        {commentsToDisplay.map((comment) =>
           comment.rubric_check_id ? (
             <LineCheckAnnotation key={comment.id} comment={comment} />
           ) : (
-            <CodeLineComment key={comment.id} comment={comment} submission={submission} />
+            <CodeLineComment key={comment.id} comment={comment} submissionReviewId={submissionReviewId} />
           )
         )}
         {showReply ? (
-          <LineCommentForm lineNumber={lineNumber} submission={submission} file={file} />
+          <LineCommentForm
+            lineNumber={lineNumber}
+            submission={submission}
+            file={file}
+            submissionReviewId={submissionReviewId}
+          />
         ) : (
           <Box display="flex" justifyContent="flex-end">
             <Button colorPalette="green" onClick={() => setShowReply(true)}>
@@ -872,6 +990,7 @@ function LineNumber({ lineNumber }: { lineNumber: number }) {
   }
   return <div className="line-number">{lineNumber}</div>;
 }
+
 /**
  * @param {Array<ElementContent>} children
  * @param {number} line
@@ -880,15 +999,14 @@ function LineNumber({ lineNumber }: { lineNumber: number }) {
 function createLine(
   children: ElementContent[],
   line: number,
-  setExpanded: Dispatch<SetStateAction<number[]>>,
-  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupProps>>
+  setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
 ): Element {
   return {
     type: "element",
     tagName: "div",
     properties: {
       className: "source-code-line-container"
-    },
+    } as Properties,
     children: [
       {
         type: "element",
@@ -896,8 +1014,9 @@ function createLine(
         properties: {
           className: "source-code-line",
           id: `L${line}`,
-
-          //@ts-expect-error - This is a valid type I guess?
+          onClick: (ev: MouseEvent) => {
+            ev.stopPropagation();
+          },
           onMouseDown: (ev: MouseEvent) => {
             if (ev.button !== 0) {
               return;
@@ -909,66 +1028,64 @@ function createLine(
                 prev.onClose?.();
               }
               return {
+                ...prev,
                 lineNumber: line,
                 top: ev.clientY,
                 left: ev.clientX,
                 visible: true,
                 mode: "marking",
                 close: () => {
-                  setLineActionPopup({
-                    lineNumber: line,
-                    top: 0,
-                    left: 0,
+                  setLineActionPopup((prevClose) => ({
+                    ...prevClose,
                     visible: false,
-                    onClose: undefined,
-                    close: () => {},
-                    mode: "marking"
-                  });
-                }
+                    // Clear onClose only if it was for the same line, otherwise preserve it
+                    onClose: prevClose.lineNumber === line && prevClose.visible ? undefined : prevClose.onClose
+                  }));
+                },
+                // Reset onClose, it can be set by specific interactions like context menu,
+                // but ensure it's cleared if we are just clicking for marking
+                onClose: undefined
               };
             });
           },
-          //@ts-expect-error - This is a valid type I guess?
-          oncontextmenu: (ev: MouseEvent) => {
+          onContextMenu: (ev: MouseEvent) => {
             ev.preventDefault();
             ev.stopPropagation();
             const target = ev.currentTarget as HTMLElement;
             target.classList.add("selected");
-            const onClose = () => {
+            const closeAndCleanup = () => {
               target.classList.remove("selected");
+              setLineActionPopup((prevClose) => ({
+                ...prevClose,
+                visible: false,
+                onClose: undefined // Clear the onClose specific to this instance
+              }));
             };
             setLineActionPopup((prev) => {
               if (line !== prev.lineNumber) {
-                prev.onClose?.();
+                prev.onClose?.(); // Call previous onClose if changing lines
               }
               return {
+                ...prev,
                 lineNumber: line,
                 top: ev.clientY,
                 left: ev.clientX,
                 visible: true,
                 mode: "select",
-                close: () => {
-                  onClose();
-                  setLineActionPopup({
-                    lineNumber: line,
-                    top: 0,
-                    left: 0,
-                    visible: false,
-                    onClose: undefined,
-                    close: () => {},
-                    mode: "select"
-                  });
-                },
-                onClose
+                close: closeAndCleanup,
+                onClose: () => {
+                  // Specific cleanup for this context menu
+                  target.classList.remove("selected");
+                }
               };
             });
           }
-        },
+        } as unknown as Properties,
         children: [
           {
             type: "element",
             tagName: "LineNumber",
-            properties: { lineNumber: line },
+            properties: { lineNumber: line } as Properties,
             children: []
           },
           {
@@ -976,7 +1093,7 @@ function createLine(
             tagName: "div",
             properties: {
               className: "source-code-line-content"
-            },
+            } as Properties,
             children: children
           }
         ]
@@ -984,7 +1101,7 @@ function createLine(
       {
         type: "element",
         tagName: "CodeLineComments",
-        properties: { lineNumber: line },
+        properties: { lineNumber: line } as Properties,
         children: []
       }
     ]

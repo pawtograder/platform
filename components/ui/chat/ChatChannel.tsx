@@ -84,7 +84,7 @@ export const ChatChannel = () => {
                 }}
               />
               <Box pos="absolute" top="3" right="0" zIndex="2">
-                <Button size="sm" type="submit" variant="outline" colorScheme="gray">
+                <Button size="sm" type="submit" variant="outline" colorPalette="gray" aria-label="Send message">
                   <FiSend />
                 </Button>
               </Box>
