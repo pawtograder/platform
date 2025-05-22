@@ -1,5 +1,5 @@
 "use client";
-import { ClassSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -14,7 +14,8 @@ import {
   VStack,
   Dialog,
   Portal,
-  Flex
+  Flex,
+  Checkbox
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
@@ -37,6 +38,8 @@ import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import { Button } from "@/components/ui/button";
 import useTags from "@/hooks/useTags";
 import TagSingleProfileModal from "./tagSingleProfileModal";
+import TagDisplay from "@/components/ui/tag";
+import { CheckIcon } from "lucide-react";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -56,6 +59,13 @@ function EnrollmentsTable() {
   const invalidate = useInvalidate();
   const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
   const tags = useTags();
+  const [checkedBoxes, setCheckedBoxes] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
+  const [tagData, setTagData] = useState<Tag[]>([]);
+  useEffect(() => {
+    if (tagData != tags.tags) {
+      setTagData(tags.tags);
+    }
+  }, [tags]);
 
   const {
     isOpen: isEditProfileModalOpen,
@@ -119,6 +129,39 @@ function EnrollmentsTable() {
 
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
+      {
+        id: "checkbox",
+        header: "",
+        cell: ({ row }) => {
+          return (
+            <Checkbox.Root
+              onCheckedChange={(e) => {
+                if (
+                  e.checked &&
+                  !checkedBoxes.find((box) => {
+                    return box === row.original;
+                  })
+                ) {
+                  // TODO:Check multiple boxes more carefully
+                  //setCheckedBoxes(checkedBoxes.concat[row.original])
+                } else {
+                  return setCheckedBoxes(
+                    checkedBoxes.filter((box) => {
+                      return box !== row.original;
+                    })
+                  );
+                }
+              }}
+            >
+              <Checkbox.HiddenInput />
+              <Checkbox.Control>
+                {" "}
+                <CheckIcon></CheckIcon>
+              </Checkbox.Control>
+            </Checkbox.Root>
+          );
+        }
+      },
       {
         id: "class_id",
         accessorKey: "class_id",
@@ -197,10 +240,26 @@ function EnrollmentsTable() {
         id: "tags",
         header: "Tags",
         accessorKey: "tags",
+        filterFn: (row, id, filterValue) => {
+          const profileTagNames = tagData
+            .filter((tag) => {
+              return (
+                tag.profile_id === row.original.private_profile_id || tag.profile_id === row.original.public_profile_id
+              );
+            })
+            .map((tag) => {
+              return tag.name;
+            });
+          return profileTagNames.find((profile) => {
+            return profile.includes(filterValue);
+          })
+            ? true
+            : false;
+        },
         cell: ({ row }) => {
           return (
-            <Flex flexDirection={"row"} width="100%" gap="2px" wrap="wrap">
-              {tags.tags
+            <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
+              {tagData
                 .filter((tag) => {
                   return (
                     tag.profile_id === row.original.private_profile_id ||
@@ -209,16 +268,8 @@ function EnrollmentsTable() {
                 })
                 .map((tag, key) => {
                   return (
-                    <Flex
-                      flexDirection={"column"}
-                      key={key}
-                      padding="3px"
-                      width="fit-content"
-                      backgroundColor={tag.color}
-                      borderRadius={"20%"}
-                      justifyContent={"center"}
-                    >
-                      {tag.name}
+                    <Flex key={key}>
+                      <TagDisplay name={tag.name} color={tag.color} />
                     </Flex>
                   );
                 })}
@@ -254,11 +305,7 @@ function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
-              <TagSingleProfileModal
-                userName={row.original.profiles.name}
-                private_id={row.original.private_profile_id}
-                public_id={row.original.public_profile_id}
-              />
+              <TagSingleProfileModal profiles={[row.original]} bulk={false} />
 
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
@@ -314,7 +361,7 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal]
+    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal, tagData]
   );
 
   const {
@@ -369,6 +416,8 @@ function EnrollmentsTable() {
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
+        <TagSingleProfileModal profiles={checkedBoxes} bulk={true} />
+
         <Table.Root>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
@@ -382,7 +431,7 @@ function EnrollmentsTable() {
                           <>
                             <Text
                               onClick={header.column.getToggleSortingHandler()}
-                              textAlign={header.id === "actions" ? "center" : undefined}
+                              textAlign={header.id === "actions" || header.id === "checkbox" ? "center" : undefined}
                             >
                               {flexRender(header.column.columnDef.header, header.getContext())}
                               {{
@@ -390,7 +439,7 @@ function EnrollmentsTable() {
                                 desc: " 🔽"
                               }[header.column.getIsSorted() as string] ?? null}
                             </Text>
-                            {header.id !== "actions" && (
+                            {header.id !== "actions" && header.id !== "checkbox" && (
                               <Input
                                 id={header.id}
                                 value={(header.column.getFilterValue() as string) ?? ""}

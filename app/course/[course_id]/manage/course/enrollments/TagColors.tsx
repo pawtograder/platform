@@ -1,21 +1,30 @@
 export class TagColor {
-  public static RED = new TagColor("#FF9AA2", "Red");
-  public static ORANGE = new TagColor("#FFDAC1", "Orange");
-  public static GREEN = new TagColor("#E2F0CB", "Green");
-  public static PURPLE = new TagColor("#C7CEEA", "Purple");
-  public hex: string;
-  public text: string;
-  private constructor(hex: string, text: string) {
-    this.hex = hex;
-    this.text = text;
+  public static RED = new TagColor("red");
+  public static ORANGE = new TagColor("orange");
+  public static YELLOW = new TagColor("yellow");
+  public static GREEN = new TagColor("green");
+  public static BLUE = new TagColor("blue");
+  public static CYAN = new TagColor("cyan");
+
+  public static PURPLE = new TagColor("purple");
+  public value: string;
+  private constructor(value: string) {
+    this.value = value;
   }
 
   public static colors() {
-    return [TagColor.RED, TagColor.ORANGE, TagColor.GREEN, TagColor.PURPLE];
+    return [
+      TagColor.RED,
+      TagColor.ORANGE,
+      TagColor.YELLOW,
+      TagColor.GREEN,
+      TagColor.BLUE,
+      TagColor.CYAN,
+      TagColor.PURPLE
+    ];
   }
 
   public toString() {
-    console.log(this.text);
-    return this.text;
+    return this.value;
   }
 }

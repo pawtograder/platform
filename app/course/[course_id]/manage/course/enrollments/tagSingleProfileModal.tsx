@@ -6,18 +6,16 @@ import { TagColor } from "./TagColors";
 import { FaTag } from "react-icons/fa6";
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
-import { Tag } from "@/utils/supabase/DatabaseTypes";
+import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useInvalidate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
 
 export default function TagSingleProfileModal({
-  userName,
-  private_id,
-  public_id
+  profiles,
+  bulk
 }: {
-  userName: string | null;
-  private_id: string;
-  public_id: string;
+  profiles: UserRoleWithPrivateProfileAndUser[];
+  bulk: boolean;
 }) {
   const [title, setTitle] = useState<string>("");
   const [visible, setVisible] = useState<SingleValue<{ label: string; value: boolean }>>();
@@ -32,7 +30,14 @@ export default function TagSingleProfileModal({
   const tagUser = async () => {
     if (createStrategy === "create_new") {
       // default color red, default visibility private to instructor
-      createNewTag(title, color ? color.value : TagColor.RED.hex, visible ? visible.value : false);
+      profiles.forEach(async (profile) => {
+        await createNewTag(
+          title,
+          color ? color.value : TagColor.RED.toString(),
+          visible ? visible.value : false,
+          profile
+        );
+      });
     } else if (createStrategy === "use_old") {
       if (!selectedTag) {
         toaster.error({
@@ -41,11 +46,18 @@ export default function TagSingleProfileModal({
         });
         return;
       }
-      createNewTag(selectedTag.value.name, selectedTag.value.color, selectedTag.value.visible);
+      profiles.forEach(async (profile) => {
+        await createNewTag(selectedTag.value.name, selectedTag.value.color, selectedTag.value.visible, profile);
+      });
     }
   };
 
-  const createNewTag = async (name: string, color: string, visible: boolean) => {
+  const createNewTag = async (
+    name: string,
+    color: string,
+    visible: boolean,
+    profile: UserRoleWithPrivateProfileAndUser
+  ) => {
     mutate(
       {
         resource: "tags",
@@ -54,7 +66,7 @@ export default function TagSingleProfileModal({
           name: name,
           color: color,
           visible: visible,
-          profile_id: name === "~" ? private_id : public_id,
+          profile_id: name.charAt(0) === "~" ? profile.private_profile_id : profile.public_profile_id,
           class_id: course_id
         }
       },
@@ -62,7 +74,7 @@ export default function TagSingleProfileModal({
         onSuccess: () => {
           toaster.success({
             title: "Tag created",
-            description: "Successfully tagged " + userName + " with " + name
+            description: "Successfully tagged " + profile.profiles.name + " with " + name
           });
           invalidate({
             resource: "tags",
@@ -72,7 +84,7 @@ export default function TagSingleProfileModal({
         onError: (error) => {
           toaster.error({
             title: "Error tagging user",
-            type: "Found error " + error + " with message " + error.message
+            type: "Found error " + error + " for " + profile.profiles.name
           });
         }
       }
@@ -91,16 +103,26 @@ export default function TagSingleProfileModal({
       }}
     >
       <Dialog.Trigger as="div">
-        <FaTag />
+        {!bulk ? <FaTag /> : profiles && profiles.length > 0 ? <Button>Tag selected users</Button> : <></>}
       </Dialog.Trigger>
       <Dialog.Backdrop />
       <Dialog.Positioner>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Tag {userName}</Dialog.Title>
+            <Dialog.Title>{bulk ? "Tag profiles" : "Tag profile"}</Dialog.Title>
           </Dialog.Header>
           <Dialog.Body>
             <Fieldset.Root>
+              {bulk && (
+                <Field.Root>
+                  <Field.Label>Profiles to tag:</Field.Label>
+                  <Text>
+                    {profiles?.map((prof) => {
+                      return prof.profiles.name + " ";
+                    })}
+                  </Text>
+                </Field.Root>
+              )}
               <Field.Root>
                 <SegmentGroup.Root
                   value={createStrategy}
@@ -150,7 +172,7 @@ export default function TagSingleProfileModal({
                       onChange={(e) => setColor(e)}
                       isMulti={false}
                       options={TagColor.colors().map((color) => {
-                        return { label: color.text, value: color.hex };
+                        return { label: color.toString(), value: color.toString() };
                       })}
                     />
                   </Field.Root>
@@ -183,9 +205,11 @@ export default function TagSingleProfileModal({
                         <Field.Label>Color</Field.Label>
                         <TagDisplay
                           name={
-                            TagColor.colors().find((c) => {
-                              return c.hex == selectedTag?.value.color;
-                            })?.text ?? ""
+                            TagColor.colors()
+                              .find((c) => {
+                                return c.toString() == selectedTag?.value.color;
+                              })
+                              ?.toString() ?? ""
                           }
                           color={selectedTag?.value.color}
                         />
