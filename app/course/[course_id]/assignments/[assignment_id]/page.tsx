@@ -3,7 +3,7 @@ import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import { Repository } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Box, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
+import { Alert, Box, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
@@ -110,9 +110,20 @@ export default async function AssignmentPage({
         <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
       </HStack>
       <Markdown>{assignment.description}</Markdown>
-      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-        <RepositoriesInfo repositories={repositories ?? []} />
-      </Box>
+      {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
+        <Alert.Root status="error" flexDirection="column">
+          <Alert.Title>No repositories configured for this assignment</Alert.Title>
+          <Alert.Description>
+            Your instructor has not set up a template repository for this assignment, so you will not be able to
+            create a repository for this assignment.
+            If you believe this is an error, please contact your instructor.
+          </Alert.Description>
+        </Alert.Root>
+      ) : (
+        <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
+
+          <RepositoriesInfo repositories={repositories ?? []} />
+        </Box>)}
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
       </Box>

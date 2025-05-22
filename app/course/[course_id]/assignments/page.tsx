@@ -62,6 +62,9 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     actions = <LinkAccount />;
   } else {
     const assignmentsWithoutRepos = assignments.data?.filter((assignment) => {
+      if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
+        return false;
+      }
       const hasIndividualRepo = assignment.repositories.length > 0;
       const assignmentGroup = groups?.data?.find((group) => group.assignment_id === assignment.id);
       const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
@@ -75,6 +78,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       return !hasIndividualRepo;
     });
     if (assignmentsWithoutRepos?.length) {
+      console.log(`Creating repos for ${assignmentsWithoutRepos.map((a) => a.title).join(", ")}`);
       await autograderCreateReposForStudent(client);
       assignments = await client
         .from("assignments")

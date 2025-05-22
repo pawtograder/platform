@@ -73,6 +73,8 @@ async function handleRequest(req: Request) {
       classes!.map((c) => c!.class_id)
     )
     .eq("classes.user_roles.user_id", user.user!.id)
+    .not("template_repo", "is", "null")
+    .not("template_repo", "eq", "")
     .limit(1000);
   if (assignmentsError) {
     console.error(assignmentsError);
@@ -80,8 +82,10 @@ async function handleRequest(req: Request) {
   }
   const assignments = allAssignments.filter(
     (a) =>
-      (a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
-      a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")
+      a.template_repo.includes("/") && (
+        (a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
+        a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader")
+      )
   );
 
   //For each group repo, sync the permissions
@@ -90,9 +94,12 @@ async function handleRequest(req: Request) {
       c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
+        if (!assignment.template_repo.includes("/")) {
+          return;
+        }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
 
-        console.log(`repoName: ${repoName}, groupMembership: ${JSON.stringify(groupMembership, null, 2)}`);
+        console.log(`repoName: ${repoName}, template_repo: '${assignment.template_repo}', groupMembership: ${JSON.stringify(groupMembership, null, 2)}, existingRepos: ${JSON.stringify(groupMembership.assignment_groups.repositories, null, 2)}`);
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           console.log("Creating repo");
