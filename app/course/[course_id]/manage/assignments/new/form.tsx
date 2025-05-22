@@ -34,7 +34,10 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
     pagination: { pageSize: 1000 }
   });
 
-  const [withGroups, setWithGroups] = useState<boolean>(form.getValues("group_config") !== "individual");
+  const [withGroups, setWithGroups] = useState<boolean>(() => {
+    const groupConfig = form.getValues("group_config");
+    return groupConfig === "groups" || groupConfig === "both";
+  });
 
   const {
     register,
@@ -58,6 +61,7 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
             <NativeSelectRoot {...register("group_config", { required: true })}>
               <NativeSelectField
                 name="group_config"
+                defaultValue="individual"
                 onChange={(e) => {
                   setWithGroups(e.target.value !== "individual");
                 }}
