@@ -114,16 +114,15 @@ export default async function AssignmentPage({
         <Alert.Root status="error" flexDirection="column">
           <Alert.Title>No repositories configured for this assignment</Alert.Title>
           <Alert.Description>
-            Your instructor has not set up a template repository for this assignment, so you will not be able to
-            create a repository for this assignment.
-            If you believe this is an error, please contact your instructor.
+            Your instructor has not set up a template repository for this assignment, so you will not be able to create
+            a repository for this assignment. If you believe this is an error, please contact your instructor.
           </Alert.Description>
         </Alert.Root>
       ) : (
         <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-
           <RepositoriesInfo repositories={repositories ?? []} />
-        </Box>)}
+        </Box>
+      )}
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
       </Box>
