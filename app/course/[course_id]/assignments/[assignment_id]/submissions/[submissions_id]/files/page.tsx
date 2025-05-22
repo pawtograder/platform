@@ -892,7 +892,7 @@ export default function FilesView() {
           )}
         </Box>
         <Separator orientation={{ base: "horizontal", md: "vertical" }} />
-        <Box flex="1" overflow="auto">
+        <Box w={"100%"}>
           {fileId ||
           (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
             selectedFile && <CodeFile file={selectedFile} submissionReviewId={finalActiveSubmissionReviewId} />
