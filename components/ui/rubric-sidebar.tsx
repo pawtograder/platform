@@ -12,7 +12,7 @@ import {
   SubmissionFileComment,
   SubmissionReview
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, HStack, Menu, Portal, RadioGroup, Text, VStack, Skeleton, Tag } from "@chakra-ui/react";
+import { Box, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Tag, Text, VStack } from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,11 +22,11 @@ import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
+  useReferencedRubricCheckInstances,
+  useReviewAssignment,
   useRubricCheckInstances,
   useRubricCriteriaInstances,
   useSubmissionMaybe,
-  useReviewAssignment,
-  useReferencedRubricCheckInstances,
   useSubmissionRubric
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -36,12 +36,12 @@ import { format, formatRelative } from "date-fns";
 import { usePathname } from "next/navigation";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
-import { BsThreeDots, BsFileEarmarkCodeFill, BsFileEarmarkImageFill } from "react-icons/bs";
+import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
-import { toaster } from "./toaster";
+import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import PersonAvatar from "./person-avatar";
+import { toaster } from "./toaster";
 import { Tooltip } from "./tooltip";
-import { RubricCheckSubOption, isRubricCheckDataWithOptions } from "./code-file";
 
 export function CommentActions({
   comment,
@@ -865,7 +865,7 @@ export default function RubricSidebar({
             {displayRubric.name}
           </Text>
           {displayRubric.description && <Markdown>{displayRubric.description}</Markdown>}
-          <Text mt={2}>This rubric does not have any parts configured for display in this context.</Text>
+          <Text mt={2}>This rubric is empty.</Text>
         </VStack>
       </Box>
     );
@@ -884,6 +884,9 @@ export default function RubricSidebar({
       overflowX="hidden"
     >
       <VStack align="start" w="100%">
+        <Text fontSize="lg" fontWeight="semibold">
+          {displayRubric.name}
+        </Text>
         {reviewAssignment && (
           <Box fontSize="sm" color="text.muted" mb={2}>
             {reviewAssignment.due_date && (

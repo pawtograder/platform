@@ -442,7 +442,10 @@ export type HydratedRubricParts = Database["public"]["Tables"]["rubric_parts"]["
 };
 export type RubricPartsDataType = Json;
 
-export type YmlRubricType = Omit<HydratedRubric, "id" | "description" | "rubric_parts" | "class_id" | "created_at"> & {
+export type YmlRubricType = Omit<
+  HydratedRubric,
+  "id" | "description" | "rubric_parts" | "class_id" | "created_at" | "assignment_id" | "review_round" | "is_private"
+> & {
   parts: YmlRubricPartType[];
   description?: string;
 };

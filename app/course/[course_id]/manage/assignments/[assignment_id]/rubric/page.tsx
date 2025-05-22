@@ -9,16 +9,16 @@ import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
+  Json,
   RubricChecksDataType,
   YmlRubricChecksType,
   YmlRubricCriteriaType,
   YmlRubricPartType,
-  YmlRubricType,
-  Json
+  YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
-import { useCreate, useDelete, useList, useShow, useUpdate, HttpError, useDataProvider } from "@refinedev/core";
+import { HttpError, useCreate, useDataProvider, useDelete, useList, useShow, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -37,12 +37,14 @@ function findChanges<T extends { id: number | undefined | null }>(
   toCreate: T[];
   toUpdate: T[];
   toDelete: number[];
+  numItemsWithBadIDs: number;
 } {
   const existingItemMap = new Map(existingItems.map((item) => [item.id, item]));
 
   const toCreate: T[] = [];
   const toUpdate: T[] = [];
 
+  let numItemsWithBadIDs = 0;
   for (const newItem of newItems) {
     if (newItem.id === undefined || newItem.id === null || newItem.id <= 0) {
       toCreate.push(newItem);
@@ -54,11 +56,7 @@ function findChanges<T extends { id: number | undefined | null }>(
         }
         existingItemMap.delete(newItem.id);
       } else {
-        toaster.create({
-          title: "Item not found in existing",
-          description: `Item with ID ${newItem.id} found in new items but not in existing. Treating as new if ID > 0.`,
-          type: "warning"
-        });
+        numItemsWithBadIDs++;
         toCreate.push(newItem);
       }
     }
@@ -68,7 +66,7 @@ function findChanges<T extends { id: number | undefined | null }>(
     (id): id is number => id !== undefined && id !== null && id > 0
   );
 
-  return { toCreate, toUpdate, toDelete };
+  return { toCreate, toUpdate, toDelete, numItemsWithBadIDs };
 }
 
 function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataType | undefined {
@@ -161,11 +159,8 @@ function hydratedRubricPartToYamlRubric(parts: HydratedRubricPart[]): YmlRubricP
 function HydratedRubricToYamlRubric(rubric: HydratedRubric): YmlRubricType {
   return {
     name: rubric.name,
-    assignment_id: rubric.assignment_id,
     description: valOrUndefined(rubric.description),
-    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts),
-    is_private: rubric.is_private,
-    review_round: valOrNull(rubric.review_round)
+    parts: hydratedRubricPartToYamlRubric(rubric.rubric_parts)
   };
 }
 
@@ -255,17 +250,28 @@ function YamlPartsToHydratedParts(parts: YmlRubricPartType[]): HydratedRubricPar
   }));
 }
 
-function YamlRubricToHydratedRubric(yaml: YmlRubricType): HydratedRubric {
+function YamlRubricToHydratedRubric(
+  yaml: YmlRubricType,
+  {
+    assignment_id,
+    is_private,
+    review_round
+  }: {
+    assignment_id: number;
+    is_private: boolean;
+    review_round: NonNullable<HydratedRubric["review_round"]>;
+  }
+): HydratedRubric {
   return {
     id: 0,
     class_id: 0,
     created_at: "",
     name: yaml.name,
-    assignment_id: yaml.assignment_id,
+    assignment_id,
     description: valOrNull(yaml.description),
     rubric_parts: YamlPartsToHydratedParts(yaml.parts),
-    is_private: yaml.is_private,
-    review_round: yaml.review_round
+    is_private,
+    review_round
   };
 }
 
@@ -412,11 +418,9 @@ export default function RubricPage() {
     (
       currentAssignmentId: string,
       currentClassId: number,
-      reviewRound: HydratedRubric["review_round"]
+      reviewRound: NonNullable<HydratedRubric["review_round"]>
     ): HydratedRubric => {
       const newRubricBase = YAML.parse(defaultRubric) as YmlRubricType;
-      newRubricBase.assignment_id = Number(currentAssignmentId);
-      newRubricBase.review_round = reviewRound;
       if (assignmentDetails?.title) {
         newRubricBase.name = `${assignmentDetails.title} - ${reviewRound
           ?.split("-")
@@ -424,7 +428,11 @@ export default function RubricPage() {
           .join(" ")} Rubric`;
       }
 
-      const hydrated = YamlRubricToHydratedRubric(newRubricBase);
+      const hydrated = YamlRubricToHydratedRubric(newRubricBase, {
+        assignment_id: Number(currentAssignmentId),
+        is_private: false,
+        review_round: reviewRound
+      });
       hydrated.id = 0; // New template, not saved yet
       hydrated.class_id = currentClassId;
       hydrated.assignment_id = Number(currentAssignmentId);
@@ -498,6 +506,7 @@ export default function RubricPage() {
         refetchCurrentRubric();
       } else {
         // No stashed state, so this tab will load fresh via useList effect
+        console.log("L508");
         setHasUnsavedChanges(false);
         wasRestoredFromStashRef.current = false;
       }
@@ -557,7 +566,11 @@ export default function RubricPage() {
       ) {
         try {
           const parsed = YAML.parse(yamlValue) as YmlRubricType;
-          const hydratedFromYaml = YamlRubricToHydratedRubric(parsed);
+          const hydratedFromYaml = YamlRubricToHydratedRubric(parsed, {
+            assignment_id: Number(assignment_id),
+            is_private: false,
+            review_round: activeReviewRound
+          });
 
           // Ensure the parsed rubric aligns with the current context (assignment, class, review round)
           // especially if it's a new rubric being defined in the editor.
@@ -650,6 +663,7 @@ export default function RubricPage() {
 
   useEffect(() => {
     if (!initialActiveRubricSnapshot && !value) {
+      console.log("L667");
       setHasUnsavedChanges(false);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
       return;
@@ -659,12 +673,21 @@ export default function RubricPage() {
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
       return;
     }
+    if (!value) {
+      // No value - we are being triggered by a change in the review round
+      return;
+    }
 
     if (initialActiveRubricSnapshot) {
+      console.log(initialActiveRubricSnapshot);
       const snapshotAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
       try {
         const parsedValue = YAML.parse(value);
-        const currentEditorActiveRubric = YamlRubricToHydratedRubric(parsedValue);
+        const currentEditorActiveRubric = YamlRubricToHydratedRubric(parsedValue, {
+          assignment_id: Number(assignment_id),
+          is_private: false,
+          review_round: initialActiveRubricSnapshot.review_round || "grading-review"
+        });
 
         // Ensure consistent fields for comparison
         currentEditorActiveRubric.review_round = initialActiveRubricSnapshot.review_round;
@@ -674,6 +697,7 @@ export default function RubricPage() {
 
         const currentEditorAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(currentEditorActiveRubric));
         const changed = snapshotAsYamlString !== currentEditorAsYamlString;
+        console.log("L702", changed);
         setHasUnsavedChanges(changed);
         if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: changed }));
       } catch {
@@ -681,9 +705,10 @@ export default function RubricPage() {
         if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
       }
     } else {
+      console.log("L710", !!value);
       setHasUnsavedChanges(!!value);
     }
-  }, [value, initialActiveRubricSnapshot, activeReviewRound]);
+  }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id]);
 
   const updatePartIfChanged = useCallback(
     async (part: HydratedRubricPart, existingPart: HydratedRubricPart) => {
@@ -770,7 +795,11 @@ export default function RubricPage() {
 
       let parsedRubricFromEditor: HydratedRubric;
       try {
-        parsedRubricFromEditor = YamlRubricToHydratedRubric(YAML.parse(yamlStringValue));
+        parsedRubricFromEditor = YamlRubricToHydratedRubric(YAML.parse(yamlStringValue), {
+          assignment_id: Number(assignment_id),
+          is_private: false,
+          review_round: activeReviewRound
+        });
         parsedRubricFromEditor.assignment_id = Number(assignment_id);
         parsedRubricFromEditor.class_id = assignmentDetails.class_id;
         parsedRubricFromEditor.review_round = activeReviewRound;
@@ -890,6 +919,15 @@ export default function RubricPage() {
 
       const criteriaToCompareAgainst = actualBaselineForDiff.rubric_parts.flatMap((part) => part.rubric_criteria);
       const criteriaChanges = findChanges(allNewCriteriaFromEditor, criteriaToCompareAgainst);
+      const totalItemsWithBadIDs =
+        partChanges.numItemsWithBadIDs + criteriaChanges.numItemsWithBadIDs + checkChanges.numItemsWithBadIDs;
+      if (totalItemsWithBadIDs > 0) {
+        toaster.create({
+          title: "Items in yml had invalid IDs",
+          description: `${totalItemsWithBadIDs} items found with an "id" that appears to be a copy/paste from elsewhere. Treating as new items.`,
+          type: "warning"
+        });
+      }
 
       await Promise.all(
         criteriaChanges.toDelete.map((id: number) => deleteResource({ id, resource: "rubric_criteria" }))
@@ -1043,6 +1081,7 @@ export default function RubricPage() {
       const finalSavedRubricState = JSON.parse(JSON.stringify(parsedRubricFromEditor));
       setActiveRubric(finalSavedRubricState);
       setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(finalSavedRubricState))); // Update state
+      console.log("L1078");
       setHasUnsavedChanges(false); // Saved, so no unsaved changes
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
       // Clear any stashed state for this tab as it's now saved
@@ -1092,7 +1131,8 @@ export default function RubricPage() {
             {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubric
           </Heading>
           <Button
-            variant="solid"
+            variant="surface"
+            size="xs"
             onClick={() => {
               if (assignmentDetails && activeReviewRound) {
                 const demoTemplate = createNewRubricTemplate(
@@ -1101,14 +1141,13 @@ export default function RubricPage() {
                   activeReviewRound
                 );
                 setActiveRubric(demoTemplate);
-                setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(demoTemplate)));
                 setValue(YAML.stringify(HydratedRubricToYamlRubric(demoTemplate)));
-                setHasUnsavedChanges(true);
                 setStashedEditorStates((prev) => {
                   const newState = { ...prev };
                   if (activeReviewRound) delete newState[activeReviewRound];
                   return newState;
                 });
+                setHasUnsavedChanges(true);
                 toaster.success({
                   title: "Demo Loaded",
                   description: "Demo rubric is loaded in the editor. Save to persist."
@@ -1119,10 +1158,39 @@ export default function RubricPage() {
             Load Demo Rubric
           </Button>
         </HStack>
-        <HStack>
+      </HStack>
+      <Tabs.Root
+        value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
+        onValueChange={(details) => {
+          if (details.value) {
+            handleReviewRoundChange(details.value as HydratedRubric["review_round"]);
+          }
+        }}
+        lazyMount
+        unmountOnExit
+        mb={0}
+      >
+        <Tabs.List>
+          {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
+            <Tabs.Trigger key={rr || "undefined_round"} value={rr || "undefined_round_val"}>
+              {" "}
+              {rr
+                ? rr
+                    .split("-")
+                    .map((w) => w[0].toUpperCase() + w.slice(1))
+                    .join(" ")
+                : "Select Round"}
+              {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+      </Tabs.Root>
+      <VStack w="100%" h="100%" border="1px solid" borderColor={"border.subtle"}>
+        <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="end">
           <Button
             variant="ghost"
             colorPalette="red"
+            size="xs"
             onClick={() => {
               if (initialActiveRubricSnapshot) {
                 setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
@@ -1153,6 +1221,7 @@ export default function RubricPage() {
                   type: "info"
                 });
               }
+              console.log("L1224");
               setHasUnsavedChanges(false);
               if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
               setStashedEditorStates((prev) => {
@@ -1197,126 +1266,105 @@ export default function RubricPage() {
             Save
           </Button>
         </HStack>
-      </HStack>
-      <Tabs.Root
-        value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
-        onValueChange={(details) => {
-          if (details.value) {
-            handleReviewRoundChange(details.value as HydratedRubric["review_round"]);
-          }
-        }}
-        lazyMount
-        unmountOnExit
-        mb={2}
-      >
-        <Tabs.List>
-          {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
-            <Tabs.Trigger key={rr || "undefined_round"} value={rr || "undefined_round_val"}>
-              {" "}
-              {rr
-                ? rr
-                    .split("-")
-                    .map((w) => w[0].toUpperCase() + w.slice(1))
-                    .join(" ")
-                : "Select Round"}
-              {unsavedStatusPerTab[rr!] ? " (Editing)" : ""}
-            </Tabs.Trigger>
-          ))}
-        </Tabs.List>
-      </Tabs.Root>
-      <Flex w="100%" minW="0" flexGrow={1}>
-        <Box w="100%" minW="0">
-          <VStack w="100%" h="100%">
-            {isLoadingCurrentRubric && !activeRubric && (
-              <Center height="calc(100vh - 150px)" width="100%">
-                <Spinner size="xl" />
+        <Flex w="100%" minW="0" flexGrow={1}>
+          <Box w="100%" minW="0">
+            <VStack w="100%" h="100%">
+              {isLoadingCurrentRubric && !activeRubric && (
+                <Center height="calc(100vh - 150px)" width="100%">
+                  <Spinner size="xl" />
+                </Center>
+              )}
+              {isSaving && (
+                <Center height="calc(100vh - 150px)" width="100%">
+                  <Spinner size="xl" />
+                </Center>
+              )}
+              {!isSaving && (!isLoadingCurrentRubric || activeRubric) && (
+                <Editor
+                  height="calc(100vh - 150px)"
+                  width="100%"
+                  defaultLanguage="yaml"
+                  path={`rubric-${activeReviewRound || "new"}.yml`}
+                  beforeMount={handleEditorWillMount}
+                  value={value}
+                  theme={colorMode === "dark" ? "vs-dark" : "vs"}
+                  onValidate={(markers) => {
+                    // If the editor is empty, don't show schema validation errors.
+                    // Schema errors for an empty document are not helpful.
+                    if (value.trim() === "") {
+                      setError(undefined);
+                      setErrorMarkers([]);
+                      return;
+                    }
+
+                    if (markers.length > 0) {
+                      setError("YAML syntax error. Please fix the errors in the editor.");
+                      setErrorMarkers(markers.map((m) => ({ message: m.message, startLineNumber: m.startLineNumber })));
+                    } else {
+                      setError(undefined);
+                      setErrorMarkers([]);
+                    }
+                  }}
+                  onChange={handleEditorChange}
+                />
+              )}
+            </VStack>
+          </Box>
+          <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
+            {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
+
+            {isLoadingCurrentRubric && !rubricForSidebar && (
+              <Center h="100%">
+                {" "}
+                <Spinner />{" "}
               </Center>
             )}
-            {(!isLoadingCurrentRubric || activeRubric) && (
-              <Editor
-                height="calc(100vh - 150px)"
-                width="100%"
-                defaultLanguage="yaml"
-                path={`rubric-${activeReviewRound || "new"}.yml`}
-                beforeMount={handleEditorWillMount}
-                value={value}
-                theme={colorMode === "dark" ? "vs-dark" : "vs"}
-                onValidate={(markers) => {
-                  // If the editor is empty, don't show schema validation errors.
-                  // Schema errors for an empty document are not helpful.
-                  if (value.trim() === "") {
-                    setError(undefined);
-                    setErrorMarkers([]);
-                    return;
-                  }
 
-                  if (markers.length > 0) {
-                    setError("YAML syntax error. Please fix the errors in the editor.");
-                    setErrorMarkers(markers.map((m) => ({ message: m.message, startLineNumber: m.startLineNumber })));
-                  } else {
-                    setError(undefined);
-                    setErrorMarkers([]);
-                  }
-                }}
-                onChange={handleEditorChange}
-              />
+            {!isLoadingCurrentRubric && !error && !rubricForSidebar && activeReviewRound && (
+              <Center h="100%">
+                <VStack>
+                  <Text>No rubric configured for {activeReviewRound}.</Text>
+                  <Text fontSize="sm">You can load a demo or start typing.</Text>
+                </VStack>
+              </Center>
             )}
-          </VStack>
-        </Box>
-        <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
-          {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
 
-          {isLoadingCurrentRubric && !rubricForSidebar && (
-            <Center h="100%">
-              {" "}
-              <Spinner />{" "}
-            </Center>
-          )}
-
-          {!isLoadingCurrentRubric && !error && !rubricForSidebar && activeReviewRound && (
-            <Center h="100%">
-              <VStack>
-                <Text>No rubric configured for {activeReviewRound}.</Text>
-                <Text fontSize="sm">You can load a demo or start typing.</Text>
-              </VStack>
-            </Center>
-          )}
-
-          {!error && rubricForSidebar && <RubricSidebar initialRubric={rubricForSidebar} />}
-          {error && (
-            <Box
-              position="absolute"
-              top="0"
-              left="0"
-              width="100%"
-              height="100%"
-              backgroundColor="bg.surface"
-              p={4}
-              display="flex"
-              flexDirection="column"
-              zIndex="1"
-            >
-              <Heading size="sm" color="fg.error" mb={2}>
-                YAML Error
-              </Heading>
-              <Text color="fg.error" mb={2}>
-                {error}
-              </Text>
-              {errorMarkers.length > 0 && (
-                <List.Root>
-                  {errorMarkers.map((marker, index) => (
-                    <List.Item key={index}>
-                      <Text color="fg.error" fontSize="sm">
-                        Line {marker.startLineNumber}: {marker.message}
-                      </Text>
-                    </List.Item>
-                  ))}
-                </List.Root>
-              )}
-            </Box>
-          )}
-        </Box>
-      </Flex>
+            {!error && rubricForSidebar && <RubricSidebar initialRubric={rubricForSidebar} />}
+            {error && (
+              <Box
+                position="absolute"
+                top="0"
+                left="0"
+                width="100%"
+                height="100%"
+                backgroundColor="bg.surface"
+                p={4}
+                display="flex"
+                flexDirection="column"
+                zIndex="1"
+              >
+                <Heading size="sm" color="fg.error" mb={2}>
+                  YAML Error
+                </Heading>
+                <Text color="fg.error" mb={2}>
+                  {error}
+                </Text>
+                {errorMarkers.length > 0 && (
+                  <List.Root>
+                    {errorMarkers.map((marker, index) => (
+                      <List.Item key={index}>
+                        <Text color="fg.error" fontSize="sm">
+                          Line {marker.startLineNumber}: {marker.message}
+                        </Text>
+                      </List.Item>
+                    ))}
+                  </List.Root>
+                )}
+              </Box>
+            )}
+          </Box>
+        </Flex>
+      </VStack>
     </Flex>
   );
 }
