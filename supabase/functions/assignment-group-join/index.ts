@@ -6,6 +6,7 @@ import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import {
   IllegalArgumentError,
   SecurityError,
+  UserVisibleError,
   assertUserIsInCourse,
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
@@ -24,6 +25,7 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
   if (!assignmentGroup) {
     throw new IllegalArgumentError("Assignment group not found");
   }
+  console.log(JSON.stringify(assignmentGroup, null, 2));
   const timeZone = assignmentGroup.classes.time_zone || "America/New_York";
   const groupFormationDeadline = assignmentGroup.assignments.group_formation_deadline;
   if (groupFormationDeadline && new TZDate(groupFormationDeadline, timeZone) < TZDate.tz(timeZone)) {
@@ -85,6 +87,9 @@ async function handleAssignmentGroupJoin(req: Request): Promise<{ message: strin
         assignmentGroup.classes!.slug!,
         remaining_members.map((m) => m.profiles!.user_roles!.users!.github_username!)
       );
+    } else if (remaining_members_error) {
+      console.log(remaining_members_error);
+      throw new UserVisibleError("Failed to get remaining members");
     }
     //Deactivate any submissions for this assignment for this student
     const { error: deactivateError } = await adminSupabase

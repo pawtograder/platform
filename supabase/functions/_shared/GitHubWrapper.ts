@@ -367,10 +367,9 @@ export async function createRepo(org: string, repoName: string, template_repo: s
       allow_squash_merge: false
     });
     //Get the head SHA
-    const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
       owner: org,
-      repo: repoName,
-      ref: "heads/main"
+      repo: repoName
     });
     console.log(`Created repo ${org}/${repoName} with head SHA ${heads.data.object.sha}`);
     console.log(`Heads: ${JSON.stringify(heads.data)}`);
@@ -535,6 +534,7 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
     });
   }
 }
+const staffTeamCache = new Map<string, string[]>();
 export async function syncRepoPermissions(org: string, repo: string, courseSlug: string, githubUsernames: string[]) {
   console.log("syncing repo permissions", org, repo, courseSlug, githubUsernames);
   if (repo.includes("/")) {
@@ -547,23 +547,37 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
     throw new Error("No octokit found for organization " + org);
   }
   const team_slug = `${courseSlug}-staff`;
-  await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
-    org,
-    team_slug,
-    owner: org,
-    repo,
-    permission: "maintain"
-  });
+  if (!staffTeamCache.has(courseSlug)) {
+    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}/members", {
+      org,
+      team_slug
+    });
+    const staffGithubUsernames = team.data.map((m) => m.login);
+    staffTeamCache.set(courseSlug, staffGithubUsernames);
+    console.log("staff team", staffGithubUsernames);
+  }
+  const staffTeamUsernames = staffTeamCache.get(courseSlug) || [];
   const existingAccess = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
     owner: org,
     repo,
     per_page: 100
   });
-  const existingAccessMap = new Map(existingAccess.data.map((c) => [c.login, c]));
-  const newAccess = githubUsernames.filter((u) => !existingAccessMap.has(u));
-  const removeAccess = existingAccessMap.keys().filter((u) => !githubUsernames.includes(u));
+
+  const existingUsernames = existingAccess.data.map((c) => c.login);
+  console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
+  if (staffTeamUsernames.length && !existingUsernames.includes(staffTeamUsernames[0])) {
+    await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
+      org,
+      team_slug,
+      owner: org,
+      repo,
+      permission: "maintain"
+    });
+  }
+  const newAccess = githubUsernames.filter((u) => !existingUsernames.includes(u));
+  const removeAccess = existingUsernames.filter((u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u));
   for (const username of newAccess) {
-    console.log("adding collaborator", username);
+    console.log(`adding collaborator ${username} to ${org}/${repo}`);
     await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,
@@ -572,7 +586,7 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
     });
   }
   for (const username of removeAccess) {
-    console.log("removing collaborator", username);
+    console.log(`removing collaborator ${username} from ${org}/${repo}`);
     await octokit.request("DELETE /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,

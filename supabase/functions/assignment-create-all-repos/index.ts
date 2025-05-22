@@ -38,7 +38,9 @@ async function handleRequest(req: Request) {
   // Select all existing repos for the assignment
   const { data: existingRepos } = await adminSupabase
     .from("repositories")
-    .select("*")
+    .select(
+      "*, assignment_groups(assignment_groups_members(*,user_roles(users(github_username)))), profiles(user_roles!user_roles_private_profile_id_fkey(users(github_username)))"
+    )
     .eq("assignment_id", assignmentId);
 
   const studentsInAGroup = assignment.assignment_groups?.flatMap((group) =>
@@ -62,13 +64,15 @@ async function handleRequest(req: Request) {
     );
   }
   if (assignment.group_config === "groups" || assignment.group_config === "both") {
-    const groupRepos = assignment.assignment_groups?.map((group) => ({
-      name: `${assignment.classes?.slug}-${assignment.slug}-group-${group.name}`,
-      assignment_group: group,
-      student_github_usernames: group.assignment_groups_members.map(
-        (member) => member.user_roles.users.github_username!
-      )
-    }));
+    const groupRepos = assignment.assignment_groups
+      ?.filter((group) => !existingRepos?.find((repo) => repo.assignment_group_id === group.id))
+      .map((group) => ({
+        name: `${assignment.classes?.slug}-${assignment.slug}-group-${group.name}`,
+        assignment_group: group,
+        student_github_usernames: group.assignment_groups_members.map(
+          (member) => member.user_roles.users.github_username!
+        )
+      }));
     reposToCreate.push(...groupRepos);
   }
 
@@ -88,7 +92,7 @@ async function handleRequest(req: Request) {
       .from("repositories")
       .insert({
         profile_id: profile_id,
-        assignment_group: assignmentGroup?.id,
+        assignment_group_id: assignmentGroup?.id,
         assignment_id: assignmentId,
         repository: assignment.classes!.github_org! + "/" + repoName,
         class_id: courseId,
@@ -98,6 +102,12 @@ async function handleRequest(req: Request) {
       .single();
     if (error) {
       console.error(error);
+      throw new UserVisibleError(`Error creating repo: ${error}`);
+    }
+    if (!dbRepo) {
+      throw new UserVisibleError(
+        `Error creating repo: No repo created for ${assignment.classes!.github_org! + "/" + repoName}`
+      );
     }
 
     try {
@@ -113,11 +123,11 @@ async function handleRequest(req: Request) {
         .update({
           synced_repo_sha: headSha
         })
-        .eq("id", dbRepo!.id);
+        .eq("id", dbRepo.id);
     } catch (e) {
       console.log(`Error creating repo: ${repoName}`);
       console.error(e);
-      await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+      await adminSupabase.from("repositories").delete().eq("id", dbRepo.id);
       throw new UserVisibleError(`Error creating repo: ${e}`);
     }
   };
@@ -126,6 +136,27 @@ async function handleRequest(req: Request) {
       createRepo(repo.name, repo.student_github_usernames, repo.profile_id ?? null, repo.assignment_group ?? null)
     )
   );
+  if (existingRepos) {
+    await Promise.all(
+      existingRepos.map(async (repo) => {
+        const [org, repoName] = repo.repository.split("/");
+        let student_github_usernames = [];
+        if (repo.assignment_groups?.assignment_groups_members) {
+          student_github_usernames = repo.assignment_groups.assignment_groups_members.map(
+            (member) => member.user_roles.users.github_username!
+          );
+        } else {
+          const github_username = repo.profiles?.user_roles?.users.github_username;
+          if (!github_username) {
+            console.log(`No github username for repo ${repo.repository}`);
+            return;
+          }
+          student_github_usernames = [github_username];
+        }
+        await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, student_github_usernames);
+      })
+    );
+  }
 }
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);

@@ -65,10 +65,6 @@ async function handleAssignmentGroupLeave(req: Request): Promise<{ message: stri
   if (repository) {
     if (remaining_members.length === 0) {
       //Archive
-      const { error: remove_repo_error } = await adminSupabase.from("repositories").delete().eq("id", repository.id);
-      if (remove_repo_error) {
-        throw new Error("Failed to remove repo");
-      }
       await archiveRepoAndLock(membership.classes!.github_org!, repository.repository);
     } else {
       //Update the repo permissions

@@ -3,6 +3,7 @@
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourse } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -36,6 +37,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
 import { MultiValue, Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
@@ -56,6 +58,7 @@ function CreateGroupButton({
   const [name, setName] = useState<string>("");
   const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null; value: string }>>([]);
   const supabase = createClient();
+  const [isLoading, setIsLoading] = useState(false);
 
   return (
     <Dialog.Root
@@ -106,8 +109,10 @@ function CreateGroupButton({
                 <Button variant="ghost">Cancel</Button>
               </Dialog.ActionTrigger>
               <Button
+                loading={isLoading}
                 colorPalette="green"
                 onClick={() => {
+                  setIsLoading(true);
                   assignmentGroupCreate(
                     {
                       course_id: assignment.class_id,
@@ -122,11 +127,13 @@ function CreateGroupButton({
                       setOpen(false);
                       setName("");
                       setSelectedInvitees([]);
+                      setIsLoading(false);
                       invalidate({ resource: "assignment_groups", invalidates: ["all"] });
                       invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
                       invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
                     })
                     .catch((e) => {
+                      setIsLoading(false);
                       if (e instanceof EdgeFunctionError) {
                         toaster.create({ title: "Error: " + e.message, description: e.details, type: "error" });
                       }
@@ -814,6 +821,7 @@ function GroupDetails({
 
 export default function ManageGroupWidget({ assignment }: { assignment: Assignment }) {
   const { private_profile_id } = useClassProfiles();
+  const { time_zone } = useCourse();
   const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
     resource: "assignment_groups",
     meta: { select: "*,assignment_groups_members(*),assignment_group_join_request(*),assignment_group_invitations(*)" },
@@ -860,9 +868,20 @@ export default function ManageGroupWidget({ assignment }: { assignment: Assignme
     description = `You can submit this assignment individually or as part of a group with ${sizeDesc} members.`;
   }
 
+  const groupJoinDeadline = new TZDate(
+    assignment.group_formation_deadline || "2030-01-01 00:00:00",
+    time_zone || "America/New_York"
+  );
+  const now = TZDate.tz(time_zone || "America/New_York");
   let actions = <></>;
   if (myGroup) {
     actions = <GroupDetails group={myGroup} allGroups={groups.data} assignment={assignment} />;
+  } else if (now > groupJoinDeadline) {
+    actions = (
+      <Text fontSize="sm" color="fg.muted">
+        The group formation deadline has passed. You will not be able to join a group for this assignment.
+      </Text>
+    );
   } else {
     actions = (
       <HStack>
