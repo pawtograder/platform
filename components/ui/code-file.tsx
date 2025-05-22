@@ -1,5 +1,5 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useIsGraderOrInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useRubricCheck,
   useSubmission,
@@ -21,22 +21,23 @@ import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
-import { Element, ElementContent, Root, RootContent, Properties } from "hast";
+import { Element, ElementContent, Properties, Root, RootContent } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import {
   createContext,
   Dispatch,
   SetStateAction,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ComponentType,
-  useCallback
+  type ComponentType
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { Checkbox } from "./checkbox";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
@@ -44,7 +45,6 @@ import PersonAvatar from "./person-avatar";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
 import { CommentActions } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
-import { Checkbox } from "./checkbox";
 import { toaster } from "./toaster";
 
 export type RubricCheckSubOption = {
@@ -829,7 +829,7 @@ function LineActionPopup({
                   onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
                   size="sm"
                 >
-                  Visible to student upon release
+                  Visible to student when submission is released
                 </Checkbox>
               </HStack>
             )}

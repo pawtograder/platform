@@ -469,7 +469,7 @@ function ArtifactCommentsForm({
             checked={eventuallyVisible}
             onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
           >
-            Visible to student upon release
+            Visible to student when submission is released
           </Checkbox>
         </Box>
       )}
@@ -630,7 +630,7 @@ function ArtifactCheckPopover({
                     checked={eventuallyVisible}
                     onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
                   >
-                    Visible to student upon release
+                    Visible to student when submission is released
                   </Checkbox>
                 )}
                 <MessageInput

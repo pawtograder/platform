@@ -1,15 +1,15 @@
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useSubmissionReview } from "@/hooks/useSubmission";
 import {
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
+import { Box, Text } from "@chakra-ui/react";
 import { useCreate, useInvalidate } from "@refinedev/core";
 import { useCallback, useState } from "react";
-import MessageInput from "./message-input";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useSubmissionReview } from "@/hooks/useSubmission";
-import { Box, Text } from "@chakra-ui/react";
 import { Checkbox } from "./checkbox";
+import MessageInput from "./message-input";
 import { toaster } from "./toaster";
 
 export default function LineCommentForm({
@@ -129,7 +129,7 @@ export default function LineCommentForm({
             size="sm"
             disabled={isCreatingComment || (!!submissionReviewId && isLoadingReviewDetails)}
           >
-            Visible to student upon release
+            Visible to student when submission is released
           </Checkbox>
         </Box>
       )}
