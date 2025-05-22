@@ -15,7 +15,7 @@ import {
   YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, HStack, List, Text, VStack, Tabs, Spinner, Center } from "@chakra-ui/react";
+import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDelete, useList, useShow, useUpdate, HttpError } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
@@ -436,6 +436,7 @@ export default function RubricPage() {
 
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
+      getWorker(_module_id, label) {
       getWorker(_module_id, label) {
         switch (label) {
           case "editorWorkerService":

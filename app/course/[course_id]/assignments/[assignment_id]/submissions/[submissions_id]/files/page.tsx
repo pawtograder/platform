@@ -1,5 +1,6 @@
 "use client";
 
+import { Checkbox } from "@/components/ui/checkbox";
 import CodeFile, {
   formatPoints,
   RubricCheckSelectOption,
@@ -9,42 +10,44 @@ import CodeFile, {
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
+import NotFound from "@/components/ui/not-found";
 import PersonAvatar from "@/components/ui/person-avatar";
 import {
+  PopoverArrow,
   PopoverBody,
+  PopoverCloseTrigger,
   PopoverContent,
   PopoverRoot,
-  PopoverTrigger,
-  PopoverArrow,
-  PopoverCloseTrigger,
-  PopoverTitle
+  PopoverTitle,
+  PopoverTrigger
 } from "@/components/ui/popover";
 import { CommentActions } from "@/components/ui/rubric-sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
+  useReviewAssignment,
   useRubricCheck,
   useSubmission,
   useSubmissionArtifactComments,
   useSubmissionFileComments,
+  useSubmissionMaybe,
   useSubmissionReview,
-  useReviewAssignment,
-  useSubmissionReviewByAssignmentId,
-  useSubmissionMaybe
+  useSubmissionReviewByAssignmentId
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
-import { Tables } from "@/utils/supabase/SupabaseTypes";
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
+  RubricChecksDataType,
   SubmissionArtifact,
   SubmissionArtifactComment,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   SubmissionFile,
-  RubricChecksDataType
+  SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
+import { Tables } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
   Button,
@@ -66,12 +69,9 @@ import { format } from "date-fns";
 import JSZip from "jszip";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
 import zipToHTMLBlobs from "./zipToHTMLBlobs";
-import { Checkbox } from "@/components/ui/checkbox";
-import { toaster } from "@/components/ui/toaster";
-import NotFound from "@/components/ui/not-found";
 
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
@@ -884,7 +884,7 @@ export default function FilesView() {
 
   return (
     <>
-      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column", md: "row" }}>
+      <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
         <Box w={{ base: "100%", md: "300px" }} minW={{ base: "100%", md: "300px" }}>
           <FilePicker curFile={filePickerDisplayIndex} />
           {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
