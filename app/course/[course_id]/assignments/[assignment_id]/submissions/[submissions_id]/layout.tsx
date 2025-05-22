@@ -770,6 +770,31 @@ function RubricView() {
           </Box>
         )}
 
+        {isGraderOrInstructor && rubricIdToDisplay && !reviewAssignmentId && rubricToDisplayData && (
+          <Button onClick={handleOpenAddReferenceModal} variant="outline" size="sm" mt={2}>
+            <HStack>
+              <Icon as={FaLink} />
+              <Text>Reference Check from Another Rubric</Text>
+            </HStack>
+          </Button>
+        )}
+        {addReferenceModalData &&
+          rubricToDisplayData &&
+          rubricToDisplayData.rubric_parts &&
+          submission.assignments.id &&
+          submission.class_id && (
+            <AddRubricReferenceModal
+              isOpen={isAddReferenceModalOpen}
+              onClose={closeAddReferenceModal}
+              currentRubricChecks={rubricToDisplayData.rubric_parts.flatMap((p) =>
+                p.rubric_criteria.flatMap((c) => c.rubric_checks)
+              )}
+              currentRubricId={addReferenceModalData.currentRubricId}
+              assignmentId={submission.assignments.id}
+              classId={submission.class_id}
+            />
+          )}
+
         {displayScoreFromReview && submission.assignments.total_points !== null && (
           <Heading size="xl">
             Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
@@ -787,32 +812,7 @@ function RubricView() {
           />
         )}
         {!showHandGradingControls && <Text>Rubric and manual grading are not available.</Text>}
-
-        {isGraderOrInstructor && rubricIdToDisplay && !reviewAssignmentId && rubricToDisplayData && (
-          <Button onClick={handleOpenAddReferenceModal} variant="outline" size="sm" mt={2}>
-            <HStack>
-              <Icon as={FaLink} />
-              <Text>Reference Check from Another Rubric</Text>
-            </HStack>
-          </Button>
-        )}
         <Comments />
-        {addReferenceModalData &&
-          rubricToDisplayData &&
-          rubricToDisplayData.rubric_parts &&
-          submission.assignments.id &&
-          submission.class_id && (
-            <AddRubricReferenceModal
-              isOpen={isAddReferenceModalOpen}
-              onClose={closeAddReferenceModal}
-              currentRubricChecks={rubricToDisplayData.rubric_parts.flatMap((p) =>
-                p.rubric_criteria.flatMap((c) => c.rubric_checks)
-              )}
-              currentRubricId={addReferenceModalData.currentRubricId}
-              assignmentId={submission.assignments.id}
-              classId={submission.class_id}
-            />
-          )}
       </VStack>
     </Box>
   );
