@@ -423,11 +423,11 @@ export type HydratedRubricPart = Omit<Database["public"]["Tables"]["rubric_parts
 };
 export type HydratedRubricCriteria = Omit<Database["public"]["Tables"]["rubric_criteria"]["Row"], "data"> & {
   rubric_checks: HydratedRubricCheck[];
-  data: RubricCriteriaDataType | null;
+  data?: RubricCriteriaDataType;
 };
 export type RubricCriteriaDataType = Json;
 export type HydratedRubricCheck = Omit<Database["public"]["Tables"]["rubric_checks"]["Row"], "data"> & {
-  data: Json | null;
+  data?: Json;
 };
 export type RubricChecksDataType = {
   options: {

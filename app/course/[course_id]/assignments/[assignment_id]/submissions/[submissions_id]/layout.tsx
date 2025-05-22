@@ -753,7 +753,6 @@ function RubricView() {
             )}
           </Box>
         )}
-
         {!reviewAssignmentId && !isLoadingAssignmentRubrics && rubricOptions.length > 1 && (
           <Box w="full">
             <Text fontSize="sm" fontWeight="bold" mb={1}>
@@ -769,7 +768,14 @@ function RubricView() {
             />
           </Box>
         )}
-
+        {displayScoreFromReview && submission.assignments.total_points !== null && (
+          <Heading size="xl">
+            Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
+          </Heading>
+        )}
+        {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
+        {isGraderOrInstructor && <ReviewActions />}
+        <TestResults />
         {isGraderOrInstructor && rubricIdToDisplay && !reviewAssignmentId && rubricToDisplayData && (
           <Button onClick={handleOpenAddReferenceModal} variant="outline" size="sm" mt={2}>
             <HStack>
@@ -794,16 +800,6 @@ function RubricView() {
               classId={submission.class_id}
             />
           )}
-
-        {displayScoreFromReview && submission.assignments.total_points !== null && (
-          <Heading size="xl">
-            Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
-          </Heading>
-        )}
-        {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
-
-        {isGraderOrInstructor && <ReviewActions />}
-        <TestResults />
         {showHandGradingControls && (
           <RubricSidebar
             initialRubric={preparedInitialRubric}

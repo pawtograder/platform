@@ -13,11 +13,12 @@ import {
   YmlRubricChecksType,
   YmlRubricCriteriaType,
   YmlRubricPartType,
-  YmlRubricType
+  YmlRubricType,
+  Json
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
-import { useCreate, useDelete, useList, useShow, useUpdate, HttpError } from "@refinedev/core";
+import { useCreate, useDelete, useList, useShow, useUpdate, HttpError, useDataProvider } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -106,21 +107,25 @@ function rubricCheckDataOrThrow(check: YmlRubricChecksType): RubricChecksDataTyp
 function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRubricChecksType[] {
   return checks
     .sort((a, b) => a.ordinal - b.ordinal)
-    .map((check) => ({
-      id: check.id,
-      name: check.name,
-      description: valOrUndefined(check.description),
-      file: valOrUndefined(check.file),
-      group: valOrUndefined(check.group),
-      is_annotation: check.is_annotation,
-      is_required: check.is_required,
-      is_comment_required: check.is_comment_required,
-      artifact: valOrUndefined(check.artifact),
-      max_annotations: valOrUndefined(check.max_annotations),
-      points: check.points,
-      data: check.data,
-      annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined
-    }));
+    .map((check) => {
+      const yamlCheck: Omit<YmlRubricChecksType, "data"> & { data?: Json | null } = {
+        id: check.id,
+        name: check.name,
+        description: valOrUndefined(check.description),
+        file: valOrUndefined(check.file),
+        is_annotation: check.is_annotation,
+        is_required: check.is_required,
+        is_comment_required: check.is_comment_required,
+        artifact: valOrUndefined(check.artifact),
+        max_annotations: valOrUndefined(check.max_annotations),
+        points: check.points,
+        annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined
+      };
+      if (check.data !== null && check.data !== undefined) {
+        yamlCheck.data = check.data;
+      }
+      return yamlCheck as YmlRubricChecksType;
+    });
 }
 
 function valOrUndefined<T>(value: T | null | undefined): T | undefined {
@@ -282,6 +287,7 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
 export default function RubricPage() {
   const { assignment_id } = useParams();
   const { colorMode } = useColorMode();
+  const dataProviderHook = useDataProvider();
 
   const { queryResult: assignmentQueryResult } = useShow<Assignment>({
     resource: "assignments",
@@ -294,7 +300,7 @@ export default function RubricPage() {
   const isLoadingAssignment = assignmentQueryResult.isLoading;
 
   const [activeRubric, setActiveRubric] = useState<HydratedRubric | undefined>(undefined);
-  const initialActiveRubricSnapshot = useRef<HydratedRubric | undefined>(undefined);
+  const [initialActiveRubricSnapshot, setInitialActiveRubricSnapshot] = useState<HydratedRubric | undefined>(undefined);
   const [activeReviewRound, setActiveReviewRound] = useState<HydratedRubric["review_round"]>(
     REVIEW_ROUNDS_AVAILABLE[1] // Default to 'grading-review'
   );
@@ -309,8 +315,30 @@ export default function RubricPage() {
   const { mutateAsync: deleteResource } = useDelete({});
   const { mutateAsync: createResource } = useCreate({});
   const debounceTimeoutRef = useRef<NodeJS.Timeout>();
+  const wasRestoredFromStashRef = useRef(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+
+  const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
+    REVIEW_ROUNDS_AVAILABLE.reduce(
+      (acc, round) => {
+        if (round) acc[round] = false;
+        return acc;
+      },
+      {} as Record<string, boolean>
+    )
+  );
+  const [stashedEditorStates, setStashedEditorStates] = useState<
+    Record<
+      string,
+      {
+        value: string;
+        initialSnapshot: HydratedRubric | undefined;
+        activeRubricForSidebar: HydratedRubric | undefined;
+      }
+    >
+  >({});
 
   const { refetch: refetchCurrentRubric } = useList<HydratedRubric>({
     resource: "rubrics",
@@ -335,7 +363,7 @@ export default function RubricPage() {
       onSuccess: (data) => {
         const rubric = data.data && data.data.length > 0 ? data.data[0] : undefined;
         setActiveRubric(rubric);
-        initialActiveRubricSnapshot.current = rubric ? JSON.parse(JSON.stringify(rubric)) : undefined;
+        setInitialActiveRubricSnapshot(rubric ? JSON.parse(JSON.stringify(rubric)) : undefined);
         setIsLoadingCurrentRubric(false);
         // If no rubric, editor will be empty via useEffect on activeRubric
       },
@@ -345,7 +373,7 @@ export default function RubricPage() {
           description: (err as HttpError).message || "Could not load rubric for this review round."
         });
         setActiveRubric(undefined);
-        initialActiveRubricSnapshot.current = undefined;
+        setInitialActiveRubricSnapshot(undefined);
         setIsLoadingCurrentRubric(false);
       }
     }
@@ -425,13 +453,67 @@ export default function RubricPage() {
 
   const handleReviewRoundChange = useCallback(
     (newReviewRound: HydratedRubric["review_round"]) => {
-      if (!assignmentDetails || !assignment_id) return;
+      if (!assignmentDetails || !assignment_id || newReviewRound === activeReviewRound) return;
+
+      // Stash current tab's state if it has unsaved changes
+      if (hasUnsavedChanges && activeReviewRound) {
+        setStashedEditorStates((prev) => ({
+          ...prev,
+          [activeReviewRound]: {
+            value: value,
+            initialSnapshot: initialActiveRubricSnapshot,
+            activeRubricForSidebar: rubricForSidebar
+          }
+        }));
+        wasRestoredFromStashRef.current = false;
+      }
+
       setIsLoadingCurrentRubric(true);
+      // Clear current tab's specific states before switching
+      setActiveRubric(undefined);
+      // setInitialActiveRubricSnapshot(undefined); // This will be set by fetch or stash
+      setValue("");
+      setRubricForSidebar(undefined);
+      // hasUnsavedChanges will be updated by useEffect or stash restoration
+
+      if (stashedEditorStates[newReviewRound!]) {
+        const stashed = stashedEditorStates[newReviewRound!];
+        setValue(stashed.value);
+        setInitialActiveRubricSnapshot(stashed.initialSnapshot);
+        setRubricForSidebar(stashed.activeRubricForSidebar);
+        setHasUnsavedChanges(true); // It was stashed because it had unsaved changes
+
+        wasRestoredFromStashRef.current = true;
+
+        // Remove from stash
+        setStashedEditorStates((prev) => {
+          const newState = { ...prev };
+          delete newState[newReviewRound!];
+          return newState;
+        });
+        setIsLoadingCurrentRubric(false);
+        // Fetch in background to update initialActiveRubricSnapshot against DB,
+        // but don't let it overwrite the editor value if the user starts typing.
+        // The `onSuccess` of refetch will handle setting initialActiveRubricSnapshot.
+        refetchCurrentRubric();
+      } else {
+        // No stashed state, so this tab will load fresh via useList effect
+        setHasUnsavedChanges(false);
+        wasRestoredFromStashRef.current = false;
+      }
       setActiveReviewRound(newReviewRound);
-      // The useList hook will automatically refetch due to activeReviewRound dependency change.
-      // Its onSuccess/onError will handle setting activeRubric and snapshot.
     },
-    [assignmentDetails, assignment_id]
+    [
+      assignmentDetails,
+      assignment_id,
+      activeReviewRound,
+      hasUnsavedChanges,
+      value,
+      initialActiveRubricSnapshot,
+      rubricForSidebar,
+      stashedEditorStates,
+      refetchCurrentRubric
+    ]
   );
 
   function handleEditorWillMount(monaco: Monaco) {
@@ -460,8 +542,19 @@ export default function RubricPage() {
   }
 
   const debouncedParseYaml = useCallback(
-    (yamlValue: string) => {
-      if (errorMarkers.length === 0 && assignmentDetails && activeReviewRound) {
+    (yamlValue: string, currentNumErrorMarkers?: number) => {
+      if (yamlValue.trim() === "") {
+        setRubricForSidebar(undefined);
+        setError(undefined);
+        // setHasUnsavedChanges might need to be true if the initial state was not empty.
+        // This is handled by the dedicated useEffect for hasUnsavedChanges.
+        return;
+      }
+      if (
+        (currentNumErrorMarkers === undefined || currentNumErrorMarkers === 0) &&
+        assignmentDetails &&
+        activeReviewRound
+      ) {
         try {
           const parsed = YAML.parse(yamlValue) as YmlRubricType;
           const hydratedFromYaml = YamlRubricToHydratedRubric(parsed);
@@ -489,14 +582,7 @@ export default function RubricPage() {
         }
       }
     },
-    [
-      errorMarkers.length,
-      activeRubric,
-      assignmentDetails,
-      assignment_id,
-      activeReviewRound,
-      createMinimalNewHydratedRubric
-    ]
+    [activeRubric, assignmentDetails, assignment_id, activeReviewRound, createMinimalNewHydratedRubric]
   );
 
   const handleEditorChange = useCallback(
@@ -507,28 +593,97 @@ export default function RubricPage() {
           clearTimeout(debounceTimeoutRef.current);
         }
         setUpdatePaused(true);
+        const numErrorMarkers = errorMarkers.length;
         debounceTimeoutRef.current = setTimeout(() => {
-          debouncedParseYaml(value);
+          debouncedParseYaml(value, numErrorMarkers);
           setUpdatePaused(false);
         }, 2000);
       }
     },
-    [debouncedParseYaml]
+    [debouncedParseYaml, errorMarkers.length]
   );
 
   useEffect(() => {
+    if (wasRestoredFromStashRef.current) {
+      // Content was from stash, value is already set. Debounced parse might still be needed for sidebar.
+      // However, debouncedParseYaml is called in handleReviewRoundChange if restored from stash.
+      // Or if activeRubric is set, it's called by the else if block below.
+      // For now, if restored from stash, assume value and sidebar are handled.
+      return;
+    }
+
     if (activeRubric) {
       const yamlString = YAML.stringify(HydratedRubricToYamlRubric(activeRubric));
       setValue(yamlString);
       if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
-      // Directly parse and set for sidebar to reflect the authoritative activeRubric
-      debouncedParseYaml(yamlString);
+      // Pass 0 for error markers, as this is a trusted source or new template
+      debouncedParseYaml(yamlString, 0);
       setUpdatePaused(false);
     } else {
-      setValue(""); // Clear editor if no active rubric
-      setRubricForSidebar(undefined);
+      // activeRubric is undefined.
+      // This typically means no rubric from DB for this tab, or a reset to a non-existent state.
+      if (initialActiveRubricSnapshot === undefined) {
+        // Truly no rubric exists for this tab, and no demo/template has been loaded into activeRubric
+        setValue(""); // Clear the editor
+        if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+        debouncedParseYaml("", 0); // Clear the sidebar preview
+        setUpdatePaused(false);
+      } else {
+        // This case might be less common: activeRubric is cleared, but there was a previous snapshot.
+        // Still, treat as an empty state if activeRubric is gone.
+        setValue("");
+        if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
+        debouncedParseYaml("", 0);
+        setUpdatePaused(false);
+      }
     }
-  }, [activeRubric, debouncedParseYaml]);
+  }, [
+    activeRubric,
+    debouncedParseYaml,
+    assignmentDetails,
+    activeReviewRound,
+    assignment_id,
+    createMinimalNewHydratedRubric,
+    initialActiveRubricSnapshot,
+    wasRestoredFromStashRef
+  ]);
+
+  useEffect(() => {
+    if (!initialActiveRubricSnapshot && !value) {
+      setHasUnsavedChanges(false);
+      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+      return;
+    }
+    if (!initialActiveRubricSnapshot && value) {
+      setHasUnsavedChanges(true);
+      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
+      return;
+    }
+
+    if (initialActiveRubricSnapshot) {
+      const snapshotAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
+      try {
+        const parsedValue = YAML.parse(value);
+        const currentEditorActiveRubric = YamlRubricToHydratedRubric(parsedValue);
+
+        // Ensure consistent fields for comparison
+        currentEditorActiveRubric.review_round = initialActiveRubricSnapshot.review_round;
+        currentEditorActiveRubric.assignment_id = initialActiveRubricSnapshot.assignment_id;
+        currentEditorActiveRubric.class_id = initialActiveRubricSnapshot.class_id;
+        currentEditorActiveRubric.id = initialActiveRubricSnapshot.id; // Important for diffing
+
+        const currentEditorAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(currentEditorActiveRubric));
+        const changed = snapshotAsYamlString !== currentEditorAsYamlString;
+        setHasUnsavedChanges(changed);
+        if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: changed }));
+      } catch {
+        setHasUnsavedChanges(true);
+        if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
+      }
+    } else {
+      setHasUnsavedChanges(!!value);
+    }
+  }, [value, initialActiveRubricSnapshot, activeReviewRound]);
 
   const updatePartIfChanged = useCallback(
     async (part: HydratedRubricPart, existingPart: HydratedRubricPart) => {
@@ -605,7 +760,6 @@ export default function RubricPage() {
   const saveRubric = useCallback(
     async (yamlStringValue: string) => {
       if (!assignmentDetails || !activeReviewRound) {
-        // activeRubric might be undefined if creating new
         toaster.create({
           title: "Error",
           description: "Cannot save: Missing assignment details or active review round.",
@@ -617,7 +771,6 @@ export default function RubricPage() {
       let parsedRubricFromEditor: HydratedRubric;
       try {
         parsedRubricFromEditor = YamlRubricToHydratedRubric(YAML.parse(yamlStringValue));
-        // Ensure critical fields are aligned with current context
         parsedRubricFromEditor.assignment_id = Number(assignment_id);
         parsedRubricFromEditor.class_id = assignmentDetails.class_id;
         parsedRubricFromEditor.review_round = activeReviewRound;
@@ -627,17 +780,46 @@ export default function RubricPage() {
         return;
       }
 
-      let currentEffectiveRubricId = initialActiveRubricSnapshot.current?.id || 0;
-      let isNewRubricCreationFlow = !initialActiveRubricSnapshot.current || initialActiveRubricSnapshot.current.id <= 0;
+      let currentEffectiveRubricId: number;
+      let isNewRubricCreationFlow: boolean;
+      let actualBaselineForDiff: HydratedRubric;
 
-      // Baseline for diffing is the state when the tab was loaded/last saved, or a minimal new rubric if starting fresh on this tab.
-      const baselineRubricForDiff: HydratedRubric =
-        initialActiveRubricSnapshot.current ||
-        createMinimalNewHydratedRubric(assignment_id as string, assignmentDetails.class_id, activeReviewRound);
+      const { getList } = dataProviderHook();
+      const { data: existingRubricQuery } = await getList<HydratedRubric>({
+        resource: "rubrics",
+        filters: [
+          { field: "assignment_id", operator: "eq", value: Number(assignment_id) },
+          { field: "review_round", operator: "eq", value: activeReviewRound }
+        ],
+        pagination: { current: 1, pageSize: 1 },
+        meta: { select: "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))" }
+      });
 
-      // If snapshot existed but ID was 0 (e.g. loaded demo but not saved), it's still a creation.
-      if (initialActiveRubricSnapshot.current && initialActiveRubricSnapshot.current.id <= 0) {
+      const dbRubricForThisRound =
+        existingRubricQuery && existingRubricQuery.length > 0 ? existingRubricQuery[0] : undefined;
+
+      if (dbRubricForThisRound && dbRubricForThisRound.id > 0) {
+        isNewRubricCreationFlow = false;
+        currentEffectiveRubricId = dbRubricForThisRound.id;
+        actualBaselineForDiff = dbRubricForThisRound;
+        parsedRubricFromEditor.id = currentEffectiveRubricId;
+
+        if (!initialActiveRubricSnapshot || initialActiveRubricSnapshot.id <= 0) {
+          toaster.create({
+            title: "Notice",
+            description: "Updating existing rubric for this review round.",
+            type: "info"
+          });
+        }
+      } else {
         isNewRubricCreationFlow = true;
+        currentEffectiveRubricId = 0;
+        actualBaselineForDiff =
+          initialActiveRubricSnapshot && initialActiveRubricSnapshot.id <= 0
+            ? JSON.parse(JSON.stringify(initialActiveRubricSnapshot))
+            : createMinimalNewHydratedRubric(assignment_id as string, assignmentDetails.class_id, activeReviewRound);
+        if (actualBaselineForDiff.id !== 0) actualBaselineForDiff.id = 0;
+        parsedRubricFromEditor.id = 0;
       }
 
       if (isNewRubricCreationFlow) {
@@ -660,7 +842,6 @@ export default function RubricPage() {
           currentEffectiveRubricId = createdTopLevelRubric.data.id as number;
           if (!currentEffectiveRubricId) throw new Error("Failed to create rubric shell.");
 
-          // Update the editor's parsed rubric with the new ID for sub-item creation
           parsedRubricFromEditor.id = currentEffectiveRubricId;
         } catch (e) {
           toaster.create({ title: "Error Creating Rubric", description: (e as Error).message, type: "error" });
@@ -668,23 +849,13 @@ export default function RubricPage() {
           return;
         }
       } else {
-        // This is an update to an existing rubric (currentEffectiveRubricId > 0)
         const topLevelRubricChanges: Partial<HydratedRubric> = {};
-        if (parsedRubricFromEditor.name !== baselineRubricForDiff.name)
+        if (parsedRubricFromEditor.name !== actualBaselineForDiff.name)
           topLevelRubricChanges.name = parsedRubricFromEditor.name;
-        if (parsedRubricFromEditor.description !== baselineRubricForDiff.description)
+        if (parsedRubricFromEditor.description !== actualBaselineForDiff.description)
           topLevelRubricChanges.description = parsedRubricFromEditor.description;
-        if (parsedRubricFromEditor.is_private !== baselineRubricForDiff.is_private)
+        if (parsedRubricFromEditor.is_private !== actualBaselineForDiff.is_private)
           topLevelRubricChanges.is_private = parsedRubricFromEditor.is_private;
-        // review_round should not change via editor for an existing rubric, it's tab-driven.
-        // But if somehow it's different in parsed (e.g. user manually edited it in YAML),
-        // we should probably stick to activeReviewRound or log a warning.
-        // For now, we assume activeReviewRound is the source of truth for the save.
-        if (baselineRubricForDiff.review_round !== activeReviewRound) {
-          // This case should ideally not happen if UI enforces activeReviewRound
-          topLevelRubricChanges.review_round = activeReviewRound;
-        }
-
         if (Object.keys(topLevelRubricChanges).length > 0) {
           await updateResource({
             id: currentEffectiveRubricId,
@@ -694,34 +865,20 @@ export default function RubricPage() {
         }
       }
 
-      // Ensure all parts, criteria, and checks in the parsedRubricFromEditor
-      // have the correct rubric_id, class_id before diffing and creating/updating.
-      // This is crucial especially for new rubrics where sub-items get the parent ID.
       parsedRubricFromEditor.rubric_parts.forEach((part) => {
         part.rubric_id = currentEffectiveRubricId;
         part.class_id = assignmentDetails.class_id;
         part.rubric_criteria.forEach((criteria) => {
           criteria.rubric_id = currentEffectiveRubricId;
           criteria.class_id = assignmentDetails.class_id;
-          // parent part ID will be set during creation/update loop
-          criteria.rubric_checks.forEach((check) => {
-            // check.rubric_id = currentEffectiveRubricId; // Checks don't have direct rubric_id
-            check.class_id = assignmentDetails.class_id;
-            // parent criteria ID will be set during creation/update loop
-          });
         });
       });
 
-      const partsToCompareAgainst = baselineRubricForDiff.rubric_parts;
+      const partsToCompareAgainst = actualBaselineForDiff.rubric_parts;
       const partChanges = findChanges(parsedRubricFromEditor.rubric_parts, partsToCompareAgainst);
 
-      // For new criteria/checks, their parent IDs (rubric_part_id, rubric_criteria_id)
-      // might be negative if they came from a template. We need to update these
-      // to the actual DB IDs of their parents *after* the parents are created.
-
-      // --- Deletions first (bottom-up to avoid foreign key issues if possible, though cascade should handle) ---
       const allNewCriteriaFromEditor = parsedRubricFromEditor.rubric_parts.flatMap((part) => part.rubric_criteria);
-      const checksToCompareAgainst = baselineRubricForDiff.rubric_parts.flatMap((part) =>
+      const checksToCompareAgainst = actualBaselineForDiff.rubric_parts.flatMap((part) =>
         part.rubric_criteria.flatMap((c) => c.rubric_checks)
       );
       const allNewChecksFromEditor = allNewCriteriaFromEditor.flatMap(
@@ -731,7 +888,7 @@ export default function RubricPage() {
 
       await Promise.all(checkChanges.toDelete.map((id: number) => deleteResource({ id, resource: "rubric_checks" })));
 
-      const criteriaToCompareAgainst = baselineRubricForDiff.rubric_parts.flatMap((part) => part.rubric_criteria);
+      const criteriaToCompareAgainst = actualBaselineForDiff.rubric_parts.flatMap((part) => part.rubric_criteria);
       const criteriaChanges = findChanges(allNewCriteriaFromEditor, criteriaToCompareAgainst);
 
       await Promise.all(
@@ -740,9 +897,6 @@ export default function RubricPage() {
 
       await Promise.all(partChanges.toDelete.map((id: number) => deleteResource({ id, resource: "rubric_parts" })));
 
-      // --- Creations and Updates (top-down: Parts -> Criteria -> Checks) ---
-
-      // Parts
       for (const partData of partChanges.toCreate) {
         const partCopy: Omit<HydratedRubricPart, "id" | "created_at" | "rubric_criteria"> = {
           name: partData.name,
@@ -754,7 +908,6 @@ export default function RubricPage() {
         };
         const createdPart = await createResource({ resource: "rubric_parts", values: partCopy });
         if (!createdPart.data.id) throw new Error("Failed to create part");
-        // Update the ID in the parsedRubricFromEditor for subsequent children
         const editorPart = parsedRubricFromEditor.rubric_parts.find(
           (p) => p.id === partData.id || (p.name === partData.name && p.ordinal === partData.ordinal)
         );
@@ -764,20 +917,16 @@ export default function RubricPage() {
         partChanges.toUpdate.map((part: HydratedRubricPart) =>
           updatePartIfChanged(
             part,
-            baselineRubricForDiff.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart
+            actualBaselineForDiff.rubric_parts.find((p) => p.id === part.id) as HydratedRubricPart
           )
         )
       );
 
-      // Update rubric_part_id for all criteria in parsedRubricFromEditor based on potentially new part IDs
       parsedRubricFromEditor.rubric_parts.forEach((part) => {
         part.rubric_criteria.forEach((criteria) => {
           if (part.id && part.id > 0) {
-            // Ensure part has a DB ID
             criteria.rubric_part_id = part.id;
           } else {
-            // This implies an issue, a criteria's parent part from editor doesn't have a DB ID.
-            // Try to find by name/ordinal if it was a new part that just got an ID.
             const matchedNewPart = parsedRubricFromEditor.rubric_parts.find(
               (p) => p.name === part.name && p.ordinal === part.ordinal && p.id && p.id > 0
             );
@@ -792,9 +941,8 @@ export default function RubricPage() {
         });
       });
 
-      // Criteria (re-calculate allNewCriteriaFromEditor as IDs might have changed)
       const finalAllNewCriteriaFromEditor = parsedRubricFromEditor.rubric_parts.flatMap((part) => part.rubric_criteria);
-      const finalCriteriaChanges = findChanges(finalAllNewCriteriaFromEditor, criteriaToCompareAgainst); // Re-diff if necessary, or just use create/update lists
+      const finalCriteriaChanges = findChanges(finalAllNewCriteriaFromEditor, criteriaToCompareAgainst);
 
       for (const criteriaData of finalCriteriaChanges.toCreate) {
         if (!criteriaData.rubric_part_id || criteriaData.rubric_part_id <= 0) {
@@ -832,11 +980,9 @@ export default function RubricPage() {
         })
       );
 
-      // Update rubric_criteria_id for all checks
       finalAllNewCriteriaFromEditor.forEach((criteria) => {
         criteria.rubric_checks.forEach((check) => {
           if (criteria.id && criteria.id > 0) {
-            // Ensure criteria has a DB ID
             check.rubric_criteria_id = criteria.id;
           } else {
             const matchedNewCriteria = finalAllNewCriteriaFromEditor.find(
@@ -858,7 +1004,6 @@ export default function RubricPage() {
         });
       });
 
-      // Checks (re-calculate allNewChecksFromEditor)
       const finalAllNewChecksFromEditor = finalAllNewCriteriaFromEditor.flatMap((c) => c.rubric_checks);
       const finalCheckChanges = findChanges(finalAllNewChecksFromEditor, checksToCompareAgainst);
 
@@ -867,7 +1012,6 @@ export default function RubricPage() {
           throw new Error(`Cannot create check '${checkData.name}': Missing or invalid parent criteria ID.`);
         }
         const checkCopy: Omit<HydratedRubricCheck, "id" | "created_at"> = {
-          // rubric_id is not on checks table
           name: checkData.name,
           description: checkData.description,
           ordinal: checkData.ordinal,
@@ -886,7 +1030,7 @@ export default function RubricPage() {
         };
         const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
         if (!createdCheck.data.id) throw new Error("Failed to create check");
-        checkData.id = createdCheck.data.id as number; // Update ID in the source array (if needed elsewhere, though usually not)
+        checkData.id = createdCheck.data.id as number;
       }
       await Promise.all(
         finalCheckChanges.toUpdate.map((check: HydratedRubricCheck) => {
@@ -896,13 +1040,24 @@ export default function RubricPage() {
         })
       );
 
-      // After all operations, refetch the current rubric to update activeRubric and snapshot
-      // This ensures the UI has the very latest state from DB, including all generated IDs and timestamps.
+      const finalSavedRubricState = JSON.parse(JSON.stringify(parsedRubricFromEditor));
+      setActiveRubric(finalSavedRubricState);
+      setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(finalSavedRubricState))); // Update state
+      setHasUnsavedChanges(false); // Saved, so no unsaved changes
+      if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+      // Clear any stashed state for this tab as it's now saved
+      setStashedEditorStates((prev) => {
+        const newState = { ...prev };
+        if (activeReviewRound) delete newState[activeReviewRound];
+        return newState;
+      });
+
       await refetchCurrentRubric();
     },
     [
       assignmentDetails,
       activeReviewRound,
+      dataProviderHook,
       createResource,
       updateResource,
       deleteResource,
@@ -910,13 +1065,13 @@ export default function RubricPage() {
       updatePartIfChanged,
       updateCriteriaIfChanged,
       updateCheckIfChanged,
-      refetchCurrentRubric, // Added refetchCurrentRubric
-      createMinimalNewHydratedRubric
+      refetchCurrentRubric,
+      createMinimalNewHydratedRubric,
+      initialActiveRubricSnapshot
     ]
   );
 
-  if (isLoadingAssignment || (!activeRubric && isLoadingCurrentRubric && !initialActiveRubricSnapshot.current)) {
-    // Adjust loading condition
+  if (isLoadingAssignment || (!activeRubric && isLoadingCurrentRubric && !initialActiveRubricSnapshot)) {
     return (
       <Center h="100vh">
         <Spinner size="xl" />
@@ -945,9 +1100,15 @@ export default function RubricPage() {
                   assignmentDetails.class_id,
                   activeReviewRound
                 );
-                setActiveRubric(demoTemplate); // This will trigger useEffect to update editor value
-                initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(demoTemplate)); // Set snapshot to the demo
-                setRubricForSidebar(demoTemplate); // Update sidebar preview immediately
+                setActiveRubric(demoTemplate);
+                setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(demoTemplate)));
+                setValue(YAML.stringify(HydratedRubricToYamlRubric(demoTemplate)));
+                setHasUnsavedChanges(true);
+                setStashedEditorStates((prev) => {
+                  const newState = { ...prev };
+                  if (activeReviewRound) delete newState[activeReviewRound];
+                  return newState;
+                });
                 toaster.success({
                   title: "Demo Loaded",
                   description: "Demo rubric is loaded in the editor. Save to persist."
@@ -963,18 +1124,15 @@ export default function RubricPage() {
             variant="ghost"
             colorPalette="red"
             onClick={() => {
-              // Reset to the state when the tab was loaded or last saved/demo loaded
-              if (initialActiveRubricSnapshot.current) {
-                setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot.current)));
+              if (initialActiveRubricSnapshot) {
+                setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
+                setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
                 toaster.create({
                   title: "Reset",
                   description: "Editor reset to last saved state for this tab.",
                   type: "info"
                 });
               } else {
-                // If no snapshot (e.g., tab was empty and never had a demo loaded)
-                // Create a minimal new one or just clear. For now, clear.
-                // Or, better, if there's an activeReviewRound, create a minimal new for that.
                 if (assignmentDetails && activeReviewRound) {
                   const minimal = createMinimalNewHydratedRubric(
                     assignment_id as string,
@@ -982,10 +1140,12 @@ export default function RubricPage() {
                     activeReviewRound
                   );
                   setActiveRubric(minimal);
-                  initialActiveRubricSnapshot.current = JSON.parse(JSON.stringify(minimal)); // Treat this minimal as the new "snapshot"
+                  setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
+                  setValue("");
                 } else {
-                  setActiveRubric(undefined); // This will clear the editor via useEffect
-                  initialActiveRubricSnapshot.current = undefined;
+                  setActiveRubric(undefined);
+                  setInitialActiveRubricSnapshot(undefined);
+                  setValue("");
                 }
                 toaster.create({
                   title: "Reset",
@@ -993,6 +1153,13 @@ export default function RubricPage() {
                   type: "info"
                 });
               }
+              setHasUnsavedChanges(false);
+              if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
+              setStashedEditorStates((prev) => {
+                const newState = { ...prev };
+                if (activeReviewRound) delete newState[activeReviewRound];
+                return newState;
+              });
             }}
           >
             Reset
@@ -1001,17 +1168,16 @@ export default function RubricPage() {
             colorPalette="green"
             loadingText="Saving..."
             loading={isSaving}
+            disabled={isSaving || !hasUnsavedChanges}
             onClick={async () => {
               try {
                 setIsSaving(true);
-                await saveRubric(value); // saveRubric now internally calls refetchCurrentRubric
+                await saveRubric(value);
                 toaster.success({
                   title: "Rubric Saved",
                   description: "The rubric has been saved successfully."
                 });
-                // No need to manually refetch and setActiveRubric here, saveRubric handles it.
               } catch (error) {
-                // Error handling for saveRubric promise rejection (e.g. from deeper errors not caught by toaster in saveRubric itself)
                 if (error instanceof Error) {
                   toaster.error({
                     title: "Failed to save rubric",
@@ -1033,28 +1199,27 @@ export default function RubricPage() {
         </HStack>
       </HStack>
       <Tabs.Root
-        value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]} // Ensure a value is always provided
+        value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
         onValueChange={(details) => {
           if (details.value) {
-            // Ensure details.value is not null/undefined
             handleReviewRoundChange(details.value as HydratedRubric["review_round"]);
           }
         }}
         lazyMount
-        unmountOnExit // This might cause issues with Monaco state if not handled carefully, but let's keep for now.
+        unmountOnExit
         mb={2}
       >
         <Tabs.List>
           {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
             <Tabs.Trigger key={rr || "undefined_round"} value={rr || "undefined_round_val"}>
               {" "}
-              {/* Ensure value is unique and defined */}
               {rr
                 ? rr
                     .split("-")
                     .map((w) => w[0].toUpperCase() + w.slice(1))
                     .join(" ")
                 : "Select Round"}
+              {unsavedStatusPerTab[rr!] ? " (Editing)" : ""}
             </Tabs.Trigger>
           ))}
         </Tabs.List>
@@ -1074,9 +1239,17 @@ export default function RubricPage() {
                 defaultLanguage="yaml"
                 path={`rubric-${activeReviewRound || "new"}.yml`}
                 beforeMount={handleEditorWillMount}
-                value={value} // Value from state
+                value={value}
                 theme={colorMode === "dark" ? "vs-dark" : "vs"}
                 onValidate={(markers) => {
+                  // If the editor is empty, don't show schema validation errors.
+                  // Schema errors for an empty document are not helpful.
+                  if (value.trim() === "") {
+                    setError(undefined);
+                    setErrorMarkers([]);
+                    return;
+                  }
+
                   if (markers.length > 0) {
                     setError("YAML syntax error. Please fix the errors in the editor.");
                     setErrorMarkers(markers.map((m) => ({ message: m.message, startLineNumber: m.startLineNumber })));
