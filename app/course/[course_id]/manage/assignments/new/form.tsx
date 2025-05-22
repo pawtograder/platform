@@ -21,6 +21,7 @@ import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
+
 function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   const { course_id } = useParams();
   const { data: otherAssignments } = useList({
@@ -33,7 +34,10 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
     pagination: { pageSize: 1000 }
   });
 
-  const [withGroups, setWithGroups] = useState<boolean>(form.getValues("group_config") !== "individual");
+  const [withGroups, setWithGroups] = useState<boolean>(() => {
+    const groupConfig = form.getValues("group_config");
+    return groupConfig === "groups" || groupConfig === "both";
+  });
 
   const {
     register,
@@ -57,6 +61,7 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
             <NativeSelectRoot {...register("group_config", { required: true })}>
               <NativeSelectField
                 name="group_config"
+                defaultValue="individual"
                 onChange={(e) => {
                   setWithGroups(e.target.value !== "individual");
                 }}
@@ -202,7 +207,10 @@ export default function AssignmentForm({
           title: "Changes not saved",
           description: "An error occurred while saving the assignment. Please try again."
         });
-        console.error(error);
+        toaster.error({
+          title: "Error creating assignment: " + (error instanceof Error ? error.name : "Unknown"),
+          description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
+        });
       } finally {
         setIsSubmitting(false);
       }
@@ -317,11 +325,16 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
-            <Field label="Points Possible">
+            <Field
+              label="Points Possible"
+              errorText={errors.total_points?.message?.toString()}
+              invalid={!!errors.total_points}
+              required={true}
+            >
               <Input
                 type="number"
                 {...register("total_points", {
-                  required: true,
+                  required: "This is required",
                   min: { value: 0, message: "Points possible must be at least 0" }
                 })}
               />
