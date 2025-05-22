@@ -3,9 +3,9 @@ import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from
 import { Button, Dialog, Field, Flex, HStack, Portal, SegmentGroup, Text } from "@chakra-ui/react";
 import { MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
+import { LuX } from "react-icons/lu";
 import { StudentMoveData, useGroupManagement } from "./GroupManagementContext";
 import { RolesWithProfilesAndGroupMemberships } from "./page";
-import { LuX } from "react-icons/lu";
 
 export default function BulkModifyGroup({
   groups,
@@ -20,7 +20,7 @@ export default function BulkModifyGroup({
   trigger: JSX.Element;
   groupToModify?: AssignmentGroupWithMembersInvitationsAndJoinRequests;
 }) {
-  const { addMovesToFulfill } = useGroupManagement();
+  const { addMovesToFulfill, modProfiles, movesToFulfill, removeMoveToFulfill } = useGroupManagement();
   const [membersToRemove, setMembersToRemove] = useState<string[]>([]);
   const [findStrategy, setFindStrategy] = useState<"by_member" | "by_team_name">("by_team_name");
   const [groupToMod, setGroupToMod] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(
@@ -31,6 +31,7 @@ export default function BulkModifyGroup({
     MultiValue<{ value: RolesWithProfilesAndGroupMemberships; label: string | null }>
   >([]);
 
+  const newProfilesForGroup = movesToFulfill.filter((move) => move.new_group_id === groupToModify?.id);
   return (
     <Dialog.Root
       key={"center"}
@@ -129,12 +130,23 @@ export default function BulkModifyGroup({
                             key={member.id}
                             uid={member.profile_id}
                             textProps={
-                              membersToRemove.includes(member.profile_id) ? { textDecoration: "line-through" } : {}
+                              membersToRemove.includes(member.profile_id) || modProfiles.includes(member.profile_id)
+                                ? { textDecoration: "line-through" }
+                                : {}
                             }
                           />
-                          {membersToRemove.includes(member.profile_id) ? (
+                          {membersToRemove.includes(member.profile_id) || modProfiles.includes(member.profile_id) ? (
                             <Text
-                              onClick={() => setMembersToRemove(membersToRemove.filter((m) => m != member.profile_id))}
+                              onClick={() => {
+                                if (modProfiles.includes(member.profile_id)) {
+                                  const move = movesToFulfill.find((move) => move.profile_id == member.profile_id);
+                                  if (move) {
+                                    removeMoveToFulfill(move);
+                                  }
+                                } else {
+                                  setMembersToRemove(membersToRemove.filter((m) => m != member.profile_id));
+                                }
+                              }}
                             >
                               Restore
                             </Text>
@@ -143,6 +155,28 @@ export default function BulkModifyGroup({
                           )}
                         </HStack>
                       ))}
+                      {newProfilesForGroup.map((move) => {
+                        return (
+                          <HStack
+                            key={move.profile_id}
+                            alignItems={"center"}
+                            width="100%"
+                            justifyContent="space-between"
+                          >
+                            <PersonName
+                              uid={move.profile_id}
+                              textProps={{
+                                bg: "green.subtle",
+                                border: "1px solid",
+                                borderColor: "green.fg",
+                                borderRadius: "md",
+                                p: "2"
+                              }}
+                            />
+                            <LuX onClick={() => removeMoveToFulfill(move)} />
+                          </HStack>
+                        );
+                      })}
                     </Field.Root>
                     <Field.Root
                       invalid={

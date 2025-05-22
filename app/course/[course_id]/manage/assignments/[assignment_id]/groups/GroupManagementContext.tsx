@@ -1,6 +1,5 @@
 import { toaster } from "@/components/ui/toaster";
-import { useContext, useState } from "react";
-import { createContext } from "react";
+import { createContext, useContext, useState } from "react";
 
 export type GroupCreateData = {
   name: string;
@@ -20,6 +19,8 @@ export type GroupManagementContextType = {
   movesToFulfill: StudentMoveData[];
   clearMovesToFulfill: () => void;
   addMovesToFulfill: (data: StudentMoveData[]) => void;
+  removeMoveToFulfill: (data: StudentMoveData) => void;
+  removeGroupToCreate: (data: GroupCreateData) => void;
   modProfiles: string[];
 };
 
@@ -91,6 +92,32 @@ export function GroupManagementProvider({ children }: { children: React.ReactNod
     setGroupsToCreate([]);
   };
 
+  const removeGroupToCreate = (data: GroupCreateData) => {
+    setGroupsToCreate(
+      groupsToCreate.filter((group) => {
+        return group.name !== data.name;
+      })
+    );
+    setModProfiles(
+      modProfiles.filter((prof) => {
+        return !data.member_ids.includes(prof);
+      })
+    );
+  };
+
+  const removeMoveToFulfill = (data: StudentMoveData) => {
+    setMovesToFulfill(
+      movesToFulfill.filter((move) => {
+        return move.profile_id !== data.profile_id;
+      })
+    );
+    setModProfiles(
+      modProfiles.filter((prof) => {
+        return prof !== data.profile_id;
+      })
+    );
+  };
+
   const clearMovesToFulfill = () => {
     setModProfiles(
       modProfiles.filter((profile) => {
@@ -110,9 +137,11 @@ export function GroupManagementProvider({ children }: { children: React.ReactNod
         groupsToCreate,
         clearGroupsToCreate,
         addGroupsToCreate,
+        removeGroupToCreate,
         movesToFulfill,
         clearMovesToFulfill,
         addMovesToFulfill,
+        removeMoveToFulfill,
         modProfiles
       }}
     >

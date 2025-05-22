@@ -10,6 +10,8 @@ import {
   Dialog,
   Flex,
   Heading,
+  HStack,
+  Icon,
   Link,
   NativeSelect,
   Portal,
@@ -17,12 +19,14 @@ import {
   Spinner,
   Switch,
   Table,
-  Text
+  Text,
+  VStack
 } from "@chakra-ui/react";
 import { useInvalidate, useList, useShow } from "@refinedev/core";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { useParams } from "next/navigation";
 import { useState } from "react";
+import { FaArrowRight, FaEdit, FaRegTimesCircle } from "react-icons/fa";
 import BulkAssignGroup from "./bulkCreateGroupModal";
 import BulkModifyGroup from "./bulkModifyGroup";
 import CreateNewGroup from "./createNewGroupModal";
@@ -65,7 +69,14 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
   const groupsData = groups?.data;
   const [loading, setLoading] = useState<boolean>(false);
   const [groupViewOn, setGroupViewOn] = useState<boolean>(false);
-  const { groupsToCreate, movesToFulfill, clearGroupsToCreate, clearMovesToFulfill } = useGroupManagement();
+  const {
+    groupsToCreate,
+    movesToFulfill,
+    clearGroupsToCreate,
+    clearMovesToFulfill,
+    removeGroupToCreate,
+    removeMoveToFulfill
+  } = useGroupManagement();
   const invalidate = useInvalidate();
 
   const supabase = createClient();
@@ -221,6 +232,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                       <Table.Row>
                         <Table.ColumnHeader>Group</Table.ColumnHeader>
                         <Table.ColumnHeader>Members</Table.ColumnHeader>
+                        <Table.ColumnHeader>Actions</Table.ColumnHeader>
                       </Table.Row>
                     </Table.Header>
                     <Table.Body>
@@ -236,6 +248,19 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                                   })?.profiles.name + (key < group.member_ids.length - 1 ? ", " : "")
                                 );
                               })}
+                            </Table.Cell>
+                            <Table.Cell>
+                              <Button
+                                variant={"surface"}
+                                size={"xs"}
+                                colorPalette="red"
+                                onClick={() => {
+                                  removeGroupToCreate(group);
+                                }}
+                              >
+                                <Icon as={FaRegTimesCircle} />
+                                Cancel
+                              </Button>
                             </Table.Cell>
                           </Table.Row>
                         );
@@ -254,6 +279,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                         <Table.ColumnHeader>Student</Table.ColumnHeader>
                         <Table.ColumnHeader>Current Group</Table.ColumnHeader>
                         <Table.ColumnHeader>New Group</Table.ColumnHeader>
+                        <Table.ColumnHeader>Actions</Table.ColumnHeader>
                       </Table.Row>
                     </Table.Header>
                     <Table.Body>
@@ -278,6 +304,19 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                               {groupsData.find((group) => {
                                 return group.id === move.new_group_id;
                               })?.name ?? "not in group"}
+                            </Table.Cell>
+                            <Table.Cell>
+                              <Button
+                                variant={"surface"}
+                                size={"xs"}
+                                colorPalette="red"
+                                onClick={() => {
+                                  removeMoveToFulfill(move);
+                                }}
+                              >
+                                <Icon as={FaRegTimesCircle} />
+                                Cancel
+                              </Button>
                             </Table.Cell>
                           </Table.Row>
                         );
@@ -409,7 +448,15 @@ function TableByGroups({
       <Flex>
         {profilesForGroup.map((profile, key) => {
           return (
-            <Text key={key} fontWeight="bold">
+            <Text
+              key={key}
+              fontWeight="bold"
+              border="1px solid"
+              borderColor="border.success"
+              bg="green.subtle"
+              borderRadius="md"
+              p="2"
+            >
               {profile?.profiles.name}{" "}
             </Text>
           );
@@ -426,6 +473,7 @@ function TableByGroups({
           <Table.Row>
             <Table.ColumnHeader>Group</Table.ColumnHeader>
             <Table.ColumnHeader>Members</Table.ColumnHeader>
+            <Table.ColumnHeader>Actions</Table.ColumnHeader>
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -454,15 +502,7 @@ function TableByGroups({
 
             return (
               <Table.Row key={group.id}>
-                <Table.Cell>
-                  <BulkModifyGroup
-                    groups={groupsData}
-                    assignment={assignment}
-                    profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
-                    groupToModify={group}
-                    trigger={<Text _hover={{ textDecoration: "underline" }}>{group.name}</Text>}
-                  />
-                </Table.Cell>
+                <Table.Cell>{group.name}</Table.Cell>
                 <Table.Cell>
                   {group.assignment_groups_members.map((member, key) => {
                     const name =
@@ -471,7 +511,15 @@ function TableByGroups({
                       })?.profiles.name + " ";
                     if (modProfiles.includes(member.profile_id)) {
                       return (
-                        <Text textDecoration="line-through" key={key}>
+                        <Text
+                          textDecoration="line-through"
+                          key={key}
+                          border="1px solid"
+                          borderColor="border.error"
+                          bg="red.subtle"
+                          borderRadius="md"
+                          p="2"
+                        >
                           {name}
                         </Text>
                       );
@@ -480,6 +528,19 @@ function TableByGroups({
                     }
                   })}
                   {newProfilesForGroup(group.id)}
+                </Table.Cell>
+                <Table.Cell>
+                  <BulkModifyGroup
+                    groups={groupsData}
+                    assignment={assignment}
+                    profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
+                    groupToModify={group}
+                    trigger={
+                      <Button variant={"surface"} size={"xs"}>
+                        <Icon as={FaEdit} /> Edit Group
+                      </Button>
+                    }
+                  />
                 </Table.Cell>
                 <Table.Cell>
                   {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
@@ -546,6 +607,7 @@ function TableByStudents({
           <Table.Row>
             <Table.ColumnHeader>Student</Table.ColumnHeader>
             <Table.ColumnHeader>Group</Table.ColumnHeader>
+            <Table.ColumnHeader>Actions</Table.ColumnHeader>
             <Table.ColumnHeader>Error</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
@@ -580,104 +642,137 @@ function TableByStudents({
               <Table.Row key={profile.id}>
                 <Table.Cell>{profile.profiles.name}</Table.Cell>
                 <Table.Cell>
-                  <Dialog.Root placement={"center"}>
-                    <Dialog.Trigger asChild>
-                      <Flex alignItems={"center"} gap="3px">
-                        {!modProfiles.includes(profile.private_profile_id) ? (
-                          <>
-                            <Text> {group ? group.name : "no group"}</Text>
-                            <Button
-                              variant={"ghost"}
-                              paddingLeft="0"
-                              _hover={{ textDecoration: "underline", backgroundColor: "transparent" }}
-                            >
-                              (edit)
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <Text textDecoration={"line-through"}>{group ? group.name : "no group"}</Text>
-                            <Text fontWeight={"bold"}>{getNewGroup(profile.private_profile_id) ?? ""}</Text>
-                          </>
-                        )}
-                      </Flex>
-                    </Dialog.Trigger>
-                    <Portal>
-                      <Dialog.Positioner>
-                        <Dialog.Backdrop />
-                        <Dialog.Content>
-                          <Dialog.Header>
-                            <Dialog.Title>Move student {profile.profiles.name}</Dialog.Title>
-                          </Dialog.Header>
-                          <Dialog.Body>
-                            <Text>
-                              <strong>Current group:</strong> {group ? group.name : "no group"}{" "}
-                            </Text>
-                            <Text>
-                              <strong>Move to:</strong>
-                            </Text>
+                  <Flex alignItems={"center"} gap="3px">
+                    {!modProfiles.includes(profile.private_profile_id) ? (
+                      <>
+                        <Text> {group ? group.name : "no group"}</Text>
+                      </>
+                    ) : (
+                      <VStack gap={1} textAlign="left" alignItems="flex-start">
+                        <Text
+                          textDecoration={"line-through"}
+                          border="1px solid"
+                          borderColor="border.error"
+                          bg="red.subtle"
+                          borderRadius="md"
+                          p="2"
+                        >
+                          {group ? group.name : "no group"}
+                        </Text>
+                        <Text
+                          border="1px solid"
+                          borderColor="border.success"
+                          bg="green.subtle"
+                          borderRadius="md"
+                          p="2"
+                          fontWeight={"bold"}
+                        >
+                          {getNewGroup(profile.private_profile_id) ?? ""}
+                        </Text>
+                      </VStack>
+                    )}
+                  </Flex>
+                </Table.Cell>
+                <Table.Cell>
+                  <HStack gap={1}>
+                    <BulkModifyGroup
+                      groups={groupsData}
+                      assignment={assignment}
+                      profiles={profiles as RolesWithProfilesAndGroupMemberships[]}
+                      groupToModify={group}
+                      trigger={
+                        <Button variant={"surface"} size={"xs"}>
+                          <Icon as={FaEdit} /> Edit Group
+                        </Button>
+                      }
+                    />
+                    <Dialog.Root placement={"center"}>
+                      <Dialog.Trigger asChild>
+                        <Button
+                          variant={"surface"}
+                          size={"xs"}
+                          _hover={{ textDecoration: "underline", backgroundColor: "transparent" }}
+                        >
+                          <Icon as={FaArrowRight} /> Move Student
+                        </Button>
+                      </Dialog.Trigger>
+                      <Portal>
+                        <Dialog.Positioner>
+                          <Dialog.Backdrop />
+                          <Dialog.Content>
+                            <Dialog.Header>
+                              <Dialog.Title>Move student {profile.profiles.name}</Dialog.Title>
+                            </Dialog.Header>
+                            <Dialog.Body>
+                              <Text>
+                                <strong>Current group:</strong> {group ? group.name : "no group"}{" "}
+                              </Text>
+                              <Text>
+                                <strong>Move to:</strong>
+                              </Text>
 
-                            <NativeSelect.Root disabled={loading}>
-                              <NativeSelect.Field
-                                value={groupId ?? group?.id}
-                                onChange={(e) => {
-                                  setGroupId(e.target.value);
-                                }}
-                              >
-                                <option value={undefined}>(No group)</option>
-                                {groupsData?.map((group) => (
-                                  <option key={group.id} value={group.id}>
-                                    {group.name}
-                                  </option>
-                                ))}
-                              </NativeSelect.Field>
-                            </NativeSelect.Root>
-
-                            <Dialog.Footer>
-                              <Dialog.CloseTrigger as="div">
-                                <Button
-                                  colorPalette={"red"}
-                                  variant="surface"
-                                  onClick={() => {
-                                    setGroupId(undefined);
+                              <NativeSelect.Root disabled={loading}>
+                                <NativeSelect.Field
+                                  value={groupId ?? group?.id}
+                                  onChange={(e) => {
+                                    setGroupId(e.target.value);
                                   }}
                                 >
-                                  Cancel
-                                </Button>
-                              </Dialog.CloseTrigger>
-                              <Dialog.CloseTrigger as="div">
-                                <Button
-                                  colorPalette={"green"}
-                                  onClick={() => {
-                                    if (group?.id == Number(groupId)) {
-                                      toaster.error({
-                                        title: "Failed to stage changes",
-                                        description: "Cannot move student to a group they are already in"
-                                      });
-                                    } else {
-                                      addMovesToFulfill([
-                                        {
-                                          profile_id: profile.private_profile_id,
-                                          old_group_id:
-                                            profile.profiles.assignment_groups_members.length > 0
-                                              ? profile.profiles.assignment_groups_members[0].assignment_group_id
-                                              : null,
-                                          new_group_id: Number(groupId)
-                                        }
-                                      ]);
-                                    }
-                                    setGroupId(undefined);
-                                  }}
-                                >
-                                  Stage Changes
-                                </Button>
-                              </Dialog.CloseTrigger>
-                            </Dialog.Footer>
-                          </Dialog.Body>
-                        </Dialog.Content>
-                      </Dialog.Positioner>
-                    </Portal>
-                  </Dialog.Root>
+                                  <option value={undefined}>(No group)</option>
+                                  {groupsData?.map((group) => (
+                                    <option key={group.id} value={group.id}>
+                                      {group.name}
+                                    </option>
+                                  ))}
+                                </NativeSelect.Field>
+                              </NativeSelect.Root>
+
+                              <Dialog.Footer>
+                                <Dialog.CloseTrigger as="div">
+                                  <Button
+                                    colorPalette={"red"}
+                                    variant="surface"
+                                    onClick={() => {
+                                      setGroupId(undefined);
+                                    }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </Dialog.CloseTrigger>
+                                <Dialog.CloseTrigger as="div">
+                                  <Button
+                                    colorPalette={"green"}
+                                    onClick={() => {
+                                      if (group?.id == Number(groupId)) {
+                                        toaster.error({
+                                          title: "Failed to stage changes",
+                                          description: "Cannot move student to a group they are already in"
+                                        });
+                                      } else {
+                                        addMovesToFulfill([
+                                          {
+                                            profile_id: profile.private_profile_id,
+                                            old_group_id:
+                                              profile.profiles.assignment_groups_members.length > 0
+                                                ? profile.profiles.assignment_groups_members[0].assignment_group_id
+                                                : null,
+                                            new_group_id: Number(groupId)
+                                          }
+                                        ]);
+                                      }
+                                      setGroupId(undefined);
+                                    }}
+                                  >
+                                    Stage Changes
+                                  </Button>
+                                </Dialog.CloseTrigger>
+                              </Dialog.Footer>
+                            </Dialog.Body>
+                          </Dialog.Content>
+                        </Dialog.Positioner>
+                      </Portal>
+                    </Dialog.Root>
+                  </HStack>
                 </Table.Cell>
                 <Table.Cell>
                   {error ? <Text color="red">{errorMessage}</Text> : <Text color="green">OK</Text>}
