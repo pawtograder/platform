@@ -17,7 +17,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
-import { useCreate, useDelete, useList, useShow, useUpdate, HttpError } from "@refinedev/core";
+import { HttpError, useCreate, useDelete, useList, useShow, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -460,8 +460,8 @@ export default function RubricPage() {
   }
 
   const debouncedParseYaml = useCallback(
-    (yamlValue: string) => {
-      if (errorMarkers.length === 0 && assignmentDetails && activeReviewRound) {
+    (yamlValue: string, numErrors: number) => {
+      if (numErrors === 0 && assignmentDetails && activeReviewRound) {
         try {
           const parsed = YAML.parse(yamlValue) as YmlRubricType;
           const hydratedFromYaml = YamlRubricToHydratedRubric(parsed);
@@ -489,16 +489,10 @@ export default function RubricPage() {
         }
       }
     },
-    [
-      errorMarkers.length,
-      activeRubric,
-      assignmentDetails,
-      assignment_id,
-      activeReviewRound,
-      createMinimalNewHydratedRubric
-    ]
+    [activeRubric, assignmentDetails, assignment_id, activeReviewRound, createMinimalNewHydratedRubric]
   );
 
+  const numErrorMarkers = errorMarkers.length;
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value) {
@@ -508,12 +502,12 @@ export default function RubricPage() {
         }
         setUpdatePaused(true);
         debounceTimeoutRef.current = setTimeout(() => {
-          debouncedParseYaml(value);
+          debouncedParseYaml(value, numErrorMarkers);
           setUpdatePaused(false);
         }, 2000);
       }
     },
-    [debouncedParseYaml]
+    [debouncedParseYaml, numErrorMarkers]
   );
 
   useEffect(() => {
@@ -522,7 +516,7 @@ export default function RubricPage() {
       setValue(yamlString);
       if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
       // Directly parse and set for sidebar to reflect the authoritative activeRubric
-      debouncedParseYaml(yamlString);
+      debouncedParseYaml(yamlString, 0);
       setUpdatePaused(false);
     } else {
       setValue(""); // Clear editor if no active rubric
