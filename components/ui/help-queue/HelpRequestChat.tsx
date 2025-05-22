@@ -57,7 +57,7 @@ export default function HelpRequestChat({ request, actions }: { request: HelpReq
                     <HStack alignItems="center">
                       <Avatar key={p!.id} fallback={p!.name!.charAt(0)} src={p!.avatar_url} />
                       <VStack alignItems="flex-start" gap={0}>
-                        {p!.badge && <Badge colorScheme={p!.badge_color}>{p!.badge}</Badge>}
+                        {p!.badge && <Badge colorPalette={p!.badge_color}>{p!.badge}</Badge>}
                         <Text fontWeight="medium">{p!.name}</Text>
                       </VStack>
                     </HStack>

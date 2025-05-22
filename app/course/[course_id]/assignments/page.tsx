@@ -10,7 +10,7 @@ import {
   Repo
 } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Container, Heading, Table } from "@chakra-ui/react";
+import { Container, Heading, Table, Text } from "@chakra-ui/react";
 import { PostgrestError } from "@supabase/supabase-js";
 
 // Define the type for the groups query result
@@ -23,6 +23,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
 
   const client = await createClient();
   const user = (await client.auth.getUser()).data.user;
+  const { data: course } = await client.from("classes").select("time_zone").eq("id", Number(course_id)).single();
 
   const { data: private_profile_id } = await client
     .from("user_roles")
@@ -61,6 +62,9 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     actions = <LinkAccount />;
   } else {
     const assignmentsWithoutRepos = assignments.data?.filter((assignment) => {
+      if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
+        return false;
+      }
       const hasIndividualRepo = assignment.repositories.length > 0;
       const assignmentGroup = groups?.data?.find((group) => group.assignment_id === assignment.id);
       const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
@@ -74,6 +78,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       return !hasIndividualRepo;
     });
     if (assignmentsWithoutRepos?.length) {
+      console.log(`Creating repos for ${assignmentsWithoutRepos.map((a) => a.title).join(", ")}`);
       await autograderCreateReposForStudent(client);
       assignments = await client
         .from("assignments")
@@ -114,7 +119,13 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       <Table.Root>
         <Table.Header>
           <Table.Row>
-            <Table.ColumnHeader>Due Date</Table.ColumnHeader>
+            <Table.ColumnHeader>
+              Due Date
+              <br />
+              <Text fontSize="sm" color="fg.muted">
+                ({course?.time_zone})
+              </Text>
+            </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
             <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
             <Table.ColumnHeader>GitHub Repository</Table.ColumnHeader>

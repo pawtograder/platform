@@ -2,6 +2,22 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "Json": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/Json"
+          },
+          "type": "array"
+        },
+        {
+          "type": ["null", "string", "number", "boolean"]
+        }
+      ]
+    },
     "YmlRubricChecksType": {
       "additionalProperties": false,
       "properties": {
@@ -13,30 +29,20 @@
           "type": "string"
         },
         "data": {
-          "additionalProperties": false,
-          "properties": {
-            "options": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+            },
+            {
               "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "description": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "points": {
-                    "type": "number"
-                  }
-                },
-                "required": ["label", "points"],
-                "type": "object"
+                "$ref": "#/definitions/Json"
               },
               "type": "array"
+            },
+            {
+              "type": ["null", "string", "number", "boolean"]
             }
-          },
-          "required": ["options"],
-          "type": "object"
+          ]
         },
         "description": {
           "type": "string"
@@ -79,8 +85,20 @@
           "type": "array"
         },
         "data": {
-          "properties": {},
-          "type": "object"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+            },
+            {
+              "items": {
+                "$ref": "#/definitions/Json"
+              },
+              "type": "array"
+            },
+            {
+              "type": ["null", "string", "number", "boolean"]
+            }
+          ]
         },
         "description": {
           "type": "string"
@@ -117,8 +135,20 @@
           "type": "array"
         },
         "data": {
-          "properties": {},
-          "type": "object"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+            },
+            {
+              "items": {
+                "$ref": "#/definitions/Json"
+              },
+              "type": "array"
+            },
+            {
+              "type": ["null", "string", "number", "boolean"]
+            }
+          ]
         },
         "description": {
           "type": "string"
@@ -131,6 +161,25 @@
         }
       },
       "required": ["criteria", "name"],
+      "type": "object"
+    },
+    "{[key:string]:Json|undefined;}": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/{[key:string]:Json|undefined;}"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/Json"
+            },
+            "type": "array"
+          },
+          {
+            "type": ["null", "string", "number", "boolean"]
+          }
+        ]
+      },
       "type": "object"
     }
   },

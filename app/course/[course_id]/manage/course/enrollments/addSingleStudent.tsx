@@ -8,6 +8,7 @@ import { useInvalidate } from "@refinedev/core";
 import { useCallback } from "react";
 import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import { toaster } from "@/components/ui/toaster";
 
 type FormData = {
   email: string;
@@ -25,14 +26,29 @@ export default function AddSingleStudent() {
   const invalidate = useInvalidate();
   const onSubmit = useCallback(
     async (data: FormData) => {
-      console.log("Submitting");
+      toaster.create({
+        title: "Adding student",
+        description: "Please wait while we add the student to the course",
+        type: "info"
+      });
       const supabase = createClient();
-      await enrollmentAdd(
-        { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
-        supabase
-      );
-      console.log("Invalidating user_roles");
-      invalidate({ resource: "user_roles", invalidates: ["list"] });
+      try {
+        await enrollmentAdd(
+          { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
+          supabase
+        );
+        toaster.create({
+          title: "Student added",
+          description: "Refreshing user_roles",
+          type: "info"
+        });
+        invalidate({ resource: "user_roles", invalidates: ["list"] });
+      } catch (error) {
+        toaster.error({
+          title: "Error adding student",
+          description: error instanceof Error ? error.message : "An unexpected error occurred."
+        });
+      }
     },
     [course_id, invalidate]
   );
@@ -51,7 +67,7 @@ export default function AddSingleStudent() {
           <Dialog.Header>
             <Dialog.Title>Add Course Member</Dialog.Title>
           </Dialog.Header>
-          <Dialog.Body>
+          <Dialog.Body mb={2}>
             <form onSubmit={handleSubmit(onSubmit)}>
               <Field.Root invalid={!!errors.email}>
                 <Field.Label>Email</Field.Label>
@@ -74,7 +90,9 @@ export default function AddSingleStudent() {
                 </NativeSelect.Root>
                 <Field.ErrorText>{errors.role?.message}</Field.ErrorText>
               </Field.Root>
-              <Button type="submit">Add Student</Button>
+              <Button type="submit" mt={2}>
+                Add Student
+              </Button>
             </form>
           </Dialog.Body>
         </Dialog.Content>

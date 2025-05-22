@@ -1,4 +1,4 @@
-import { Database } from "./SupabaseTypes.d.ts";
+import { Database, Json } from "./SupabaseTypes.d.ts";
 
 export type Autograder = Database["public"]["Tables"]["autograder"]["Row"];
 export type AutograderRegressionTest = Database["public"]["Tables"]["autograder_regression_test"]["Row"];
@@ -36,15 +36,37 @@ export type AutograderFeedback = {
     name_format?: OutputFormat;
     output: string;
     output_format?: OutputFormat;
+    hidden_output?: string;
+    hidden_output_format?: OutputFormat;
     part?: string;
     hide_until_released?: boolean;
-    extra_data?: { [key: string]: string };
+    extra_data?: Json;
   }[];
   artifacts?: {
     name: string;
     path: string; // Local path in the grader container
     data?: object;
   }[];
+  annotations?: (FeedbackComment | FeedbackLineComment | FeedbackArtifactComment)[];
+};
+export type FeedbackComment = {
+  author: {
+    name: string;
+    avatar_url: string;
+    flair?: string;
+    flair_color?: string;
+  };
+  message: string;
+  points?: number;
+  rubric_check_id?: number;
+  released: boolean;
+};
+export type FeedbackLineComment = FeedbackComment & {
+  line: number;
+  file_name: string;
+};
+export type FeedbackArtifactComment = FeedbackComment & {
+  artifact_name: string;
 };
 export type GradingScriptResult = {
   ret_code: number;
@@ -189,6 +211,13 @@ export type CheckRunStatus = {
   submission_id?: number;
   requested_at?: string;
 };
+
+export type AssignmentGroupInstructorCreateRequest = {
+  name: string;
+  course_id: number;
+  assignment_id: number;
+};
+
 export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_check_runs"]["Row"], "status"> & {
   status: CheckRunStatus;
 };

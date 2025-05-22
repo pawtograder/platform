@@ -1,11 +1,53 @@
-import Markdown from "@/components/ui/markdown";
-import { createClient } from "@/utils/supabase/server";
-import { Box, Heading, HStack, Link, Table, Text } from "@chakra-ui/react";
-import { format } from "date-fns";
-import ManageGroupWidget from "./manageGroupWidget";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
+import Markdown from "@/components/ui/markdown";
+import { Repository } from "@/utils/supabase/DatabaseTypes";
+import { createClient } from "@/utils/supabase/server";
+import { Alert, Box, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
+import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
+import ManageGroupWidget from "./manageGroupWidget";
+
+function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
+  if (repositories?.length === 0) {
+    return (
+      <Text fontSize="sm" color="text.muted">
+        No repositories found. Please refresh the page. If this issue persists, please contact your instructor.
+      </Text>
+    );
+  }
+  if (repositories?.length === 1) {
+    return (
+      <HStack>
+        <Text fontSize="sm" fontWeight="bold">
+          Repository:{" "}
+        </Text>
+        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+      </HStack>
+    );
+  }
+  const groupRepo = repositories.find((r) => r.assignment_group_id !== null);
+  const personalRepo = repositories.find((r) => r.assignment_group_id === null);
+  return (
+    <VStack textAlign="left" alignItems="flex-start" fontSize="sm" color="text.muted">
+      <HStack>
+        <Text fontWeight="bold" fontSize="sm">
+          Current group repository:
+        </Text>{" "}
+        <Link href={`https://github.com/${groupRepo?.repository}`}>{groupRepo?.repository}</Link>
+      </HStack>
+      <Text fontWeight="bold">
+        Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
+        (the current group repository).
+      </Text>
+      <Text>
+        Individual repository (not in use, you are now in a group):{" "}
+        <Link href={`https://github.com/${personalRepo?.repository}`}>{personalRepo?.repository}</Link>
+      </Text>
+    </VStack>
+  );
+}
 export default async function AssignmentPage({
   params
 }: {
@@ -21,10 +63,11 @@ export default async function AssignmentPage({
   }
   const { data: enrollment } = await client
     .from("user_roles")
-    .select("*")
+    .select("*, classes(time_zone)")
     .eq("class_id", Number.parseInt(course_id))
     .eq("user_id", user.id)
     .single();
+  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
   const { data: assignment } = await client
     .from("assignments")
     .select("*")
@@ -50,14 +93,36 @@ export default async function AssignmentPage({
       .single();
     assignment_group_id = group?.assignment_group_id;
   }
+  const { data: repositories } = await client
+    .from("repositories")
+    .select("*")
+    .eq("assignment_id", Number.parseInt(assignment_id))
+    .or(
+      assignment_group_id
+        ? `assignment_group_id.eq.${assignment_group_id},profile_id.eq.${enrollment?.private_profile_id}`
+        : `profile_id.eq.${enrollment?.private_profile_id}`
+    );
   return (
     <Box p={4}>
       <Heading size="lg">{assignment.title}</Heading>
       <HStack>
         <Text>Due: </Text>
-        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} />
+        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
       </HStack>
       <Markdown>{assignment.description}</Markdown>
+      {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
+        <Alert.Root status="error" flexDirection="column">
+          <Alert.Title>No repositories configured for this assignment</Alert.Title>
+          <Alert.Description>
+            Your instructor has not set up a template repository for this assignment, so you will not be able to create
+            a repository for this assignment. If you believe this is an error, please contact your instructor.
+          </Alert.Description>
+        </Alert.Root>
+      ) : (
+        <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
+          <RepositoriesInfo repositories={repositories ?? []} />
+        </Box>
+      )}
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
       </Box>
@@ -83,12 +148,14 @@ export default async function AssignmentPage({
               <Table.Cell>
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
                   {submission.is_active ? <ActiveSubmissionIcon /> : ""}
-                  {submission.ordinal}
+                  {!assignment_group_id || submission.assignment_group_id
+                    ? submission.ordinal
+                    : `(Old #${submission.ordinal})`}
                 </Link>
               </Table.Cell>
               <Table.Cell>
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                  {format(new Date(submission.created_at), "MMM d h:mm aaa")}
+                  {format(new TZDate(submission.created_at, timeZone), "MMM d h:mm aaa")}
                 </Link>
               </Table.Cell>
               <Table.Cell>

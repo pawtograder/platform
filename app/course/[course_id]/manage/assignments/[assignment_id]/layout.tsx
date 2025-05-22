@@ -5,8 +5,9 @@ import { useOne } from "@refinedev/core";
 import NextLink from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import React from "react";
-import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaUsers } from "react-icons/fa";
+import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaUsers, FaSearch } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
+
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
   { label: "Edit Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/edit`, icon: FaEdit },
@@ -27,6 +28,11 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     label: "Rerun Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
     icon: FaPooStorm
+  },
+  {
+    label: "Manage Reviews",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/reviews`,
+    icon: FaSearch
   }
 ];
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {

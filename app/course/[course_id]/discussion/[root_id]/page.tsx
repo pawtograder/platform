@@ -48,7 +48,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
                 {thread.is_question ? "Asked question" : "Posted note"} #{thread.ordinal} to{" "}
               </Text>
               {topic ? (
-                <Badge colorScheme={topic.color}>{topic.topic}</Badge>
+                <Badge colorPalette={topic.color}>{topic.topic}</Badge>
               ) : (
                 <Skeleton width="100px" height="20px" />
               )}
