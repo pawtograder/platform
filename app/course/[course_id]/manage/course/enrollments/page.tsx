@@ -14,7 +14,7 @@ import {
   VStack,
   Dialog,
   Portal,
-  Flex,
+  Flex
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
@@ -36,7 +36,6 @@ import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import { Button } from "@/components/ui/button";
 import useTags from "@/hooks/useTags";
-import SpreadTagModal from "./spreadTagModal";
 import TagSingleProfileModal from "./tagSingleProfileModal";
 
 type EditProfileModalData = string; // userId
@@ -199,24 +198,32 @@ function EnrollmentsTable() {
         header: "Tags",
         accessorKey: "tags",
         cell: ({ row }) => {
-          return tags.tags
-            .filter((tag) => {
-              return (
-                tag.profile_id === row.original.private_profile_id || tag.profile_id === row.original.public_profile_id
-              );
-            })
-            .map((tag, key) => {
-              return <Flex
-        key={key}
-      padding="2px"
-      backgroundColor={tag.color}
-      borderRadius={"25px"}
-      minWidth="20"
-      justifyContent={"center"}
-    >
-      {tag.name}
-    </Flex>
-            });
+          return (
+            <Flex flexDirection={"row"} width="100%" gap="2px" wrap="wrap">
+              {tags.tags
+                .filter((tag) => {
+                  return (
+                    tag.profile_id === row.original.private_profile_id ||
+                    tag.profile_id === row.original.public_profile_id
+                  );
+                })
+                .map((tag, key) => {
+                  return (
+                    <Flex
+                      flexDirection={"column"}
+                      key={key}
+                      padding="3px"
+                      width="fit-content"
+                      backgroundColor={tag.color}
+                      borderRadius={"20%"}
+                      justifyContent={"center"}
+                    >
+                      {tag.name}
+                    </Flex>
+                  );
+                })}
+            </Flex>
+          );
         }
       },
       {
@@ -247,8 +254,11 @@ function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
-              <TagSingleProfileModal name={row.original.profiles.name} private_id={row.original.private_profile_id}
-              public_id={row.original.public_profile_id}/>
+              <TagSingleProfileModal
+                userName={row.original.profiles.name}
+                private_id={row.original.private_profile_id}
+                public_id={row.original.public_profile_id}
+              />
 
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
@@ -359,10 +369,6 @@ function EnrollmentsTable() {
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
-        <Heading size="md">Tag Profiles:</Heading>
-        <Flex gap="15px" wrap={"wrap"}>
-          <SpreadTagModal />
-        </Flex>
         <Table.Root>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
