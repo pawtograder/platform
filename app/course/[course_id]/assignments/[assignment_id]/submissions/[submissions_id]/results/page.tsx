@@ -217,11 +217,13 @@ export default function GraderResults() {
               }
               return <CardBody>{content}</CardBody>;
             };
+            const style = result.max_score === 0 ? "info" : result.score === result.max_score ? "success" : "error";
+            const showScore = result.max_score !== 0;
             return (
               <CardRoot key={result.id} id={`test-${result.id}`} mt={4}>
-                <CardHeader bg="bg.muted" p={2}>
-                  <Heading size="lg" color={result.score === result.max_score ? "green" : "red"}>
-                    {result.name} ({result.score} / {result.max_score})
+                <CardHeader bg={`bg.${style}`} p={2}>
+                  <Heading size="lg" color={`fg.${style}`}>
+                    {result.name} {showScore ? result.score + "/" + result.max_score : ""}
                   </Heading>
                 </CardHeader>
                 {maybeWrappedResult(format_result_output(result))}
