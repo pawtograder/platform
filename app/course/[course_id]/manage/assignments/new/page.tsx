@@ -6,6 +6,8 @@ import { useRouter, useParams } from "next/navigation";
 import { useCallback } from "react";
 import CreateAssignment from "./form";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import { toaster } from "@/components/ui/toaster";
+
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
   const form = useForm<Assignment>({ refineCoreProps: { resource: "assignments", action: "create" } });
@@ -38,7 +40,10 @@ export default function NewAssignmentPage() {
         .select("id")
         .single();
       if (error || !data) {
-        console.error(error);
+        toaster.error({
+          title: "Error creating assignment: " + error.name,
+          description: error.message
+        });
       } else {
         await githubRepoConfigureWebhook(
           { assignment_id: data.id, new_repo: getValues("template_repo"), watch_type: "template_repo" },

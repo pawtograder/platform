@@ -21,6 +21,7 @@ import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
+
 function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   const { course_id } = useParams();
   const { data: otherAssignments } = useList({
@@ -202,7 +203,10 @@ export default function AssignmentForm({
           title: "Changes not saved",
           description: "An error occurred while saving the assignment. Please try again."
         });
-        console.error(error);
+        toaster.error({
+          title: "Error creating assignment: " + error.name,
+          description: error.message
+        });
       } finally {
         setIsSubmitting(false);
       }
@@ -317,11 +321,16 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
-            <Field label="Points Possible">
+            <Field
+              label="Points Possible"
+              errorText={errors.total_points?.message?.toString()}
+              invalid={errors.total_points ? true : false}
+              required={true}
+            >
               <Input
                 type="number"
                 {...register("total_points", {
-                  required: true,
+                  required: "This is required",
                   min: { value: 0, message: "Points possible must be at least 0" }
                 })}
               />
