@@ -585,6 +585,7 @@ export default function RubricPage() {
     [activeRubric, assignmentDetails, assignment_id, activeReviewRound, createMinimalNewHydratedRubric]
   );
 
+  const numErrorMarkers = errorMarkers.length;
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
       if (value) {
