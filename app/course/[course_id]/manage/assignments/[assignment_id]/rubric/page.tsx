@@ -437,7 +437,6 @@ export default function RubricPage() {
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
       getWorker(_module_id, label) {
-      getWorker(_module_id, label) {
         switch (label) {
           case "editorWorkerService":
             return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
