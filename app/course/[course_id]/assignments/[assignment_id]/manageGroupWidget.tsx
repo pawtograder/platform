@@ -143,7 +143,7 @@ function CreateGroupButton({
   );
 }
 
-function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
+export function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
   const { profiles } = useClassProfiles();
   const ungroupedProfiles = useMemo(() => {
     if (!groups) {
@@ -317,7 +317,7 @@ function JoinGroupButton({
     >
       <Dialog.Trigger asChild>
         <Button variant="surface" colorPalette="green">
-          Join a Group
+          Join a group
         </Button>
       </Dialog.Trigger>
       <Dialog.Backdrop />
@@ -841,7 +841,13 @@ export default function ManageGroupWidget({ assignment }: { assignment: Assignme
   let heading;
   let description;
   let sizeDesc;
-  if (assignment.min_group_size === assignment.max_group_size) {
+  if (!assignment.min_group_size && !assignment.max_group_size) {
+    sizeDesc = `any amount of`;
+  } else if (!assignment.min_group_size && assignment.max_group_size) {
+    sizeDesc = `at most ${assignment.max_group_size}`;
+  } else if (assignment.min_group_size && !assignment.max_group_size) {
+    sizeDesc = `at least ${assignment.min_group_size}`;
+  } else if (assignment.min_group_size === assignment.max_group_size) {
     sizeDesc = `${assignment.min_group_size}`;
   } else {
     sizeDesc = `${assignment.min_group_size} - ${assignment.max_group_size}`;

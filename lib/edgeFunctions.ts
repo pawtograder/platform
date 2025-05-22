@@ -205,6 +205,17 @@ export async function triggerWorkflow(
   }
   return data as { message: string };
 }
+export async function assignmentGroupInstructorCreateGroup(
+  params: FunctionTypes.AssignmentGroupInstructorCreateRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("assignment-group-instructor-create", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as { message: string; id: number };
+}
 export class EdgeFunctionError extends Error {
   details: string;
   recoverable: boolean;
