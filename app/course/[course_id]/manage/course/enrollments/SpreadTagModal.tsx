@@ -1,10 +1,13 @@
-import { Button, Dialog, Field, Fieldset, Input, Portal } from "@chakra-ui/react";
+import { Button, Dialog, Field, Fieldset, Text } from "@chakra-ui/react";
 import { useState } from "react";
-import { MultiValue, Select } from "chakra-react-select";
+import { MultiValue, Select, SingleValue } from "chakra-react-select";
 import useUserProfiles from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
 import useTags from "@/hooks/useTags";
+import { Tag } from "@/utils/supabase/DatabaseTypes";
+import { TagColor } from "./TagColors";
+import TagDisplay from "@/components/ui/tag";
 
 export default function CreateNewTagModal() {
   const [title, setTitle] = useState<string>("");
@@ -22,9 +25,14 @@ export default function CreateNewTagModal() {
     //supabase.from("tags").insert({class_id:Number(course_id), color:"blue", visible:true, name:"title", profile_id:"1"})
   };
   const tags = useTags();
+  const [selectedTag, setSelectedTag] = useState<SingleValue<{ label: string; value: Tag }>>();
 
   return (
-    <Dialog.Root placement={"center"}>
+    <Dialog.Root placement={"center"} onExitComplete={
+      () => {
+        setSelectedTag(null);
+      }
+    }>
       <Dialog.Trigger as="div">
         <Button>Use existing tag</Button>
       </Dialog.Trigger>
@@ -38,8 +46,34 @@ export default function CreateNewTagModal() {
             <Fieldset.Root>
               <Field.Root>
                 <Field.Label>Choose tag</Field.Label>
-                <Select isMulti={false} options={tags.tags.map((p) => ({ label: p.name, value: p.id }))} />
+                <Select
+                  isMulti={false}
+                  onChange={(e) => {
+                    setSelectedTag(e);
+                  }}
+                  options={tags.tags.map((p) => ({ label: p.name, value: p }))}
+                />
               </Field.Root>
+              {selectedTag && (
+                <>
+                  <Field.Root>
+                    <Field.Label>Visiblity</Field.Label>
+                    <Text>{selectedTag?.value.visible ? "Visible" : "Not visible"}</Text>
+                  </Field.Root>
+                  <Field.Root>
+                    <Field.Label>Color</Field.Label>
+                    <TagDisplay
+                      name={
+                        TagColor.colors().find((c) => {
+                          return c.hex == selectedTag?.value.color;
+                        })?.text ?? ""
+                      }
+                      color={selectedTag?.value.color}
+                    />
+                  </Field.Root>
+                </>
+              )}
+
               <Field.Root>
                 <Field.Label>Select profiles to tag</Field.Label>
                 <Select

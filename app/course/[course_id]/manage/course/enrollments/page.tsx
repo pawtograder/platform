@@ -14,7 +14,7 @@ import {
   VStack,
   Dialog,
   Portal,
-  Flex
+  Flex,
 } from "@chakra-ui/react";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
@@ -36,8 +36,8 @@ import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import { Button } from "@/components/ui/button";
 import useTags from "@/hooks/useTags";
-import CreateNewTagModal from "./CreateNewTagModal";
-import SpreadTagModal from "./SpreadTagModal";
+import SpreadTagModal from "./spreadTagModal";
+import TagSingleProfileModal from "./tagSingleProfileModal";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -201,14 +201,21 @@ function EnrollmentsTable() {
         cell: ({ row }) => {
           return tags.tags
             .filter((tag) => {
-              return tag.id == row.original.private_profile_id || tag.id == row.original.public_profile_id;
-            })
-            .map((tag) => {
               return (
-                <Text background={tag.color} borderRadius={"50%"}>
-                  {tag.name}
-                </Text>
+                tag.profile_id === row.original.private_profile_id || tag.profile_id === row.original.public_profile_id
               );
+            })
+            .map((tag, key) => {
+              return <Flex
+        key={key}
+      padding="2px"
+      backgroundColor={tag.color}
+      borderRadius={"25px"}
+      minWidth="20"
+      justifyContent={"center"}
+    >
+      {tag.name}
+    </Flex>
             });
         }
       },
@@ -240,6 +247,9 @@ function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
+              <TagSingleProfileModal name={row.original.profiles.name} private_id={row.original.private_profile_id}
+              public_id={row.original.public_profile_id}/>
+
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
                   <Icon
@@ -351,7 +361,6 @@ function EnrollmentsTable() {
       <VStack paddingBottom="55px" align="start" w="100%">
         <Heading size="md">Tag Profiles:</Heading>
         <Flex gap="15px" wrap={"wrap"}>
-          <CreateNewTagModal />
           <SpreadTagModal />
         </Flex>
         <Table.Root>

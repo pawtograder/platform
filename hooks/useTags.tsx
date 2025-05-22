@@ -22,7 +22,6 @@ export default function useTags(): {
       tags: []
     };
   }
-  console.log(tags?.data);
   return {
     tags: tags?.data || []
   };
