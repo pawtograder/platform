@@ -15,12 +15,12 @@ import {
   YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, HStack, List, Text, VStack, Tabs, Spinner, Center } from "@chakra-ui/react";
+import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDelete, useList, useShow, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as YAML from "yaml";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
@@ -444,7 +444,7 @@ export default function RubricPage() {
 
   function handleEditorWillMount(monaco: Monaco) {
     window.MonacoEnvironment = {
-      getWorker(label) {
+      getWorker(_module_id, label) {
         switch (label) {
           case "editorWorkerService":
             return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url));
