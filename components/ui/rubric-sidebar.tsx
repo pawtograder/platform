@@ -564,6 +564,9 @@ function SubmissionCommentForm({
           ? "submission_file_comments"
           : "submission_comments"
   });
+  const { mutateAsync: createReview } = useCreate({
+    resource: "submission_reviews"
+  });
 
   useEffect(() => {
     if (messageInputRef.current) {
@@ -601,7 +604,36 @@ function SubmissionCommentForm({
               }
             : {};
 
-          if (!activeSubmissionReviewId) {
+          let finalSubmissionReviewId = activeSubmissionReviewId;
+
+          // If we don't have a submission review ID, but we have a submissionReview object,
+          // it means we need to create the review in the database first
+          if (!finalSubmissionReviewId && submissionReview) {
+            try {
+              const createdReview = await createReview({
+                values: {
+                  submission_id: submissionReview.submission_id,
+                  rubric_id: submissionReview.rubric_id,
+                  grader: submissionReview.grader,
+                  class_id: submissionReview.class_id,
+                  name: submissionReview.name,
+                  total_score: submissionReview.total_score || 0,
+                  total_autograde_score: submissionReview.total_autograde_score || 0,
+                  tweak: submissionReview.tweak || 0,
+                  released: submissionReview.released || false
+                }
+              });
+              finalSubmissionReviewId = createdReview.data?.id as number;
+            } catch (createReviewError) {
+              toaster.error({
+                title: "Error creating submission review",
+                description: `Failed to create submission review for this rubric: ${createReviewError instanceof Error ? createReviewError.message : "Unknown error"}`
+              });
+              return;
+            }
+          }
+
+          if (!finalSubmissionReviewId) {
             toaster.error({
               title: "Error saving comment",
               description: "Submission review ID is missing, cannot save comment for check."
@@ -617,7 +649,7 @@ function SubmissionCommentForm({
             author: profile_id,
             points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
             released: submissionReview?.released,
-            submission_review_id: activeSubmissionReviewId,
+            submission_review_id: finalSubmissionReviewId,
             ...artifactInfo
           };
           await createComment({ values });

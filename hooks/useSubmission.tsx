@@ -23,6 +23,7 @@ import { Unsubscribe } from "./useCourseController";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { PostgrestError } from "@supabase/supabase-js";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 type ListUpdateCallback<T> = (
   data: T[],
@@ -767,7 +768,7 @@ export function useReviewAssignment(reviewAssignmentId?: number) {
     },
     meta: {
       select:
-        "*, profiles!assignee_profile_id(*), rubrics!inner(*, rubric_parts!inner(*, rubric_criteria!inner(*, rubric_checks!inner(*)))), review_assignment_rubric_parts!inner(*, rubric_parts!inner(*, rubric_criteria!inner(*, rubric_checks!inner(*))))"
+        "*, profiles!assignee_profile_id(*), rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))), review_assignment_rubric_parts(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
     }
   });
 
@@ -1112,4 +1113,67 @@ export function useReferencedRubricCheckInstances(
   }, [referencing_check_id, submission_id, supabase]);
 
   return { instances, isLoading, error };
+}
+
+export function useSubmissionReviewForRubric(
+  rubricId?: number | null,
+  enabled: boolean = true
+): {
+  submissionReview: SubmissionReview | undefined;
+  isLoading: boolean;
+  error: Error | undefined;
+} {
+  const controller = useSubmissionController();
+  const submission = controller?.submission;
+  const { private_profile_id } = useClassProfiles();
+
+  const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
+  const [isLoading, setIsLoading] = useState<boolean>(enabled);
+  const [error, setError] = useState<Error | undefined>(undefined);
+
+  useEffect(() => {
+    if (!enabled || !rubricId || !submission || !controller || !private_profile_id) {
+      setSubmissionReview(undefined);
+      setIsLoading(false);
+      setError(undefined);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(undefined);
+
+    // Try to find an existing submission review for this rubric
+    const { unsubscribe, data: existingReview } = controller.getValueWithSubscription<SubmissionReview>(
+      "submission_reviews",
+      (sr) => sr.submission_id === submission.id && sr.rubric_id === rubricId,
+      (updatedReview) => {
+        setSubmissionReview(updatedReview);
+      }
+    );
+
+    if (existingReview) {
+      setSubmissionReview(existingReview);
+      setIsLoading(false);
+    } else {
+      // No existing review found - create a placeholder that will be properly created when first comment is made
+      const newReviewPlaceholder: Partial<SubmissionReview> = {
+        submission_id: submission.id,
+        rubric_id: rubricId,
+        grader: private_profile_id,
+        class_id: submission.class_id,
+        name: `Review for submission ${submission.id}`,
+        total_score: 0,
+        total_autograde_score: 0,
+        tweak: 0,
+        released: false
+        // id will be undefined until saved to database
+      };
+      setSubmissionReview(newReviewPlaceholder as SubmissionReview);
+      setIsLoading(false);
+    }
+
+    return () => unsubscribe();
+  }, [enabled, rubricId, submission, controller, private_profile_id]);
+
+  return { submissionReview, isLoading, error };
 }

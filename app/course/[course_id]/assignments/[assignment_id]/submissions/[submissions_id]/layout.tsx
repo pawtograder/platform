@@ -7,6 +7,7 @@ import {
   HydratedRubricCriteria,
   HydratedRubricPart,
   Submission,
+  SubmissionReview,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   SubmissionWithGraderResultsAndReview
@@ -31,6 +32,7 @@ import {
   useSubmissionComments,
   useSubmissionReview,
   useSubmissionReviewByAssignmentId,
+  useSubmissionReviewForRubric,
   useSubmissionRubric
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -44,7 +46,7 @@ import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useEffect, useMemo, useState } from "react";
+import { ElementType as ReactElementType, useEffect, useMemo, useState, useCallback } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -616,9 +618,14 @@ function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const { replace } = useRouter();
   const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
+  const selectedRubricIdParam = searchParams.get("selected_rubric_id");
   const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
-  const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(undefined);
+  const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(
+    selectedRubricIdParam ? parseInt(selectedRubricIdParam, 10) : undefined
+  );
 
   const {
     reviewAssignment,
@@ -639,19 +646,41 @@ function RubricView() {
     }
   });
 
+  // Function to update URL with selected rubric ID
+  const updateSelectedRubricInURL = useCallback(
+    (rubricId: number | undefined) => {
+      const params = new URLSearchParams(searchParams);
+      if (rubricId) {
+        params.set("selected_rubric_id", rubricId.toString());
+      } else {
+        params.delete("selected_rubric_id");
+      }
+      replace(`${pathname}?${params.toString()}`);
+    },
+    [pathname, replace, searchParams]
+  );
+
   useEffect(() => {
     if (reviewAssignmentId && reviewAssignment?.rubric_id) {
       setSelectedRubricIdState(reviewAssignment.rubric_id);
+      updateSelectedRubricInURL(reviewAssignment.rubric_id);
+    } else if (selectedRubricIdParam) {
+      // If we have a selected rubric in URL, use that
+      setSelectedRubricIdState(parseInt(selectedRubricIdParam, 10));
     } else if (submission.assignments.grading_rubric_id) {
       setSelectedRubricIdState(submission.assignments.grading_rubric_id);
+      updateSelectedRubricInURL(submission.assignments.grading_rubric_id);
     } else if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
       setSelectedRubricIdState(assignmentRubricsData.data[0].id);
+      updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
     }
   }, [
     reviewAssignmentId,
     reviewAssignment?.rubric_id,
     submission.assignments.grading_rubric_id,
-    assignmentRubricsData?.data
+    assignmentRubricsData?.data,
+    selectedRubricIdParam,
+    updateSelectedRubricInURL
   ]);
 
   const rubricIdToDisplay =
@@ -681,7 +710,24 @@ function RubricView() {
   const mainSubmissionReviewData = useSubmissionReview();
   const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
 
-  const activeReviewForSidebar = reviewAssignmentId ? peerReviewSubmissionData : mainSubmissionReviewData;
+  // Find or create submission review for the selected rubric
+  const { submissionReview: selectedRubricReviewData } = useSubmissionReviewForRubric(
+    selectedRubricIdState,
+    !reviewAssignmentId // Only enabled when not in peer review mode
+  );
+
+  // Determine which review to use based on context
+  let activeReviewForSidebar: SubmissionReview | undefined;
+  if (reviewAssignmentId) {
+    // Peer review mode - use peer review data
+    activeReviewForSidebar = peerReviewSubmissionData;
+  } else if (selectedRubricIdState && selectedRubricReviewData) {
+    // Specific rubric selected - use review for that rubric
+    activeReviewForSidebar = selectedRubricReviewData;
+  } else {
+    // Fallback to main submission review
+    activeReviewForSidebar = mainSubmissionReviewData;
+  }
 
   const rubricOptions: RubricOptionType[] = useMemo(() => {
     return (
@@ -739,7 +785,10 @@ function RubricView() {
             <ChakraReactSelect<RubricOptionType, false>
               options={rubricOptions}
               value={rubricOptions.find((option) => option.value === selectedRubricIdState)}
-              onChange={(option) => setSelectedRubricIdState(option?.value)}
+              onChange={(option) => {
+                setSelectedRubricIdState(option?.value);
+                updateSelectedRubricInURL(option?.value);
+              }}
               isLoading={isLoadingAssignmentRubrics || isLoadingRubricToDisplay}
               isDisabled={!!reviewAssignmentId}
               chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}

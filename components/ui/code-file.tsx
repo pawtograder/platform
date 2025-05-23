@@ -1,22 +1,24 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
-  useRubricCheck,
   useSubmission,
   useSubmissionFileComments,
-  useSubmissionReviewByAssignmentId
+  useSubmissionReviewByAssignmentId,
+  useSubmissionRubric
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
+  HydratedRubricPart,
   Json,
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
-import { useCreate, useUpdate } from "@refinedev/core";
+import { useCreate, useUpdate, useShow } from "@refinedev/core";
 import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
@@ -50,7 +52,6 @@ import { toaster } from "./toaster";
 export type RubricCheckSubOption = {
   label: string;
   points: number;
-  // Add other properties if they exist on subOption
 };
 
 export type RubricCheckDataWithOptions = {
@@ -100,9 +101,21 @@ export type LineActionPopupDynamicProps = {
 type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
   file: SubmissionFile;
   submissionReviewId?: number;
+  reviewAssignmentId?: number;
+  selectedRubricId?: number;
 };
 
-export default function CodeFile({ file, submissionReviewId }: { file: SubmissionFile; submissionReviewId?: number }) {
+export default function CodeFile({
+  file,
+  submissionReviewId,
+  reviewAssignmentId,
+  selectedRubricId
+}: {
+  file: SubmissionFile;
+  submissionReviewId?: number;
+  reviewAssignmentId?: number;
+  selectedRubricId?: number;
+}) {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const submission = useSubmission();
   const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
@@ -258,7 +271,13 @@ export default function CodeFile({ file, submissionReviewId }: { file: Submissio
         </HStack>
       </Flex>
       {/* Pass dynamic props from state, and other props directly */}
-      <LineActionPopup {...lineActionPopupProps} file={file} submissionReviewId={submissionReviewId} />
+      <LineActionPopup
+        {...lineActionPopupProps}
+        file={file}
+        submissionReviewId={submissionReviewId}
+        reviewAssignmentId={reviewAssignmentId}
+        selectedRubricId={selectedRubricId}
+      />
       <CodeLineCommentContext.Provider
         value={{
           submission,
@@ -380,7 +399,6 @@ export function starryNightGutter(
 }
 
 function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
-  const { rubricCheck, rubricCriteria } = useRubricCheck(comment.rubric_check_id);
   const commentAuthor = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -391,9 +409,42 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     comment.submission_review_id ?? undefined
   );
 
+  // Fetch rubric check data directly from the database instead of relying on useRubricCheck
+  const { query: rubricCheckQuery } = useShow<HydratedRubricCheck>({
+    resource: "rubric_checks",
+    id: comment.rubric_check_id || -1,
+    queryOptions: {
+      enabled: !!comment.rubric_check_id
+    },
+    meta: {
+      select: "*"
+    }
+  });
+
+  // Fetch rubric criteria data directly from the database
+  const { query: rubricCriteriaQuery } = useShow<HydratedRubricCriteria>({
+    resource: "rubric_criteria",
+    id: rubricCheckQuery?.data?.data?.rubric_criteria_id || -1,
+    queryOptions: {
+      enabled: !!rubricCheckQuery?.data?.data?.rubric_criteria_id
+    },
+    meta: {
+      select: "*"
+    }
+  });
+
+  const rubricCheck = rubricCheckQuery?.data?.data;
+  const rubricCriteria = rubricCriteriaQuery?.data?.data;
+  const isLoading = rubricCheckQuery?.isLoading || rubricCriteriaQuery?.isLoading;
+
+  if (isLoading) {
+    return <Skeleton height="100px" width="100%" />;
+  }
+
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
   }
+
   const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
 
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
@@ -590,10 +641,30 @@ function LineActionPopup({
   close,
   mode,
   file,
-  submissionReviewId
+  submissionReviewId,
+  reviewAssignmentId,
+  selectedRubricId
 }: LineActionPopupComponentProps) {
   const submission = useSubmission();
   const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
+  const { rubric: selectedRubric } = useSubmissionRubric(reviewAssignmentId);
+
+  // Use the manually selected rubric if provided, otherwise fall back to the default behavior
+  const { query: manuallySelectedRubricQuery } = useShow<
+    Database["public"]["Tables"]["rubrics"]["Row"] & { rubric_parts: HydratedRubricPart[] }
+  >({
+    resource: "rubrics",
+    id: selectedRubricId || -1,
+    queryOptions: {
+      enabled: !!selectedRubricId
+    },
+    meta: {
+      select: "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))"
+    }
+  });
+
+  const effectiveRubric = selectedRubricId ? manuallySelectedRubricQuery?.data?.data : selectedRubric;
+
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
   const selectRef = useRef<SelectInstance<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption>>(null);
@@ -661,12 +732,28 @@ function LineActionPopup({
   if (!visible) {
     return null;
   }
+
   // Only show criteria that have annotation checks
-  const criteriaWithAnnotationChecks = submission.assignments.rubrics?.rubric_criteria.filter((criteria) =>
-    criteria.rubric_checks.some(
-      (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-    )
-  );
+  let criteriaWithAnnotationChecks: HydratedRubricCriteria[] = [];
+
+  if (effectiveRubric?.rubric_parts) {
+    // Using the effective rubric (either manually selected or default)
+    criteriaWithAnnotationChecks = effectiveRubric.rubric_parts
+      .flatMap((part: HydratedRubricPart) => part.rubric_criteria || [])
+      .filter((criteria: HydratedRubricCriteria) =>
+        criteria.rubric_checks.some(
+          (check: HydratedRubricCheck) =>
+            check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+        )
+      );
+  } else if (submission.assignments.rubrics?.rubric_criteria) {
+    // Fallback to submission's rubric (different structure)
+    criteriaWithAnnotationChecks = submission.assignments.rubrics.rubric_criteria.filter((criteria) =>
+      criteria.rubric_checks.some(
+        (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+      )
+    );
+  }
   const criteria: RubricCriteriaSelectGroupOption[] =
     (criteriaWithAnnotationChecks?.map((criteria) => ({
       label: criteria.name,
