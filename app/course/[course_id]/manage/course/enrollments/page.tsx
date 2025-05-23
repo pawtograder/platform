@@ -15,13 +15,13 @@ import {
   Dialog,
   Portal,
   Flex,
-  Checkbox,
+  Checkbox
 } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import AddSingleStudent from "./addSingleStudent";
 import { useInvalidate, useList, useDelete } from "@refinedev/core";
 import Link from "next/link";
@@ -132,6 +132,21 @@ function EnrollmentsTable() {
     },
     [deleteUserRole, invalidate, removingStudentData?.userName, closeRemoveStudentModal]
   );
+  const handleSingleCheckboxChange = useCallback((user: UserRoleWithPrivateProfileAndUser, checked: boolean) => {
+    if (checked === true) {
+      checkedBoxesRef.current.add(user);
+    } else {
+      checkedBoxesRef.current.delete(user);
+    }
+    setCheckedBoxes(new Set(checkedBoxesRef.current));
+  }, []);
+
+  const checkboxClear = () => {
+    checkedBoxesRef.current.clear();
+    setCheckedBoxes(new Set(checkedBoxesRef.current)); // Clear all
+  };
+
+  const checkedBoxesRef = useRef(new Set<UserRoleWithPrivateProfileAndUser>());
 
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
@@ -141,22 +156,15 @@ function EnrollmentsTable() {
         cell: ({ row }) => {
           return (
             <Checkbox.Root
-              checked={checkedBoxes.has(row.original)}
-              onCheckedChange={(checked) => {
-                setCheckedBoxes((prev) => {
-                  const set = new Set<UserRoleWithPrivateProfileAndUser>(prev);
-                  if (checked.checked.valueOf() === true) {
-                    set.add(row.original);
-                  } else {
-                    set.delete(row.original);
-                  }
-                  return set;
-                });
-              }}
+              checked={
+                Array.from(checkedBoxesRef.current).find((box) => {
+                  return box.private_profile_id === row.original.private_profile_id;
+                }) != undefined
+              }
+              onCheckedChange={(checked) => handleSingleCheckboxChange(row.original, checked.checked.valueOf() == true)}
             >
               <Checkbox.HiddenInput />
               <Checkbox.Control>
-                {" "}
                 <CheckIcon></CheckIcon>
               </Checkbox.Control>
             </Checkbox.Root>
@@ -303,13 +311,7 @@ function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
-              <TagProfileModal
-                profiles={[row.original]}
-                bulk={false}
-                clearProfiles={() => {
-                  setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>());
-                }}
-              />
+              <TagProfileModal profiles={[row.original]} bulk={false} clearProfiles={() => checkboxClear()} />
 
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
@@ -417,7 +419,6 @@ function EnrollmentsTable() {
     setPageCount(Math.ceil(nRows / pageSize));
   }, [nRows, pageSize]);
 
-
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
@@ -430,7 +431,7 @@ function EnrollmentsTable() {
             profiles={Array.from(checkedBoxes)}
             bulk={true}
             clearProfiles={() => {
-              setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>());
+              checkboxClear();
             }}
             commonTag={sharedTag !== null ? sharedTag : undefined}
           />
@@ -459,15 +460,17 @@ function EnrollmentsTable() {
                             </Text>
                             {header.id === "checkbox" && (
                               <Checkbox.Root
+                                checked={checkedBoxesRef.current.size === getRowModel().rows.length}
                                 onCheckedChange={(checked) => {
-                                  if (checked) {
-                                    setCheckedBoxes(
-                                      new Set<UserRoleWithPrivateProfileAndUser>(
-                                        getRowModel().rows.map((row) => row.original)
-                                      )
-                                    ); // or however you track all possible items
+                                  if (checked.checked.valueOf() === true) {
+                                    getRowModel()
+                                      .rows.map((row) => row.original)
+                                      .forEach((row) => {
+                                        checkedBoxesRef.current.add(row);
+                                      });
+                                    setCheckedBoxes(new Set(checkedBoxesRef.current));
                                   } else {
-                                    setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>()); // Clear all
+                                    checkboxClear();
                                   }
                                 }}
                               >
@@ -494,7 +497,7 @@ function EnrollmentsTable() {
                                 onChange={(e) => {
                                   if (e) {
                                     header.column.setFilterValue(e.value?.name);
-                                    setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>());
+                                    checkboxClear();
                                     setSharedTag(e.value);
                                   }
                                 }}

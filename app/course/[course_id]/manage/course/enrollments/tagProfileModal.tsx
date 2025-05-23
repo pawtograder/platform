@@ -115,7 +115,7 @@ export default function TagProfileModal({
     ) {
       toaster.create({
         title: "Tag was not added",
-        description: "You cannot add " + name + " to " + profile.profiles.name + " because they alredy have that tag"
+        description: 'You cannot add "' + name + '" to ' + profile.profiles.name + " because they alredy have that tag"
       });
       return;
     }
@@ -221,7 +221,7 @@ export default function TagProfileModal({
                       }}
                     />
                     <Field.HelperText>
-                      To assign the tag to their private profile (non anonymous), prefix the name with &apos;~&apos;
+                      To assign the tag to private profiles, prefix the name with &apos;~&apos;
                     </Field.HelperText>
                   </Field.Root>
                   <Field.Root>
