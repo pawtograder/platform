@@ -1041,6 +1041,38 @@ export function useReferencedRubricCheckInstances(
               let reviewRound: Enums<"review_round"> | null = null;
               const authorProfile = comment.author_profile || undefined;
 
+              // Fetch the correct rubric based on the referencedRubricCheck's rubric_criteria_id
+              if (referencedCheck && referencedCheck.rubric_criteria_id) {
+                const { data: criteriaData, error: criteriaError } = await supabase
+                  .from("rubric_criteria")
+                  .select("rubric_id")
+                  .eq("id", referencedCheck.rubric_criteria_id)
+                  .single();
+
+                if (criteriaError) {
+                  toaster.error({
+                    title: "Error fetching rubric criteria for referenced check",
+                    description: criteriaError.message
+                  });
+                } else if (criteriaData && criteriaData.rubric_id) {
+                  const { data: rubricData, error: rubricError } = await supabase
+                    .from("rubrics")
+                    .select("id, name, review_round, assignment_id")
+                    .eq("id", criteriaData.rubric_id)
+                    .single();
+                  if (rubricError) {
+                    toaster.error({
+                      title: "Error fetching correct rubric",
+                      description: rubricError.message
+                    });
+                  } else {
+                    rubric = rubricData || undefined;
+                    reviewRound = rubric?.review_round || null;
+                  }
+                }
+              }
+
+              // Fetch submission review if comment is associated with one
               if (comment.submission_review_id) {
                 const { data: reviewData, error: reviewError } = await supabase
                   .from("submission_reviews")
@@ -1054,23 +1086,26 @@ export function useReferencedRubricCheckInstances(
                     description: reviewError.message,
                     type: "warning"
                   });
-                } else submissionReview = reviewData || undefined;
-
-                if (submissionReview && submissionReview.rubric_id) {
-                  const { data: rubricData, error: rubricError } = await supabase
-                    .from("rubrics")
-                    .select("id, name, review_round, assignment_id")
-                    .eq("id", submissionReview.rubric_id)
-                    .single();
-                  if (rubricError) {
-                    toaster.create({
-                      title: "Error fetching rubric:",
-                      description: rubricError.message,
-                      type: "warning"
-                    });
-                  } else {
-                    rubric = rubricData || undefined;
-                    reviewRound = rubric?.review_round || null;
+                } else {
+                  submissionReview = reviewData || undefined;
+                  // If we haven't found a rubric yet (e.g. old comments not linked via rubric_check_references)
+                  // fall back to the submissionReview's rubric.
+                  // This part of the logic remains, but the primary source of rubric is now the referencedCheck.
+                  if (!rubric && submissionReview && submissionReview.rubric_id) {
+                    const { data: fallbackRubricData, error: fallbackRubricError } = await supabase
+                      .from("rubrics")
+                      .select("id, name, review_round, assignment_id")
+                      .eq("id", submissionReview.rubric_id)
+                      .single();
+                    if (fallbackRubricError) {
+                      toaster.error({
+                        title: "Error fetching fallback rubric",
+                        description: fallbackRubricError.message
+                      });
+                    } else {
+                      rubric = fallbackRubricData || undefined;
+                      reviewRound = rubric?.review_round || null;
+                    }
                   }
                 }
               }
