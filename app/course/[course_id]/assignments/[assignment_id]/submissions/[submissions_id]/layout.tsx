@@ -649,13 +649,16 @@ function RubricView() {
   // Function to update URL with selected rubric ID
   const updateSelectedRubricInURL = useCallback(
     (rubricId: number | undefined) => {
-      const params = new URLSearchParams(searchParams);
+      const updatedQueryParams = new URLSearchParams(searchParams);
       if (rubricId) {
-        params.set("selected_rubric_id", rubricId.toString());
+        updatedQueryParams.set("selected_rubric_id", rubricId.toString());
       } else {
-        params.delete("selected_rubric_id");
+        updatedQueryParams.delete("selected_rubric_id");
       }
-      replace(`${pathname}?${params.toString()}`);
+      replace({
+        pathname,
+        query: Object.fromEntries(updatedQueryParams),
+      });
     },
     [pathname, replace, searchParams]
   );
