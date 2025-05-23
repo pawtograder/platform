@@ -655,10 +655,8 @@ function RubricView() {
       } else {
         updatedQueryParams.delete("selected_rubric_id");
       }
-      replace({
-        pathname,
-        query: Object.fromEntries(updatedQueryParams),
-      });
+      const queryString = updatedQueryParams.toString();
+      replace(queryString ? `${pathname}?${queryString}` : pathname);
     },
     [pathname, replace, searchParams]
   );
