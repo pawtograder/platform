@@ -9,8 +9,7 @@ import {
   Fieldset,
   Input,
   NativeSelectField,
-  NativeSelectRoot,
-  Text
+  NativeSelectRoot
 } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 
@@ -252,11 +251,11 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
                 />
               </Field>
             </Fieldset.Content>
-            <Field 
-            helperText="Students can submit self evaluation before programming assignment deadline"
-            required={withEval}>
-              <Checkbox.Root
-                {...register("allow_early")}>
+            <Field
+              helperText="Students can submit self evaluation before programming assignment deadline"
+              required={withEval}
+            >
+              <Checkbox.Root {...register("allow_early")}>
                 <Checkbox.HiddenInput />
                 <Checkbox.Control>
                   {" "}
