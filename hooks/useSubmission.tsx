@@ -980,11 +980,10 @@ export function useReferencedRubricCheckInstances(
 
           const fileCommentsResult = await supabase
             .from("submission_file_comments")
-            .select(
-              "*, author_profile:profiles!submission_file_comments_author_fkey(id, name, avatar_url, flair, short_name)"
-            )
+            .select("*, author_profile:profiles!author(id, name, avatar_url, flair, short_name)")
             .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id);
+            .eq("submission_id", submission_id)
+            .is("deleted_at", null);
           allCommentsSource.push({
             type: "file",
             data: fileCommentsResult.data as CommentWithAuthorProfile[] | null,
@@ -993,11 +992,10 @@ export function useReferencedRubricCheckInstances(
 
           const generalCommentsResult = await supabase
             .from("submission_comments")
-            .select(
-              "*, author_profile:profiles!submission_comments_author_fkey(id, name, avatar_url, flair, short_name)"
-            )
+            .select("*, author_profile:profiles!author(id, name, avatar_url, flair, short_name)")
             .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id);
+            .eq("submission_id", submission_id)
+            .is("deleted_at", null);
           allCommentsSource.push({
             type: "general",
             data: generalCommentsResult.data as CommentWithAuthorProfile[] | null,
@@ -1010,7 +1008,8 @@ export function useReferencedRubricCheckInstances(
               "*, author_profile:profiles!submission_artifact_comments_author_fkey(id, name, avatar_url, flair, short_name)"
             )
             .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id);
+            .eq("submission_id", submission_id)
+            .is("deleted_at", null);
           allCommentsSource.push({
             type: "artifact",
             data: artifactCommentsResult.data as CommentWithAuthorProfile[] | null,
