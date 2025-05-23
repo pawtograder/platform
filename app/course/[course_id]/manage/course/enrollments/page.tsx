@@ -37,7 +37,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import { Button } from "@/components/ui/button";
 import useTags from "@/hooks/useTags";
-import TagSingleProfileModal from "./tagSingleProfileModal";
+import TagProfileModal from "./tagProfileModal";
 import TagDisplay from "@/components/ui/tag";
 import { CheckIcon } from "lucide-react";
 
@@ -59,7 +59,9 @@ function EnrollmentsTable() {
   const invalidate = useInvalidate();
   const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
   const tags = useTags();
-  const [checkedBoxes, setCheckedBoxes] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
+  const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
+    new Set<UserRoleWithPrivateProfileAndUser>()
+  );
   const [tagData, setTagData] = useState<Tag[]>([]);
   useEffect(() => {
     if (tagData != tags.tags) {
@@ -135,22 +137,16 @@ function EnrollmentsTable() {
         cell: ({ row }) => {
           return (
             <Checkbox.Root
-              onCheckedChange={(e) => {
-                if (
-                  e.checked &&
-                  !checkedBoxes.find((box) => {
-                    return box === row.original;
-                  })
-                ) {
-                  // TODO:Check multiple boxes more carefully
-                  //setCheckedBoxes(checkedBoxes.concat[row.original])
-                } else {
-                  return setCheckedBoxes(
-                    checkedBoxes.filter((box) => {
-                      return box !== row.original;
-                    })
-                  );
-                }
+              onCheckedChange={(checked) => {
+                setCheckedBoxes((prev) => {
+                  const set = new Set(prev);
+                  if (checked.checked.valueOf() === true) {
+                    set.add(row.original);
+                  } else {
+                    set.delete(row.original);
+                  }
+                  return set;
+                });
               }}
             >
               <Checkbox.HiddenInput />
@@ -305,7 +301,13 @@ function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
-              <TagSingleProfileModal profiles={[row.original]} bulk={false} />
+              <TagProfileModal
+                profiles={[row.original]}
+                bulk={false}
+                clearProfiles={() => {
+                  setCheckedBoxes(new Set());
+                }}
+              />
 
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
@@ -416,7 +418,13 @@ function EnrollmentsTable() {
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
-        <TagSingleProfileModal profiles={checkedBoxes} bulk={true} />
+        <TagProfileModal
+          profiles={Array.from(checkedBoxes)}
+          bulk={true}
+          clearProfiles={() => {
+            setCheckedBoxes(new Set());
+          }}
+        />
 
         <Table.Root>
           <Table.Header>
