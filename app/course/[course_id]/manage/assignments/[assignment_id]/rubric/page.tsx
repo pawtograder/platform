@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import RubricSidebar from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import useModalManager from "@/hooks/useModalManager";
 import {
   Assignment,
   HydratedRubric,
@@ -22,7 +23,10 @@ import { HttpError, useCreate, useDataProvider, useDelete, useList, useShow, use
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FaLink } from "react-icons/fa";
+import { Icon } from "@chakra-ui/react";
 import * as YAML from "yaml";
+import AddRubricReferenceModal from "./addRubricReferenceModal";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
@@ -295,15 +299,22 @@ export default function RubricPage() {
   const { colorMode } = useColorMode();
   const dataProviderHook = useDataProvider();
 
-  const { queryResult: assignmentQueryResult } = useShow<Assignment>({
+  const {
+    isOpen: isAddReferenceModalOpen,
+    openModal: openAddReferenceModal,
+    closeModal: closeAddReferenceModal,
+    modalData: addReferenceModalData
+  } = useModalManager<{ currentRubricId: number }>();
+
+  const { query: assignmentQuery } = useShow<Assignment>({
     resource: "assignments",
     id: assignment_id as string,
     meta: {
       select: "id, class_id, title"
     }
   });
-  const assignmentDetails = assignmentQueryResult.data?.data;
-  const isLoadingAssignment = assignmentQueryResult.isLoading;
+  const assignmentDetails = assignmentQuery.data?.data;
+  const isLoadingAssignment = assignmentQuery.isLoading;
 
   const [activeRubric, setActiveRubric] = useState<HydratedRubric | undefined>(undefined);
   const [initialActiveRubricSnapshot, setInitialActiveRubricSnapshot] = useState<HydratedRubric | undefined>(undefined);
@@ -506,7 +517,6 @@ export default function RubricPage() {
         refetchCurrentRubric();
       } else {
         // No stashed state, so this tab will load fresh via useList effect
-        console.log("L508");
         setHasUnsavedChanges(false);
         wasRestoredFromStashRef.current = false;
       }
@@ -663,7 +673,6 @@ export default function RubricPage() {
 
   useEffect(() => {
     if (!initialActiveRubricSnapshot && !value) {
-      console.log("L667");
       setHasUnsavedChanges(false);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
       return;
@@ -679,7 +688,6 @@ export default function RubricPage() {
     }
 
     if (initialActiveRubricSnapshot) {
-      console.log(initialActiveRubricSnapshot);
       const snapshotAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
       try {
         const parsedValue = YAML.parse(value);
@@ -697,7 +705,6 @@ export default function RubricPage() {
 
         const currentEditorAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(currentEditorActiveRubric));
         const changed = snapshotAsYamlString !== currentEditorAsYamlString;
-        console.log("L702", changed);
         setHasUnsavedChanges(changed);
         if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: changed }));
       } catch {
@@ -705,7 +712,6 @@ export default function RubricPage() {
         if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
       }
     } else {
-      console.log("L710", !!value);
       setHasUnsavedChanges(!!value);
     }
   }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id]);
@@ -1081,7 +1087,6 @@ export default function RubricPage() {
       const finalSavedRubricState = JSON.parse(JSON.stringify(parsedRubricFromEditor));
       setActiveRubric(finalSavedRubricState);
       setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(finalSavedRubricState))); // Update state
-      console.log("L1078");
       setHasUnsavedChanges(false); // Saved, so no unsaved changes
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
       // Clear any stashed state for this tab as it's now saved
@@ -1109,6 +1114,18 @@ export default function RubricPage() {
       initialActiveRubricSnapshot
     ]
   );
+
+  const handleOpenAddReferenceModal = useCallback(() => {
+    if (!rubricForSidebar) {
+      toaster.error({ title: "Error", description: "Rubric data is not loaded yet." });
+      return;
+    }
+    if (!rubricForSidebar.id || rubricForSidebar.id <= 0) {
+      toaster.error({ title: "Error", description: "Current rubric must be saved before adding references." });
+      return;
+    }
+    openAddReferenceModal({ currentRubricId: rubricForSidebar.id });
+  }, [rubricForSidebar, openAddReferenceModal]);
 
   if (isLoadingAssignment || (!activeRubric && isLoadingCurrentRubric && !initialActiveRubricSnapshot)) {
     return (
@@ -1157,6 +1174,12 @@ export default function RubricPage() {
           >
             Load Demo Rubric
           </Button>
+          {rubricForSidebar && rubricForSidebar.id > 0 && (
+            <Button variant="outline" size="xs" onClick={handleOpenAddReferenceModal}>
+              <Icon as={FaLink} />
+              Reference Check
+            </Button>
+          )}
         </HStack>
       </HStack>
       <Tabs.Root
@@ -1221,7 +1244,6 @@ export default function RubricPage() {
                   type: "info"
                 });
               }
-              console.log("L1224");
               setHasUnsavedChanges(false);
               if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
               setStashedEditorStates((prev) => {
@@ -1365,6 +1387,18 @@ export default function RubricPage() {
           </Box>
         </Flex>
       </VStack>
+      {addReferenceModalData && rubricForSidebar && rubricForSidebar.rubric_parts && assignmentDetails && (
+        <AddRubricReferenceModal
+          isOpen={isAddReferenceModalOpen}
+          onClose={closeAddReferenceModal}
+          currentRubricChecks={rubricForSidebar.rubric_parts.flatMap((p) =>
+            p.rubric_criteria.flatMap((c) => c.rubric_checks)
+          )}
+          currentRubricId={addReferenceModalData.currentRubricId}
+          assignmentId={Number(assignment_id)}
+          classId={assignmentDetails.class_id}
+        />
+      )}
     </Flex>
   );
 }

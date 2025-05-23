@@ -19,10 +19,9 @@ import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import RubricSidebar, { RubricCheckComment } from "@/components/ui/rubric-sidebar";
-import { Toaster, toaster } from "@/components/ui/toaster";
+import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
-import useModalManager from "@/hooks/useModalManager";
 import {
   SubmissionProvider,
   useAllRubricCheckInstances,
@@ -53,7 +52,6 @@ import {
   FaFile,
   FaHistory,
   FaInfo,
-  FaLink,
   FaQuestionCircle,
   FaRegCheckCircle,
   FaTimesCircle
@@ -64,7 +62,6 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import AddRubricReferenceModal from "./addRubricReferenceModal";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
 
@@ -624,13 +621,6 @@ function RubricView() {
   const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(undefined);
 
   const {
-    isOpen: isAddReferenceModalOpen,
-    openModal: openAddReferenceModal,
-    closeModal: closeAddReferenceModal,
-    modalData: addReferenceModalData
-  } = useModalManager<{ currentRubricId: number }>();
-
-  const {
     reviewAssignment,
     isLoading: isLoadingReviewAssignment,
     error: reviewAssignmentError
@@ -707,18 +697,6 @@ function RubricView() {
   const showHandGradingControls =
     isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!reviewAssignmentId;
 
-  const handleOpenAddReferenceModal = () => {
-    if (!rubricToDisplayData) {
-      toaster.error({ title: "Error", description: "Rubric data is not loaded yet." });
-      return;
-    }
-    if (!rubricIdToDisplay) {
-      toaster.error({ title: "Error", description: "Current rubric ID is not available." });
-      return;
-    }
-    openAddReferenceModal({ currentRubricId: rubricIdToDisplay });
-  };
-
   return (
     <Box
       position="sticky"
@@ -776,30 +754,6 @@ function RubricView() {
         {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
-        {isGraderOrInstructor && rubricIdToDisplay && !reviewAssignmentId && rubricToDisplayData && (
-          <Button onClick={handleOpenAddReferenceModal} variant="outline" size="sm" mt={2}>
-            <HStack>
-              <Icon as={FaLink} />
-              <Text>Reference Check from Another Rubric</Text>
-            </HStack>
-          </Button>
-        )}
-        {addReferenceModalData &&
-          rubricToDisplayData &&
-          rubricToDisplayData.rubric_parts &&
-          submission.assignments.id &&
-          submission.class_id && (
-            <AddRubricReferenceModal
-              isOpen={isAddReferenceModalOpen}
-              onClose={closeAddReferenceModal}
-              currentRubricChecks={rubricToDisplayData.rubric_parts.flatMap((p) =>
-                p.rubric_criteria.flatMap((c) => c.rubric_checks)
-              )}
-              currentRubricId={addReferenceModalData.currentRubricId}
-              assignmentId={submission.assignments.id}
-              classId={submission.class_id}
-            />
-          )}
         {showHandGradingControls && (
           <RubricSidebar
             initialRubric={preparedInitialRubric}
