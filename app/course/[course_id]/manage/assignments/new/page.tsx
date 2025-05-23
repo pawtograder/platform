@@ -54,6 +54,7 @@ export default function NewAssignmentPage() {
           max_group_size: getValues("max_group_size") || null,
           allow_student_formed_groups: getValues("allow_student_formed_groups"),
           group_formation_deadline: getValues("group_formation_deadline") || null
+          self_review_rubric_id: settings.data.id as number
         })
         .select("id, self_review_rubric_id")
         .single();
