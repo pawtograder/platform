@@ -15,8 +15,9 @@ import {
   Dialog,
   Portal,
   Flex,
-  Checkbox
+  Checkbox,
 } from "@chakra-ui/react";
+import { Select } from "chakra-react-select";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
@@ -58,10 +59,13 @@ function EnrollmentsTable() {
   const { user: currentUser } = useAuthState();
   const invalidate = useInvalidate();
   const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
+  // full list of tags with profiles and courses
   const tags = useTags();
+  // unique list of tags with just name + color
   const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
     new Set<UserRoleWithPrivateProfileAndUser>()
   );
+  const [sharedTag, setSharedTag] = useState<Tag | null>(null);
   const [tagData, setTagData] = useState<Tag[]>([]);
   useEffect(() => {
     if (tagData != tags.tags) {
@@ -137,9 +141,10 @@ function EnrollmentsTable() {
         cell: ({ row }) => {
           return (
             <Checkbox.Root
+              checked={checkedBoxes.has(row.original)}
               onCheckedChange={(checked) => {
                 setCheckedBoxes((prev) => {
-                  const set = new Set(prev);
+                  const set = new Set<UserRoleWithPrivateProfileAndUser>(prev);
                   if (checked.checked.valueOf() === true) {
                     set.add(row.original);
                   } else {
@@ -246,11 +251,8 @@ function EnrollmentsTable() {
             .map((tag) => {
               return tag.name;
             });
-          return profileTagNames.find((profile) => {
-            return profile.includes(filterValue);
-          })
-            ? true
-            : false;
+          console.log(profileTagNames.length);
+          return profileTagNames.includes(filterValue);
         },
         cell: ({ row }) => {
           return (
@@ -305,7 +307,7 @@ function EnrollmentsTable() {
                 profiles={[row.original]}
                 bulk={false}
                 clearProfiles={() => {
-                  setCheckedBoxes(new Set());
+                  setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>());
                 }}
               />
 
@@ -415,16 +417,24 @@ function EnrollmentsTable() {
     setPageCount(Math.ceil(nRows / pageSize));
   }, [nRows, pageSize]);
 
+
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
-        <TagProfileModal
-          profiles={Array.from(checkedBoxes)}
-          bulk={true}
-          clearProfiles={() => {
-            setCheckedBoxes(new Set());
-          }}
-        />
+        <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4" mb="4" width="100%">
+          <Heading size="sm" mb={3}>
+            Tag Options
+          </Heading>
+          <Toaster />
+          <TagProfileModal
+            profiles={Array.from(checkedBoxes)}
+            bulk={true}
+            clearProfiles={() => {
+              setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>());
+            }}
+            commonTag={sharedTag !== null ? sharedTag : undefined}
+          />
+        </Box>
 
         <Table.Root>
           <Table.Header>
@@ -447,13 +457,60 @@ function EnrollmentsTable() {
                                 desc: " 🔽"
                               }[header.column.getIsSorted() as string] ?? null}
                             </Text>
-                            {header.id !== "actions" && header.id !== "checkbox" && (
+                            {header.id === "checkbox" && (
+                              <Checkbox.Root
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setCheckedBoxes(
+                                      new Set<UserRoleWithPrivateProfileAndUser>(
+                                        getRowModel().rows.map((row) => row.original)
+                                      )
+                                    ); // or however you track all possible items
+                                  } else {
+                                    setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>()); // Clear all
+                                  }
+                                }}
+                              >
+                                <Checkbox.HiddenInput />
+                                <Checkbox.Control>
+                                  {" "}
+                                  <CheckIcon></CheckIcon>
+                                </Checkbox.Control>
+                              </Checkbox.Root>
+                            )}
+                            {header.id !== "actions" && header.id !== "checkbox" && header.id !== "tags" && (
                               <Input
                                 id={header.id}
                                 value={(header.column.getFilterValue() as string) ?? ""}
                                 onChange={(e) => {
                                   header.column.setFilterValue(e.target.value);
                                 }}
+                              />
+                            )}
+                            {header.id === "tags" && (
+                              <Select
+                                isMulti={false}
+                                id={header.id}
+                                onChange={(e) => {
+                                  if (e) {
+                                    header.column.setFilterValue(e.value?.name);
+                                    setCheckedBoxes(new Set<UserRoleWithPrivateProfileAndUser>());
+                                    setSharedTag(e.value);
+                                  }
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    tagData
+                                      .reduce((map, p) => {
+                                        if (!map.has(p.name)) {
+                                          map.set(p.name, p);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((p) => ({ label: p.name, value: p })),
+                                  { label: "<none>", value: null }
+                                ]}
                               />
                             )}
                           </>

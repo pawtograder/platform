@@ -13,11 +13,13 @@ import { toaster } from "@/components/ui/toaster";
 export default function TagProfileModal({
   profiles,
   bulk,
-  clearProfiles
+  clearProfiles,
+  commonTag
 }: {
   profiles: UserRoleWithPrivateProfileAndUser[];
   bulk: boolean;
   clearProfiles: () => void;
+  commonTag?: Tag;
 }) {
   const [title, setTitle] = useState<string>("");
   const [visible, setVisible] = useState<SingleValue<{ label: string; value: boolean }>>();
@@ -53,24 +55,24 @@ export default function TagProfileModal({
       profiles.forEach(async (profile) => {
         await createNewTag(selectedTag.value.name, selectedTag.value.color, selectedTag.value.visible, profile);
       });
-    } else if (strategy === "remove_tag") {
-      if (profiles.length < 1) {
-        return;
-      }
-      await removeTag(profiles[0]);
+    } else if (strategy === "remove_tag" && bulk && commonTag) {
+      profiles.forEach(async (profile) => {
+        await removeTag(profile, commonTag.id);
+      });
+    } else if (strategy === "remove_tag" && !bulk && selectedTag) {
+      profiles.forEach(async (profile) => {
+        await removeTag(profile, selectedTag.value.id);
+      });
     }
     // clear as modal is closed and action is complete
     clearProfiles();
   };
 
-  const removeTag = async (profile: UserRoleWithPrivateProfileAndUser) => {
-    if (!selectedTag) {
-      return;
-    }
+  const removeTag = async (profile: UserRoleWithPrivateProfileAndUser, tag_id: string) => {
     deleteMutation(
       {
         resource: "tags",
-        id: selectedTag.value.id
+        id: tag_id
       },
       {
         onSuccess: () => {
@@ -100,7 +102,7 @@ export default function TagProfileModal({
     profile: UserRoleWithPrivateProfileAndUser
   ) => {
     const idToUse = name.charAt(0) === "~" ? profile.private_profile_id : profile.public_profile_id;
-    // if profile has this exact tag, do not retag it
+
     if (
       tags.tags.find((tag) => {
         return (
@@ -111,6 +113,10 @@ export default function TagProfileModal({
         );
       })
     ) {
+      toaster.create({
+        title: "Tag was not added",
+        description: "You cannot add " + name + " to " + profile.profiles.name + " because they alredy have that tag"
+      });
       return;
     }
     mutate(
@@ -160,12 +166,10 @@ export default function TagProfileModal({
       <Dialog.Trigger as="div">
         {!bulk ? (
           <FaTag />
-        ) : profiles && profiles.length > 0 ? (
-          <Button>
-            Tag {profiles.length} selected user{profiles.length > 1 ? "s" : ""}
-          </Button>
         ) : (
-          <></>
+          <Button disabled={profiles.length === 0}>
+            Edit tags for {profiles.length} selected user{profiles.length !== 1 ? "s" : ""}
+          </Button>
         )}
       </Dialog.Trigger>
       <Dialog.Backdrop />
@@ -176,14 +180,12 @@ export default function TagProfileModal({
           </Dialog.Header>
           <Dialog.Body>
             <Fieldset.Root>
-              {bulk && (
-                <Field.Root>
-                  <Field.Label>Profiles to tag:</Field.Label>
-                  <Flex flexDirection={"column"}>
-                    {profiles?.map((prof, key) => <Text key={key}>{prof.profiles.name}</Text>)}
-                  </Flex>
-                </Field.Root>
-              )}
+              <Field.Root>
+                <Field.Label>Profile{profiles.length !== 1 ? "s" : ""} to configure</Field.Label>
+                <Flex flexDirection={"column"}>
+                  {profiles?.map((prof, key) => <Text key={key}>{prof.profiles.name}</Text>)}
+                </Flex>
+              </Field.Root>
               <Field.Root>
                 <SegmentGroup.Root
                   value={strategy}
@@ -197,12 +199,12 @@ export default function TagProfileModal({
                     <SegmentGroup.ItemHiddenInput />
                   </SegmentGroup.Item>
                   <SegmentGroup.Item value="use_old">
-                    <SegmentGroup.ItemText>Use existing tag</SegmentGroup.ItemText>
+                    <SegmentGroup.ItemText>Add existing tag</SegmentGroup.ItemText>
                     <SegmentGroup.ItemHiddenInput />
                   </SegmentGroup.Item>
-                  {!bulk && (
+                  {(!bulk || commonTag) && (
                     <SegmentGroup.Item value="remove_tag">
-                      <SegmentGroup.ItemText>Remove tag</SegmentGroup.ItemText>
+                      <SegmentGroup.ItemText>Remove {bulk ? "shared" : ""} tag</SegmentGroup.ItemText>
                       <SegmentGroup.ItemHiddenInput />
                     </SegmentGroup.Item>
                   )}
@@ -254,7 +256,16 @@ export default function TagProfileModal({
                       onChange={(e) => {
                         setSelectedTag(e);
                       }}
-                      options={tags.tags.map((p) => ({ label: p.name, value: p }))}
+                      options={Array.from(
+                        tags.tags
+                          .reduce((map, p) => {
+                            if (!map.has(p.name)) {
+                              map.set(p.name, p);
+                            }
+                            return map;
+                          }, new Map())
+                          .values()
+                      ).map((p) => ({ label: p.name, value: p }))}
                     />
                     <Field.HelperText>
                       Tags prefixed with &apos;~&apos; will be assigned to the user&apos;s private profile. All others
@@ -304,6 +315,19 @@ export default function TagProfileModal({
                   </Field.Root>
                 </>
               )}
+              {strategy === "remove_tag" &&
+                bulk &&
+                (commonTag ? (
+                  <>
+                    <Field.Root>
+                      <Field.Label>Common tag to remove (taken from table filter)</Field.Label>
+                      <TagDisplay name={commonTag.name} color={commonTag.color}></TagDisplay>
+                      <Field.HelperText>Press save to remove this tag from the listed profiles</Field.HelperText>
+                    </Field.Root>
+                  </>
+                ) : (
+                  <Text>No common tag found. Please choose another option or perform this operation individually.</Text>
+                ))}
             </Fieldset.Root>
           </Dialog.Body>
           <Dialog.Footer>
@@ -313,7 +337,18 @@ export default function TagProfileModal({
             <Dialog.CloseTrigger as="div">
               <Button
                 colorPalette="green"
-                disabled={!(selectedTag || (title && color && visible))}
+                disabled={
+                  !(
+                    // for remove of individual or use existing tag for any
+                    (
+                      selectedTag ||
+                      // for create new tag for any
+                      (title && color && visible) ||
+                      // for remove for bulk
+                      (bulk && commonTag && strategy == "remove_tag")
+                    )
+                  )
+                }
                 onClick={() => {
                   tagUser();
                 }}
