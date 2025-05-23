@@ -7,16 +7,34 @@ import { useCallback } from "react";
 import CreateAssignment from "./form";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { toaster } from "@/components/ui/toaster";
+import { useCreate } from "@refinedev/core";
+import { interval } from "date-fns";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
   const form = useForm<Assignment>({ refineCoreProps: { resource: "assignments", action: "create" } });
   const router = useRouter();
   const { getValues } = form;
+  const {mutate, mutateAsync} = useCreate();
+  const {profiles:classProfiles} = useClassProfiles();
   const onSubmit = useCallback(async () => {
     async function create() {
       const supabase = createClient();
-      // console.log(getValues("submission_files"));
+      // create the self eval configuration first 
+      const settings = await mutateAsync({
+        resource:"self_review_settings",
+        values: {
+          enabled:getValues("eval_config") === "use_eval",
+          deadline_offset:getValues("deadline_offset"),
+          allow_early:getValues("allow_early"),
+          class_id:course_id
+        }
+      });
+      if(!settings.data.id) {
+        return;
+      }
+    
       const { data, error } = await supabase
         .from("assignments")
         .insert({
@@ -37,7 +55,7 @@ export default function NewAssignmentPage() {
           allow_student_formed_groups: getValues("allow_student_formed_groups"),
           group_formation_deadline: getValues("group_formation_deadline") || null
         })
-        .select("id")
+        .select("id, self_review_rubric_id")
         .single();
       if (error || !data) {
         toaster.error({

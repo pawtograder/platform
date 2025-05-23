@@ -5,10 +5,12 @@ import {
   CardHeader,
   CardRoot,
   CardTitle,
+  Checkbox,
   Fieldset,
   Input,
   NativeSelectField,
-  NativeSelectRoot
+  NativeSelectRoot,
+  Text
 } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 
@@ -21,6 +23,7 @@ import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
+import { LuCheck } from "react-icons/lu";
 
 function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
   const { course_id } = useParams();
@@ -49,7 +52,7 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
       <CardHeader>
         <CardTitle>Group Configuration</CardTitle>
       </CardHeader>
-      <CardBody>
+      <CardBody gap="5px">
         <Fieldset.Content>
           <Field
             label="Group configuration"
@@ -171,6 +174,97 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
                 />
               </Field>
             </Fieldset.Content>
+          </>
+        )}
+      </CardBody>
+    </CardRoot>
+  );
+}
+
+function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+  const { course_id } = useParams();
+  const { data: otherAssignments } = useList({
+    resource: "assignments",
+    queryOptions: { enabled: !!course_id },
+    filters: [
+      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
+      { field: "group_config", operator: "ne", value: "individual" }
+    ],
+    pagination: { pageSize: 1000 }
+  });
+
+  const [withEval, setWithEval] = useState<boolean>(() => {
+    const groupConfig = form.getValues("eval_config");
+    return groupConfig === "use_eval";
+  });
+
+  const {
+    register,
+    getValues,
+    formState: { errors }
+  } = form;
+  return (
+    <CardRoot>
+      <CardHeader>
+        <CardTitle>Self Evaluation Configuration</CardTitle>
+      </CardHeader>
+      <CardBody gap="5px">
+        <Fieldset.Content>
+          <Field
+            label="Assignment setting"
+            errorText={errors.group_config?.message?.toString()}
+            invalid={errors.group_config ? true : false}
+            required={true}
+          >
+            <NativeSelectRoot {...register("eval_config", { required: true })}>
+              <NativeSelectField
+                name="eval_config"
+                defaultValue="base_only"
+                onChange={(e) => {
+                  setWithEval(e.target.value === "use_eval");
+                }}
+              >
+                <option value="base_only">Programming assignment only</option>
+                <option value="use_eval">Programming assignment and self evaluation</option>
+              </NativeSelectField>
+            </NativeSelectRoot>
+          </Field>
+        </Fieldset.Content>
+        {withEval && (
+          <>
+            <Fieldset.Content>
+              <Field
+                label="Hours due after programming assignment"
+                helperText="The number of hours between the deadline of the programming assignment and when the self evaluation is due"
+                errorText={errors.min_group_size?.message?.toString()}
+                invalid={errors.min_group_size ? true : false}
+                required={withEval}
+              >
+                <Input
+                  type="number"
+                  {...register("deadline_offset", {
+                    required:
+                      getValues("eval_config") === "use_eval"
+                        ? "This is required for self evaluation assignments"
+                        : false,
+                    min: { value: 0, message: "Offset must be a positive number" }
+                  })}
+                />
+              </Field>
+            </Fieldset.Content>
+            <Field 
+            helperText="Students can submit self evaluation before programming assignment deadline"
+            required={withEval}>
+              <Checkbox.Root
+                {...register("allow_early")}>
+                <Checkbox.HiddenInput />
+                <Checkbox.Control>
+                  {" "}
+                  <LuCheck />
+                </Checkbox.Control>
+                <Checkbox.Label>Allow early submission</Checkbox.Label>
+              </Checkbox.Root>
+            </Field>
           </>
         )}
       </CardBody>
@@ -341,6 +435,7 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <GroupConfigurationSubform form={form} />
+          <SelfEvaluationSubform form={form} />
           <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
               Save
