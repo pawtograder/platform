@@ -1,5 +1,5 @@
 "use client";
-import { ClassSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -13,12 +13,15 @@ import {
   Text,
   VStack,
   Dialog,
-  Portal
+  Portal,
+  Flex,
+  Checkbox
 } from "@chakra-ui/react";
+import { Select } from "chakra-react-select";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import AddSingleStudent from "./addSingleStudent";
 import { useInvalidate, useList, useDelete } from "@refinedev/core";
 import Link from "next/link";
@@ -34,6 +37,10 @@ import useModalManager from "@/hooks/useModalManager";
 import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import { Button } from "@/components/ui/button";
+import useTags from "@/hooks/useTags";
+import TagProfileModal from "./tagProfileModal";
+import TagDisplay from "@/components/ui/tag";
+import { CheckIcon } from "lucide-react";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -52,6 +59,19 @@ function EnrollmentsTable() {
   const { user: currentUser } = useAuthState();
   const invalidate = useInvalidate();
   const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
+  // full list of tags with profiles and courses
+  const tags = useTags();
+  // unique list of tags with just name + color
+  const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
+    new Set<UserRoleWithPrivateProfileAndUser>()
+  );
+  const [sharedTag, setSharedTag] = useState<Tag | null>(null);
+  const [tagData, setTagData] = useState<Tag[]>([]);
+  useEffect(() => {
+    if (tagData != tags.tags) {
+      setTagData(tags.tags);
+    }
+  }, [tags]);
 
   const {
     isOpen: isEditProfileModalOpen,
@@ -112,9 +132,45 @@ function EnrollmentsTable() {
     },
     [deleteUserRole, invalidate, removingStudentData?.userName, closeRemoveStudentModal]
   );
+  const handleSingleCheckboxChange = useCallback((user: UserRoleWithPrivateProfileAndUser, checked: boolean) => {
+    if (checked === true) {
+      checkedBoxesRef.current.add(user);
+    } else {
+      checkedBoxesRef.current.delete(user);
+    }
+    setCheckedBoxes(new Set(checkedBoxesRef.current));
+  }, []);
+
+  const checkboxClear = () => {
+    checkedBoxesRef.current.clear();
+    setCheckedBoxes(new Set(checkedBoxesRef.current)); // Clear all
+  };
+
+  const checkedBoxesRef = useRef(new Set<UserRoleWithPrivateProfileAndUser>());
 
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
+      {
+        id: "checkbox",
+        header: "",
+        cell: ({ row }) => {
+          return (
+            <Checkbox.Root
+              checked={
+                Array.from(checkedBoxesRef.current).find((box) => {
+                  return box.private_profile_id === row.original.private_profile_id;
+                }) != undefined
+              }
+              onCheckedChange={(checked) => handleSingleCheckboxChange(row.original, checked.checked.valueOf() == true)}
+            >
+              <Checkbox.HiddenInput />
+              <Checkbox.Control>
+                <CheckIcon></CheckIcon>
+              </Checkbox.Control>
+            </Checkbox.Root>
+          );
+        }
+      },
       {
         id: "class_id",
         accessorKey: "class_id",
@@ -190,6 +246,44 @@ function EnrollmentsTable() {
         }
       },
       {
+        id: "tags",
+        header: "Tags",
+        accessorKey: "tags",
+        filterFn: (row, id, filterValue) => {
+          const profileTagNames = tagData
+            .filter((tag) => {
+              return (
+                tag.profile_id === row.original.private_profile_id || tag.profile_id === row.original.public_profile_id
+              );
+            })
+            .map((tag) => {
+              return tag.name;
+            });
+          console.log(profileTagNames.length);
+          return profileTagNames.includes(filterValue);
+        },
+        cell: ({ row }) => {
+          return (
+            <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
+              {tagData
+                .filter((tag) => {
+                  return (
+                    tag.profile_id === row.original.private_profile_id ||
+                    tag.profile_id === row.original.public_profile_id
+                  );
+                })
+                .map((tag, key) => {
+                  return (
+                    <Flex key={key}>
+                      <TagDisplay name={tag.name} color={tag.color} />
+                    </Flex>
+                  );
+                })}
+            </Flex>
+          );
+        }
+      },
+      {
         id: "actions",
         header: "Actions",
         cell: ({ row }) => {
@@ -217,6 +311,8 @@ function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
+              <TagProfileModal profiles={[row.original]} bulk={false} clearProfiles={() => checkboxClear()} />
+
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
                   <Icon
@@ -271,7 +367,7 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal]
+    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal, tagData]
   );
 
   const {
@@ -326,6 +422,21 @@ function EnrollmentsTable() {
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
+        <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4" mb="4" width="100%">
+          <Heading size="sm" mb={3}>
+            Tag Options
+          </Heading>
+          <Toaster />
+          <TagProfileModal
+            profiles={Array.from(checkedBoxes)}
+            bulk={true}
+            clearProfiles={() => {
+              checkboxClear();
+            }}
+            commonTag={sharedTag !== null ? sharedTag : undefined}
+          />
+        </Box>
+
         <Table.Root>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
@@ -339,7 +450,7 @@ function EnrollmentsTable() {
                           <>
                             <Text
                               onClick={header.column.getToggleSortingHandler()}
-                              textAlign={header.id === "actions" ? "center" : undefined}
+                              textAlign={header.id === "actions" || header.id === "checkbox" ? "center" : undefined}
                             >
                               {flexRender(header.column.columnDef.header, header.getContext())}
                               {{
@@ -347,13 +458,62 @@ function EnrollmentsTable() {
                                 desc: " 🔽"
                               }[header.column.getIsSorted() as string] ?? null}
                             </Text>
-                            {header.id !== "actions" && (
+                            {header.id === "checkbox" && (
+                              <Checkbox.Root
+                                checked={checkedBoxesRef.current.size === getRowModel().rows.length}
+                                onCheckedChange={(checked) => {
+                                  if (checked.checked.valueOf() === true) {
+                                    getRowModel()
+                                      .rows.map((row) => row.original)
+                                      .forEach((row) => {
+                                        checkedBoxesRef.current.add(row);
+                                      });
+                                    setCheckedBoxes(new Set(checkedBoxesRef.current));
+                                  } else {
+                                    checkboxClear();
+                                  }
+                                }}
+                              >
+                                <Checkbox.HiddenInput />
+                                <Checkbox.Control>
+                                  {" "}
+                                  <CheckIcon></CheckIcon>
+                                </Checkbox.Control>
+                              </Checkbox.Root>
+                            )}
+                            {header.id !== "actions" && header.id !== "checkbox" && header.id !== "tags" && (
                               <Input
                                 id={header.id}
                                 value={(header.column.getFilterValue() as string) ?? ""}
                                 onChange={(e) => {
                                   header.column.setFilterValue(e.target.value);
                                 }}
+                              />
+                            )}
+                            {header.id === "tags" && (
+                              <Select
+                                isMulti={false}
+                                id={header.id}
+                                onChange={(e) => {
+                                  if (e) {
+                                    header.column.setFilterValue(e.value?.name);
+                                    checkboxClear();
+                                    setSharedTag(e.value);
+                                  }
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    tagData
+                                      .reduce((map, p) => {
+                                        if (!map.has(p.name)) {
+                                          map.set(p.name, p);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((p) => ({ label: p.name, value: p })),
+                                  { label: "<none>", value: null }
+                                ]}
                               />
                             )}
                           </>
