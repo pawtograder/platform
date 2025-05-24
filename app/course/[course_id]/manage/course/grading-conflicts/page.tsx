@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
 import AddConflictDialog from "./addConflictDialog";
-import GradingConflictsTable from "./GradingConflictsTable";
+import GradingConflictsTable from "./gradingConflictsTable";
 
 export default function GradingConflictsPage() {
   const { course_id } = useParams();

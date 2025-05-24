@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
-import { Textarea, VStack, Portal, HStack, Dialog } from "@chakra-ui/react";
+import { useMemo, useEffect } from "react";
+import { Textarea, VStack, Portal, HStack, Dialog, Text } from "@chakra-ui/react";
 import { useList, useCreate, HttpError } from "@refinedev/core";
 import { Button } from "@/components/ui/button";
 import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
@@ -11,6 +11,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { Controller, SubmitHandler } from "react-hook-form";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import PersonName from "@/components/ui/person-name";
 
 type GradingConflict = Database["public"]["Tables"]["grading_conflicts"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
@@ -38,7 +39,9 @@ export default function AddConflictDialog({
   isOpen: boolean;
   closeModal: () => void;
 }) {
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
+  const isGrader = role.role === "grader";
+  const isInstructor = role.role === "instructor";
 
   const {
     register,
@@ -55,6 +58,13 @@ export default function AddConflictDialog({
     }
   });
 
+  // Auto-set grader field for graders
+  useEffect(() => {
+    if (isGrader) {
+      setValue("grader_profile_id", private_profile_id);
+    }
+  }, [isGrader, private_profile_id, setValue]);
+
   const { mutate: createConflict, isLoading: isCreating } = useCreate<GradingConflict>();
 
   const { data: staffData, isLoading: isLoadingStaff } = useList<UserRoleRow & { profiles: ProfileRow }>({
@@ -65,6 +75,10 @@ export default function AddConflictDialog({
     ],
     meta: {
       select: "*, profiles!private_profile_id(id, name, sortable_name)"
+    },
+    // Only load staff data if user is instructor
+    queryOptions: {
+      enabled: isInstructor
     }
   });
 
@@ -140,23 +154,33 @@ export default function AddConflictDialog({
             <Dialog.Body>
               <form onSubmit={handleSubmit(onSubmit)}>
                 <VStack gap={4} align="stretch">
-                  <Field label="Grader" errorText={errors.grader_profile_id?.message as string | undefined}>
-                    <Controller
-                      control={control}
-                      name="grader_profile_id"
-                      rules={{ required: "Grader is required" }}
-                      render={({ field }) => (
-                        <ChakraReactSelect
-                          options={staffOptions}
-                          isLoading={isLoadingStaff}
-                          placeholder="Select Grader"
-                          value={staffOptions.find((c) => c.value === field.value)}
-                          onChange={(option: FormOption | null) => setValue("grader_profile_id", option?.value || "")}
-                          onBlur={field.onBlur}
-                        />
-                      )}
-                    />
-                  </Field>
+                  {isInstructor ? (
+                    <Field label="Grader" errorText={errors.grader_profile_id?.message as string | undefined}>
+                      <Controller
+                        control={control}
+                        name="grader_profile_id"
+                        rules={{ required: "Grader is required" }}
+                        render={({ field }) => (
+                          <ChakraReactSelect
+                            options={staffOptions}
+                            isLoading={isLoadingStaff}
+                            placeholder="Select Grader"
+                            value={staffOptions.find((c) => c.value === field.value)}
+                            onChange={(option: FormOption | null) => setValue("grader_profile_id", option?.value || "")}
+                            onBlur={field.onBlur}
+                          />
+                        )}
+                      />
+                    </Field>
+                  ) : (
+                    <Field label="Grader">
+                      <VStack align="start" p={3} borderRadius="md" border="1px solid" borderColor="gray.200">
+                        <PersonName uid={private_profile_id} />
+                        <Text fontSize="sm">(You can only create conflicts for yourself)</Text>
+                      </VStack>
+                    </Field>
+                  )}
+
                   <Field label="Student" errorText={errors.student_profile_id?.message as string | undefined}>
                     <Controller
                       control={control}

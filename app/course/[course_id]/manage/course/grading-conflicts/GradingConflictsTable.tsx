@@ -8,9 +8,11 @@ import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
 import { FaTrash } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import { Tooltip } from "@/components/ui/tooltip";
 import PersonName from "@/components/ui/person-name";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 type GradingConflictRow = Database["public"]["Tables"]["grading_conflicts"]["Row"];
 
@@ -26,6 +28,9 @@ interface GradingConflictsTableProps {
 }
 
 export default function GradingConflictsTable({ courseId, onConflictDeleted }: GradingConflictsTableProps) {
+  const { role } = useClassProfiles();
+  const isGrader = role.role === "grader";
+
   const { mutate: deleteConflict } = useDelete();
 
   const handleDelete = useCallback(
@@ -137,6 +142,29 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
         enableColumnFilter: false,
         cell: function render({ row }) {
           const conflictId = row.original.id;
+
+          const deleteButton = (
+            <IconButton
+              aria-label="Delete conflict"
+              colorPalette="red"
+              variant="ghost"
+              size="sm"
+              disabled={isGrader}
+              opacity={isGrader ? 0.5 : 1}
+              cursor={isGrader ? "not-allowed" : "pointer"}
+            >
+              <FaTrash />
+            </IconButton>
+          );
+
+          if (isGrader) {
+            return (
+              <Tooltip content="Only instructors can delete grading conflicts. Graders can only view and create conflicts.">
+                {deleteButton}
+              </Tooltip>
+            );
+          }
+
           return (
             <PopConfirm
               triggerLabel="Delete"
@@ -144,17 +172,13 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
               confirmText="Are you sure you want to delete this grading conflict?"
               onConfirm={() => handleDelete(conflictId)}
               onCancel={() => {}}
-              trigger={
-                <IconButton aria-label="Delete conflict" colorPalette="red" variant="ghost" size="sm">
-                  <FaTrash />
-                </IconButton>
-              }
+              trigger={deleteButton}
             />
           );
         }
       }
     ],
-    [handleDelete]
+    [handleDelete, isGrader]
   );
 
   const table = useTable<GradingConflictWithPopulatedProfiles>({
