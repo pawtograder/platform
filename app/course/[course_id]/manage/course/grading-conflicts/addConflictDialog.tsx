@@ -14,8 +14,6 @@ import { useEffect, useMemo } from "react";
 import { Controller, SubmitHandler } from "react-hook-form";
 
 type GradingConflict = Database["public"]["Tables"]["grading_conflicts"]["Row"];
-type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
-type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"];
 
 interface FormOption extends OptionBase {
   value: string;
