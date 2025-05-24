@@ -159,7 +159,7 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
 
           if (isGrader) {
             return (
-              <Tooltip content="Only instructors can delete grading conflicts. Graders can only view and create conflicts.">
+              <Tooltip content="Please contact your instructor to ask them to delete this conflict.">
                 {deleteButton}
               </Tooltip>
             );
