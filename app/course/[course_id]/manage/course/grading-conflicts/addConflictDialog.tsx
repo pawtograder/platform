@@ -1,17 +1,17 @@
 "use client";
 
-import { useMemo, useEffect } from "react";
-import { Textarea, VStack, Portal, HStack, Dialog, Text } from "@chakra-ui/react";
-import { useList, useCreate, HttpError } from "@refinedev/core";
 import { Button } from "@/components/ui/button";
-import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
-import { toaster } from "@/components/ui/toaster";
 import { Field } from "@/components/ui/field";
-import { useForm } from "@refinedev/react-hook-form";
-import { Controller, SubmitHandler } from "react-hook-form";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonName from "@/components/ui/person-name";
+import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
+import { Dialog, HStack, Portal, Text, Textarea, VStack } from "@chakra-ui/react";
+import { HttpError, useCreate, useList } from "@refinedev/core";
+import { useForm } from "@refinedev/react-hook-form";
+import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { useEffect, useMemo } from "react";
+import { Controller, SubmitHandler } from "react-hook-form";
 
 type GradingConflict = Database["public"]["Tables"]["grading_conflicts"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
@@ -176,10 +176,10 @@ export default function AddConflictDialog({
                     <Field label="Grader">
                       <VStack align="start" p={3} borderRadius="md" border="1px solid" borderColor="gray.200">
                         <PersonName uid={private_profile_id} />
-                        <Text fontSize="sm" color="fg.muted">
-                          Please contact your instructor to report conflicts regarding other graders
-                        </Text>
                       </VStack>
+                      <Text fontSize="sm" color="fg.muted">
+                        Please contact your instructor to report conflicts regarding other graders
+                      </Text>
                     </Field>
                   )}
 
