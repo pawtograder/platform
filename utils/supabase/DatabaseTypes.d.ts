@@ -518,3 +518,11 @@ export type ClassSection = GetResult<
   Database["public"]["Tables"]["class_sections"]["Relationships"],
   "*"
 >;
+
+export type RubricCheckReference = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["rubric_check_references"]["Row"],
+  "rubric_check_references",
+  Database["public"]["Tables"]["rubric_check_references"]["Relationships"],
+  "*"
+>;

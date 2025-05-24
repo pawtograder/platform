@@ -27,6 +27,7 @@ import { FaLink } from "react-icons/fa";
 import { Icon } from "@chakra-ui/react";
 import * as YAML from "yaml";
 import AddRubricReferenceModal from "./addRubricReferenceModal";
+import RubricReferences from "./rubricReferences";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
@@ -1351,7 +1352,18 @@ export default function RubricPage() {
               </Center>
             )}
 
-            {!error && rubricForSidebar && <RubricSidebar initialRubric={rubricForSidebar} />}
+            {!error && rubricForSidebar && (
+              <VStack gap={4} align="stretch">
+                {rubricForSidebar.id > 0 && assignmentDetails && (
+                  <RubricReferences
+                    currentRubric={rubricForSidebar}
+                    assignmentId={Number(assignment_id)}
+                    classId={assignmentDetails.class_id}
+                  />
+                )}
+                <RubricSidebar initialRubric={rubricForSidebar} />
+              </VStack>
+            )}
             {error && (
               <Box
                 position="absolute"
