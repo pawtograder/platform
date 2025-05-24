@@ -18,6 +18,14 @@ type ClassProfileContextType = {
 
 const ClassProfileContext = createContext<ClassProfileContextType | undefined>(undefined);
 
+export function useGradersAndInstructors() {
+  const profiles = useClassProfiles();
+  const staff = profiles.allVisibleRoles
+    .filter((r) => r.role === "grader" || r.role === "instructor")
+    .map((r) => r.private_profile_id);
+  return profiles.profiles.filter((p) => staff.includes(p.id));
+}
+
 export function useStudentRoster() {
   const profiles = useClassProfiles();
   const users = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);

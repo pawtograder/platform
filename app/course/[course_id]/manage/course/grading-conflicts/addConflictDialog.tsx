@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useGradersAndInstructors, useStudentRoster } from "@/hooks/useClassProfiles";
 import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
 import { Dialog, HStack, Portal, Text, Textarea, VStack } from "@chakra-ui/react";
-import { HttpError, useCreate, useList } from "@refinedev/core";
+import { HttpError, useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { useEffect, useMemo } from "react";
@@ -40,6 +40,8 @@ export default function AddConflictDialog({
   closeModal: () => void;
 }) {
   const { private_profile_id, role } = useClassProfiles();
+  const studentRoster = useStudentRoster();
+  const gradersAndInstructors = useGradersAndInstructors();
   const isGrader = role.role === "grader";
   const isInstructor = role.role === "instructor";
 
@@ -67,52 +69,26 @@ export default function AddConflictDialog({
 
   const { mutate: createConflict, isLoading: isCreating } = useCreate<GradingConflict>();
 
-  const { data: staffData, isLoading: isLoadingStaff } = useList<UserRoleRow & { profiles: ProfileRow }>({
-    resource: "user_roles",
-    filters: [
-      { field: "class_id", operator: "eq", value: courseId },
-      { field: "role", operator: "in", value: ["instructor", "grader"] }
-    ],
-    meta: {
-      select: "*, profiles!private_profile_id(id, name, sortable_name)"
-    },
-    // Only load staff data if user is instructor
-    queryOptions: {
-      enabled: isInstructor
-    }
-  });
-
   const staffOptions: FormOption[] = useMemo(
     () =>
-      staffData?.data
-        ?.map((userRole) => ({
-          value: userRole.profiles.id,
-          label: userRole.profiles.sortable_name || userRole.profiles.name || userRole.profiles.id
+      gradersAndInstructors
+        ?.map((profile) => ({
+          value: profile.id,
+          label: profile.sortable_name || profile.name || profile.id
         }))
         .sort((a, b) => a.label.localeCompare(b.label)) || [],
-    [staffData]
+    [gradersAndInstructors]
   );
-
-  const { data: studentData, isLoading: isLoadingStudents } = useList<UserRoleRow & { profiles: ProfileRow }>({
-    resource: "user_roles",
-    filters: [
-      { field: "class_id", operator: "eq", value: courseId },
-      { field: "role", operator: "eq", value: "student" }
-    ],
-    meta: {
-      select: "*, profiles!private_profile_id(id, name, sortable_name)"
-    }
-  });
 
   const studentOptions: FormOption[] = useMemo(
     () =>
-      studentData?.data
-        ?.map((userRole) => ({
-          value: userRole.profiles.id,
-          label: userRole.profiles.sortable_name || userRole.profiles.name || userRole.profiles.id
+      studentRoster
+        ?.map((profile) => ({
+          value: profile.id,
+          label: profile.sortable_name || profile.name || profile.id
         }))
         .sort((a, b) => a.label.localeCompare(b.label)) || [],
-    [studentData]
+    [studentRoster]
   );
 
   const onSubmit: SubmitHandler<GradingConflictFormData> = (data: GradingConflictFormData) => {
@@ -163,7 +139,6 @@ export default function AddConflictDialog({
                         render={({ field }) => (
                           <ChakraReactSelect
                             options={staffOptions}
-                            isLoading={isLoadingStaff}
                             placeholder="Select Grader"
                             value={staffOptions.find((c) => c.value === field.value)}
                             onChange={(option: FormOption | null) => setValue("grader_profile_id", option?.value || "")}
@@ -191,7 +166,6 @@ export default function AddConflictDialog({
                       render={({ field }) => (
                         <ChakraReactSelect
                           options={studentOptions}
-                          isLoading={isLoadingStudents}
                           placeholder="Select Student"
                           value={studentOptions.find((c) => c.value === field.value)}
                           onChange={(option: FormOption | null) => setValue("student_profile_id", option?.value || "")}
