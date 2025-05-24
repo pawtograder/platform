@@ -7,6 +7,7 @@ import {
   HydratedRubricCriteria,
   HydratedRubricPart,
   Submission,
+  SubmissionReview,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   SubmissionWithGraderResultsAndReview
@@ -19,10 +20,9 @@ import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import RubricSidebar, { RubricCheckComment } from "@/components/ui/rubric-sidebar";
-import { Toaster, toaster } from "@/components/ui/toaster";
+import { Toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
-import useModalManager from "@/hooks/useModalManager";
 import {
   SubmissionProvider,
   useAllRubricCheckInstances,
@@ -32,6 +32,7 @@ import {
   useSubmissionComments,
   useSubmissionReview,
   useSubmissionReviewByAssignmentId,
+  useSubmissionReviewForRubric,
   useSubmissionRubric
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -45,7 +46,7 @@ import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useEffect, useMemo, useState } from "react";
+import { ElementType as ReactElementType, useEffect, useMemo, useState, useCallback } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -53,7 +54,6 @@ import {
   FaFile,
   FaHistory,
   FaInfo,
-  FaLink,
   FaQuestionCircle,
   FaRegCheckCircle,
   FaTimesCircle
@@ -64,7 +64,6 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
-import AddRubricReferenceModal from "./addRubricReferenceModal";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
 
@@ -619,16 +618,14 @@ function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const { replace } = useRouter();
   const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
+  const selectedRubricIdParam = searchParams.get("selected_rubric_id");
   const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
-  const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(undefined);
-
-  const {
-    isOpen: isAddReferenceModalOpen,
-    openModal: openAddReferenceModal,
-    closeModal: closeAddReferenceModal,
-    modalData: addReferenceModalData
-  } = useModalManager<{ currentRubricId: number }>();
+  const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(
+    selectedRubricIdParam ? parseInt(selectedRubricIdParam, 10) : undefined
+  );
 
   const {
     reviewAssignment,
@@ -649,19 +646,42 @@ function RubricView() {
     }
   });
 
+  // Function to update URL with selected rubric ID
+  const updateSelectedRubricInURL = useCallback(
+    (rubricId: number | undefined) => {
+      const updatedQueryParams = new URLSearchParams(searchParams);
+      if (rubricId) {
+        updatedQueryParams.set("selected_rubric_id", rubricId.toString());
+      } else {
+        updatedQueryParams.delete("selected_rubric_id");
+      }
+      const queryString = updatedQueryParams.toString();
+      replace(queryString ? `${pathname}?${queryString}` : pathname);
+    },
+    [pathname, replace, searchParams]
+  );
+
   useEffect(() => {
     if (reviewAssignmentId && reviewAssignment?.rubric_id) {
       setSelectedRubricIdState(reviewAssignment.rubric_id);
+      updateSelectedRubricInURL(reviewAssignment.rubric_id);
+    } else if (selectedRubricIdParam) {
+      // If we have a selected rubric in URL, use that
+      setSelectedRubricIdState(parseInt(selectedRubricIdParam, 10));
     } else if (submission.assignments.grading_rubric_id) {
       setSelectedRubricIdState(submission.assignments.grading_rubric_id);
+      updateSelectedRubricInURL(submission.assignments.grading_rubric_id);
     } else if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
       setSelectedRubricIdState(assignmentRubricsData.data[0].id);
+      updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
     }
   }, [
     reviewAssignmentId,
     reviewAssignment?.rubric_id,
     submission.assignments.grading_rubric_id,
-    assignmentRubricsData?.data
+    assignmentRubricsData?.data,
+    selectedRubricIdParam,
+    updateSelectedRubricInURL
   ]);
 
   const rubricIdToDisplay =
@@ -691,7 +711,24 @@ function RubricView() {
   const mainSubmissionReviewData = useSubmissionReview();
   const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
 
-  const activeReviewForSidebar = reviewAssignmentId ? peerReviewSubmissionData : mainSubmissionReviewData;
+  // Find or create submission review for the selected rubric
+  const { submissionReview: selectedRubricReviewData } = useSubmissionReviewForRubric(
+    selectedRubricIdState,
+    !reviewAssignmentId // Only enabled when not in peer review mode
+  );
+
+  // Determine which review to use based on context
+  let activeReviewForSidebar: SubmissionReview | undefined;
+  if (reviewAssignmentId && peerReviewSubmissionData && peerReviewSubmissionData.id) {
+    // Peer review mode - use peer review data only if it has a valid ID
+    activeReviewForSidebar = peerReviewSubmissionData;
+  } else if (selectedRubricIdState && selectedRubricReviewData && selectedRubricReviewData.id) {
+    // Specific rubric selected - use review for that rubric only if it has a valid ID
+    activeReviewForSidebar = selectedRubricReviewData;
+  } else {
+    // Fallback to main submission review (which should have a proper ID from database trigger)
+    activeReviewForSidebar = mainSubmissionReviewData;
+  }
 
   const rubricOptions: RubricOptionType[] = useMemo(() => {
     return (
@@ -706,18 +743,6 @@ function RubricView() {
 
   const showHandGradingControls =
     isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!reviewAssignmentId;
-
-  const handleOpenAddReferenceModal = () => {
-    if (!rubricToDisplayData) {
-      toaster.error({ title: "Error", description: "Rubric data is not loaded yet." });
-      return;
-    }
-    if (!rubricIdToDisplay) {
-      toaster.error({ title: "Error", description: "Current rubric ID is not available." });
-      return;
-    }
-    openAddReferenceModal({ currentRubricId: rubricIdToDisplay });
-  };
 
   return (
     <Box
@@ -761,7 +786,10 @@ function RubricView() {
             <ChakraReactSelect<RubricOptionType, false>
               options={rubricOptions}
               value={rubricOptions.find((option) => option.value === selectedRubricIdState)}
-              onChange={(option) => setSelectedRubricIdState(option?.value)}
+              onChange={(option) => {
+                setSelectedRubricIdState(option?.value);
+                updateSelectedRubricInURL(option?.value);
+              }}
               isLoading={isLoadingAssignmentRubrics || isLoadingRubricToDisplay}
               isDisabled={!!reviewAssignmentId}
               chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
@@ -776,30 +804,6 @@ function RubricView() {
         {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
-        {isGraderOrInstructor && rubricIdToDisplay && !reviewAssignmentId && rubricToDisplayData && (
-          <Button onClick={handleOpenAddReferenceModal} variant="outline" size="sm" mt={2}>
-            <HStack>
-              <Icon as={FaLink} />
-              <Text>Reference Check from Another Rubric</Text>
-            </HStack>
-          </Button>
-        )}
-        {addReferenceModalData &&
-          rubricToDisplayData &&
-          rubricToDisplayData.rubric_parts &&
-          submission.assignments.id &&
-          submission.class_id && (
-            <AddRubricReferenceModal
-              isOpen={isAddReferenceModalOpen}
-              onClose={closeAddReferenceModal}
-              currentRubricChecks={rubricToDisplayData.rubric_parts.flatMap((p) =>
-                p.rubric_criteria.flatMap((c) => c.rubric_checks)
-              )}
-              currentRubricId={addReferenceModalData.currentRubricId}
-              assignmentId={submission.assignments.id}
-              classId={submission.class_id}
-            />
-          )}
         {showHandGradingControls && (
           <RubricSidebar
             initialRubric={preparedInitialRubric}

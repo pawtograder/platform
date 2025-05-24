@@ -715,24 +715,42 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   useEffect(() => {
     let cleanup: (() => void) | undefined = undefined;
+    let isMounted = true;
+
     async function loadArtifact() {
       const client = createClient();
       const data = await client.storage.from("submission-artifacts").download(artifactKey);
+
+      if (!isMounted) return; // Component unmounted, exit early
+
       if (data.data) {
         setArtifactData(data.data);
         if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
           try {
             // TODO this will NEVER work in safari, we need to just unzip it on a server and serve the files
             const zip = await JSZip.loadAsync(data.data);
+
+            if (!isMounted) return; // Component unmounted during zip processing
+
             const { rewrittenHTMLFiles, topLevelDir } = await zipToHTMLBlobs(data.data);
+
+            if (!isMounted) return; // Component unmounted during blob processing
+
             const listener = async (event: MessageEvent) => {
-              if (event.data.type === "REQUEST_FILE_CONTENTS") {
+              // Check if we're still mounted and the event is from our iframe
+              if (!isMounted || event.data.type !== "REQUEST_FILE_CONTENTS") {
+                return;
+              }
+
+              try {
                 // Create a map of file contents
                 const fileContents: Record<string, string | Uint8Array> = {};
                 // Find the top level directory
                 // Process all files in parallel
                 await Promise.all(
                   Object.entries(zip.files).map(async ([path, file]) => {
+                    if (!isMounted) return; // Exit early if unmounted
+
                     const pathRelativeToTopLevelDir = path.replace(topLevelDir, "");
                     if (!file.dir) {
                       // Get the content based on file type
@@ -750,48 +768,67 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
                     }
                   })
                 );
-                // Send all file contents to the iframe
-                event.source?.postMessage(
-                  {
-                    type: "FILE_CONTENTS_RESPONSE",
-                    fileContents
-                  },
-                  { targetOrigin: "*" }
-                );
+
+                // Only send message if still mounted and event source exists
+                if (isMounted && event.source) {
+                  event.source.postMessage(
+                    {
+                      type: "FILE_CONTENTS_RESPONSE",
+                      fileContents
+                    },
+                    { targetOrigin: "*" }
+                  );
+                }
+              } catch (error) {
+                toaster.create({
+                  title: "Error processing file contents request",
+                  description: error instanceof Error ? error.message : "Unknown error",
+                  type: "warning"
+                });
               }
             };
+
             window.addEventListener("message", listener);
             cleanup = () => {
               window.removeEventListener("message", listener);
             };
+
             if (rewrittenHTMLFiles.get("/index.html")) {
               const url = URL.createObjectURL(
                 new Blob([rewrittenHTMLFiles.get("/index.html")!], { type: "text/html" })
               );
-              setSiteUrl(url);
+              if (isMounted) {
+                setSiteUrl(url);
+              }
             }
           } catch (error) {
-            toaster.error({
-              title: "Error processing ZIP file: " + error,
-              description: "Please try again."
-            });
+            if (isMounted) {
+              toaster.error({
+                title: "Error processing ZIP file: " + error,
+                description: "Please try again."
+              });
+            }
           }
         }
       }
-      if (data.error) {
+      if (data.error && isMounted) {
         toaster.error({
           title: "Error processing ZIP file: " + data.error,
           description: "Please try again."
         });
       }
     }
+
     loadArtifact();
+
     return () => {
+      isMounted = false;
       if (cleanup) {
         cleanup();
       }
     };
   }, [artifactKey, artifact.data?.display, artifact.data?.format]);
+
   if (artifact.data.format === "png") {
     if (artifactData) {
       return <Image src={URL.createObjectURL(artifactData)} alt={artifact.name} />;
@@ -833,6 +870,7 @@ export default function FilesView() {
   const isLoadingSubmission = submissionData === undefined;
 
   const reviewAssignmentIdFromQuery = searchParams.get("review_assignment_id");
+  const selectedRubricIdFromQuery = searchParams.get("selected_rubric_id");
   const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(
     reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined
   );
@@ -895,7 +933,14 @@ export default function FilesView() {
         <Box w={"100%"}>
           {fileId ||
           (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
-            selectedFile && <CodeFile file={selectedFile} submissionReviewId={finalActiveSubmissionReviewId} />
+            selectedFile && (
+              <CodeFile
+                file={selectedFile}
+                submissionReviewId={finalActiveSubmissionReviewId}
+                reviewAssignmentId={reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined}
+                selectedRubricId={selectedRubricIdFromQuery ? Number(selectedRubricIdFromQuery) : undefined}
+              />
+            )
           ) : selectedArtifact ? (
             selectedArtifact.data !== null ? (
               <ArtifactWithComments

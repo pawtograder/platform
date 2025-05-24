@@ -13,7 +13,7 @@ import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import { HydratedRubric, HydratedRubricCheck } from "@/utils/supabase/DatabaseTypes";
 import { Spinner, Text, VStack } from "@chakra-ui/react"; // Keep Chakra for layout if used elsewhere
-import { useCreate, useList } from "@refinedev/core";
+import { useCreate, useInvalidate, useList } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { useEffect, useMemo, useState } from "react";
 import { FaPlus } from "react-icons/fa";
@@ -67,6 +67,7 @@ export default function AddRubricReferenceModal({
   });
 
   const { mutate: createReference } = useCreate();
+  const invalidate = useInvalidate();
 
   const referencingCheckOptions: CheckOptionType[] = useMemo(() => {
     return currentRubricChecks.map((check) => ({
@@ -141,6 +142,11 @@ export default function AddRubricReferenceModal({
           toaster.success({
             title: "Reference Added",
             description: "The rubric check reference has been added successfully."
+          });
+          // Invalidate the rubric_check_references queries to trigger refetch
+          invalidate({
+            resource: "rubric_check_references",
+            invalidates: ["list"]
           });
           onClose();
         },

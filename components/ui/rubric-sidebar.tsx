@@ -40,7 +40,6 @@ import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "reac
 import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import PersonAvatar from "./person-avatar";
-import { toaster } from "./toaster";
 import { Tooltip } from "./tooltip";
 
 export function CommentActions({
@@ -600,14 +599,6 @@ function SubmissionCommentForm({
                 submission_artifact_id: linkedArtifactId
               }
             : {};
-
-          if (!activeSubmissionReviewId) {
-            toaster.error({
-              title: "Error saving comment",
-              description: "Submission review ID is missing, cannot save comment for check."
-            });
-            return;
-          }
 
           const values = {
             comment,
