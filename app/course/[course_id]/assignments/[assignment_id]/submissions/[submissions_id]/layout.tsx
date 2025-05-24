@@ -719,14 +719,14 @@ function RubricView() {
 
   // Determine which review to use based on context
   let activeReviewForSidebar: SubmissionReview | undefined;
-  if (reviewAssignmentId) {
-    // Peer review mode - use peer review data
+  if (reviewAssignmentId && peerReviewSubmissionData && peerReviewSubmissionData.id) {
+    // Peer review mode - use peer review data only if it has a valid ID
     activeReviewForSidebar = peerReviewSubmissionData;
-  } else if (selectedRubricIdState && selectedRubricReviewData) {
-    // Specific rubric selected - use review for that rubric
+  } else if (selectedRubricIdState && selectedRubricReviewData && selectedRubricReviewData.id) {
+    // Specific rubric selected - use review for that rubric only if it has a valid ID
     activeReviewForSidebar = selectedRubricReviewData;
   } else {
-    // Fallback to main submission review
+    // Fallback to main submission review (which should have a proper ID from database trigger)
     activeReviewForSidebar = mainSubmissionReviewData;
   }
 

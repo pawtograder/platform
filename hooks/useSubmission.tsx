@@ -18,7 +18,7 @@ import {
 import { Spinner, Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useMemo } from "react";
 import { Unsubscribe } from "./useCourseController";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
@@ -171,13 +171,35 @@ class SubmissionController {
   handleGenericDataEvent(typeName: string, event: LiveEvent) {
     const body = event.payload as unknown; // Assertion for event.payload
     const idGetter = this.genericDataTypeToId[typeName];
+
+    if (!idGetter) {
+      toaster.error({
+        title: "Error",
+        description: `No id getter registered for type ${typeName}`
+      });
+      return;
+    }
+
     const id = idGetter(body);
+
+    // Ensure the maps are initialized before handling events
+    if (!this.genericData[typeName]) {
+      this.genericData[typeName] = new Map();
+    }
+    if (!this.genericDataSubscribers[typeName]) {
+      this.genericDataSubscribers[typeName] = new Map();
+    }
+    if (!this.genericDataListSubscribers[typeName]) {
+      this.genericDataListSubscribers[typeName] = [];
+    }
+
     if (event.type === "created") {
       this.genericData[typeName].set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [body], left: [], updated: [] })
-      );
+      this.genericDataListSubscribers[typeName]?.forEach((cb) => {
+        const allData = Array.from(this.genericData[typeName].values());
+        cb(allData, { entered: [body], left: [], updated: [] });
+      });
     } else if (event.type === "updated") {
       this.genericData[typeName].set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
@@ -326,7 +348,8 @@ export function useSubmissionComments({
     const { unsubscribe, data } = submissionController.listGenericData<SubmissionComments>(
       "submission_comments",
       (data, { entered, left, updated }) => {
-        setComments(data.filter((comment) => comment.deleted_at === null));
+        const filteredData = data.filter((comment) => comment.deleted_at === null);
+        setComments(filteredData);
         if (onEnter) {
           onEnter(entered.filter((comment) => comment.deleted_at === null));
         }
@@ -409,6 +432,24 @@ function SubmissionControllerCreator({
     throw new Error("SubmissionContext not found");
   }
   const submissionController = ctx.submissionController;
+
+  // Register all generic data types BEFORE setting up live subscriptions
+  submissionController.registerGenericDataType(
+    "submission_file_comments",
+    (item: unknown) => (item as SubmissionFileComment).id
+  );
+  submissionController.registerGenericDataType(
+    "submission_comments",
+    (item: unknown) => (item as SubmissionComments).id
+  );
+  submissionController.registerGenericDataType(
+    "submission_reviews",
+    (item: unknown) => (item as SubmissionReviewWithRubric).id
+  );
+  submissionController.registerGenericDataType(
+    "submission_artifact_comments",
+    (item: unknown) => (item as SubmissionArtifactComment).id
+  );
   const { query } = useShow<SubmissionWithFilesGraderResultsOutputTestsAndRubric>({
     resource: "submissions",
     id: submission_id,
@@ -480,37 +521,21 @@ function SubmissionControllerCreator({
       setReady(true);
     }
   }, [anyIsLoading, setReady]);
-  submissionController.registerGenericDataType(
-    "submission_file_comments",
-    (item: unknown) => (item as SubmissionFileComment).id
-  );
   useEffect(() => {
     if (liveFileComments?.data) {
       submissionController.setGeneric("submission_file_comments", liveFileComments.data);
     }
   }, [submissionController, anyIsLoading, liveFileComments?.data]);
-  submissionController.registerGenericDataType(
-    "submission_comments",
-    (item: unknown) => (item as SubmissionComments).id
-  );
   useEffect(() => {
     if (liveComments?.data) {
       submissionController.setGeneric("submission_comments", liveComments.data);
     }
   }, [submissionController, anyIsLoading, liveComments?.data]);
-  submissionController.registerGenericDataType(
-    "submission_reviews",
-    (item: unknown) => (item as SubmissionReviewWithRubric).id
-  );
   useEffect(() => {
     if (liveReviews?.data) {
       submissionController.setGeneric("submission_reviews", liveReviews.data);
     }
   }, [submissionController, anyIsLoading, liveReviews?.data]);
-  submissionController.registerGenericDataType(
-    "submission_artifact_comments",
-    (item: unknown) => (item as SubmissionArtifactComment).id
-  );
   useEffect(() => {
     if (liveArtifactComments?.data) {
       submissionController.setGeneric("submission_artifact_comments", liveArtifactComments.data);
@@ -554,14 +579,16 @@ export function useAllRubricCheckInstances(review_id: number | undefined) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
 
-  if (!ctx) {
-    return [];
-  }
-  if (!review_id) {
-    return [];
-  }
-  const comments = [...fileComments, ...submissionComments];
-  return comments.filter((c) => c.submission_review_id === review_id);
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!ctx || !review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments];
+    return comments.filter((c) => c.submission_review_id === review_id);
+  }, [ctx, fileComments, submissionComments, review_id]);
+
+  return filteredComments;
 }
 export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
   const ctx = useContext(SubmissionContext);
@@ -569,14 +596,18 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
   const submissionComments = useSubmissionComments({});
   const artifactComments = useSubmissionArtifactComments({});
 
-  if (!ctx) {
-    return [];
-  }
-  if (!review_id) {
-    return [];
-  }
-  const comments = [...fileComments, ...submissionComments, ...artifactComments];
-  return comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!ctx || !review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments, ...artifactComments];
+    const filtered = comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
+
+    return filtered;
+  }, [ctx, fileComments, submissionComments, artifactComments, check.id, review_id]);
+
+  return filteredComments;
 }
 export function useSubmissionRubric(reviewAssignmentId?: number | null): {
   rubric: (Database["public"]["Tables"]["rubrics"]["Row"] & { rubric_parts: HydratedRubricPart[] }) | undefined;
@@ -645,30 +676,36 @@ export function useRubricCriteriaInstances({
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
   const rubricData = useSubmissionRubric(review_id); // Pass review_id to useSubmissionRubric
-  if (!review_id) {
-    return [];
-  }
-  const comments = [...fileComments, ...submissionComments];
-  if (criteria) {
-    return comments.filter(
-      (eachComment) =>
-        eachComment.submission_review_id === review_id &&
-        criteria.rubric_checks.find((eachCheck: RubricChecks) => eachCheck.id === eachComment.rubric_check_id)
-    );
-  }
-  if (rubric_id) {
-    const allCriteria: HydratedRubricCriteria[] =
-      rubricData?.rubric?.rubric_parts?.flatMap((part) => part.rubric_criteria || []) || [];
-    const allChecks: HydratedRubricCheck[] = allCriteria.flatMap(
-      (eachCriteria: HydratedRubricCriteria) => eachCriteria.rubric_checks || []
-    );
-    return comments.filter(
-      (eachComment) =>
-        eachComment.submission_review_id === review_id &&
-        allChecks.find((eachCheck: HydratedRubricCheck) => eachCheck.id === eachComment.rubric_check_id)
-    );
-  }
-  throw new Error("Either criteria or rubric_id must be provided");
+
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments];
+    if (criteria) {
+      return comments.filter(
+        (eachComment) =>
+          eachComment.submission_review_id === review_id &&
+          criteria.rubric_checks.find((eachCheck: RubricChecks) => eachCheck.id === eachComment.rubric_check_id)
+      );
+    }
+    if (rubric_id) {
+      const allCriteria: HydratedRubricCriteria[] =
+        rubricData?.rubric?.rubric_parts?.flatMap((part) => part.rubric_criteria || []) || [];
+      const allChecks: HydratedRubricCheck[] = allCriteria.flatMap(
+        (eachCriteria: HydratedRubricCriteria) => eachCriteria.rubric_checks || []
+      );
+      return comments.filter(
+        (eachComment) =>
+          eachComment.submission_review_id === review_id &&
+          allChecks.find((eachCheck: HydratedRubricCheck) => eachCheck.id === eachComment.rubric_check_id)
+      );
+    }
+    throw new Error("Either criteria or rubric_id must be provided");
+  }, [fileComments, submissionComments, review_id, criteria, rubric_id, rubricData]);
+
+  return filteredComments;
 }
 export function useSubmissionReview(reviewId?: number | null) {
   const ctx = useContext(SubmissionContext);
