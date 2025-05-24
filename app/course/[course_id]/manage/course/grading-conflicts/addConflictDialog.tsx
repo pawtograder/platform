@@ -176,7 +176,9 @@ export default function AddConflictDialog({
                     <Field label="Grader">
                       <VStack align="start" p={3} borderRadius="md" border="1px solid" borderColor="gray.200">
                         <PersonName uid={private_profile_id} />
-                        <Text fontSize="sm" color="fg.muted">Please contact your instructor to report conflicts regarding other graders</Text>
+                        <Text fontSize="sm" color="fg.muted">
+                          Please contact your instructor to report conflicts regarding other graders
+                        </Text>
                       </VStack>
                     </Field>
                   )}

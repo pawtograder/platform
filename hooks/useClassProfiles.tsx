@@ -37,6 +37,11 @@ export function useFeatureEnabled(feature: string) {
   return course.features?.find((f) => f.name === feature)?.enabled;
 }
 
+export function useIsGrader() {
+  const { role } = useClassProfiles();
+  return role.role === "grader";
+}
+
 export function useIsGraderOrInstructor() {
   const { role } = useClassProfiles();
   return role.role === "grader" || role.role === "instructor";
