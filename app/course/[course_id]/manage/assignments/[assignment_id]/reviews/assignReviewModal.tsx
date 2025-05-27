@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { type HttpError, useCreate, useList, useUpdate, useOne } from "@refinedev/core";
+import { type HttpError, useCreate, useList, useUpdate } from "@refinedev/core";
 import { useForm, Controller } from "react-hook-form";
 import { format } from "date-fns";
 import { VStack, Text, Input } from "@chakra-ui/react";
@@ -28,7 +28,7 @@ type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["R
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type SubmissionRow = Database["public"]["Tables"]["submissions"]["Row"];
 type RubricRow = Database["public"]["Tables"]["rubrics"]["Row"];
-type AssignmentRow = Database["public"]["Tables"]["assignments"]["Row"];
+
 type AssignmentGroupRow = Database["public"]["Tables"]["assignment_groups"]["Row"];
 type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"] & {
   profiles?: Pick<ProfileRow, "id" | "name">;
@@ -41,7 +41,6 @@ type PopulatedSubmission = SubmissionRow & {
   assignment_groups?: AssignmentGroupRow & {
     assignment_groups_members?: { profiles: ProfileRow }[];
   };
-  assignments?: AssignmentRow;
   submission_reviews?: SubmissionReviewRow[];
 };
 
@@ -123,13 +122,6 @@ export default function AssignReviewModal({
   const supabaseClient = createClient();
   const selectedRubricId = watch("rubric_id");
   const selectedSubmissionId = watch("submission_id");
-
-  const { data: assignmentData, isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
-    resource: "assignments",
-    id: assignmentId,
-    queryOptions: { enabled: isOpen && !!assignmentId },
-    meta: { select: "id, grading_rubric_id" }
-  });
 
   const { data: courseUsersData, isLoading: isLoadingCourseUsers } = useList<UserRoleRow>({
     resource: "user_roles",
@@ -214,26 +206,12 @@ export default function AssignReviewModal({
     );
   }, [submissionsData]);
 
-  const gradingRubricIdFromAssignment = assignmentData?.data?.grading_rubric_id;
-
-  const rubricsFilters = useMemo(() => {
-    if (isLoadingAssignment) {
-      return undefined; // Query will be disabled
-    }
-    if (gradingRubricIdFromAssignment) {
-      return [{ field: "id", operator: "eq" as const, value: gradingRubricIdFromAssignment }];
-    }
-    // No specific rubric for assignment, or assignment has no grading_rubric_id.
-    // Show no rubrics by using a filter that won't match.
-    return [{ field: "id", operator: "eq" as const, value: -1 }]; // Assuming rubric IDs are positive
-  }, [isLoadingAssignment, gradingRubricIdFromAssignment]);
-
   const { data: rubricsData, isLoading: isLoadingRubrics } = useList<RubricRow>({
     resource: "rubrics",
-    filters: rubricsFilters,
+    filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
     meta: { select: "id, name, review_round" },
     queryOptions: {
-      enabled: isOpen && !isLoadingAssignment && rubricsFilters !== undefined
+      enabled: isOpen && !!assignmentId
     }
   });
 
@@ -520,12 +498,12 @@ export default function AssignReviewModal({
                       {...field}
                       inputId="rubric_id"
                       options={rubricOptions}
-                      isLoading={isLoadingAssignment || isLoadingRubrics}
+                      isLoading={isLoadingRubrics}
                       placeholder={
-                        isLoadingAssignment
-                          ? "Loading assignment info..."
+                        isLoadingRubrics
+                          ? "Loading rubrics..."
                           : rubricOptions.length === 0
-                            ? "No rubric specified for this assignment"
+                            ? "No rubrics available for this assignment"
                             : "Select Rubric..."
                       }
                       onChange={(option) => field.onChange(option?.value)}
