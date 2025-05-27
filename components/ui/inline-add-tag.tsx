@@ -4,7 +4,7 @@ import { TagColor } from "@/app/course/[course_id]/manage/course/enrollments/Tag
 import TagDisplay from "@/components/ui/tag";
 import useTags from "@/hooks/useTags";
 import { Tag } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, Icon, SegmentGroup } from "@chakra-ui/react";
+import { Box, Button, Flex, Grid, Heading, Icon, SegmentGroup } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useEffect, useRef, useState } from "react";
 import { FaPlus } from "react-icons/fa6";
@@ -135,7 +135,7 @@ export default function InlineAddTag({
   }
 
   return (
-    <Flex direction="column" gap={2} w="150px">
+    <Flex direction="column" gap={2} width="150px" wrap={"wrap"}>
       {!showColorPicker ? (
         <Select<TagOption>
           autoFocus
@@ -189,51 +189,66 @@ export default function InlineAddTag({
           }}
         />
       ) : (
-        <Flex direction="column" gap={2}>
+        <Flex direction="column" gap={2} maxWidth={"150px"}>
           <Heading size="xs">Tag color</Heading>
-          <KeyboardAwareSegmentGroup
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setIsEditing(false);
-                setInputValue("");
-                setShowColorPicker(false);
-              } else if (e.key === "Enter" && inputValue.trim()) {
-                handleSubmit(inputValue, selectedColor);
-              } else if (e.key === "ArrowLeft") {
-                handleArrowKey("left");
-              } else if (e.key === "ArrowRight") {
-                handleArrowKey("right");
-              }
-            }}
-          >
-            <SegmentGroup.Root
-              value={selectedColor}
-              onValueChange={(details) => {
-                handleColorChange(details.value, true);
+          <Flex maxWidth={"100%"} border="none">
+            <KeyboardAwareSegmentGroup
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setIsEditing(false);
+                  setInputValue("");
+                  setShowColorPicker(false);
+                } else if (e.key === "Enter" && inputValue.trim()) {
+                  handleSubmit(inputValue, selectedColor);
+                } else if (e.key === "ArrowLeft") {
+                  handleArrowKey("left");
+                } else if (e.key === "ArrowRight") {
+                  handleArrowKey("right");
+                }
               }}
-              size="xs"
             >
-              <SegmentGroup.Indicator />
-              <SegmentGroup.Item
-                value="gray"
-                border="1px solid"
-                borderColor={selectedColor === "gray" ? "gray.500" : "transparent"}
-                onClick={() => handleColorChange("gray", true)}
+              <SegmentGroup.Root
+                background="none"
+                border="none"
+                outline="none"
+                height="auto"
+                value={selectedColor}
+                onValueChange={(details) => {
+                  handleColorChange(details.value, true);
+                }}
+                size="xs"
+                display="flex"
+                flexWrap="wrap"
               >
-                <SegmentGroup.ItemHiddenInput />
-              </SegmentGroup.Item>
-              {TagColor.colors().map((color) => (
-                <SegmentGroup.Item
-                  key={color.toString()}
-                  value={color.toString()}
-                  bg={selectedColor === color.toString() ? `${color.toString()}.500` : `${color.toString()}.200`}
-                  onClick={() => handleColorChange(color.toString(), true)}
-                >
-                  <SegmentGroup.ItemHiddenInput />
-                </SegmentGroup.Item>
-              ))}
-            </SegmentGroup.Root>
-          </KeyboardAwareSegmentGroup>
+                <SegmentGroup.Indicator />
+                <Grid gridTemplateColumns="repeat(auto-fill, 24px)" maxWidth={"150px"} justifyContent={"space-between"}>
+                  <SegmentGroup.Item
+                    value="gray"
+                    outlineOffset={-1}
+                    outline="1px solid"
+                    outlineColor={selectedColor === "gray" ? "gray.500" : "transparent"}
+                    onClick={() => handleColorChange("gray", true)}
+                    zIndex="10"
+                  >
+                    <SegmentGroup.ItemHiddenInput />
+                  </SegmentGroup.Item>
+                  {TagColor.colors().map((color) => (
+                    <SegmentGroup.Item
+                      width="24px"
+                      height="24px"
+                      key={color.toString()}
+                      value={color.toString()}
+                      bg={selectedColor === color.toString() ? `${color.toString()}.500` : `${color.toString()}.200`}
+                      onClick={() => handleColorChange(color.toString(), true)}
+                      zIndex="5"
+                    >
+                      <SegmentGroup.ItemHiddenInput />
+                    </SegmentGroup.Item>
+                  ))}
+                </Grid>
+              </SegmentGroup.Root>
+            </KeyboardAwareSegmentGroup>
+          </Flex>
         </Flex>
       )}
     </Flex>

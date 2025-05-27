@@ -221,7 +221,7 @@ export default function TagProfileModal({
                       }}
                     />
                     <Field.HelperText>
-                      To assign the tag to private profiles, prefix the name with &apos;~&apos;
+                      To make the tag private from other graders the name with &apos;~&apos;
                     </Field.HelperText>
                   </Field.Root>
                   <Field.Root>
@@ -268,8 +268,7 @@ export default function TagProfileModal({
                       ).map((p) => ({ label: p.name, value: p }))}
                     />
                     <Field.HelperText>
-                      Tags prefixed with &apos;~&apos; will be assigned to the user&apos;s private profile. All others
-                      will be assigned to public profiles.
+                      Tags prefixed with &apos;~&apos; will be visible only to yourself.
                     </Field.HelperText>
                   </Field.Root>
                   {selectedTag && (

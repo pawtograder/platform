@@ -3405,6 +3405,7 @@ export type Database = {
           class_id: number;
           color: string;
           created_at: string;
+          creator_id: string;
           id: string;
           name: string;
           profile_id: string;
@@ -3414,7 +3415,8 @@ export type Database = {
           class_id: number;
           color: string;
           created_at?: string;
-          id: string;
+          creator_id?: string;
+          id?: string;
           name: string;
           profile_id: string;
           visible: boolean;
@@ -3423,6 +3425,7 @@ export type Database = {
           class_id?: number;
           color?: string;
           created_at?: string;
+          creator_id?: string;
           id?: string;
           name?: string;
           profile_id?: string;
@@ -3435,6 +3438,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "tags_creator_fkey";
+            columns: ["creator_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
           },
           {
             foreignKeyName: "tags_profile_id_fkey";

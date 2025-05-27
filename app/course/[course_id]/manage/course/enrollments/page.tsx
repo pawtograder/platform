@@ -151,7 +151,6 @@ function EnrollmentsTable() {
       }
     }
   });
-
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
       {

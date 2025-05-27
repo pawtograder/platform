@@ -6,6 +6,7 @@ import {
   DiscussionThreadReadStatus,
   DiscussionThreadWatcher,
   Notification,
+  Tag,
   UserProfile,
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
@@ -141,16 +142,6 @@ type DiscussionThreadTeaser = Pick<
   | "ordinal"
   | "answer"
 >;
-
-type Tag = {
-  id: string;
-  class_id: number;
-  name: string;
-  color: string;
-  profile_id: string;
-  created_at: string;
-  visible: boolean;
-};
 
 export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
@@ -799,7 +790,16 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       staleTime: Infinity,
       cacheTime: Infinity
     },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      {
+        operator: "or",
+        value: [
+          { field: "visible", operator: "eq", value: true },
+          { field: "creator_id", operator: "eq", value: user?.id }
+        ]
+      }
+    ],
     pagination: {
       pageSize: 1000
     },
