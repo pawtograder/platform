@@ -61,7 +61,7 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
         accessorKey: "class_id",
         header: "Class ID",
         enableHiding: true,
-        filterFn: (row: Row<GradingConflictWithPopulatedProfiles>, filterValue: string | number) => {
+        filterFn: (row: Row<GradingConflictWithPopulatedProfiles>, columnId: string, filterValue: string | number) => {
           return String(row.original.class_id) === String(filterValue);
         }
       },
@@ -73,7 +73,7 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
           return <PersonName uid={row.original.grader_profile_id} />;
         },
         enableColumnFilter: true,
-        filterFn: (row, filterValue: string) => {
+        filterFn: (row, columnId: string, filterValue: string) => {
           const profile = row.original.grader_profile;
           const filterString = String(filterValue).toLowerCase();
           if (profile?.name && profile.name.toLowerCase().includes(filterString)) return true;
@@ -88,7 +88,7 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
           return <PersonName uid={row.original.student_profile_id} />;
         },
         enableColumnFilter: true,
-        filterFn: (row, filterValue: string) => {
+        filterFn: (row, columnId: string, filterValue: string) => {
           const profile = row.original.student_profile;
           const filterString = String(filterValue).toLowerCase();
           if (profile?.name && profile.name.toLowerCase().includes(filterString)) return true;
@@ -105,7 +105,7 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
           );
         },
         enableColumnFilter: true,
-        filterFn: (row, filterValue: string) => {
+        filterFn: (row, columnId: string, filterValue: string) => {
           const reason = row.original.reason;
           const filterString = String(filterValue).toLowerCase();
           return reason ? reason.toLowerCase().includes(filterString) : filterString === "n/a" || filterString === "";
@@ -119,7 +119,7 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
           return <PersonName uid={row.original.created_by_profile_id} />;
         },
         enableColumnFilter: true,
-        filterFn: (row, filterValue: string) => {
+        filterFn: (row, columnId: string, filterValue: string) => {
           const profile = row.original.created_by_profile;
           const filterString = String(filterValue).toLowerCase();
           if (profile?.name && profile.name.toLowerCase().includes(filterString)) return true;

@@ -163,7 +163,7 @@ function AuditTable() {
         header: "Class ID",
         enableColumnFilter: true,
         enableHiding: true,
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           return String(row.original.class_id) === String(filterValue);
         }
       },
@@ -176,7 +176,7 @@ function AuditTable() {
         cell: (props) => {
           return <Text>{new Date(props.getValue() as string).toLocaleString()}</Text>;
         },
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const date = new Date(row.original.created_at);
           const filterString = String(filterValue);
           return date.toLocaleString().toLowerCase().includes(filterString.toLowerCase());
@@ -193,7 +193,7 @@ function AuditTable() {
             <Text>{roster.data?.data.find((r) => r.user_id === (props.getValue() as string))?.profiles?.name}</Text>
           );
         },
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const name = roster.data?.data.find((r) => r.user_id === row.original.user_id)?.profiles?.name;
           const filterString = String(filterValue).toLowerCase();
           return name?.toLocaleLowerCase().includes(filterString) || false;
@@ -205,7 +205,7 @@ function AuditTable() {
         header: "IP Address",
         enableColumnFilter: true,
         enableHiding: true,
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const ip = row.original.ip_addr;
           if (!ip) return false;
           const filterString = String(filterValue);
@@ -218,7 +218,7 @@ function AuditTable() {
         header: "Table",
         enableColumnFilter: true,
         enableHiding: true,
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const table = row.original.table;
           if (!table) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -231,7 +231,7 @@ function AuditTable() {
         header: "Resource ID",
         enableColumnFilter: true,
         enableHiding: true,
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           let resourceId: string | number | undefined | null = null;
           if (typeof row.original.new === "object" && row.original.new !== null && "id" in row.original.new) {
             resourceId = row.original.new["id"] as string | number | undefined | null;

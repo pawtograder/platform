@@ -104,7 +104,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         accessorKey: "assignment_id",
         header: "Assignment ID",
         enableHiding: true, // Allow hiding
-        filterFn: (row: Row<PopulatedReviewAssignment>, filterValue: string | number) => {
+        filterFn: (row: Row<PopulatedReviewAssignment>, columnId: string, filterValue: string | number) => {
           return String(row.original.assignment_id) === String(filterValue);
         }
       },
@@ -120,7 +120,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           );
         },
         enableColumnFilter: true,
-        filterFn: (row: Row<PopulatedReviewAssignment>, filterValue: string) => {
+        filterFn: (row: Row<PopulatedReviewAssignment>, columnId: string, filterValue: string) => {
           const assigneeName = row.original.profiles?.name;
           const assigneeId = String(row.original.assignee_profile_id);
           const filterString = String(filterValue).toLowerCase();
@@ -155,7 +155,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           return submitterName;
         },
         enableColumnFilter: true,
-        filterFn: (row: Row<PopulatedReviewAssignment>, filterValue: string) => {
+        filterFn: (row: Row<PopulatedReviewAssignment>, columnId: string, filterValue: string) => {
           const submission = row.original.submissions;
           const filterString = String(filterValue).toLowerCase();
           if (submission) {
@@ -178,7 +178,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           return row.original.rubrics?.name || "N/A";
         },
         enableColumnFilter: true,
-        filterFn: (row: Row<PopulatedReviewAssignment>, filterValue: string) => {
+        filterFn: (row: Row<PopulatedReviewAssignment>, columnId: string, filterValue: string) => {
           const rubricName = row.original.rubrics?.name;
           const filterString = String(filterValue).toLowerCase();
           if (rubricName && rubricName.toLowerCase().includes(filterString)) return true;
@@ -202,7 +202,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           return getReviewStatus(row.original);
         },
         enableColumnFilter: true,
-        filterFn: (row: Row<PopulatedReviewAssignment>, filterValue: string) => {
+        filterFn: (row: Row<PopulatedReviewAssignment>, columnId: string, filterValue: string) => {
           const status = getReviewStatus(row.original);
           const filterString = String(filterValue).toLowerCase();
           return status.toLowerCase().includes(filterString);

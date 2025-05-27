@@ -27,7 +27,7 @@ export default function AssignmentsTable() {
         id: "assignment_id",
         accessorKey: "assignment_id",
         header: "Assignment",
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           return String(row.original.assignment_id) === String(filterValue);
         }
       },
@@ -36,7 +36,7 @@ export default function AssignmentsTable() {
         accessorKey: "name",
         header: "Student",
         enableColumnFilter: true,
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           if (!row.original.name) return false;
           const filterString = String(filterValue).toLowerCase();
           return row.original.name.toLowerCase().includes(filterString);
@@ -57,7 +57,7 @@ export default function AssignmentsTable() {
           }
           return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
         },
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           if (row.original.late_due_date === null) {
             return false;
           }
@@ -92,7 +92,7 @@ export default function AssignmentsTable() {
           }
           return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
         },
-        filterFn: (row, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           if (!row.original.created_at) return false;
           const date = new TZDate(row.original.created_at, timeZone);
           const filterString = String(filterValue);

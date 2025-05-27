@@ -15,8 +15,6 @@
     "allowImportingTsExtensions": true,
     // "verbatimModuleSyntax": true, // This checks node_modules too for some reason
     "noFallthroughCasesInSwitch": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
     "noPropertyAccessFromIndexSignature": true,
     "module": "esnext",
     "moduleResolution": "bundler",
