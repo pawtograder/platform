@@ -1,10 +1,10 @@
 "use client";
-import { useContext, createContext, useState, useCallback, useEffect } from "react";
-import { Notification } from "@/utils/supabase/DatabaseTypes";
-import { useList, useUpdate, useDelete } from "@refinedev/core";
-import useAuthState from "./useAuthState";
+import { useState, useCallback, useEffect } from "react";
+import type { Notification } from "@/utils/supabase/DatabaseTypes";
+import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
-import { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
+import type { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
+import { toaster } from "@/components/ui/toaster";
 export function useNotification(notification_id: number) {
   const controller = useCourseController();
   const [notification, setNotification] = useState<Notification | undefined>(undefined);
@@ -38,7 +38,10 @@ export function useNotifications(resource?: string, id?: number) {
           }
         });
       } catch (error) {
-        console.error("error setting notification read", error);
+        toaster.error({
+          title: "Error setting notification read",
+          description: error instanceof Error ? error.message : "Unknown error"
+        });
       }
     },
     [update_notification]
@@ -57,14 +60,17 @@ export function useNotifications(resource?: string, id?: number) {
     },
     [delete_notification, controller]
   );
-  if (resource && id) {
-    const [notifications, setNotifications] = useState<Notification[]>([]);
-    useEffect(() => {
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  useEffect(() => {
+    if (resource && id) {
       const { unsubscribe, data } = controller.getValueWithSubscription<Notification>(
         "notifications",
         (notification) => {
           const type =
-            notification.body && typeof notification.body === "object" ? (notification.body as any).type : undefined;
+            notification.body && typeof notification.body === "object"
+              ? (notification.body as DiscussionThreadNotification).type
+              : undefined;
           if (type === "discussion_thread") {
             const envelope = notification.body as DiscussionThreadNotification;
             return envelope.root_thread_id === id;
@@ -77,11 +83,7 @@ export function useNotifications(resource?: string, id?: number) {
       );
       if (data) setNotifications([data]);
       return () => unsubscribe();
-    }, [controller, resource, id]);
-    return { notifications, set_read, dismiss };
-  } else {
-    const [notifications, setNotifications] = useState<Notification[]>([]);
-    useEffect(() => {
+    } else {
       const { unsubscribe, data } = controller.listGenericData<Notification>("notifications", (data) => {
         const thisClassNotifications = data.filter((notification) => {
           return notification.class_id === controller.courseId;
@@ -93,7 +95,8 @@ export function useNotifications(resource?: string, id?: number) {
       });
       setNotifications(thisClassNotifications);
       return () => unsubscribe();
-    }, [controller]);
-    return { notifications, set_read, dismiss };
-  }
+    }
+  }, [controller, resource, id]);
+
+  return { notifications, set_read, dismiss };
 }

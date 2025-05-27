@@ -1,5 +1,5 @@
 "use client";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   DiscussionThread,
@@ -10,12 +10,13 @@ import {
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
+import { type LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { addHours } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import type { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import { toaster } from "@/components/ui/toaster";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
@@ -46,7 +47,12 @@ export function useUpdateThreadTeaser() {
           values
         });
       } catch (error) {
-        console.error("error updating thread", error);
+        toaster.error({
+          title: "Error updating thread",
+          description:
+            "An error occurred while updating the thread. Please try again, and reach out to your instructor if the problem persists. More details: " +
+            (error instanceof Error ? error.message : "Unknown error")
+        });
         controller.handleDiscussionThreadTeaserEvent({
           type: "updated",
           payload: old,
@@ -116,11 +122,16 @@ export function useDiscussionThreadReadStatus(threadId: number) {
             read_at: isUnread ? null : new Date()
           }
         }).catch((error) => {
-          console.error("error creating thread read status", error);
+          toaster.error({
+            title: "Error creating thread read status",
+            description:
+              "An error occurred while creating the thread read status. Please try again, and reach out to your instructor if the problem persists. More details: " +
+              (error instanceof Error ? error.message : "Unknown error")
+          });
         });
       }
     },
-    [user?.id, createdThreadReadStatuses, controller]
+    [user?.id, createdThreadReadStatuses, controller, createThreadReadStatus, updateThreadReadStatus]
   );
   return { readStatus, setUnread };
 }
@@ -176,7 +187,7 @@ export function useDiscussionThreadTeaser(id: number, watchFields?: DiscussionTh
     });
     setTeaser(data);
     return unsubscribe;
-  }, [controller, id]);
+  }, [controller, id, watchFields]);
   return teaser;
 }
 export type UpdateCallback<T> = (data: T) => void;
@@ -201,13 +212,13 @@ class CourseController {
   private discussionThreadTeaserListSubscribers: UpdateCallback<DiscussionThreadTeaser[]>[] = [];
   private discussionThreadTeaserSubscribers: Map<number, UpdateCallback<DiscussionThreadTeaser>[]> = new Map();
 
-  private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<any>[]> } = {};
-  private genericData: { [key in string]: Map<number, any> } = {};
-  private genericDataListSubscribers: { [key in string]: UpdateCallback<any>[] } = {};
+  private genericDataSubscribers: { [key: string]: Map<number, UpdateCallback<unknown>[]> } = {};
+  private genericData: { [key: string]: Map<number, unknown> } = {};
+  private genericDataListSubscribers: { [key: string]: UpdateCallback<unknown[]>[] } = {};
 
-  private genericDataTypeToId: { [key in string]: (item: any) => number } = {};
+  private genericDataTypeToId: { [key: string]: (item: unknown) => number } = {};
 
-  registerGenericDataType(typeName: string, idGetter: (item: any) => number) {
+  registerGenericDataType(typeName: string, idGetter: (item: unknown) => number) {
     if (!this.genericDataTypeToId[typeName]) {
       this.genericDataTypeToId[typeName] = idGetter;
       this.genericDataSubscribers[typeName] = new Map();
@@ -215,11 +226,13 @@ class CourseController {
     }
   }
 
-  setGeneric(typeName: string, data: any[]) {
+  setGeneric(typeName: string, data: unknown[]) {
     if (!this.genericData[typeName]) {
       this.genericData[typeName] = new Map();
     }
     const idGetter = this.genericDataTypeToId[typeName];
+    if (!idGetter) return;
+
     for (const item of data) {
       const id = idGetter(item);
       this.genericData[typeName].set(id, item);
@@ -227,19 +240,20 @@ class CourseController {
       itemSubscribers.forEach((cb) => cb(item));
     }
     const listSubscribers = this.genericDataListSubscribers[typeName] || [];
-    listSubscribers.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+    listSubscribers.forEach((cb) => cb(Array.from(this.genericData[typeName]?.values() ?? [])));
   }
   listGenericData<T>(typeName: string, callback?: UpdateCallback<T[]>): { unsubscribe: Unsubscribe; data: T[] } {
     const subscribers = this.genericDataListSubscribers[typeName] || [];
     if (callback) {
-      subscribers.push(callback);
+      subscribers.push(callback as UpdateCallback<unknown[]>);
       this.genericDataListSubscribers[typeName] = subscribers;
     }
     const currentData = this.genericData[typeName]?.values() || [];
     return {
       unsubscribe: () => {
         this.genericDataListSubscribers[typeName] =
-          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== callback) || [];
+          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== (callback as UpdateCallback<unknown[]>)) ||
+          [];
       },
       data: Array.from(currentData) as T[]
     };
@@ -253,19 +267,20 @@ class CourseController {
       throw new Error(`No id getter for type ${typeName}`);
     }
     if (typeof id === "function") {
-      const relevantIds = Array.from(this.genericData[typeName]?.keys() || []).filter((_id) =>
-        id(this.genericData[typeName]?.get(_id)!)
-      );
+      const relevantIds = Array.from(this.genericData[typeName]?.keys() || []).filter((_id) => {
+        const item = this.genericData[typeName]?.get(_id);
+        return item && id(item as T);
+      });
       if (relevantIds.length == 0) {
         return {
           unsubscribe: () => {},
           data: undefined
         };
       } else if (relevantIds.length == 1) {
-        const id = relevantIds[0];
+        const id = relevantIds[0]!;
         const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
         if (callback) {
-          this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+          this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as UpdateCallback<unknown>]);
         }
         return {
           unsubscribe: () => {
@@ -282,7 +297,7 @@ class CourseController {
     } else if (typeof id === "number") {
       const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
       if (callback) {
-        this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+        this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as UpdateCallback<unknown>]);
       }
       return {
         unsubscribe: () => {
@@ -300,19 +315,31 @@ class CourseController {
   handleGenericDataEvent(typeName: string, event: LiveEvent) {
     const body = event.payload;
     const idGetter = this.genericDataTypeToId[typeName];
+    if (!idGetter) return;
+
     const id = idGetter(body);
+    if (!this.genericData[typeName]) {
+      this.genericData[typeName] = new Map();
+    }
+
     if (event.type === "created") {
-      this.genericData[typeName].set(id, body);
+      this.genericData[typeName]!.set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
+        cb(Array.from(this.genericData[typeName]?.values() ?? []))
+      );
     } else if (event.type === "updated") {
-      this.genericData[typeName].set(id, body);
+      this.genericData[typeName]!.set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
+        cb(Array.from(this.genericData[typeName]?.values() ?? []))
+      );
     } else if (event.type === "deleted") {
-      this.genericData[typeName].delete(id);
+      this.genericData[typeName]!.delete(id);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => cb(Array.from(this.genericData[typeName].values())));
+      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
+        cb(Array.from(this.genericData[typeName]?.values() ?? []))
+      );
     }
   }
 
@@ -644,7 +671,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     ]
   });
   useEffect(() => {
-    controller.registerGenericDataType("notifications", (item: Notification) => item.id);
+    controller.registerGenericDataType("notifications", (item: unknown) => (item as Notification).id);
     if (notifications?.data) {
       controller.setGeneric("notifications", notifications.data);
     }
@@ -674,7 +701,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
   useEffect(() => {
     controller.registerGenericDataType(
       "discussion_thread_watchers",
-      (item: DiscussionThreadWatcher) => item.discussion_thread_root_id
+      (item: unknown) => (item as DiscussionThreadWatcher).discussion_thread_root_id
     );
     if (threadWatches?.data) {
       controller.setGeneric("discussion_thread_watchers", threadWatches.data);
@@ -692,7 +719,10 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     }
   });
   useEffect(() => {
-    controller.registerGenericDataType("assignment_due_date_exceptions", (item: AssignmentDueDateException) => item.id);
+    controller.registerGenericDataType(
+      "assignment_due_date_exceptions",
+      (item: unknown) => (item as AssignmentDueDateException).id
+    );
     if (dueDateExceptions?.data) {
       controller.setGeneric("assignment_due_date_exceptions", dueDateExceptions.data);
     }

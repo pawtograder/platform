@@ -1,6 +1,6 @@
 import { useRef, useCallback, useEffect, Fragment } from "react";
 import { useChatChannel } from "@/lib/chat";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Flex, HStack, Stack, Text, AvatarGroup, Box, Button, VStack, Badge, Icon } from "@chakra-ui/react";
 import { BsCheck } from "react-icons/bs";
 import useUserProfiles, { getUserProfile, useUserProfile } from "@/hooks/useUserProfiles";

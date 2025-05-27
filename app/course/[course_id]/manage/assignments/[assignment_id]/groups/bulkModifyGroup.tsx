@@ -1,11 +1,11 @@
 import PersonName from "@/components/ui/person-name";
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, HStack, Portal, SegmentGroup, Text } from "@chakra-ui/react";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { LuX } from "react-icons/lu";
-import { StudentMoveData, useGroupManagement } from "./GroupManagementContext";
-import { RolesWithProfilesAndGroupMemberships } from "./page";
+import { type StudentMoveData, useGroupManagement } from "./GroupManagementContext";
+import type { RolesWithProfilesAndGroupMemberships } from "./page";
 
 export default function BulkModifyGroup({
   groups,
@@ -229,9 +229,7 @@ export default function BulkModifyGroup({
                           return {
                             profile_id: member.value.private_profile_id,
                             old_group_id:
-                              member.value.profiles.assignment_groups_members.length > 0
-                                ? member.value.profiles.assignment_groups_members[0].assignment_group_id
-                                : null,
+                              member.value.profiles.assignment_groups_members[0]?.assignment_group_id ?? null,
 
                             new_group_id: groupToMod.id
                           };

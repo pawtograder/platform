@@ -10,15 +10,15 @@ import {
   NativeSelectField,
   NativeSelectRoot
 } from "@chakra-ui/react";
-import { Controller, FieldValues } from "react-hook-form";
+import { Controller, type FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { useList } from "@refinedev/core";
-import { UseFormReturnType } from "@refinedev/react-hook-form";
+import type { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useState } from "react";
 
@@ -54,8 +54,8 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
           <Field
             label="Group configuration"
             helperText="If you want to use groups for this assignment, select the group configuration you want to use."
-            errorText={errors.group_config?.message?.toString()}
-            invalid={errors.group_config ? true : false}
+            errorText={errors["group_config"]?.message?.toString()}
+            invalid={errors["group_config"] ? true : false}
             required={true}
           >
             <NativeSelectRoot {...register("group_config", { required: true })}>
@@ -79,8 +79,8 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
               <Field
                 label="Minimum Group Size"
                 helperText="The minimum number of students allowed in a group"
-                errorText={errors.min_group_size?.message?.toString()}
-                invalid={errors.min_group_size ? true : false}
+                errorText={errors["min_group_size"]?.message?.toString()}
+                invalid={errors["min_group_size"] ? true : false}
                 required={withGroups}
               >
                 <Input
@@ -99,8 +99,8 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
               <Field
                 label="Maximum Group Size"
                 helperText="The maximum number of students allowed in a group"
-                errorText={errors.max_group_size?.message?.toString()}
-                invalid={errors.max_group_size ? true : false}
+                errorText={errors["max_group_size"]?.message?.toString()}
+                invalid={errors["max_group_size"] ? true : false}
                 required={withGroups}
               >
                 <Input
@@ -119,8 +119,8 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
               <Field
                 label="Group Formation Method"
                 helperText="Choose whether students can form their own groups or if all groups will be assigned by instructors"
-                errorText={errors.allow_student_formed_groups?.message?.toString()}
-                invalid={errors.allow_student_formed_groups ? true : false}
+                errorText={errors["allow_student_formed_groups"]?.message?.toString()}
+                invalid={errors["allow_student_formed_groups"] ? true : false}
                 required={withGroups}
               >
                 <NativeSelectRoot
@@ -145,7 +145,7 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
                     <option value="">None</option>
                     {otherAssignments?.data?.map((assignment) => (
                       <option key={assignment.id} value={assignment.id}>
-                        {assignment.title}
+                        {assignment["title"]}
                       </option>
                     ))}
                   </NativeSelectField>
@@ -156,8 +156,8 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
               <Field
                 label="Group Formation Deadline"
                 helperText="The deadline by which groups must be formed. If set, students will not be able to change groups after this deadline."
-                errorText={errors.group_formation_deadline?.message?.toString()}
-                invalid={errors.group_formation_deadline ? true : false}
+                errorText={errors["group_formation_deadline"]?.message?.toString()}
+                invalid={errors["group_formation_deadline"] ? true : false}
                 required={withGroups}
               >
                 <Input
@@ -226,8 +226,8 @@ export default function AssignmentForm({
           <Fieldset.Content>
             <Field
               label="Title"
-              errorText={errors.title?.message?.toString()}
-              invalid={errors.title ? true : false}
+              errorText={errors["title"]?.message?.toString()}
+              invalid={errors["title"] ? true : false}
               required={true}
             >
               <Input {...register("title", { required: "This is required" })} />
@@ -237,8 +237,8 @@ export default function AssignmentForm({
             <Field
               label="Slug"
               helperText="A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
-              errorText={errors.slug?.message?.toString()}
-              invalid={errors.slug ? true : false}
+              errorText={errors["slug"]?.message?.toString()}
+              invalid={errors["slug"] ? true : false}
               required={true}
             >
               <Input
@@ -257,8 +257,8 @@ export default function AssignmentForm({
             <Field
               label="Template repository"
               helperText="A link to a repository that will be used as a template for each student's assignment"
-              errorText={errors.template_repo?.message?.toString()}
-              invalid={errors.template_repo ? true : false}
+              errorText={errors["template_repo"]?.message?.toString()}
+              invalid={errors["template_repo"] ? true : false}
             >
               <Controller
                 control={control}
@@ -283,8 +283,8 @@ export default function AssignmentForm({
             <Field
               label={`Release Date (${course.classes.time_zone})`}
               helperText="Date that students can see the assignment"
-              errorText={errors.release_date?.message?.toString()}
-              invalid={errors.release_date ? true : false}
+              errorText={errors["release_date"]?.message?.toString()}
+              invalid={errors["release_date"] ? true : false}
               required={true}
             >
               <Input type="datetime-local" {...register("release_date", { required: "This is required" })} />
@@ -294,8 +294,8 @@ export default function AssignmentForm({
             <Field
               label={`Due Date (${course.classes.time_zone})`}
               helperText="No submissions accepted after this time unless late submissions are allowed"
-              errorText={errors.due_date?.message?.toString()}
-              invalid={errors.due_date ? true : false}
+              errorText={errors["due_date"]?.message?.toString()}
+              invalid={errors["due_date"] ? true : false}
               required={true}
             >
               <Input type="datetime-local" {...register("due_date", { required: "This is required" })} />
@@ -327,8 +327,8 @@ export default function AssignmentForm({
           <Fieldset.Content>
             <Field
               label="Points Possible"
-              errorText={errors.total_points?.message?.toString()}
-              invalid={!!errors.total_points}
+              errorText={errors["total_points"]?.message?.toString()}
+              invalid={!!errors["total_points"]}
               required={true}
             >
               <Input

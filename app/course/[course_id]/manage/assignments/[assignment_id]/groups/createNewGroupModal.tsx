@@ -1,7 +1,7 @@
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import { Button, Dialog, Field, Flex, Input, Portal } from "@chakra-ui/react";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import { useState } from "react";
 import { useUngroupedStudentProfiles } from "./bulkCreateGroupModal";
 import { useGroupManagement } from "./GroupManagementContext";

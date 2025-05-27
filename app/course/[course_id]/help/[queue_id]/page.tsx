@@ -1,7 +1,7 @@
 "use client";
 
 import { EphemeralChatChannelProvider } from "@/lib/chat";
-import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Tabs } from "@chakra-ui/react";
 import { useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -29,7 +29,7 @@ export default function HelpQueuePage() {
       }
     ]
   });
-  if (queue.isLoading || !requests || requests?.isLoading) {
+  if (queue.isLoading || !requests || requests?.["isLoading"]) {
     return <div>Loading...</div>;
   }
   if (queue.error) {
@@ -47,7 +47,7 @@ export default function HelpQueuePage() {
           </Tabs.List>
           <Tabs.Content width="100%" value="current">
             {unResolvedRequest && unResolvedRequest.length > 0 && (
-              <CurrentRequest queue={queue.data?.data} request={unResolvedRequest?.[0]} />
+              <CurrentRequest queue={queue.data?.data} request={unResolvedRequest[0]!} />
             )}
             {!unResolvedRequest || (unResolvedRequest.length === 0 && <HelpRequestForm />)}
           </Tabs.Content>

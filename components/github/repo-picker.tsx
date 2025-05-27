@@ -2,7 +2,7 @@
 
 import { createClient } from "@/utils/supabase/client";
 import { useEffect, useState } from "react";
-import { ListReposResponse } from "./GitHubTypes";
+import type { ListReposResponse } from "./GitHubTypes";
 import {
   SelectContent,
   SelectItem,
@@ -12,7 +12,7 @@ import {
   SelectValueText
 } from "@/components/ui/select";
 import { createListCollection } from "@chakra-ui/react";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 export type RepoPickerParams = Parameters<typeof SelectRoot> & {
   course: Database["public"]["Tables"]["classes"]["Row"];

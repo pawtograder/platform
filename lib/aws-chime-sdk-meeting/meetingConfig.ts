@@ -3,7 +3,7 @@
 
 import { ConsoleLogger, MultiLogger, POSTLogger } from "amazon-chime-sdk-js";
 import { SDK_LOG_LEVELS } from "./constants";
-import { MeetingConfig } from "./types";
+import type { MeetingConfig } from "./types";
 
 // const urlParams = new URLSearchParams(window.location.search);
 // const queryLogLevel = urlParams.get('logLevel') || 'info';
@@ -15,7 +15,7 @@ const meetingConfig: MeetingConfig = {
   logger: new ConsoleLogger("ChimeComponentLibraryReactDemo", logLevel)
 };
 
-const BASE_URL: string = process.env.NEXT_PUBLIC_API_URL || "";
+const BASE_URL: string = process.env["NEXT_PUBLIC_API_URL"] || "";
 
 if (!["0.0.0.0", "127.0.0.1", "localhost"].includes(BASE_URL)) {
   const postLogger = new POSTLogger({

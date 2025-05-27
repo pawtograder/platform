@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useShow, useUpdate } from "@refinedev/core";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { BsCameraVideo, BsClipboardCheckFill, BsClipboardCheck } from "react-icons/bs";
 import { HelpRequestChatChannelProvider } from "@/lib/chat";
 import { Icon, IconButton, Skeleton, Text } from "@chakra-ui/react";
@@ -22,7 +22,6 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
     id: request.id,
     mutationOptions: {
       onSuccess: (update) => {
-        console.log("onSuccess", update.data.assignee);
         setAssignee(update.data.assignee);
       }
     }
@@ -77,7 +76,7 @@ export default function HelpRequestPage() {
               aria-label="Join Video Call"
               onClick={() => {
                 window.open(
-                  `${process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/course/${activeRequest.data.class_id}/help/${activeRequest.data.help_queue}/request/${activeRequest.data.id}/meet`,
+                  `${process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/course/${activeRequest.data.class_id}/help/${activeRequest.data.help_queue}/request/${activeRequest.data.id}/meet`,
                   "_blank"
                 );
               }}

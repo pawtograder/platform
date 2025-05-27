@@ -1,7 +1,7 @@
 "use client";
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
-import React, { useState, useContext, useEffect, useRef, ReactNode } from "react";
+import React, { useState, useContext, useEffect, useRef, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { useMeetingManager } from "amazon-chime-sdk-component-library-react";
 

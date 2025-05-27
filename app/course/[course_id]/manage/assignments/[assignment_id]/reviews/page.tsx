@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
 import AssignReviewModal from "./assignReviewModal";
-import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
+import ReviewsTable, { type PopulatedReviewAssignment } from "./ReviewsTable";
 
 // Main Page Component
 export default function ReviewAssignmentsPage() {

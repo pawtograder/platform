@@ -1,5 +1,5 @@
 "use client";
-import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
+import type { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, HStack, Icon, Spacer, Stack, Status, Text, VStack } from "@chakra-ui/react";
 import excerpt from "@stefanprobst/remark-excerpt";
 
@@ -7,7 +7,7 @@ import Markdown from "@/components/ui/markdown";
 import { useDiscussionThreadLikes } from "@/hooks/useDiscussionThreadLikes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
-import { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
+import type { ThreadWithChildren } from "@/utils/supabase/DatabaseTypes";
 import { formatRelative } from "date-fns";
 import { useCallback } from "react";
 import { BsChat } from "react-icons/bs";

@@ -2,8 +2,9 @@ import LinkAccount from "@/components/github/link-account";
 import { Alert } from "@/components/ui/alert";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
+import { toaster } from "@/components/ui/toaster";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
-import {
+import type {
   AssignmentGroup,
   AssignmentGroupMember,
   AssignmentWithRepositoryAndSubmissionsAndGraderResults,
@@ -78,7 +79,11 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       return !hasIndividualRepo;
     });
     if (assignmentsWithoutRepos?.length) {
-      console.log(`Creating repos for ${assignmentsWithoutRepos.map((a) => a.title).join(", ")}`);
+      toaster.create({
+        title: "Creating repos",
+        description: `Creating repos for ${assignmentsWithoutRepos.map((a) => a.title).join(", ")}`,
+        type: "info"
+      });
       await autograderCreateReposForStudent(client);
       assignments = await client
         .from("assignments")
@@ -137,12 +142,12 @@ export default async function StudentPage({ params }: { params: Promise<{ course
             const mostRecentSubmission = getLatestSubmission(assignment);
             let repo = "-";
             if (assignment.repositories.length) {
-              repo = assignment.repositories[0].repository;
+              repo = assignment.repositories[0]?.repository ?? "-";
             }
             const group = groups?.data?.find((group) => group.assignment_id === assignment.id);
             if (group && group.assignment_groups) {
               if (group.assignment_groups.repositories.length) {
-                repo = group.assignment_groups.repositories[0].repository;
+                repo = group.assignment_groups.repositories[0]?.repository ?? "-";
               } else {
                 repo = "-";
               }

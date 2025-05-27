@@ -1,6 +1,6 @@
 "use client";
-import { UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
-import { User } from "@supabase/supabase-js";
+import type { UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import type { User } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext } from "react";
 type AuthStateContextType = {

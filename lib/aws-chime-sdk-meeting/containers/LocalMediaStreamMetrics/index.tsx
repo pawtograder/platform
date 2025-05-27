@@ -64,41 +64,40 @@ export const LocalMediaStreamMetrics: React.FC = () => {
             <MetricItem
               metricName="Bit rate (kbps)"
               metricValues={ssrcArray.map((ssrc) => {
-                return localVideoStreamMetrics[ssrc].videoUpstreamBitrate
-                  ? Math.trunc(localVideoStreamMetrics[ssrc].videoUpstreamBitrate / 1000).toString()
+                const metrics = localVideoStreamMetrics?.[ssrc];
+                return metrics?.["videoUpstreamBitrate"]
+                  ? Math.trunc(metrics["videoUpstreamBitrate"] / 1000).toString()
                   : "";
               })}
             />
             <MetricItem
               metricName="Packets Sent"
               metricValues={ssrcArray.map((ssrc) => {
-                return localVideoStreamMetrics[ssrc].videoUpstreamPacketsSent
-                  ? localVideoStreamMetrics[ssrc].videoUpstreamPacketsSent.toString()
-                  : "";
+                const metrics = localVideoStreamMetrics?.[ssrc];
+                return metrics?.["videoUpstreamPacketsSent"] ? metrics["videoUpstreamPacketsSent"].toString() : "";
               })}
             />
             <MetricItem
               metricName="Frame Rate"
               metricValues={ssrcArray.map((ssrc) => {
-                return localVideoStreamMetrics[ssrc].videoUpstreamFramesEncodedPerSecond
-                  ? localVideoStreamMetrics[ssrc].videoUpstreamFramesEncodedPerSecond.toString()
+                const metrics = localVideoStreamMetrics?.[ssrc];
+                return metrics?.["videoUpstreamFramesEncodedPerSecond"]
+                  ? metrics["videoUpstreamFramesEncodedPerSecond"].toString()
                   : "";
               })}
             />
             <MetricItem
               metricName="Frame Height"
               metricValues={ssrcArray.map((ssrc) => {
-                return localVideoStreamMetrics[ssrc].videoUpstreamFrameHeight
-                  ? localVideoStreamMetrics[ssrc].videoUpstreamFrameHeight.toString()
-                  : "";
+                const metrics = localVideoStreamMetrics?.[ssrc];
+                return metrics?.["videoUpstreamFrameHeight"] ? metrics["videoUpstreamFrameHeight"].toString() : "";
               })}
             />
             <MetricItem
               metricName="Frame Width"
               metricValues={ssrcArray.map((ssrc) => {
-                return localVideoStreamMetrics[ssrc].videoUpstreamFrameWidth
-                  ? localVideoStreamMetrics[ssrc].videoUpstreamFrameWidth.toString()
-                  : "";
+                const metrics = localVideoStreamMetrics?.[ssrc];
+                return metrics?.["videoUpstreamFrameWidth"] ? metrics["videoUpstreamFrameWidth"].toString() : "";
               })}
             />
           </MediaStatsList>

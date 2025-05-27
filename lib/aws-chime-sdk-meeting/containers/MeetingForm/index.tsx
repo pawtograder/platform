@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { ChangeEvent, useContext, useState } from "react";
+import React, { type ChangeEvent, useContext, useState } from "react";
 import {
   Checkbox,
   DeviceLabels,
@@ -27,7 +27,7 @@ import RegionSelection from "./RegionSelection";
 import { createGetAttendeeCallback, createMeetingAndAttendee } from "../../utils/api";
 import { useAppState } from "../../providers/AppStateProvider";
 import { MeetingMode, VideoFiltersCpuUtilization } from "../../types";
-import { MeetingManagerJoinOptions } from "amazon-chime-sdk-component-library-react/lib/providers/MeetingProvider/types";
+import type { MeetingManagerJoinOptions } from "amazon-chime-sdk-component-library-react/lib/providers/MeetingProvider/types";
 import meetingConfig from "../../meetingConfig";
 import { useRouter } from "next/navigation";
 

@@ -1,7 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -37,15 +37,15 @@ import {
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Tables } from "@/utils/supabase/SupabaseTypes";
+import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useInvalidate, useList, useShow, useUpdate } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { type CrudFilter, useInvalidate, useList, useShow, useUpdate } from "@refinedev/core";
+import { Select as ChakraReactSelect, type OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useEffect, useMemo, useState } from "react";
+import { type ElementType as ReactElementType, useEffect, useMemo, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -65,7 +65,7 @@ import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import AddRubricReferenceModal from "./addRubricReferenceModal";
-import { GraderResultTestData } from "./results/page";
+import type { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
 
 interface RubricOptionType extends OptionBase {
@@ -655,7 +655,7 @@ function RubricView() {
     } else if (submission.assignments.grading_rubric_id) {
       setSelectedRubricIdState(submission.assignments.grading_rubric_id);
     } else if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
-      setSelectedRubricIdState(assignmentRubricsData.data[0].id);
+      setSelectedRubricIdState(assignmentRubricsData.data[0]?.id);
     }
   }, [
     reviewAssignmentId,

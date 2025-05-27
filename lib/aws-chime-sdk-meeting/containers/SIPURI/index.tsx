@@ -1,10 +1,11 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useState, useRef, RefObject } from "react";
+import React, { useState, useRef, type RefObject } from "react";
 import { PrimaryButton } from "amazon-chime-sdk-component-library-react";
 
 import { StyledDiv } from "./Styled";
+import { toaster } from "@/components/ui/toaster";
 
 interface SIPProps {
   sipURI: string;
@@ -27,10 +28,16 @@ const SIPURI: React.FC<SIPProps> = ({ sipURI }: SIPProps) => {
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
       } catch (error) {
-        console.error("Could not copy content ", error);
+        toaster.error({
+          title: "Could not copy content",
+          description: error instanceof Error ? error.message : "Unknown error"
+        });
       }
     } else {
-      console.error("Could not get window selection to copy content");
+      toaster.error({
+        title: "Could not get window selection to copy content",
+        description: "Please try again later."
+      });
     }
   };
 

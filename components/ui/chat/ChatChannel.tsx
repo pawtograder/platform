@@ -2,7 +2,7 @@ import { Box, Button, Flex, Stack, Textarea } from "@chakra-ui/react";
 import { FiSend } from "react-icons/fi";
 import { ChatMessage } from "./ChatMessage";
 import { ChatMessages } from "./ChatMessages";
-import { useChatChannel, ChatMessage as ChatMessageType } from "@/lib/chat";
+import { useChatChannel, type ChatMessage as ChatMessageType } from "@/lib/chat";
 import { useCallback, useRef } from "react";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 export const ChatChannel = () => {
@@ -70,7 +70,6 @@ export const ChatChannel = () => {
                 rows={2}
                 _placeholder={{ color: "fg.subtle" }}
                 onKeyDown={(event) => {
-                  console.log(event.metaKey, event.key);
                   if (event.metaKey && event.key === "Enter") {
                     event.preventDefault();
                     sendMessage();

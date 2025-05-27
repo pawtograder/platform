@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
-import { HelpRequest, HelpRequestMessage } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest, HelpRequestMessage } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useList } from "@refinedev/core";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 export type ChatMessage = { id: number | string; message: string; created_at: string; author: string };
@@ -50,8 +50,9 @@ export function HelpRequestChatChannelProvider({
         const uids = new Set<string>();
         // console.log(JSON.stringify(presence))
         Object.keys(presence).forEach((key) => {
-          if (presence[key][0]) {
-            uids.add(presence[key][0].user_id);
+          const firstPresence = presence[key]?.[0];
+          if (firstPresence) {
+            uids.add(firstPresence.user_id);
           }
         });
         return Array.from(uids);
@@ -74,7 +75,6 @@ export function HelpRequestChatChannelProvider({
         participants,
         messages: help_request_messages?.data ?? [],
         postMessage: async (message: string, profile_id: string) => {
-          console.log(message, profile_id);
           await createMessage({
             values: {
               message,
@@ -136,8 +136,9 @@ export function EphemeralChatChannelProvider({
         const getUidsFromPresence = (presence: Record<string, { user_id: string }[]>) => {
           const uids = new Set<string>();
           Object.keys(presence).forEach((key) => {
-            if (presence[key][0]) {
-              uids.add(presence[key][0].user_id);
+            const firstPresence = presence[key]?.[0];
+            if (firstPresence) {
+              uids.add(firstPresence.user_id);
             }
           });
           return Array.from(uids);
@@ -146,7 +147,7 @@ export function EphemeralChatChannelProvider({
           setParticipants(getUidsFromPresence(chan.presenceState()));
         });
         chan.on("broadcast", { event: "chat_message" }, (payload) => {
-          setMessages((prev) => [...prev, payload.message as ChatMessage]);
+          setMessages((prev) => [...prev, payload["message"] as ChatMessage]);
         });
         chan.track({ user_id: private_profile_id! });
       });

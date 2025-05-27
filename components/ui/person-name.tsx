@@ -1,5 +1,5 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { HStack, Avatar, Text, VStack, TextProps } from "@chakra-ui/react";
+import { HStack, Avatar, Text, VStack, type TextProps } from "@chakra-ui/react";
 
 export default function PersonName({
   uid,

@@ -1,8 +1,8 @@
-import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { useCourseController, UserProfileWithPrivateProfile } from "./useCourseController";
+import { useCourseController, type UserProfileWithPrivateProfile } from "./useCourseController";
 
 export function getUserProfile(
   allProfiles: UserProfile[],

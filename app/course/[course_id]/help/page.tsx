@@ -1,6 +1,6 @@
 "use client";
 
-import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Link, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { redirect } from "next/navigation";
@@ -19,7 +19,7 @@ export default function HelpPage() {
   }
   if (queues.data?.data.length === 1) {
     //Directly enter the queue
-    return redirect(`/course/${course_id}/help/${queues.data?.data[0].id}`);
+    return redirect(`/course/${course_id}/help/${queues.data?.data?.[0]?.id}`);
   }
   return (
     <div>

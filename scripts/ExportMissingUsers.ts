@@ -1,8 +1,8 @@
 import dotenv from "dotenv";
-import Canvas, { CanvasApi } from "@kth/canvas-api";
+import { CanvasApi } from "@kth/canvas-api";
 import { createClient } from "@supabase/supabase-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Enrollment } from "@/lib/CanvasTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Enrollment } from "@/lib/CanvasTypes";
 import { createObjectCsvWriter } from "csv-writer";
 dotenv.config({ path: "./supabase/functions/.env" });
 dotenv.config({ path: "./.env.local.prod" });
@@ -12,8 +12,8 @@ dotenv.config({ path: "./.env.local.prod" });
  */
 const COURSE_ID = 8;
 function getCanvas(id: number) {
-  const canvas_api_url = process.env[`CANVAS_API_URL_${id}`] || process.env.CANVAS_API_URL;
-  const canvas_api_key = process.env[`CANVAS_API_KEY_${id}`] || process.env.CANVAS_API_KEY;
+  const canvas_api_url = process.env[`CANVAS_API_URL_${id}`] || process.env["CANVAS_API_URL"];
+  const canvas_api_key = process.env[`CANVAS_API_KEY_${id}`] || process.env["CANVAS_API_KEY"];
   return new CanvasApi(canvas_api_url!, canvas_api_key!);
 }
 
@@ -28,6 +28,7 @@ export async function getEnrollments({
 }): Promise<Enrollment[]> {
   const canvas = getCanvas(class_id);
   if (canvas_course_id) {
+    // eslint-disable-next-line no-console
     console.log("Getting enrollments for course", canvas_course_id);
     const pages = await canvas.listPages(`courses/${canvas_course_id}/enrollments`);
     const ret = [];
@@ -36,6 +37,7 @@ export async function getEnrollments({
     }
     return ret;
   } else if (canvas_course_section_id) {
+    // eslint-disable-next-line no-console
     console.log("Getting enrollments for section", canvas_course_section_id);
     const pages = await canvas.listPages(`sections/${canvas_course_section_id}/enrollments`);
     const ret = [];
@@ -48,8 +50,8 @@ export async function getEnrollments({
 }
 async function main() {
   const adminSupabase = createClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
+    process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
+    process.env["SUPABASE_SERVICE_ROLE_KEY"]!
   );
   const { data: courses } = await adminSupabase
     .from("classes")

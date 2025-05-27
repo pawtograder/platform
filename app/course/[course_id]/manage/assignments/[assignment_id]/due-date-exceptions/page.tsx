@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCourse } from "@/hooks/useAuthState";
 import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroup,
@@ -116,15 +116,15 @@ function AdjustDueDateDialog({
                 <Fieldset.Content w="xl">
                   <Field
                     label="Hours Extended"
-                    errorText={errors.hours?.message?.toString()}
-                    invalid={errors.hours ? true : false}
+                    errorText={errors["hours"]?.message?.toString()}
+                    invalid={errors["hours"] ? true : false}
                   >
                     <Input type="number" {...register("hours", { min: 0, required: "Hours extended is required" })} />
                   </Field>
                   <Field
                     label="Tokens to Consume"
-                    errorText={errors.tokens_consumed?.message?.toString()}
-                    invalid={errors.tokens_consumed ? true : false}
+                    errorText={errors["tokens_consumed"]?.message?.toString()}
+                    invalid={errors["tokens_consumed"] ? true : false}
                     helperText="The number of late tokens to consume when granting this extension. Leave at 0 to not consume any of the student's tokens."
                     defaultValue={0}
                   >
@@ -139,8 +139,8 @@ function AdjustDueDateDialog({
                   </Field>
                   <Field
                     label="Notes"
-                    errorText={errors.note?.message?.toString()}
-                    invalid={errors.note ? true : false}
+                    errorText={errors["note"]?.message?.toString()}
+                    invalid={errors["note"] ? true : false}
                     helperText="Any additional notes about this extension."
                   >
                     <Textarea {...register("note")} />

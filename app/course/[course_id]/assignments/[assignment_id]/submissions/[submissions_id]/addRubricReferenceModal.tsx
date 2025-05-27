@@ -11,10 +11,10 @@ import {
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { HydratedRubric, HydratedRubricCheck } from "@/utils/supabase/DatabaseTypes";
+import type { HydratedRubric, HydratedRubricCheck } from "@/utils/supabase/DatabaseTypes";
 import { Spinner, Text, VStack } from "@chakra-ui/react"; // Keep Chakra for layout if used elsewhere
 import { useCreate, useList } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { Select as ChakraReactSelect, type OptionBase } from "chakra-react-select";
 import { useEffect, useMemo, useState } from "react";
 import { FaPlus } from "react-icons/fa";
 

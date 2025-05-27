@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import { Logger, POSTLogger } from "amazon-chime-sdk-js";
+import { type Logger, POSTLogger } from "amazon-chime-sdk-js";
 
 export type FormattedDeviceType = {
   deviceId: string;

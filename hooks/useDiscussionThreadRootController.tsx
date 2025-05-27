@@ -1,7 +1,7 @@
-import { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
-import { LiveEvent, useList } from "@refinedev/core";
+import type { DiscussionThread, DiscussionThreadReadStatus } from "@/utils/supabase/DatabaseTypes";
+import { type LiveEvent, useList } from "@refinedev/core";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import useAuthState from "./useAuthState";
+
 export type DiscussionThreadWithChildren = DiscussionThread & {
   children: DiscussionThread[];
 };
@@ -125,7 +125,6 @@ export class DiscussionThreadsController {
   }
 }
 function DiscussionThreadChildrenProvider({ controller }: { controller: DiscussionThreadsController }) {
-  const { user } = useAuthState();
   const { data } = useList<DiscussionThread>({
     resource: "discussion_threads",
     meta: {

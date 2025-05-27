@@ -3,7 +3,7 @@
 
 import React from "react";
 
-import { MetricItemProps } from "./MetricItem";
+import type { MetricItemProps } from "./MetricItem";
 import { StyledList } from "./Styled";
 
 export interface MediaStatsListProps {

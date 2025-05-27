@@ -1,13 +1,13 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useState, ChangeEvent } from "react";
+import React, { useState, type ChangeEvent } from "react";
 import {
   Roster,
   RosterHeader,
   RosterGroup,
   useRosterState,
-  RosterAttendeeType
+  type RosterAttendeeType
 } from "amazon-chime-sdk-component-library-react";
 
 import { useNavigation } from "../providers/NavigationProvider";

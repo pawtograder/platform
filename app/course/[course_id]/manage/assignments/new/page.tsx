@@ -1,6 +1,6 @@
 "use client";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { useForm } from "@refinedev/react-hook-form";
 import { useRouter, useParams } from "next/navigation";
 import { useCallback } from "react";

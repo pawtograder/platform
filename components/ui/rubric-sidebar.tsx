@@ -1,6 +1,6 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -38,7 +38,7 @@ import path from "path";
 import { useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaTimesCircle } from "react-icons/fa";
-import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import { isRubricCheckDataWithOptions, type RubricCheckSubOption } from "./code-file";
 import PersonAvatar from "./person-avatar";
 import { toaster } from "./toaster";
 import { Tooltip } from "./tooltip";
@@ -402,7 +402,7 @@ export function RubricCheckGlobal({
   const showOptions = isGrader && hasOptions;
   const _selectedOptionIndex =
     hasOptions && rubricCheckComments.length == 1 && isRubricCheckDataWithOptions(check.data)
-      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
+      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0]?.points)
       : undefined;
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
   const gradingIsRequired = submissionReview && check.is_required && rubricCheckComments.length == 0;
@@ -703,7 +703,7 @@ export function RubricCriteria({
   }
   const singleCheck =
     criteria.max_checks_per_submission === 1 && comments.length === 1
-      ? comments[0].rubric_check_id?.toString()
+      ? comments[0]?.rubric_check_id?.toString()
       : undefined;
   return (
     <Box

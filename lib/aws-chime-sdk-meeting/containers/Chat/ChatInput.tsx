@@ -1,5 +1,5 @@
 import { Input } from "amazon-chime-sdk-component-library-react";
-import React, { ChangeEvent, useState } from "react";
+import React, { type ChangeEvent, useState } from "react";
 import { useDataMessagesState } from "../../providers/DataMessagesProvider";
 import { StyledChatInputContainer } from "./Styled";
 

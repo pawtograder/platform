@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import { Device, isVideoTransformDevice } from "amazon-chime-sdk-js";
-import React, { ChangeEvent, useState, useEffect } from "react";
+import type { Device } from "amazon-chime-sdk-js";
+import React, { type ChangeEvent, useState, useEffect } from "react";
 import {
   useBackgroundBlur,
   useBackgroundReplacement,
@@ -11,7 +11,24 @@ import {
   useVideoInputs,
   useMeetingManager
 } from "amazon-chime-sdk-component-library-react";
-import { VideoTransformOptions, VideoTransformDropdownOptionType } from "../../../types/index";
+import { VideoTransformOptions, type VideoTransformDropdownOptionType } from "../../../types/index";
+import { toaster } from "@/components/ui/toaster";
+
+/**
+ * Checks if a device is a video transform device (blur/replacement) that has transform methods.
+ * @param device - The device to check
+ * @returns True if the device has transform device methods, false otherwise
+ */
+const isVideoTransformDevice = (
+  device: unknown
+): device is { intrinsicDevice: () => Promise<Device>; stop: () => Promise<void> } => {
+  return !!(
+    device &&
+    typeof device === "object" &&
+    "intrinsicDevice" in device &&
+    typeof (device as { intrinsicDevice: unknown }).intrinsicDevice === "function"
+  );
+};
 
 interface Props {
   /* Title for the dropdown, defaults to `Video Transform Dropdown` */
@@ -81,7 +98,10 @@ export const VideoTransformDropdown: React.FC<Props> = ({ label = "Video Transfo
       // Update the current selected transform.
       setTransformOption(selectedTransform);
     } catch (e) {
-      console.error("Error trying to apply", selectTransform, e);
+      toaster.error({
+        title: "Error applying video transform",
+        description: `${selectTransform} ${e instanceof Error ? e.message : "Unknown error"}`
+      });
     } finally {
       setIsLoading(false);
     }

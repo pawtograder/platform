@@ -1,5 +1,5 @@
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database, Json } from "./SupabaseTypes";
+import type { Database, Json } from "./SupabaseTypes";
 export type { Json };
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 

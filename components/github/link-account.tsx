@@ -4,10 +4,12 @@ import { Button, VStack } from "@chakra-ui/react";
 import { createBrowserClient } from "@supabase/ssr";
 import { Alert } from "../ui/alert";
 import { BsGithub } from "react-icons/bs";
+import { toaster } from "../ui/toaster";
+
 export default function LinkAccount() {
   const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+    process.env["NEXT_PUBLIC_SUPABASE_URL"] || "",
+    process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"] || ""
   );
 
   return (
@@ -19,7 +21,10 @@ export default function LinkAccount() {
           onClick={async () => {
             const { error } = await supabase.auth.linkIdentity({ provider: "github" });
             if (error) {
-              console.error(error);
+              toaster.error({
+                title: "Error linking GitHub account",
+                description: error.message
+              });
             }
           }}
         >

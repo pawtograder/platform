@@ -3,7 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import RubricSidebar from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import {
+import type {
   Assignment,
   HydratedRubric,
   HydratedRubricCheck,
@@ -17,8 +17,8 @@ import {
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
-import Editor, { Monaco } from "@monaco-editor/react";
-import { HttpError, useCreate, useDataProvider, useDelete, useList, useShow, useUpdate } from "@refinedev/core";
+import Editor, { type Monaco } from "@monaco-editor/react";
+import { type HttpError, useCreate, useDataProvider, useDelete, useList, useShow, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -308,7 +308,7 @@ export default function RubricPage() {
   const [activeRubric, setActiveRubric] = useState<HydratedRubric | undefined>(undefined);
   const [initialActiveRubricSnapshot, setInitialActiveRubricSnapshot] = useState<HydratedRubric | undefined>(undefined);
   const [activeReviewRound, setActiveReviewRound] = useState<HydratedRubric["review_round"]>(
-    REVIEW_ROUNDS_AVAILABLE[1] // Default to 'grading-review'
+    REVIEW_ROUNDS_AVAILABLE[1]! // Default to 'grading-review'
   );
   const [isLoadingCurrentRubric, setIsLoadingCurrentRubric] = useState<boolean>(true);
 
@@ -424,7 +424,7 @@ export default function RubricPage() {
       if (assignmentDetails?.title) {
         newRubricBase.name = `${assignmentDetails.title} - ${reviewRound
           ?.split("-")
-          .map((w) => w[0].toUpperCase() + w.slice(1))
+          .map((w) => w[0]!.toUpperCase() + w.slice(1))
           .join(" ")} Rubric`;
       }
 
@@ -485,7 +485,7 @@ export default function RubricPage() {
       // hasUnsavedChanges will be updated by useEffect or stash restoration
 
       if (stashedEditorStates[newReviewRound!]) {
-        const stashed = stashedEditorStates[newReviewRound!];
+        const stashed = stashedEditorStates[newReviewRound!]!;
         setValue(stashed.value);
         setInitialActiveRubricSnapshot(stashed.initialSnapshot);
         setRubricForSidebar(stashed.activeRubricForSidebar);
@@ -506,7 +506,6 @@ export default function RubricPage() {
         refetchCurrentRubric();
       } else {
         // No stashed state, so this tab will load fresh via useList effect
-        console.log("L508");
         setHasUnsavedChanges(false);
         wasRestoredFromStashRef.current = false;
       }
@@ -663,7 +662,6 @@ export default function RubricPage() {
 
   useEffect(() => {
     if (!initialActiveRubricSnapshot && !value) {
-      console.log("L667");
       setHasUnsavedChanges(false);
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
       return;
@@ -679,7 +677,6 @@ export default function RubricPage() {
     }
 
     if (initialActiveRubricSnapshot) {
-      console.log(initialActiveRubricSnapshot);
       const snapshotAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot));
       try {
         const parsedValue = YAML.parse(value);
@@ -697,7 +694,6 @@ export default function RubricPage() {
 
         const currentEditorAsYamlString = YAML.stringify(HydratedRubricToYamlRubric(currentEditorActiveRubric));
         const changed = snapshotAsYamlString !== currentEditorAsYamlString;
-        console.log("L702", changed);
         setHasUnsavedChanges(changed);
         if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: changed }));
       } catch {
@@ -705,7 +701,6 @@ export default function RubricPage() {
         if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: true }));
       }
     } else {
-      console.log("L710", !!value);
       setHasUnsavedChanges(!!value);
     }
   }, [value, initialActiveRubricSnapshot, activeReviewRound, assignment_id]);
@@ -1081,7 +1076,6 @@ export default function RubricPage() {
       const finalSavedRubricState = JSON.parse(JSON.stringify(parsedRubricFromEditor));
       setActiveRubric(finalSavedRubricState);
       setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(finalSavedRubricState))); // Update state
-      console.log("L1078");
       setHasUnsavedChanges(false); // Saved, so no unsaved changes
       if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
       // Clear any stashed state for this tab as it's now saved
@@ -1177,7 +1171,7 @@ export default function RubricPage() {
               {rr
                 ? rr
                     .split("-")
-                    .map((w) => w[0].toUpperCase() + w.slice(1))
+                    .map((w) => w[0]!.toUpperCase() + w.slice(1))
                     .join(" ")
                 : "Select Round"}
               {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
@@ -1221,7 +1215,6 @@ export default function RubricPage() {
                   type: "info"
                 });
               }
-              console.log("L1224");
               setHasUnsavedChanges(false);
               if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
               setStashedEditorStates((prev) => {

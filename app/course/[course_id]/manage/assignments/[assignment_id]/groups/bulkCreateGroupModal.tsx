@@ -1,4 +1,4 @@
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
 import {
   Button,
   Dialog,
@@ -12,7 +12,7 @@ import {
 } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
-import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
+import { type GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
 
 export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
@@ -56,7 +56,9 @@ export default function BulkCreateGroup({
     // shuffle ungrouped profiles
     for (let i = ungroupedProfiles.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j], ungroupedProfiles[i]];
+      const temp = ungroupedProfiles[i]!;
+      ungroupedProfiles[i] = ungroupedProfiles[j]!;
+      ungroupedProfiles[j] = temp;
     }
     // create as many even groups as possible
     let index = 0;
@@ -73,7 +75,7 @@ export default function BulkCreateGroup({
     // spread extras across created groups
     while (index < ungroupedProfiles.length && newGroups.length > 0) {
       const createdGroup: GroupCreateData = newGroups.pop()!;
-      createdGroup?.member_ids.push(ungroupedProfiles[index].id);
+      createdGroup.member_ids.push(ungroupedProfiles[index]!.id);
       newGroups.push(createdGroup);
       index += 1;
     }

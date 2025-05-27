@@ -6,10 +6,11 @@ import { useCallback, useEffect, useState } from "react";
 import yaml from "yaml";
 
 import { EdgeFunctionError, repositoryGetFile } from "@/lib/edgeFunctions";
-import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "@/utils/PawtograderYml";
+import type { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "@/utils/PawtograderYml";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
+import { toaster } from "./toaster";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
@@ -21,18 +22,134 @@ export function isRegularTestUnit(unit: GradedUnit): unit is RegularTestUnit {
   return "tests" in unit && "testCount" in unit;
 }
 
-function totalPoints(config: PawtograderConfig) {
-  return config.gradedParts.reduce(
-    (acc, part) =>
-      acc +
-      part.gradedUnits.reduce(
-        (unitAcc, unit) =>
-          unitAcc +
-          (isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward : isRegularTestUnit(unit) ? unit.points : 0),
-        0
-      ),
-    0
-  );
+/**
+ * Validates that a parsed YAML object conforms to the expected PawtograderConfig structure.
+ *
+ * @param config - The parsed YAML object to validate
+ * @returns An object with isValid boolean and error message if invalid
+ */
+function validatePawtograderConfig(config: unknown): { isValid: boolean; error?: string } {
+  if (!config || typeof config !== "object") {
+    return { isValid: false, error: "Configuration file is empty or not a valid YAML object" };
+  }
+
+  const obj = config as Record<string, unknown>;
+
+  if (!obj["gradedParts"]) {
+    return { isValid: false, error: "Missing required field: gradedParts" };
+  }
+
+  if (!Array.isArray(obj["gradedParts"])) {
+    return { isValid: false, error: "gradedParts must be an array" };
+  }
+
+  if (!obj["submissionFiles"]) {
+    return { isValid: false, error: "Missing required field: submissionFiles" };
+  }
+
+  const submissionFiles = obj["submissionFiles"] as Record<string, unknown>;
+  if (!submissionFiles["files"] || !Array.isArray(submissionFiles["files"])) {
+    return { isValid: false, error: "submissionFiles.files must be an array" };
+  }
+
+  if (!submissionFiles["testFiles"] || !Array.isArray(submissionFiles["testFiles"])) {
+    return { isValid: false, error: "submissionFiles.testFiles must be an array" };
+  }
+
+  // Validate gradedParts structure
+  const gradedParts = obj["gradedParts"] as unknown[];
+  for (let i = 0; i < gradedParts.length; i++) {
+    const part = gradedParts[i];
+    if (!part || typeof part !== "object") {
+      return { isValid: false, error: `gradedParts[${i}] must be an object` };
+    }
+
+    const partObj = part as Record<string, unknown>;
+    if (!partObj["name"] || typeof partObj["name"] !== "string") {
+      return { isValid: false, error: `gradedParts[${i}].name must be a string` };
+    }
+
+    if (!partObj["gradedUnits"] || !Array.isArray(partObj["gradedUnits"])) {
+      return { isValid: false, error: `gradedParts[${i}].gradedUnits must be an array` };
+    }
+
+    // Validate gradedUnits structure
+    const gradedUnits = partObj["gradedUnits"] as unknown[];
+    for (let j = 0; j < gradedUnits.length; j++) {
+      const unit = gradedUnits[j];
+      if (!unit || typeof unit !== "object") {
+        return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}] must be an object` };
+      }
+
+      const unitObj = unit as Record<string, unknown>;
+      if (!unitObj["name"] || typeof unitObj["name"] !== "string") {
+        return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].name must be a string` };
+      }
+
+      // Check if it's a mutation test unit or regular test unit
+      const hasMutationFields = "locations" in unitObj && "breakPoints" in unitObj;
+      const hasRegularFields = "tests" in unitObj && "points" in unitObj;
+
+      if (!hasMutationFields && !hasRegularFields) {
+        return {
+          isValid: false,
+          error: `gradedParts[${i}].gradedUnits[${j}] must have either (locations and breakPoints) for mutation testing or (tests and points) for regular testing`
+        };
+      }
+
+      if (hasMutationFields) {
+        if (!Array.isArray(unitObj["breakPoints"]) || (unitObj["breakPoints"] as unknown[]).length === 0) {
+          return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].breakPoints must be a non-empty array` };
+        }
+
+        const firstBreakPoint = (unitObj["breakPoints"] as unknown[])[0] as Record<string, unknown>;
+        if (!firstBreakPoint || typeof firstBreakPoint["pointsToAward"] !== "number") {
+          return {
+            isValid: false,
+            error: `gradedParts[${i}].gradedUnits[${j}].breakPoints[0].pointsToAward must be a number`
+          };
+        }
+      }
+
+      if (hasRegularFields && typeof unitObj["points"] !== "number") {
+        return { isValid: false, error: `gradedParts[${i}].gradedUnits[${j}].points must be a number` };
+      }
+    }
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * Safely calculates total points from a validated PawtograderConfig.
+ *
+ * @param config - The validated PawtograderConfig object
+ * @returns The total points, or 0 if calculation fails
+ */
+function safelyCalculateTotalPoints(config: PawtograderConfig): number {
+  try {
+    return config.gradedParts.reduce(
+      (acc, part) =>
+        acc +
+        part.gradedUnits.reduce(
+          (unitAcc, unit) =>
+            unitAcc +
+            (isMutationTestUnit(unit)
+              ? (unit.breakPoints?.[0]?.pointsToAward ?? 0)
+              : isRegularTestUnit(unit)
+                ? (unit.points ?? 0)
+                : 0),
+          0
+        ),
+      0
+    );
+  } catch (error) {
+    toaster.error({
+      title: "Error calculating total points",
+      description: error instanceof Error ? error.message : "Unknown error"
+    });
+    return 0;
+  }
 }
 
 export default function AutograderConfiguration({
@@ -70,28 +187,53 @@ export default function AutograderConfiguration({
       if (!graderRepo) {
         return;
       }
+
+      // Clear any previous errors
+      setError(undefined);
+
       const supabase = createClient();
+      const repoParts = graderRepo.split("/");
+      if (repoParts.length !== 2) {
+        setError("Invalid repository format. Expected format: owner/repository");
+        setAutograderConfig(undefined);
+        return;
+      }
+
       repositoryGetFile(
         {
           courseId: Number(course_id),
-          orgName: graderRepo.split("/")[0],
-          repoName: graderRepo.split("/")[1],
+          orgName: repoParts[0]!,
+          repoName: repoParts[1]!,
           path: "pawtograder.yml"
         },
         supabase
       )
         .then(async (res) => {
           if ("content" in res) {
-            const parsedConfig = yaml.parse(res.content) as PawtograderConfig;
-            setAutograderConfig(parsedConfig);
-            // Calculate the total points for the autograder
-            const points = totalPoints(parsedConfig);
-            if (assignment && assignment.autograder_points !== points) {
-              await updateAssignment({
-                resource: "assignments",
-                id: assignment.id,
-                values: { autograder_points: points }
-              });
+            try {
+              const parsedConfig = yaml.parse(res.content) as PawtograderConfig;
+              const validationResult = validatePawtograderConfig(parsedConfig);
+              if (validationResult.isValid) {
+                setAutograderConfig(parsedConfig);
+                setError(undefined);
+                // Calculate the total points for the autograder
+                const points = safelyCalculateTotalPoints(parsedConfig);
+                if (assignment && assignment.autograder_points !== points) {
+                  await updateAssignment({
+                    resource: "assignments",
+                    id: assignment.id,
+                    values: { autograder_points: points }
+                  });
+                }
+              } else {
+                setError(`Invalid pawtograder.yml structure: ${validationResult.error}`);
+                setAutograderConfig(undefined);
+              }
+            } catch (parseError) {
+              setError(
+                `Failed to parse pawtograder.yml: ${parseError instanceof Error ? parseError.message : "Invalid YAML syntax"}`
+              );
+              setAutograderConfig(undefined);
             }
           }
         })
@@ -102,8 +244,9 @@ export default function AutograderConfiguration({
             );
             setAutograderConfig(undefined);
           } else {
-            console.log("Error fetching autograder configuration", err);
-            // throw err;
+            const errorMessage = err instanceof Error ? err.message : "Unknown error occurred";
+            setError(`Error fetching autograder configuration: ${errorMessage}`);
+            setAutograderConfig(undefined);
           }
         });
     }
@@ -202,7 +345,8 @@ export default function AutograderConfiguration({
               <Table.Cell>{part.name}</Table.Cell>
               <Table.Cell>
                 {part.gradedUnits.reduce(
-                  (acc, unit) => acc + (isMutationTestUnit(unit) ? unit.breakPoints[0].pointsToAward : unit.points),
+                  (acc, unit) =>
+                    acc + (isMutationTestUnit(unit) ? (unit.breakPoints?.[0]?.pointsToAward ?? 0) : (unit.points ?? 0)),
                   0
                 )}
               </Table.Cell>

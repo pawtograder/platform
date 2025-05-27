@@ -6,9 +6,10 @@ import "@uiw/react-markdown-preview/markdown.css";
 import { createClient } from "@/utils/supabase/client";
 import { useParams } from "next/navigation";
 import "katex/dist/katex.min.css";
-import { MDEditorProps } from "@uiw/react-md-editor";
+import type { MDEditorProps } from "@uiw/react-md-editor";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { toaster } from "./toaster";
 //https://github.com/uiwjs/react-md-editor/issues/83
 
 const insertToTextArea = (intsertString: string) => {
@@ -49,10 +50,13 @@ const MdEditor = (props: MDEditorProps) => {
           .from("uploads")
           .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
         if (error) {
-          console.error("Error uploading image:", error);
+          toaster.error({
+            title: "Error uploading image",
+            description: error.message
+          });
         }
         const urlEncodedFilename = encodeURIComponent(fileName);
-        const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
+        const url = `${process.env["NEXT_PUBLIC_SUPABASE_URL"]}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
         return url;
       };
       const files: File[] = [];

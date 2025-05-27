@@ -1,7 +1,7 @@
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
-import { Repository } from "@/utils/supabase/DatabaseTypes";
+import type { Repository } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
 import { Alert, Box, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
@@ -23,7 +23,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+        <Link href={`https://github.com/${repositories[0]?.repository}`}>{repositories[0]?.repository}</Link>
       </HStack>
     );
   }

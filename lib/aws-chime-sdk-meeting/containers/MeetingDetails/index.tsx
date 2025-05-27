@@ -18,14 +18,10 @@ const MeetingDetails = () => {
           Meeting information
         </Heading>
         <StyledList>
-          <div>
-            <dt>Meeting ID</dt>
-            <dd>{meetingId}</dd>
-          </div>
-          <div>
-            <dt>Hosted region</dt>
-            <dd>{region}</dd>
-          </div>
+          <dt>Meeting ID</dt>
+          <dd>{meetingId}</dd>
+          <dt>Hosted region</dt>
+          <dd>{region}</dd>
         </StyledList>
         <PrimaryButton
           mt={4}

@@ -1,4 +1,4 @@
-import { Button, ButtonProps, Icon } from "@chakra-ui/react";
+import { Button, type ButtonProps, Icon } from "@chakra-ui/react";
 
 export function ChatActionButton(props: ButtonProps & { icon: React.ElementType }) {
   const { icon, children, ...rest } = props;

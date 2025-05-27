@@ -7,7 +7,7 @@ import {
   useSubmissionReviewByAssignmentId
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import {
+import type {
   HydratedRubricCheck,
   HydratedRubricCriteria,
   Json,
@@ -19,14 +19,14 @@ import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } 
 import { useCreate, useUpdate } from "@refinedev/core";
 import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
-import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
+import { chakraComponents, Select, type SelectComponentsConfig, type SelectInstance } from "chakra-react-select";
 import { format } from "date-fns";
-import { Element, ElementContent, Properties, Root, RootContent } from "hast";
+import type { Element, ElementContent, Properties, Root, RootContent } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import {
   createContext,
-  Dispatch,
-  SetStateAction,
+  type Dispatch,
+  type SetStateAction,
   useCallback,
   useContext,
   useEffect,
@@ -322,7 +322,7 @@ export function starryNightGutter(
   while (++index < tree.children.length) {
     const child = tree.children[index];
 
-    if (child.type === "text") {
+    if (child && child.type === "text") {
       let textStart = 0;
       let match = search.exec(child.value);
 

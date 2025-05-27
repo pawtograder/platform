@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { HttpError, useCreate, useList, useUpdate, useOne } from "@refinedev/core";
+import { type HttpError, useCreate, useList, useUpdate, useOne } from "@refinedev/core";
 import { useForm, Controller } from "react-hook-form";
 import { format } from "date-fns";
 import { VStack, Text, Input } from "@chakra-ui/react";
@@ -9,7 +9,7 @@ import { Select as ChakraReactSelect } from "chakra-react-select";
 import { FaPlus } from "react-icons/fa";
 import { createClient } from "@/utils/supabase/client";
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 import { Field } from "@/components/ui/field";
 import {

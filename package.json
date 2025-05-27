@@ -9,7 +9,7 @@
   },
   "license": "GPL-3.0-only",
   "scripts": {
-    "dev": "next dev --experimental-https",
+    "dev": "next dev --experimental-https --turbopack",
     "build": "next build",
     "start": "next start",
     "client": "npx supabase gen types typescript --project-id 'pveyalbiqnrpvuazgyuo' --schema public,pgmq_public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
