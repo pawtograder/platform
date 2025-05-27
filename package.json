@@ -3,6 +3,7 @@
   "name": "@pawtograder/webapp",
   "version": "0.0.1",
   "description": "Web Application for the Pawtograder CS CourseOps Platform",
+  "type": "module",
   "author": {
     "name": "Jonathan Bell",
     "email": "jon@jonbell.net"
