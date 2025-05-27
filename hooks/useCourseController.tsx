@@ -120,7 +120,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
         });
       }
     },
-    [user?.id, createdThreadReadStatuses, controller]
+    [user?.id, createdThreadReadStatuses, controller, createThreadReadStatus, updateThreadReadStatus]
   );
   return { readStatus, setUnread };
 }
@@ -141,6 +141,17 @@ type DiscussionThreadTeaser = Pick<
   | "ordinal"
   | "answer"
 >;
+
+type Tag = {
+  id: string;
+  class_id: number;
+  name: string;
+  color: string;
+  profile_id: string;
+  created_at: string;
+  visible: boolean;
+};
+
 export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
   const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>([]);
@@ -201,21 +212,25 @@ class CourseController {
   private discussionThreadTeaserListSubscribers: UpdateCallback<DiscussionThreadTeaser[]>[] = [];
   private discussionThreadTeaserSubscribers: Map<number, UpdateCallback<DiscussionThreadTeaser>[]> = new Map();
 
-  private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<any>[]> } = {};
-  private genericData: { [key in string]: Map<number, any> } = {};
-  private genericDataListSubscribers: { [key in string]: UpdateCallback<any>[] } = {};
+  private tags: Tag[] = [];
+  private tagListSubscribers: UpdateCallback<Tag[]>[] = [];
+  private profileTagSubscribers: Map<string, UpdateCallback<Tag[]>[]> = new Map();
 
-  private genericDataTypeToId: { [key in string]: (item: any) => number } = {};
+  private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
+  private genericData: { [key in string]: Map<number, unknown> } = {};
+  private genericDataListSubscribers: { [key in string]: UpdateCallback<unknown>[] } = {};
 
-  registerGenericDataType(typeName: string, idGetter: (item: any) => number) {
+  private genericDataTypeToId: { [key in string]: (item: unknown) => number } = {};
+
+  registerGenericDataType(typeName: string, idGetter: (item: never) => number) {
     if (!this.genericDataTypeToId[typeName]) {
-      this.genericDataTypeToId[typeName] = idGetter;
+      this.genericDataTypeToId[typeName] = idGetter as (item: unknown) => number;
       this.genericDataSubscribers[typeName] = new Map();
       this.genericDataListSubscribers[typeName] = [];
     }
   }
 
-  setGeneric(typeName: string, data: any[]) {
+  setGeneric(typeName: string, data: unknown[]) {
     if (!this.genericData[typeName]) {
       this.genericData[typeName] = new Map();
     }
@@ -232,7 +247,7 @@ class CourseController {
   listGenericData<T>(typeName: string, callback?: UpdateCallback<T[]>): { unsubscribe: Unsubscribe; data: T[] } {
     const subscribers = this.genericDataListSubscribers[typeName] || [];
     if (callback) {
-      subscribers.push(callback);
+      subscribers.push(callback as UpdateCallback<unknown>);
       this.genericDataListSubscribers[typeName] = subscribers;
     }
     const currentData = this.genericData[typeName]?.values() || [];
@@ -254,7 +269,7 @@ class CourseController {
     }
     if (typeof id === "function") {
       const relevantIds = Array.from(this.genericData[typeName]?.keys() || []).filter((_id) =>
-        id(this.genericData[typeName]?.get(_id)!)
+        id(this.genericData[typeName]?.get(_id) as T)
       );
       if (relevantIds.length == 0) {
         return {
@@ -265,7 +280,7 @@ class CourseController {
         const id = relevantIds[0];
         const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
         if (callback) {
-          this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+          this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as UpdateCallback<unknown>]);
         }
         return {
           unsubscribe: () => {
@@ -282,7 +297,7 @@ class CourseController {
     } else if (typeof id === "number") {
       const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
       if (callback) {
-        this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback]);
+        this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as UpdateCallback<unknown>]);
       }
       return {
         unsubscribe: () => {
@@ -552,6 +567,87 @@ class CourseController {
       subscribers.forEach((cb) => cb(data));
     }
   }
+
+  setTags(data: Tag[]) {
+    this.tags = data;
+    this.tagListSubscribers.forEach((callback) => callback(data));
+    this.profileTagSubscribers.forEach((subscribers, profile_id) => {
+      subscribers.forEach((callback) => callback(data.filter((t) => t.profile_id === profile_id)));
+    });
+  }
+
+  getTagsForProfile(
+    profile_id: string,
+    callback?: UpdateCallback<Tag[]>
+  ): { unsubscribe: Unsubscribe; data: Tag[] | undefined } {
+    if (callback) {
+      if (!this.profileTagSubscribers.has(profile_id)) {
+        this.profileTagSubscribers.set(profile_id, []);
+      }
+      this.profileTagSubscribers.get(profile_id)!.push(callback);
+      const tag = this.tags.filter((t) => t.profile_id === profile_id);
+      if (tag) {
+        callback(tag);
+      }
+    }
+
+    return {
+      unsubscribe: () => {
+        if (callback) {
+          const subscribers = this.profileTagSubscribers.get(profile_id);
+          if (subscribers) {
+            const index = subscribers.indexOf(callback);
+            if (index !== -1) {
+              subscribers.splice(index, 1);
+            }
+          }
+        }
+      },
+      data: this.tags.filter((t) => t.profile_id === profile_id)
+    };
+  }
+
+  listTags(callback?: UpdateCallback<Tag[]>): { unsubscribe: Unsubscribe; data: Tag[] } {
+    if (callback) {
+      this.tagListSubscribers.push(callback);
+      callback(this.tags);
+    }
+
+    return {
+      unsubscribe: () => {
+        if (callback) {
+          const index = this.tagListSubscribers.indexOf(callback);
+          if (index !== -1) {
+            this.tagListSubscribers.splice(index, 1);
+          }
+        }
+      },
+      data: this.tags
+    };
+  }
+
+  handleTagEvent(event: LiveEvent) {
+    if (event.type === "created" || event.type === "updated") {
+      const tag = event.payload as Tag;
+      const existingIndex = this.tags.findIndex((t) => t.id === tag.id);
+      if (existingIndex !== -1) {
+        this.tags[existingIndex] = tag;
+      } else {
+        this.tags.push(tag);
+      }
+      this.tagListSubscribers.forEach((callback) => callback(this.tags));
+      this.profileTagSubscribers
+        .get(tag.profile_id)
+        ?.forEach((callback) => callback(this.tags.filter((t) => t.profile_id === tag.profile_id)));
+    } else if (event.type === "deleted") {
+      const tag = event.payload as Tag;
+      this.tags = this.tags.filter((t) => t.id !== tag.id);
+      this.tagListSubscribers.forEach((callback) => callback(this.tags));
+      this.profileTagSubscribers
+        .get(tag.profile_id)
+        ?.forEach((callback) => callback(this.tags.filter((t) => t.profile_id === tag.profile_id)));
+    }
+  }
 }
 
 function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
@@ -697,6 +793,26 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       controller.setGeneric("assignment_due_date_exceptions", dueDateExceptions.data);
     }
   }, [controller, dueDateExceptions?.data]);
+  const { data: tags } = useList<Tag>({
+    resource: "tags",
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    pagination: {
+      pageSize: 1000
+    },
+    liveMode: "manual",
+    onLiveEvent: (event) => {
+      controller.handleTagEvent(event);
+    }
+  });
+  useEffect(() => {
+    if (tags?.data) {
+      controller.setTags(tags.data);
+    }
+  }, [controller, tags?.data]);
   return <></>;
 }
 const CourseControllerContext = createContext<CourseController | null>(null);

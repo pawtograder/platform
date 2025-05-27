@@ -7,6 +7,8 @@ export class TagColor {
   public static CYAN = new TagColor("cyan");
 
   public static PURPLE = new TagColor("purple");
+  public static GRAY = new TagColor("gray");
+
   public value: string;
   private constructor(value: string) {
     this.value = value;
@@ -20,7 +22,8 @@ export class TagColor {
       TagColor.GREEN,
       TagColor.BLUE,
       TagColor.CYAN,
-      TagColor.PURPLE
+      TagColor.PURPLE,
+      TagColor.GRAY
     ];
   }
 

@@ -1,28 +1,29 @@
 import { Tag } from "@/utils/supabase/DatabaseTypes";
-import { useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useCourseController } from "./useCourseController";
+
+export function useTagsForProfile(profile_id: string): {
+  tags: Tag[];
+} {
+  const courseController = useCourseController();
+  const [tags, setTags] = useState<Tag[]>([]);
+  useEffect(() => {
+    const { unsubscribe, data } = courseController.getTagsForProfile(profile_id, setTags);
+    setTags(data ?? []);
+    return () => unsubscribe();
+  }, [courseController, profile_id]);
+  return { tags };
+}
 
 export default function useTags(): {
   tags: Tag[];
 } {
-  const { course_id } = useParams();
-  const { data: tags, isLoading: tagsLoading } = useList<Tag>({
-    resource: "tags",
-    queryOptions: {
-      staleTime: Infinity
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    filters: [{ field: "class_id", operator: "eq", value: Number(course_id as string) }],
-    liveMode: "auto"
-  });
-  if (tagsLoading) {
-    return {
-      tags: []
-    };
-  }
-  return {
-    tags: tags?.data || []
-  };
+  const courseController = useCourseController();
+  const [tags, setTags] = useState<Tag[]>([]);
+  useEffect(() => {
+    const { unsubscribe, data } = courseController.listTags(setTags);
+    setTags(data);
+    return () => unsubscribe();
+  }, [courseController]);
+  return { tags };
 }

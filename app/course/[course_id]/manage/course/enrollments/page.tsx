@@ -1,46 +1,47 @@
 "use client";
+import { Button } from "@/components/ui/button";
+import InlineAddTag from "@/components/ui/inline-add-tag";
+import PersonTags from "@/components/ui/person-tags";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
+import useAuthState from "@/hooks/useAuthState";
+import useModalManager from "@/hooks/useModalManager";
+import useTags from "@/hooks/useTags";
+import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
+  Checkbox,
   Container,
+  Dialog,
+  Flex,
   Heading,
   HStack,
   Icon,
   Input,
   List,
   NativeSelect,
+  Portal,
   Table,
   Text,
-  VStack,
-  Dialog,
-  Portal,
-  Flex,
-  Checkbox
+  VStack
 } from "@chakra-ui/react";
-import { Select } from "chakra-react-select";
+import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
-import { useParams } from "next/navigation";
-import { useMemo, useState, useEffect, useCallback, useRef } from "react";
-import AddSingleStudent from "./addSingleStudent";
-import { useInvalidate, useList, useDelete } from "@refinedev/core";
+import { Select } from "chakra-react-select";
+import { CheckIcon } from "lucide-react";
 import Link from "next/link";
-import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
-import { FaLink, FaEdit, FaUserCog, FaTrash, FaFileImport } from "react-icons/fa";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FaEdit, FaFileImport, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
+import AddSingleStudent from "./addSingleStudent";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
-import RemoveStudentModal from "./removeStudentModal";
-import useAuthState from "@/hooks/useAuthState";
-import useModalManager from "@/hooks/useModalManager";
-import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
-import { Button } from "@/components/ui/button";
-import useTags from "@/hooks/useTags";
+import RemoveStudentModal from "./removeStudentModal";
 import TagProfileModal from "./tagProfileModal";
-import TagDisplay from "@/components/ui/tag";
-import { CheckIcon } from "lucide-react";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -60,18 +61,13 @@ function EnrollmentsTable() {
   const invalidate = useInvalidate();
   const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
   // full list of tags with profiles and courses
-  const tags = useTags();
   // unique list of tags with just name + color
   const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
     new Set<UserRoleWithPrivateProfileAndUser>()
   );
   const [sharedTag, setSharedTag] = useState<Tag | null>(null);
-  const [tagData, setTagData] = useState<Tag[]>([]);
-  useEffect(() => {
-    if (tagData != tags.tags) {
-      setTagData(tags.tags);
-    }
-  }, [tags]);
+
+  const { tags: tagData } = useTags();
 
   const {
     isOpen: isEditProfileModalOpen,
@@ -147,6 +143,14 @@ function EnrollmentsTable() {
   };
 
   const checkedBoxesRef = useRef(new Set<UserRoleWithPrivateProfileAndUser>());
+  const { mutateAsync: addTag } = useCreate<Tag>({
+    resource: "tags",
+    mutationOptions: {
+      onSuccess: () => {
+        invalidate({ resource: "tags", invalidates: ["list"] });
+      }
+    }
+  });
 
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
@@ -259,26 +263,26 @@ function EnrollmentsTable() {
             .map((tag) => {
               return tag.name;
             });
-          console.log(profileTagNames.length);
           return profileTagNames.includes(filterValue);
         },
         cell: ({ row }) => {
           return (
             <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
-              {tagData
-                .filter((tag) => {
-                  return (
-                    tag.profile_id === row.original.private_profile_id ||
-                    tag.profile_id === row.original.public_profile_id
-                  );
-                })
-                .map((tag, key) => {
-                  return (
-                    <Flex key={key}>
-                      <TagDisplay name={tag.name} color={tag.color} />
-                    </Flex>
-                  );
-                })}
+              <PersonTags profile_id={row.original.private_profile_id} showRemove />
+              <InlineAddTag
+                addTag={async (name: string, color?: string) => {
+                  await addTag({
+                    values: {
+                      name: name.startsWith("~") ? name.slice(1) : name,
+                      color: color || "gray",
+                      visible: !name.startsWith("~"),
+                      profile_id: row.original.private_profile_id,
+                      class_id: course_id as string
+                    }
+                  });
+                }}
+                currentTags={tagData}
+              />
             </Flex>
           );
         }
