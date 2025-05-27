@@ -1,14 +1,14 @@
-import { Button, Dialog, Field, Fieldset, Flex, Input, SegmentGroup, Text } from "@chakra-ui/react";
-import { useState } from "react";
-import { SingleValue, Select } from "chakra-react-select";
-import { useParams } from "next/navigation";
-import { TagColor } from "./TagColors";
-import { FaTag } from "react-icons/fa6";
-import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
-import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
-import { useCreate, useDelete, useInvalidate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
+import useTags from "@/hooks/useTags";
+import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { Button, Dialog, Field, Fieldset, Flex, Input, SegmentGroup, Text } from "@chakra-ui/react";
+import { useCreate, useDelete, useInvalidate } from "@refinedev/core";
+import { Select, SingleValue } from "chakra-react-select";
+import { useParams } from "next/navigation";
+import { useState } from "react";
+import { FaTag } from "react-icons/fa6";
+import { TagColor } from "./TagColors";
 
 export default function TagProfileModal({
   profiles,
@@ -280,16 +280,7 @@ export default function TagProfileModal({
                       </Field.Root>
                       <Field.Root>
                         <Field.Label>Color</Field.Label>
-                        <TagDisplay
-                          name={
-                            TagColor.colors()
-                              .find((c) => {
-                                return c.toString() == selectedTag?.value.color;
-                              })
-                              ?.toString() ?? ""
-                          }
-                          color={selectedTag?.value.color}
-                        />
+                        <TagDisplay tag={selectedTag?.value} />
                       </Field.Root>
                     </>
                   )}
@@ -321,7 +312,7 @@ export default function TagProfileModal({
                   <>
                     <Field.Root>
                       <Field.Label>Common tag to remove (taken from table filter)</Field.Label>
-                      <TagDisplay name={commonTag.name} color={commonTag.color}></TagDisplay>
+                      <TagDisplay tag={commonTag}></TagDisplay>
                       <Field.HelperText>Press save to remove this tag from the listed profiles</Field.HelperText>
                     </Field.Root>
                   </>
