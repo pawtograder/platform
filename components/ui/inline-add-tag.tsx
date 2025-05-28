@@ -51,10 +51,12 @@ function KeyboardAwareSegmentGroup({
 
 export default function InlineAddTag({
   addTag,
-  currentTags
+  currentTags,
+  allowExpand
 }: {
   addTag: (name: string, color: string) => void;
   currentTags: Tag[];
+  allowExpand: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [inputValue, setInputValue] = useState("");
@@ -63,7 +65,6 @@ export default function InlineAddTag({
   const inputRef = useRef<HTMLInputElement>(null);
   const { tags } = useTags();
 
-  // Get unique tag names for autocomplete
   const uniqueTags: TagOption[] = Array.from(
     tags
       .reduce((map, tag) => {
@@ -135,7 +136,7 @@ export default function InlineAddTag({
   }
 
   return (
-    <Flex direction="column" gap={2} width="150px" wrap={"wrap"}>
+    <Flex direction="column" gap={2} width={allowExpand ? "auto" : "150px"} wrap={"wrap"}>
       {!showColorPicker ? (
         <Select<TagOption>
           autoFocus
@@ -221,7 +222,11 @@ export default function InlineAddTag({
                 flexWrap="wrap"
               >
                 <SegmentGroup.Indicator />
-                <Grid gridTemplateColumns="repeat(auto-fill, 24px)" maxWidth={"150px"} justifyContent={"space-between"}>
+                <Grid
+                  gridTemplateColumns={allowExpand ? "repeat(9, 1fr)" : "repeat(auto-fill, 24px)"}
+                  maxWidth={allowExpand ? "auto" : "150px"}
+                  justifyContent={"space-between"}
+                >
                   <SegmentGroup.Item
                     value="gray"
                     outlineOffset={-1}

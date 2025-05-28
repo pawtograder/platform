@@ -6,7 +6,7 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
-import useTags from "@/hooks/useTags";
+import useTags, { useTagsForProfile } from "@/hooks/useTags";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
@@ -15,6 +15,7 @@ import {
   Checkbox,
   Container,
   Dialog,
+  Fieldset,
   Flex,
   Heading,
   HStack,
@@ -22,6 +23,7 @@ import {
   Input,
   List,
   NativeSelect,
+  NativeSelectField,
   Portal,
   Table,
   Text,
@@ -41,7 +43,8 @@ import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import RemoveStudentModal from "./removeStudentModal";
-import TagProfileModal from "./tagProfileModal";
+import { PiArrowBendLeftUpBold } from "react-icons/pi";
+import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -55,6 +58,11 @@ type RemoveStudentModalData = {
   role: UserRoleWithPrivateProfileAndUser["role"];
 };
 
+function RetrieveTagsForProfile(profile_id: string) {
+  const forProf = useTagsForProfile(profile_id);
+  return forProf;
+}
+
 function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
@@ -65,7 +73,6 @@ function EnrollmentsTable() {
   const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
     new Set<UserRoleWithPrivateProfileAndUser>()
   );
-  const [sharedTag, setSharedTag] = useState<Tag | null>(null);
 
   const { tags: tagData } = useTags();
 
@@ -151,6 +158,13 @@ function EnrollmentsTable() {
       }
     }
   });
+
+  useEffect(() => {
+    if (checkedBoxes.size === 0) {
+      setStrategy("none");
+    }
+  }, [checkedBoxes]);
+
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
       {
@@ -265,6 +279,7 @@ function EnrollmentsTable() {
           return profileTagNames.includes(filterValue);
         },
         cell: ({ row }) => {
+          const tagsFor = RetrieveTagsForProfile(row.original.private_profile_id);
           return (
             <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
               <PersonTags profile_id={row.original.private_profile_id} showRemove />
@@ -280,7 +295,8 @@ function EnrollmentsTable() {
                     }
                   });
                 }}
-                currentTags={tagData}
+                currentTags={tagsFor.tags}
+                allowExpand={false}
               />
             </Flex>
           );
@@ -314,8 +330,6 @@ function EnrollmentsTable() {
 
           return (
             <HStack gap={2} justifyContent="center">
-              <TagProfileModal profiles={[row.original]} bulk={false} clearProfiles={() => checkboxClear()} />
-
               {profile && studentProfileId && (
                 <Tooltip content="Edit student profile">
                   <Icon
@@ -421,25 +435,12 @@ function EnrollmentsTable() {
   useEffect(() => {
     setPageCount(Math.ceil(nRows / pageSize));
   }, [nRows, pageSize]);
+  const [strategy, setStrategy] = useState<"add" | "remove" | "none">("none");
+  const { mutate: deleteMutation } = useDelete();
 
   return (
     <VStack align="start" w="100%">
       <VStack paddingBottom="55px" align="start" w="100%">
-        <Box border="1px solid" borderColor="border.muted" borderRadius="md" p="4" mb="4" width="100%">
-          <Heading size="sm" mb={3}>
-            Tag Options
-          </Heading>
-          <Toaster />
-          <TagProfileModal
-            profiles={Array.from(checkedBoxes)}
-            bulk={true}
-            clearProfiles={() => {
-              checkboxClear();
-            }}
-            commonTag={sharedTag !== null ? sharedTag : undefined}
-          />
-        </Box>
-
         <Table.Root>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
@@ -501,7 +502,6 @@ function EnrollmentsTable() {
                                   if (e) {
                                     header.column.setFilterValue(e.value?.name);
                                     checkboxClear();
-                                    setSharedTag(e.value);
                                   }
                                 }}
                                 options={[
@@ -547,6 +547,132 @@ function EnrollmentsTable() {
             ))}
           </Table.Body>
         </Table.Root>
+        <Flex
+          color="black"
+          marginLeft="15px"
+          flexDir={"row"}
+          alignItems={"center"}
+          fontSize="var(--chakra-font-sizes-sm)"
+        >
+          <PiArrowBendLeftUpBold width={"30px"} height={"30px"} />
+          Select people
+          <Button
+            height="fit-content"
+            padding="0"
+            width="fit-content"
+            variant={"ghost"}
+            colorPalette={"blue"}
+            onClick={() => {
+              getRowModel()
+                .rows.map((row) => row.original)
+                .forEach((row) => {
+                  checkedBoxesRef.current.add(row);
+                });
+              setCheckedBoxes(new Set(checkedBoxesRef.current));
+            }}
+          >
+            (or select all {getRowModel().rows.length})
+          </Button>
+          , then
+          <Flex>
+            <Fieldset.Root size="sm" ml="2">
+              <Fieldset.Content display="flex" flexDir={"row"} alignItems={"center"}>
+                <NativeSelect.Root disabled={checkedBoxes.size < 1}>
+                  <NativeSelectField
+                    value={strategy}
+                    onChange={(e) => {
+                      setStrategy(e.target.value as "add" | "remove" | "none");
+                    }}
+                  >
+                    <option value="none">{"<Select>"}</option>
+                    <option value="add">Add tag</option>
+                    <option value="remove">Remove tag</option>
+                  </NativeSelectField>
+                </NativeSelect.Root>
+                {strategy === "add" && (
+                  <InlineAddTag
+                    addTag={async (name: string, color?: string) => {
+                      checkedBoxes.forEach(async (profile) => {
+                        await addTag({
+                          values: {
+                            name: name.startsWith("~") ? name.slice(1) : name,
+                            color: color || "gray",
+                            visible: !name.startsWith("~"),
+                            profile_id: profile.private_profile_id,
+                            class_id: course_id as string
+                          }
+                        });
+                      });
+                      setStrategy("none");
+                    }}
+                    currentTags={tagData.filter((tag) => {
+                      return Array.from(checkedBoxes)
+                        .map((row) => row.private_profile_id)
+                        .includes(tag.profile_id);
+                    })}
+                    allowExpand={true}
+                  />
+                )}
+                {strategy === "remove" && (
+                  <InlineRemoveTag
+                    tagOptions={
+                      checkedBoxes.size === 0
+                        ? []
+                        : Array.from(
+                            tagData
+                              .reduce((map, tag) => {
+                                const key = JSON.stringify({ name: tag.name, color: tag.color, visible: tag.visible });
+                                if (!map.has(key)) {
+                                  map.set(key, tag);
+                                }
+                                return map;
+                              }, new Map())
+                              .values()
+                          ).filter((tag) => {
+                            const checkedProfileIds = Array.from(checkedBoxes).map((box) => box.private_profile_id);
+
+                            return checkedProfileIds.every((profileId) =>
+                              tagData.some(
+                                (t) =>
+                                  t.profile_id === profileId &&
+                                  t.name === tag.name &&
+                                  t.color === tag.color &&
+                                  t.visible === tag.visible
+                              )
+                            );
+                          })
+                    }
+                    removeTag={(tagName: string, tagColor: string, tagVisibility: boolean) => {
+                      checkedBoxes.forEach(async (profile) => {
+                        const findTag = tagData.find((tag) => {
+                          return (
+                            tag.name === tagName &&
+                            tag.color === tagColor &&
+                            tagVisibility === tag.visible &&
+                            tag.profile_id === profile.private_profile_id
+                          );
+                        });
+                        if (!findTag) {
+                          toaster.error({
+                            title: "Error removing tag",
+                            type: "Tag not found on profile " + profile.profiles.name
+                          });
+                          return;
+                        }
+                        deleteMutation({
+                          resource: "tags",
+                          id: findTag.id
+                        });
+                      });
+                      setStrategy("none");
+                    }}
+                  />
+                )}
+              </Fieldset.Content>
+            </Fieldset.Root>
+          </Flex>
+        </Flex>
+
         <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
           <HStack gap={2}>
             <Button size="sm" onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>

@@ -52,3 +52,5 @@ WITH CHECK (
 
 ALTER TABLE ONLY "public"."tags"
     ADD CONSTRAINT "tags_creator_fkey" FOREIGN KEY ("creator_id") REFERENCES "public"."users"("user_id");
+
+CREATE TRIGGER audit_profile_tags_insert_update_delete AFTER INSERT OR DELETE OR UPDATE ON public.tags FOR EACH ROW EXECUTE FUNCTION audit_insert_and_update_and_delete();

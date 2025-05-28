@@ -803,7 +803,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     pagination: {
       pageSize: 1000
     },
-    liveMode: "manual",
+    liveMode: "auto",
     onLiveEvent: (event) => {
       controller.handleTagEvent(event);
     }
