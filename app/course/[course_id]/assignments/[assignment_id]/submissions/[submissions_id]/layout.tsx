@@ -46,7 +46,7 @@ import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useEffect, useMemo, useState, useCallback } from "react";
+import { ElementType as ReactElementType, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -626,6 +626,7 @@ function RubricView() {
   const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(
     selectedRubricIdParam ? parseInt(selectedRubricIdParam, 10) : undefined
   );
+  const prevReviewAssignmentIdRef = useRef<number | undefined>(reviewAssignmentId);
 
   const {
     reviewAssignment,
@@ -662,18 +663,53 @@ function RubricView() {
   );
 
   useEffect(() => {
+    // Check if we're transitioning out of peer review mode
+    const wasInPeerReview = prevReviewAssignmentIdRef.current !== undefined;
+    const isNowInPeerReview = reviewAssignmentId !== undefined;
+    const exitingPeerReview = wasInPeerReview && !isNowInPeerReview;
+
+    // Update the ref for next comparison
+    prevReviewAssignmentIdRef.current = reviewAssignmentId;
+
+    // Priority 1: If we're in peer review mode, always use the review assignment's rubric
     if (reviewAssignmentId && reviewAssignment?.rubric_id) {
       setSelectedRubricIdState(reviewAssignment.rubric_id);
       updateSelectedRubricInURL(reviewAssignment.rubric_id);
-    } else if (selectedRubricIdParam) {
-      // If we have a selected rubric in URL, use that
+      return;
+    }
+
+    // Priority 2: If exiting peer review, ignore URL param and fall back to defaults
+    if (exitingPeerReview) {
+      if (submission.assignments.grading_rubric_id) {
+        setSelectedRubricIdState(submission.assignments.grading_rubric_id);
+        updateSelectedRubricInURL(submission.assignments.grading_rubric_id);
+        return;
+      }
+      if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
+        setSelectedRubricIdState(assignmentRubricsData.data[0].id);
+        updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
+        return;
+      }
+    }
+
+    // Priority 3: If there's a URL parameter AND we're not exiting peer review, use it
+    if (selectedRubricIdParam && !exitingPeerReview) {
       setSelectedRubricIdState(parseInt(selectedRubricIdParam, 10));
-    } else if (submission.assignments.grading_rubric_id) {
+      return;
+    }
+
+    // Priority 4: Fall back to assignment's default grading rubric
+    if (submission.assignments.grading_rubric_id) {
       setSelectedRubricIdState(submission.assignments.grading_rubric_id);
       updateSelectedRubricInURL(submission.assignments.grading_rubric_id);
-    } else if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
+      return;
+    }
+
+    // Priority 5: Fall back to first available rubric
+    if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
       setSelectedRubricIdState(assignmentRubricsData.data[0].id);
       updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
+      return;
     }
   }, [
     reviewAssignmentId,

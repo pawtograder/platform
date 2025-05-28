@@ -33,7 +33,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
@@ -103,28 +103,48 @@ export function isArtifactComment(
 export function SubmissionArtifactCommentLink({ comment }: { comment: SubmissionArtifactComment }) {
   const submission = useSubmissionMaybe();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentSelectedRubricId = searchParams.get("selected_rubric_id");
+  // Use current selected rubric if available, otherwise fall back to comment's rubric check ID
+  const rubricIdToUse = currentSelectedRubricId || comment.rubric_check_id?.toString();
   const artifact = submission?.submission_artifacts.find((artifact) => artifact.id === comment.submission_artifact_id);
   if (!artifact || !submission) {
     return <></>;
   }
   const shortFileName = path.basename(artifact.name);
-  return (
-    <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${comment.submission_artifact_id}`}>
-      @ {shortFileName}
-    </Link>
-  );
+
+  const baseUrl = linkToSubPage(pathname, "files");
+  const queryParams = new URLSearchParams();
+  queryParams.set("artifact_id", comment.submission_artifact_id.toString());
+  if (rubricIdToUse) {
+    queryParams.set("selected_rubric_id", rubricIdToUse);
+  }
+
+  return <Link href={`${baseUrl}?${queryParams.toString()}`}>@ {shortFileName}</Link>;
 }
 
 export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
   const submission = useSubmissionMaybe();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentSelectedRubricId = searchParams.get("selected_rubric_id");
+  // Use current selected rubric if available, otherwise fall back to comment's rubric check ID
+  const rubricIdToUse = currentSelectedRubricId || comment.rubric_check_id?.toString();
   const file = submission?.submission_files.find((file) => file.id === comment.submission_file_id);
   if (!file || !submission) {
     return <></>;
   }
   const shortFileName = path.basename(file.name);
+
+  const baseUrl = linkToSubPage(pathname, "files");
+  const queryParams = new URLSearchParams();
+  queryParams.set("file_id", comment.submission_file_id.toString());
+  if (rubricIdToUse) {
+    queryParams.set("selected_rubric_id", rubricIdToUse);
+  }
+
   return (
-    <Link href={linkToSubPage(pathname, "files") + `?file_id=${comment.submission_file_id}#L${comment.line}`}>
+    <Link href={`${baseUrl}?${queryParams.toString()}#L${comment.line}`}>
       @ {shortFileName}:{comment.line}
     </Link>
   );
@@ -197,14 +217,21 @@ export function RubricCheckComment({
           {pointsText} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
           {isArtifactComment(comment) && <SubmissionArtifactCommentLink comment={comment} />}
           {!isLineComment(comment) && !isArtifactComment(comment) && linkedFileId && submission && check?.file && (
-            <Link href={linkToSubPage(pathname, "files") + `?file_id=${linkedFileId}`}> (Ref: {check.file})</Link>
+            <Link
+              href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+            >
+              {" "}
+              (Ref: {check.file})
+            </Link>
           )}
           {!isLineComment(comment) &&
             !isArtifactComment(comment) &&
             linkedArtifactId &&
             submission &&
             check?.artifact && (
-              <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${linkedArtifactId}`}>
+              <Link
+                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedArtifactId.toString() }).toString()}`}
+              >
                 {" "}
                 (Ref: {check.artifact})
               </Link>
@@ -271,12 +298,14 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
       <VStack gap={3} alignItems="stretch">
         {instances.map((instance, index) => (
           <Box key={index} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default" bg="bg.canvas">
-            <HStack justifyContent="space-between" alignItems="center" mb={1.5}>
+            <VStack alignItems="flex-start" mb={1.5}>
               <Tooltip content={instance.referencedRubricCheck.description || "No description"} showArrow>
                 <Text fontSize="xs" fontWeight="bold" truncate>
                   {instance.referencedRubricCheck.name}
                 </Text>
               </Tooltip>
+              {isLineComment(instance.comment) && <SubmissionFileCommentLink comment={instance.comment} />}
+              {isArtifactComment(instance.comment) && <SubmissionArtifactCommentLink comment={instance.comment} />}
               {instance.reviewRound && instance.rubric && (
                 <Tag.Root size="sm" colorPalette="blue" variant="outline">
                   <Tag.Label>
@@ -284,7 +313,7 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
                   </Tag.Label>
                 </Tag.Root>
               )}
-            </HStack>
+            </VStack>
             {instance.authorProfile && (
               <HStack gap={1.5} alignItems="center" mb={1.5}>
                 <PersonAvatar uid={instance.authorProfile.id!} size="2xs" />
@@ -426,10 +455,16 @@ export function RubricCheckGlobal({
           >
             <Text fontSize="sm">{check.name}</Text>
             {linkedFileId && submission && (
-              <Link href={linkToSubPage(pathname, "files") + `?file_id=${linkedFileId}`}>File: {check.file}</Link>
+              <Link
+                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+              >
+                File: {check.file}
+              </Link>
             )}
             {linkedAritfactId && submission && (
-              <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${linkedAritfactId}`}>
+              <Link
+                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
+              >
                 Artifact: {check.artifact}
               </Link>
             )}
@@ -485,14 +520,14 @@ export function RubricCheckGlobal({
             </Text>
             {linkedFileId && submission && (
               <Link
-                href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?file_id=${linkedFileId}`}
+                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
               >
                 File: {check.file}
               </Link>
             )}
             {linkedAritfactId && submission && (
               <Link
-                href={`/course/${submission.class_id}/assignments/${submission.assignment_id}/submissions/${submission.id}/files/?artifact_id=${linkedAritfactId}`}
+                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
               >
                 Artifact: {check.artifact}
               </Link>
@@ -504,10 +539,17 @@ export function RubricCheckGlobal({
             <Text>
               {points} {check.name}
               {linkedFileId && submission && (
-                <Link href={linkToSubPage(pathname, "files") + `?file_id=${linkedFileId}`}> (File: {check.file})</Link>
+                <Link
+                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+                >
+                  {" "}
+                  (File: {check.file})
+                </Link>
               )}
               {linkedAritfactId && submission && (
-                <Link href={linkToSubPage(pathname, "files") + `?artifact_id=${linkedAritfactId}`}>
+                <Link
+                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
+                >
                   {" "}
                   (Artifact: {check.artifact})
                 </Link>
