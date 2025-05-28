@@ -3,7 +3,6 @@ import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import RubricSidebar from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import useModalManager from "@/hooks/useModalManager";
 import {
   Assignment,
   HydratedRubric,
@@ -23,10 +22,7 @@ import { HttpError, useCreate, useDataProvider, useDelete, useList, useShow, use
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FaLink } from "react-icons/fa";
-import { Icon } from "@chakra-ui/react";
 import * as YAML from "yaml";
-import AddRubricReferenceModal from "./addRubricReferenceModal";
 
 const REVIEW_ROUNDS_AVAILABLE: Array<NonNullable<HydratedRubric["review_round"]>> = [
   "self-review",
@@ -298,13 +294,6 @@ export default function RubricPage() {
   const { assignment_id } = useParams();
   const { colorMode } = useColorMode();
   const dataProviderHook = useDataProvider();
-
-  const {
-    isOpen: isAddReferenceModalOpen,
-    openModal: openAddReferenceModal,
-    closeModal: closeAddReferenceModal,
-    modalData: addReferenceModalData
-  } = useModalManager<{ currentRubricId: number }>();
 
   const { query: assignmentQuery } = useShow<Assignment>({
     resource: "assignments",
@@ -1115,18 +1104,6 @@ export default function RubricPage() {
     ]
   );
 
-  const handleOpenAddReferenceModal = useCallback(() => {
-    if (!rubricForSidebar) {
-      toaster.error({ title: "Error", description: "Rubric data is not loaded yet." });
-      return;
-    }
-    if (!rubricForSidebar.id || rubricForSidebar.id <= 0) {
-      toaster.error({ title: "Error", description: "Current rubric must be saved before adding references." });
-      return;
-    }
-    openAddReferenceModal({ currentRubricId: rubricForSidebar.id });
-  }, [rubricForSidebar, openAddReferenceModal]);
-
   if (isLoadingAssignment || (!activeRubric && isLoadingCurrentRubric && !initialActiveRubricSnapshot)) {
     return (
       <Center h="100vh">
@@ -1174,12 +1151,6 @@ export default function RubricPage() {
           >
             Load Demo Rubric
           </Button>
-          {rubricForSidebar && rubricForSidebar.id > 0 && (
-            <Button variant="outline" size="xs" onClick={handleOpenAddReferenceModal}>
-              <Icon as={FaLink} />
-              Reference Check
-            </Button>
-          )}
         </HStack>
       </HStack>
       <Tabs.Root
@@ -1395,18 +1366,6 @@ export default function RubricPage() {
           </Box>
         </Flex>
       </VStack>
-      {addReferenceModalData && rubricForSidebar && rubricForSidebar.rubric_parts && assignmentDetails && (
-        <AddRubricReferenceModal
-          isOpen={isAddReferenceModalOpen}
-          onClose={closeAddReferenceModal}
-          currentRubricChecks={rubricForSidebar.rubric_parts.flatMap((p) =>
-            p.rubric_criteria.flatMap((c) => c.rubric_checks)
-          )}
-          currentRubricId={addReferenceModalData.currentRubricId}
-          assignmentId={Number(assignment_id)}
-          classId={assignmentDetails.class_id}
-        />
-      )}
     </Flex>
   );
 }
