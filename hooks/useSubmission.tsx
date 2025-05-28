@@ -86,8 +86,15 @@ class SubmissionController {
     if (filteredCallback && callback) {
       if (filter) {
         filteredCallback = (data, { entered, left, updated }) => {
-          data = data.filter(filter as (value: unknown) => boolean); // Added assertion for filter
-          (callback as ListUpdateCallback<unknown>)(data, { entered, left, updated });
+          const filteredData = data.filter(filter as (value: unknown) => boolean);
+          const filteredEntered = entered.filter(filter as (value: unknown) => boolean);
+          const filteredLeft = left.filter(filter as (value: unknown) => boolean);
+          const filteredUpdated = updated.filter(filter as (value: unknown) => boolean);
+          (callback as ListUpdateCallback<unknown>)(filteredData, {
+            entered: filteredEntered,
+            left: filteredLeft,
+            updated: filteredUpdated
+          });
         };
       }
       subscribers.push(filteredCallback);
@@ -98,7 +105,7 @@ class SubmissionController {
       return {
         unsubscribe: () => {
           this.genericDataListSubscribers[typeName] =
-            this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== callback) || [];
+            this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
         },
         data: (Array.from(currentData) as T[]).filter(filter)
       };
@@ -106,7 +113,7 @@ class SubmissionController {
     return {
       unsubscribe: () => {
         this.genericDataListSubscribers[typeName] =
-          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== callback) || [];
+          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
       },
       data: Array.from(currentData) as T[]
     };
@@ -472,8 +479,8 @@ function SubmissionControllerCreator({
     }
   });
 
-  // Set up live subscriptions without initial data loading
-  // We use queryOptions: { enabled: false } to prevent initial loading since we already have the data
+  // Set up live subscriptions with proper event handling
+  // We need these enabled to receive live events, but we'll ignore the initial data since we already loaded it
   const [liveSubscriptionsReady, setLiveSubscriptionsReady] = useState(false);
 
   useList<SubmissionFileComment>({
@@ -481,7 +488,10 @@ function SubmissionControllerCreator({
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
     queryOptions: {
-      enabled: false // Don't load initial data, we already have it from the main query
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false, // Don't refetch on mount since we have data
+      refetchOnReconnect: false,
+      refetchOnWindowFocus: false
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_file_comments", event);
@@ -496,7 +506,10 @@ function SubmissionControllerCreator({
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
     queryOptions: {
-      enabled: false // Don't load initial data
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false,
+      refetchOnReconnect: false,
+      refetchOnWindowFocus: false
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_reviews", event);
@@ -508,7 +521,10 @@ function SubmissionControllerCreator({
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
     queryOptions: {
-      enabled: false // Don't load initial data
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false,
+      refetchOnReconnect: false,
+      refetchOnWindowFocus: false
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_comments", event);
@@ -520,7 +536,10 @@ function SubmissionControllerCreator({
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
     queryOptions: {
-      enabled: false // Don't load initial data
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false,
+      refetchOnReconnect: false,
+      refetchOnWindowFocus: false
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_artifact_comments", event);
