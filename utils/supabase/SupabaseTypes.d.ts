@@ -1,6 +1,31 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
+  graphql_public: {
+    Tables: {
+      [_ in never]: never;
+    };
+    Views: {
+      [_ in never]: never;
+    };
+    Functions: {
+      graphql: {
+        Args: {
+          operationName?: string;
+          query?: string;
+          variables?: Json;
+          extensions?: Json;
+        };
+        Returns: Json;
+      };
+    };
+    Enums: {
+      [_ in never]: never;
+    };
+    CompositeTypes: {
+      [_ in never]: never;
+    };
+  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -516,6 +541,7 @@ export type Database = {
           min_group_size: number | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
+          self_review_setting_id: number | null;
           slug: string | null;
           student_repo_prefix: string | null;
           template_repo: string | null;
@@ -543,6 +569,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
+          self_review_setting_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -570,6 +597,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
+          self_review_setting_id?: number | null;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -603,6 +631,13 @@ export type Database = {
             columns: ["self_review_rubric_id"];
             isOneToOne: false;
             referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_self_review_setting_fkey";
+            columns: ["self_review_setting_id"];
+            isOneToOne: false;
+            referencedRelation: "self_review_settings";
             referencedColumns: ["id"];
           }
         ];
@@ -2871,6 +2906,38 @@ export type Database = {
           }
         ];
       };
+      self_review_settings: {
+        Row: {
+          allow_early: boolean | null;
+          class_id: number;
+          deadline_offset: number | null;
+          enabled: boolean;
+          id: number;
+        };
+        Insert: {
+          allow_early?: boolean | null;
+          class_id: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Update: {
+          allow_early?: boolean | null;
+          class_id?: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "self_review_settings_class_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       submission_artifact_comments: {
         Row: {
           author: string;
@@ -4299,6 +4366,9 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
+  graphql_public: {
+    Enums: {}
+  },
   pgmq_public: {
     Enums: {}
   },

@@ -518,3 +518,5 @@ export type ClassSection = GetResult<
   Database["public"]["Tables"]["class_sections"]["Relationships"],
   "*"
 >;
+
+export type SelfReviewSetting = Database["public"]["Tables"]["self_review_settings"]["Row"];

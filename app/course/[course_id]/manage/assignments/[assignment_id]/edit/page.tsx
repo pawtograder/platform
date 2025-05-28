@@ -2,7 +2,6 @@
 
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Skeleton } from "@chakra-ui/react";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -10,15 +9,19 @@ import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
 import AssignmentForm from "../../new/form";
 import { toaster } from "@/components/ui/toaster";
+import { useOne, useUpdate } from "@refinedev/core";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
 
 export default function EditAssignment() {
   const { course_id, assignment_id } = useParams();
   const form = useForm<Assignment>({
     refineCoreProps: { resource: "assignments", action: "edit", id: Number.parseInt(assignment_id as string) }
   });
+  const { data } = useOne<Assignment>({ resource: "assignments", id: assignment_id as string });
 
   const { reset, refineCore } = form;
   const queryData = refineCore.query?.data?.data;
+  const { mutate: update } = useUpdate();
 
   useEffect(() => {
     if (queryData) {
@@ -30,6 +33,26 @@ export default function EditAssignment() {
     async (values: FieldValues) => {
       try {
         const supabase = createClient();
+        if (values) {
+          const isEnabled = values.eval_config == "use_eval";
+          update(
+            {
+              resource: "self_review_settings",
+              id: data?.data.self_review_setting_id ?? 0,
+              values: {
+                enabled: isEnabled,
+                deadline_offset: isEnabled ? values.deadline_offset : null,
+                allow_early: isEnabled ? values.allow_early : null,
+                class_id: course_id
+              }
+            },
+            {
+              onError: (error) => {
+                toaster.error({ title: "Error creating self review settings", description: error.message });
+              }
+            }
+          );
+        }
         if (values.copy_groups_from_assignment !== undefined) {
           if (values.copy_groups_from_assignment !== "") {
             await assignmentGroupCopyGroupsFromAssignment(

@@ -3,7 +3,7 @@ CREATE TABLE "public"."self_review_settings" (
     "enabled" boolean not null default false,
     "deadline_offset" bigint,
     "allow_early" boolean,
-    "class_id" bigint not null
+    "class_id" bigint not null 
 );
 
 ALTER TABLE "public"."self_review_settings" ENABLE ROW LEVEL SECURITY;
@@ -40,4 +40,13 @@ USING (
     authorizeforclassinstructor(class_id)
 );
 
+ALTER TABLE ONLY "public"."self_review_settings"
+    ADD CONSTRAINT "self_review_settings_pkey" PRIMARY KEY ("id");
+
+ALTER TABLE "public"."self_review_settings"
+    ADD CONSTRAINT "self_review_settings_class_fkey" FOREIGN KEY ("class_id") REFERENCES "public"."classes"("id");
+
 ALTER TABLE "public"."assignments" ADD COLUMN "self_review_setting_id" bigint;
+
+ALTER TABLE "public"."assignments"
+    ADD CONSTRAINT "assignments_self_review_setting_fkey" FOREIGN KEY ("self_review_setting_id") REFERENCES "public"."self_review_settings"("id");

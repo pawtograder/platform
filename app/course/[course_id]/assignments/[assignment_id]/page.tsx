@@ -1,9 +1,9 @@
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
-import { Repository } from "@/utils/supabase/DatabaseTypes";
+import { Repository, SelfReviewSetting } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Alert, Box, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
+import { Alert, Box, Button, Flex, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
@@ -102,13 +102,29 @@ export default async function AssignmentPage({
         ? `assignment_group_id.eq.${assignment_group_id},profile_id.eq.${enrollment?.private_profile_id}`
         : `profile_id.eq.${enrollment?.private_profile_id}`
     );
+
+  const {data:review_settings } = await client
+    .from("self_review_settings")
+    .select("*")
+    .eq("id", assignment.self_review_setting_id ?? 0)
+    .limit(1); // TODO make the thing mandatory to avoid this issue
+
+
   return (
     <Box p={4}>
-      <Heading size="lg">{assignment.title}</Heading>
-      <HStack>
-        <Text>Due: </Text>
-        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
-      </HStack>
+      <Flex width="100%" alignItems={"center"}>
+        <Box width="50%">
+              <Heading size="lg">{assignment.title}</Heading>
+          <HStack>
+            <Text>Due: </Text>
+            <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
+          </HStack>
+      </Box>
+          {review_settings && review_settings[0]?. && <Box width="50%" alignItems={"center"} >
+                <Button float="right">Finalize Submission Early</Button>
+          </Box>}
+      </Flex>
+
       <Markdown>{assignment.description}</Markdown>
       {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
         <Alert.Root status="error" flexDirection="column">
@@ -126,6 +142,7 @@ export default async function AssignmentPage({
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
       </Box>
+      
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog
         assignment={assignment}

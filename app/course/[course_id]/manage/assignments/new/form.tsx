@@ -181,17 +181,6 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
 }
 
 function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
-  const { course_id } = useParams();
-  const { data: otherAssignments } = useList({
-    resource: "assignments",
-    queryOptions: { enabled: !!course_id },
-    filters: [
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "group_config", operator: "ne", value: "individual" }
-    ],
-    pagination: { pageSize: 1000 }
-  });
-
   const [withEval, setWithEval] = useState<boolean>(() => {
     const groupConfig = form.getValues("eval_config");
     return groupConfig === "use_eval";
