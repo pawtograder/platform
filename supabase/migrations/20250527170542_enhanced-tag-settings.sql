@@ -1,14 +1,14 @@
 ALTER TABLE "public"."tags" ADD COLUMN "creator_id" uuid NOT NULL default auth.uid();
 
-DROP POLICY  "graders and instructors can view all class tags" ON "public"."tags";
+DROP POLICY IF EXISTS "graders and instructors can view all class tags" ON "public"."tags";
 
-DROP POLICY  "graders and instructors can update all class tags" ON "public"."tags";
+DROP POLICY IF EXISTS  "graders and instructors can update all class tags" ON "public"."tags";
 
-DROP POLICY  "graders and instructors can delete all class tags" ON "public"."tags";
+DROP POLICY IF EXISTS  "graders and instructors can delete all class tags" ON "public"."tags";
 
-DROP POLICY  "graders and instructors can insert to class tags" ON "public"."tags";
+DROP POLICY IF EXISTS  "graders and instructors can insert to class tags" ON "public"."tags";
 
-DROP POLICY "users can view their visible tags for class" ON "public"."tags";
+DROP POLICY IF EXISTS "users can view their visible tags for class" ON "public"."tags";
 
 CREATE POLICY "graders and instructors can view class tags"
 ON "public"."tags"
