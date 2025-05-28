@@ -10,7 +10,8 @@ import {
   SubmissionArtifactComment,
   SubmissionComments,
   SubmissionFileComment,
-  SubmissionReview
+  SubmissionReview,
+  RubricCheckReference
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Tag, Text, VStack } from "@chakra-ui/react";
 
@@ -31,7 +32,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useUpdate } from "@refinedev/core";
+import { useCreate, useUpdate, useList } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
@@ -334,19 +335,161 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
   );
 }
 
+/**
+ * Preview-specific component to show which checks are referenced by the current check
+ * This is used in the rubric preview mode where we don't have submission context
+ */
+function RubricCheckReferencesPreview({
+  check,
+  assignmentId,
+  classId
+}: {
+  check: HydratedRubricCheck;
+  assignmentId?: number;
+  classId?: number;
+}) {
+  // Fetch references where this check is referencing other checks
+  const { data: referencesData, isLoading: isLoadingReferences } = useList<RubricCheckReference>({
+    resource: "rubric_check_references",
+    filters: [
+      { field: "referencing_rubric_check_id", operator: "eq", value: check.id },
+      { field: "class_id", operator: "eq", value: classId }
+    ],
+    queryOptions: {
+      enabled: !!assignmentId && !!classId && check.id > 0
+    }
+  });
+
+  // Get the referenced check IDs
+  const referencedCheckIds = referencesData?.data?.map((ref) => ref.referenced_rubric_check_id) || [];
+
+  // Fetch the referenced checks details
+  const { data: referencedChecksData, isLoading: isLoadingReferencedChecks } = useList<HydratedRubricCheck>({
+    resource: "rubric_checks",
+    filters: [{ field: "id", operator: "in", value: referencedCheckIds }],
+    queryOptions: {
+      enabled: referencedCheckIds.length > 0
+    }
+  });
+
+  // Fetch all rubrics for this assignment to find context for referenced checks
+  const { data: allRubricsData, isLoading: isLoadingRubrics } = useList<HydratedRubric>({
+    resource: "rubrics",
+    filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
+    meta: {
+      select: "id, name, review_round, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))"
+    },
+    queryOptions: {
+      enabled: referencedCheckIds.length > 0 && !!assignmentId
+    }
+  });
+
+  if (isLoadingReferences) {
+    return (
+      <Text fontSize="xs" color="fg.muted" mt={2}>
+        Loading references...
+      </Text>
+    );
+  }
+
+  if (!referencesData?.data || referencesData.data.length === 0) {
+    return null;
+  }
+
+  if (isLoadingReferencedChecks || isLoadingRubrics) {
+    return (
+      <Text fontSize="xs" color="fg.muted" mt={2}>
+        Loading reference details...
+      </Text>
+    );
+  }
+
+  const referencedChecks = referencedChecksData?.data || [];
+  const allRubrics = allRubricsData?.data || [];
+
+  return (
+    <Box mt={2} p={2} borderTop="1px dashed" borderColor="border.subtle" bg="bg.muted" borderRadius="md">
+      <Text fontWeight="bold" fontSize="xs" mb={2} color="fg.default">
+        📎 References ({referencedChecks.length}):
+      </Text>
+      <VStack gap={2} alignItems="stretch">
+        {referencedChecks.map((referencedCheck) => {
+          // Find which rubric and criteria contains this referenced check
+          let rubricContext: { rubric: HydratedRubric; criteriaName: string } | undefined;
+
+          for (const rubric of allRubrics) {
+            for (const part of rubric.rubric_parts) {
+              for (const criteria of part.rubric_criteria) {
+                if (criteria.rubric_checks.some((c) => c.id === referencedCheck.id)) {
+                  rubricContext = { rubric, criteriaName: criteria.name };
+                  break;
+                }
+              }
+              if (rubricContext) break;
+            }
+            if (rubricContext) break;
+          }
+
+          return (
+            <Box
+              key={referencedCheck.id}
+              p={2}
+              borderWidth="1px"
+              borderRadius="md"
+              borderColor="border.default"
+              bg="bg.canvas"
+            >
+              <VStack alignItems="flex-start" gap={1}>
+                <Text fontSize="xs" fontWeight="medium" truncate>
+                  {referencedCheck.name}
+                </Text>
+                <Text fontSize="xs" color="fg.muted">
+                  Points: {referencedCheck.points}
+                </Text>
+                {rubricContext && (
+                  <VStack alignItems="flex-start" gap={0.5}>
+                    <Text fontSize="xs" color="fg.muted">
+                      From: {rubricContext.rubric.name}
+                      {rubricContext.rubric.review_round && ` (${rubricContext.rubric.review_round})`}
+                    </Text>
+                    <Text fontSize="xs" color="fg.muted">
+                      Criteria: {rubricContext.criteriaName}
+                    </Text>
+                  </VStack>
+                )}
+                {referencedCheck.description && (
+                  <Text fontSize="xs" color="fg.muted" truncate>
+                    {referencedCheck.description}
+                  </Text>
+                )}
+              </VStack>
+            </Box>
+          );
+        })}
+      </VStack>
+    </Box>
+  );
+}
+
 export function RubricCheckAnnotation({
   check,
   criteria,
-  activeSubmissionReviewId
+  activeSubmissionReviewId,
+  assignmentId,
+  classId
 }: {
   check: HydratedRubricCheck;
   criteria: HydratedRubricCriteria;
   activeSubmissionReviewId?: number;
+  assignmentId?: number;
+  classId?: number;
 }) {
   const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, activeSubmissionReviewId);
   const isGrader = useIsGraderOrInstructor();
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
+  const submission = useSubmissionMaybe();
+  const isPreviewMode = !submission;
 
   return (
     <Box
@@ -378,7 +521,11 @@ export function RubricCheckAnnotation({
       {rubricCheckComments.map((comment) => (
         <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} check={check} />
       ))}
-      <ReferencedFeedbackDisplay referencing_check_id={check.id} />
+      {isPreviewMode ? (
+        <RubricCheckReferencesPreview check={check} assignmentId={assignmentId} classId={classId} />
+      ) : (
+        <ReferencedFeedbackDisplay referencing_check_id={check.id} />
+      )}
     </Box>
   );
 }
@@ -388,13 +535,17 @@ export function RubricCheckGlobal({
   criteria,
   isSelected,
   activeSubmissionReviewId,
-  submissionReview
+  submissionReview,
+  assignmentId,
+  classId
 }: {
   check: HydratedRubricCheck;
   criteria: HydratedRubricCriteria;
   isSelected: boolean;
   activeSubmissionReviewId?: number;
   submissionReview?: SubmissionReview;
+  assignmentId?: number;
+  classId?: number;
 }) {
   const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, activeSubmissionReviewId);
   const criteriaCheckComments = useRubricCriteriaInstances({
@@ -406,6 +557,7 @@ export function RubricCheckGlobal({
   const submission = useSubmissionMaybe();
   const isGrader = useIsGraderOrInstructor();
   const pathname = usePathname();
+  const isPreviewMode = !submission;
   const linkedAritfactId = check.artifact
     ? submission?.submission_artifacts.find((artifact) => artifact.name === check.artifact)?.id
     : undefined;
@@ -577,7 +729,11 @@ export function RubricCheckGlobal({
       {rubricCheckComments.map((comment) => (
         <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} check={check} />
       ))}
-      <ReferencedFeedbackDisplay referencing_check_id={check.id} />
+      {isPreviewMode ? (
+        <RubricCheckReferencesPreview check={check} assignmentId={assignmentId} classId={classId} />
+      ) : (
+        <ReferencedFeedbackDisplay referencing_check_id={check.id} />
+      )}
     </Box>
   );
 }
@@ -667,18 +823,28 @@ function RubricCheck({
   check,
   isSelected,
   activeSubmissionReviewId,
-  submissionReview
+  submissionReview,
+  assignmentId,
+  classId
 }: {
   criteria: HydratedRubricCriteria;
   check: HydratedRubricCheck;
   isSelected: boolean;
   activeSubmissionReviewId?: number;
   submissionReview?: SubmissionReview;
+  assignmentId?: number;
+  classId?: number;
 }) {
   return (
     <Box p={1} w="100%">
       {check.is_annotation ? (
-        <RubricCheckAnnotation check={check} criteria={criteria} activeSubmissionReviewId={activeSubmissionReviewId} />
+        <RubricCheckAnnotation
+          check={check}
+          criteria={criteria}
+          activeSubmissionReviewId={activeSubmissionReviewId}
+          assignmentId={assignmentId}
+          classId={classId}
+        />
       ) : (
         <RubricCheckGlobal
           check={check}
@@ -686,6 +852,8 @@ function RubricCheck({
           isSelected={isSelected}
           activeSubmissionReviewId={activeSubmissionReviewId}
           submissionReview={submissionReview}
+          assignmentId={assignmentId}
+          classId={classId}
         />
       )}
     </Box>
@@ -695,11 +863,15 @@ function RubricCheck({
 export function RubricCriteria({
   criteria,
   activeSubmissionReviewId,
-  submissionReview
+  submissionReview,
+  assignmentId,
+  classId
 }: {
   criteria: HydratedRubricCriteria;
   activeSubmissionReviewId?: number;
   submissionReview?: SubmissionReview;
+  assignmentId?: number;
+  classId?: number;
 }) {
   const comments = useRubricCriteriaInstances({
     criteria: criteria as RubricCriteriaWithRubricChecks,
@@ -776,6 +948,8 @@ export function RubricCriteria({
               isSelected={selectedCheck?.id === check.id}
               activeSubmissionReviewId={activeSubmissionReviewId}
               submissionReview={submissionReview}
+              assignmentId={assignmentId}
+              classId={classId}
             />
           ))}
         </RadioGroup.Root>
@@ -787,11 +961,15 @@ export function RubricCriteria({
 export function RubricPart({
   part,
   activeSubmissionReviewId,
-  submissionReview
+  submissionReview,
+  assignmentId,
+  classId
 }: {
   part: HydratedRubricPart;
   activeSubmissionReviewId?: number;
   submissionReview?: SubmissionReview;
+  assignmentId?: number;
+  classId?: number;
 }) {
   return (
     <Box>
@@ -806,6 +984,8 @@ export function RubricPart({
               criteria={criteria}
               activeSubmissionReviewId={activeSubmissionReviewId}
               submissionReview={submissionReview}
+              assignmentId={assignmentId}
+              classId={classId}
             />
           ))}
       </VStack>
@@ -816,11 +996,15 @@ export function RubricPart({
 export default function RubricSidebar({
   initialRubric,
   reviewAssignmentId,
-  submissionReview
+  submissionReview,
+  assignmentId,
+  classId
 }: {
   initialRubric?: HydratedRubric;
   reviewAssignmentId?: number;
   submissionReview?: SubmissionReview;
+  assignmentId?: number;
+  classId?: number;
 }) {
   const {
     reviewAssignment,
@@ -936,6 +1120,8 @@ export default function RubricSidebar({
             part={part}
             activeSubmissionReviewId={submissionReview?.id}
             submissionReview={submissionReview}
+            assignmentId={assignmentId}
+            classId={classId}
           />
         ))}
       </VStack>
