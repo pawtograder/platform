@@ -4,7 +4,8 @@ import {
   useSubmission,
   useSubmissionFileComments,
   useSubmissionReviewByAssignmentId,
-  useSubmissionRubric
+  useSubmissionRubric,
+  useReferencingRubricChecks
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
@@ -648,6 +649,7 @@ function LineActionPopup({
   const submission = useSubmission();
   const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
   const { rubric: selectedRubric } = useSubmissionRubric(reviewAssignmentId);
+  const { private_profile_id } = useClassProfiles();
 
   // Use the manually selected rubric if provided, otherwise fall back to the default behavior
   const { query: manuallySelectedRubricQuery } = useShow<
@@ -664,6 +666,56 @@ function LineActionPopup({
   });
 
   const effectiveRubric = selectedRubricId ? manuallySelectedRubricQuery?.data?.data : selectedRubric;
+
+  // Get existing comments on this line to check for annotations
+  const allFileComments = useSubmissionFileComments({ file_id: file.id });
+  const commentsOnThisLine = useMemo(() => {
+    const filtered = allFileComments.filter((comment) => {
+      return comment.line === lineNumber && comment.rubric_check_id;
+    });
+
+    return filtered;
+  }, [allFileComments, lineNumber]);
+
+  // Get referencing checks for the effective rubric
+  const { referencingChecks } = useReferencingRubricChecks(effectiveRubric?.id, !!effectiveRubric?.id);
+
+  // Find referenced checks that can be applied based on existing annotations
+  const availableReferencedChecks = useMemo(() => {
+    if (allFileComments.length === 0) {
+      return [];
+    }
+
+    // Get all applied check IDs from anywhere in the file, not just this line
+    const allAppliedCheckIds = allFileComments
+      .filter((comment) => comment.rubric_check_id)
+      .map((comment) => comment.rubric_check_id);
+
+    // Get check IDs already applied on this specific line to filter them out later
+    const appliedCheckIdsOnThisLine = commentsOnThisLine.map((comment) => comment.rubric_check_id);
+
+    const availableChecks: HydratedRubricCheck[] = [];
+
+    for (const referencingCheck of referencingChecks) {
+      // Forward direction: if the referencing check is applied anywhere in the file, show its referenced checks
+      if (allAppliedCheckIds.includes(referencingCheck.id)) {
+        availableChecks.push(...referencingCheck.referencedChecks);
+      }
+
+      // Reverse direction: if any referenced check is applied anywhere in the file, show the referencing check
+      for (const referencedCheck of referencingCheck.referencedChecks) {
+        if (allAppliedCheckIds.includes(referencedCheck.id)) {
+          availableChecks.push(referencingCheck);
+          break; // Only add the referencing check once even if multiple referenced checks are applied
+        }
+      }
+    }
+
+    // Filter out checks that are already applied to this specific line
+    const result = availableChecks.filter((check) => !appliedCheckIdsOnThisLine.includes(check.id));
+
+    return result;
+  }, [allFileComments, commentsOnThisLine, referencingChecks]);
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -732,6 +784,47 @@ function LineActionPopup({
   if (!visible) {
     return null;
   }
+
+  // Helper function to apply a referenced check directly
+  const applyReferencedCheck = async (check: HydratedRubricCheck) => {
+    const finalSubmissionReviewId = submissionReviewId ?? review?.id;
+    if (!finalSubmissionReviewId) {
+      toaster.error({
+        title: "Error saving comment",
+        description: "Submission review ID is missing, cannot save rubric annotation."
+      });
+      return;
+    }
+
+    const values = {
+      comment: check.description || "",
+      line: lineNumber,
+      rubric_check_id: check.id,
+      class_id: file.class_id,
+      submission_file_id: file.id,
+      submission_id: submission.id,
+      author: private_profile_id,
+      released: review ? review.released : true,
+      points: check.points,
+      submission_review_id: finalSubmissionReviewId,
+      eventually_visible: eventuallyVisible
+    };
+
+    try {
+      await createComment({ values });
+      toaster.create({
+        title: "Referenced check applied",
+        description: `Applied "${check.name}" to line ${lineNumber}`,
+        type: "success"
+      });
+      close();
+    } catch (error) {
+      toaster.error({
+        title: "Error applying check",
+        description: error instanceof Error ? error.message : "Unknown error occurred"
+      });
+    }
+  };
 
   // Only show criteria that have annotation checks
   let criteriaWithAnnotationChecks: HydratedRubricCriteria[] = [];
@@ -861,10 +954,48 @@ function LineActionPopup({
         <Text fontSize="md" fontWeight="semibold" color="fg.default" textAlign="center">
           Annotate line {lineNumber} with a check:
         </Text>
+
+        {/* Show available referenced checks if there are existing annotations */}
+        {availableReferencedChecks.length > 0 && (
+          <Box border="1px solid" borderColor="border.info" borderRadius="md" p={2} bg="bg.info">
+            <Text fontSize="sm" fontWeight="semibold" color="fg.default" mb={2}>
+              Apply Referenced Checks:
+            </Text>
+            <VStack gap={1} align="stretch">
+              {availableReferencedChecks.map((check) => (
+                <Button
+                  key={check.id}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => applyReferencedCheck(check)}
+                  justifyContent="flex-start"
+                  p={2}
+                  h="auto"
+                  whiteSpace="normal"
+                  textAlign="left"
+                >
+                  <VStack align="flex-start" gap={0} w="100%">
+                    <Text fontSize="sm" fontWeight="medium">
+                      {check.name} ({check.points > 0 ? "+" : ""}
+                      {check.points} pts)
+                    </Text>
+                    {check.description && (
+                      <Text fontSize="xs" color="fg.muted" lineClamp={2}>
+                        {check.description}
+                      </Text>
+                    )}
+                  </VStack>
+                </Button>
+              ))}
+            </VStack>
+            <Separator my={2} />
+          </Box>
+        )}
+
         <Select
           ref={selectRef}
           options={criteria}
-          defaultMenuIsOpen={selectedCheckOption === null}
+          defaultMenuIsOpen={selectedCheckOption === null && availableReferencedChecks.length === 0}
           escapeClearsValue={true}
           components={components}
           value={selectedCheckOption}

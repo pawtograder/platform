@@ -1249,3 +1249,143 @@ export function useSubmissionReviewForRubric(
 
   return { submissionReview, isLoading, error };
 }
+
+export function useReferencingRubricChecks(
+  rubricId?: number | null,
+  enabled: boolean = true
+): {
+  referencingChecks: (HydratedRubricCheck & { referencedChecks: HydratedRubricCheck[] })[];
+  isLoading: boolean;
+  error: PostgrestError | Error | null;
+} {
+  const supabase = createClient();
+  const [referencingChecks, setReferencingChecks] = useState<
+    (HydratedRubricCheck & { referencedChecks: HydratedRubricCheck[] })[]
+  >([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<PostgrestError | Error | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !rubricId || !supabase) {
+      setReferencingChecks([]);
+      setIsLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoading(true);
+    setError(null);
+
+    const fetchReferencingChecks = async () => {
+      try {
+        // First, get all checks in the given rubric that are annotations
+        const { data: rubricData, error: rubricError } = await supabase
+          .from("rubrics")
+          .select("*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))")
+          .eq("id", rubricId)
+          .single();
+
+        if (rubricError) throw rubricError;
+        if (!isMounted || !rubricData) {
+          return;
+        }
+
+        const allChecksInRubric: HydratedRubricCheck[] = [];
+        if (rubricData.rubric_parts) {
+          for (const part of rubricData.rubric_parts) {
+            for (const criteria of part.rubric_criteria) {
+              for (const check of criteria.rubric_checks) {
+                allChecksInRubric.push(check as HydratedRubricCheck);
+              }
+            }
+          }
+        }
+
+        // Filter to only annotation checks for files
+        const annotationChecks = allChecksInRubric.filter(
+          (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+        );
+
+        if (annotationChecks.length === 0) {
+          if (isMounted) setReferencingChecks([]);
+          return;
+        }
+
+        const checkIds = annotationChecks.map((check) => check.id);
+
+        // Get all references where these checks are referencing other checks
+        const { data: references, error: referencesError } = await supabase
+          .from("rubric_check_references")
+          .select("*")
+          .in("referencing_rubric_check_id", checkIds);
+
+        if (referencesError) throw referencesError;
+        if (!isMounted || !references || references.length === 0) {
+          if (isMounted) setReferencingChecks([]);
+          return;
+        }
+
+        // Get the referenced checks
+        const referencedCheckIds = references.map((ref) => ref.referenced_rubric_check_id);
+        const { data: referencedChecks, error: referencedChecksError } = await supabase
+          .from("rubric_checks")
+          .select("*")
+          .in("id", referencedCheckIds);
+
+        if (referencedChecksError) throw referencedChecksError;
+        if (!isMounted || !referencedChecks) {
+          return;
+        }
+
+        // Build the result mapping referencing checks to their referenced checks
+        const referencingChecksWithReferences: (HydratedRubricCheck & { referencedChecks: HydratedRubricCheck[] })[] =
+          [];
+
+        for (const check of annotationChecks) {
+          const referencesForThisCheck = references.filter((ref) => ref.referencing_rubric_check_id === check.id);
+
+          if (referencesForThisCheck.length > 0) {
+            const referencedChecksForThisCheck = referencedChecks.filter((refCheck) =>
+              referencesForThisCheck.some((ref) => ref.referenced_rubric_check_id === refCheck.id)
+            );
+
+            // Only include annotation checks that are also for files
+            const filteredReferencedChecks = referencedChecksForThisCheck.filter(
+              (refCheck) =>
+                refCheck.is_annotation && (refCheck.annotation_target === "file" || refCheck.annotation_target === null)
+            );
+
+            if (filteredReferencedChecks.length > 0) {
+              referencingChecksWithReferences.push({
+                ...check,
+                referencedChecks: filteredReferencedChecks as HydratedRubricCheck[]
+              });
+            }
+          }
+        }
+
+        if (isMounted) setReferencingChecks(referencingChecksWithReferences);
+      } catch (e: unknown) {
+        if (isMounted) {
+          if (e instanceof Error) {
+            setError(e);
+          } else if (typeof e === "object" && e !== null && "message" in e) {
+            setError(new Error(String(e.message)));
+          } else {
+            setError(new Error("An unknown error occurred"));
+          }
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    fetchReferencingChecks();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [enabled, rubricId, supabase]);
+
+  return { referencingChecks, isLoading, error };
+}
