@@ -486,12 +486,17 @@ function SubmissionControllerCreator({
   useList<SubmissionFileComment>({
     resource: "submission_file_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
+    pagination: {
+      pageSize: 1000
+    },
     liveMode: "manual",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false, // Don't refetch on mount since we have data
-      refetchOnReconnect: false,
-      refetchOnWindowFocus: false
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_file_comments", event);
@@ -504,12 +509,17 @@ function SubmissionControllerCreator({
       select: "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
     },
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
+    pagination: {
+      pageSize: 1000
+    },
     liveMode: "manual",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false,
-      refetchOnReconnect: false,
-      refetchOnWindowFocus: false
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_reviews", event);
@@ -519,12 +529,17 @@ function SubmissionControllerCreator({
   useList<SubmissionComments>({
     resource: "submission_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
+    pagination: {
+      pageSize: 1000
+    },
     liveMode: "manual",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false,
-      refetchOnReconnect: false,
-      refetchOnWindowFocus: false
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_comments", event);
@@ -534,12 +549,17 @@ function SubmissionControllerCreator({
   useList<SubmissionArtifactComment>({
     resource: "submission_artifact_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
+    pagination: {
+      pageSize: 1000
+    },
     liveMode: "manual",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false,
-      refetchOnReconnect: false,
-      refetchOnWindowFocus: false
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_artifact_comments", event);
@@ -987,37 +1007,25 @@ export type ReferencedRubricCheckInstance = {
   authorProfile?: Partial<Tables<"profiles">> | null;
 };
 
-// Define a more specific type for comments with author_profile from eager loading
-type CommentWithAuthorProfile = (
-  | Tables<"submission_file_comments">
-  | Tables<"submission_comments">
-  | Tables<"submission_artifact_comments">
-) & {
-  author_profile?: Partial<Tables<"profiles">> | null;
-};
-
 export function useReferencedRubricCheckInstances(
   referencing_check_id: number | undefined | null,
   submission_id: number | undefined | null
 ): { instances: ReferencedRubricCheckInstance[]; isLoading: boolean; error: PostgrestError | Error | null } {
   const supabase = createClient();
+  const submissionController = useSubmissionController();
   const [instances, setInstances] = useState<ReferencedRubricCheckInstance[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<PostgrestError | Error | null>(null);
 
+  // Get comments from submission controller instead of separate queries
+  const fileComments = useSubmissionFileComments({});
+  const submissionComments = useSubmissionComments({});
+  const artifactComments = useSubmissionArtifactComments({});
+
   useEffect(() => {
-    if (!referencing_check_id || !submission_id || !supabase) {
+    if (!referencing_check_id || !submission_id || !supabase || !submissionController) {
       setInstances([]);
-      // setIsLoading(referencing_check_id && submission_id ? true : false); // Original
-      // Corrected logic: only set loading true if we intend to fetch
-      setIsLoading(!!(referencing_check_id && submission_id && supabase));
-      if (!supabase && referencing_check_id && submission_id) {
-        // Waiting for supabase client, setIsLoading(true) is appropriate if we expect supabase to appear
-        // For simplicity, if supabase is null, we are not loading yet from this hook's perspective for this run.
-        // The initial true might be okay if supabase is guaranteed to load shortly.
-        // Let's stick to false if critical deps are missing to avoid infinite loading states if supabase never arrives.
-        setIsLoading(false);
-      }
+      setIsLoading(!!(referencing_check_id && submission_id && supabase && submissionController));
       return;
     }
 
@@ -1027,6 +1035,7 @@ export function useReferencedRubricCheckInstances(
 
     const fetchInstances = async () => {
       try {
+        // Still need to fetch rubric check references separately
         const { data: references, error: referencesError } = await supabase
           .from("rubric_check_references")
           .select("*")
@@ -1043,6 +1052,7 @@ export function useReferencedRubricCheckInstances(
         for (const ref of references) {
           const referenced_rubric_check_id = ref.referenced_rubric_check_id;
 
+          // Still need to fetch referenced checks separately since they're from other rubrics
           const { data: referencedCheck, error: referencedCheckError } = await supabase
             .from("rubric_checks")
             .select("*")
@@ -1059,151 +1069,126 @@ export function useReferencedRubricCheckInstances(
           }
           if (!referencedCheck) continue;
 
-          const allCommentsSource: {
-            type: "file" | "general" | "artifact";
-            data: CommentWithAuthorProfile[] | null;
-            error: PostgrestError | null;
-          }[] = [];
+          // Use submission controller data for comments instead of separate queries
+          const relevantFileComments = fileComments.filter(
+            (comment) => comment.rubric_check_id === referenced_rubric_check_id && comment.deleted_at === null
+          );
 
-          const fileCommentsResult = await supabase
-            .from("submission_file_comments")
-            .select("*, author_profile:profiles!author(id, name, avatar_url, flair, short_name)")
-            .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id)
-            .is("deleted_at", null);
-          allCommentsSource.push({
-            type: "file",
-            data: fileCommentsResult.data as CommentWithAuthorProfile[] | null,
-            error: fileCommentsResult.error
-          });
+          const relevantSubmissionComments = submissionComments.filter(
+            (comment) => comment.rubric_check_id === referenced_rubric_check_id && comment.deleted_at === null
+          );
 
-          const generalCommentsResult = await supabase
-            .from("submission_comments")
-            .select("*, author_profile:profiles!author(id, name, avatar_url, flair, short_name)")
-            .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id)
-            .is("deleted_at", null);
-          allCommentsSource.push({
-            type: "general",
-            data: generalCommentsResult.data as CommentWithAuthorProfile[] | null,
-            error: generalCommentsResult.error
-          });
+          const relevantArtifactComments = artifactComments.filter(
+            (comment) => comment.rubric_check_id === referenced_rubric_check_id && comment.deleted_at === null
+          );
 
-          const artifactCommentsResult = await supabase
-            .from("submission_artifact_comments")
-            .select(
-              "*, author_profile:profiles!submission_artifact_comments_author_fkey(id, name, avatar_url, flair, short_name)"
-            )
-            .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id)
-            .is("deleted_at", null);
-          allCommentsSource.push({
-            type: "artifact",
-            data: artifactCommentsResult.data as CommentWithAuthorProfile[] | null,
-            error: artifactCommentsResult.error
-          });
+          // Collect all comment types
+          const allRelevantComments = [
+            ...relevantFileComments.map((comment) => ({ ...comment, type: "file" as const })),
+            ...relevantSubmissionComments.map((comment) => ({ ...comment, type: "general" as const })),
+            ...relevantArtifactComments.map((comment) => ({ ...comment, type: "artifact" as const }))
+          ];
 
-          for (const source of allCommentsSource) {
-            if (source.error) {
+          // Fetch author profiles for all comments (since they're not in submission controller)
+          const authorIds = [...new Set(allRelevantComments.map((comment) => comment.author).filter(Boolean))];
+          const authorProfiles = new Map();
+
+          if (authorIds.length > 0) {
+            const { data: profiles, error: profilesError } = await supabase
+              .from("profiles")
+              .select("id, name, avatar_url, flair, short_name")
+              .in("id", authorIds);
+
+            if (profilesError) {
               toaster.create({
-                title: `Error fetching ${source.type} comments:`,
-                description: source.error.message,
+                title: "Error fetching author profiles:",
+                description: profilesError.message,
                 type: "warning"
               });
+            } else if (profiles) {
+              profiles.forEach((profile) => authorProfiles.set(profile.id, profile));
             }
-            if (!source.data) continue;
+          }
 
-            for (const rawComment of source.data) {
-              // rawComment is now CommentWithAuthorProfile
-              const comment = {
-                ...rawComment,
-                type: source.type
-                // author_profile is already part of rawComment due to CommentWithAuthorProfile type
-              } as ReferencedRubricCheckInstance["comment"];
+          for (const rawComment of allRelevantComments) {
+            const comment = {
+              ...rawComment,
+              author_profile: rawComment.author ? authorProfiles.get(rawComment.author) : null
+            } as ReferencedRubricCheckInstance["comment"];
 
-              let submissionReview: Tables<"submission_reviews"> | undefined = undefined;
-              let rubric: Pick<Tables<"rubrics">, "id" | "name" | "review_round" | "assignment_id"> | undefined =
-                undefined;
-              let reviewRound: Enums<"review_round"> | null = null;
-              const authorProfile = comment.author_profile || undefined;
+            let submissionReview: Tables<"submission_reviews"> | undefined = undefined;
+            let rubric: Pick<Tables<"rubrics">, "id" | "name" | "review_round" | "assignment_id"> | undefined =
+              undefined;
+            let reviewRound: Enums<"review_round"> | null = null;
+            const authorProfile = comment.author_profile || undefined;
 
-              // Fetch the correct rubric based on the referencedRubricCheck's rubric_criteria_id
-              if (referencedCheck && referencedCheck.rubric_criteria_id) {
-                const { data: criteriaData, error: criteriaError } = await supabase
-                  .from("rubric_criteria")
-                  .select("rubric_id")
-                  .eq("id", referencedCheck.rubric_criteria_id)
+            // Fetch the correct rubric based on the referencedRubricCheck's rubric_criteria_id
+            if (referencedCheck && referencedCheck.rubric_criteria_id) {
+              const { data: criteriaData, error: criteriaError } = await supabase
+                .from("rubric_criteria")
+                .select("rubric_id")
+                .eq("id", referencedCheck.rubric_criteria_id)
+                .single();
+
+              if (criteriaError) {
+                toaster.error({
+                  title: "Error fetching rubric criteria for referenced check",
+                  description: criteriaError.message
+                });
+              } else if (criteriaData && criteriaData.rubric_id) {
+                const { data: rubricData, error: rubricError } = await supabase
+                  .from("rubrics")
+                  .select("id, name, review_round, assignment_id")
+                  .eq("id", criteriaData.rubric_id)
                   .single();
-
-                if (criteriaError) {
+                if (rubricError) {
                   toaster.error({
-                    title: "Error fetching rubric criteria for referenced check",
-                    description: criteriaError.message
-                  });
-                } else if (criteriaData && criteriaData.rubric_id) {
-                  const { data: rubricData, error: rubricError } = await supabase
-                    .from("rubrics")
-                    .select("id, name, review_round, assignment_id")
-                    .eq("id", criteriaData.rubric_id)
-                    .single();
-                  if (rubricError) {
-                    toaster.error({
-                      title: "Error fetching correct rubric",
-                      description: rubricError.message
-                    });
-                  } else {
-                    rubric = rubricData || undefined;
-                    reviewRound = rubric?.review_round || null;
-                  }
-                }
-              }
-
-              // Fetch submission review if comment is associated with one
-              if (comment.submission_review_id) {
-                const { data: reviewData, error: reviewError } = await supabase
-                  .from("submission_reviews")
-                  .select("*")
-                  .eq("id", comment.submission_review_id)
-                  .single();
-
-                if (reviewError) {
-                  toaster.create({
-                    title: "Error fetching submission review:",
-                    description: reviewError.message,
-                    type: "warning"
+                    title: "Error fetching correct rubric",
+                    description: rubricError.message
                   });
                 } else {
-                  submissionReview = reviewData || undefined;
-                  // If we haven't found a rubric yet (e.g. old comments not linked via rubric_check_references)
-                  // fall back to the submissionReview's rubric.
-                  // This part of the logic remains, but the primary source of rubric is now the referencedCheck.
-                  if (!rubric && submissionReview && submissionReview.rubric_id) {
-                    const { data: fallbackRubricData, error: fallbackRubricError } = await supabase
-                      .from("rubrics")
-                      .select("id, name, review_round, assignment_id")
-                      .eq("id", submissionReview.rubric_id)
-                      .single();
-                    if (fallbackRubricError) {
-                      toaster.error({
-                        title: "Error fetching fallback rubric",
-                        description: fallbackRubricError.message
-                      });
-                    } else {
-                      rubric = fallbackRubricData || undefined;
-                      reviewRound = rubric?.review_round || null;
-                    }
-                  }
+                  rubric = rubricData || undefined;
+                  reviewRound = rubric?.review_round || null;
                 }
               }
-              collectedInstances.push({
-                referencedRubricCheck: referencedCheck,
-                comment,
-                submissionReview,
-                rubric,
-                reviewRound,
-                authorProfile
-              });
             }
+
+            // Check if comment is associated with a submission review (use submission controller data)
+            if (comment.submission_review_id) {
+              const { data: reviewFromController } = submissionController.getValueWithSubscription<SubmissionReview>(
+                "submission_reviews",
+                comment.submission_review_id
+              );
+
+              submissionReview = reviewFromController;
+
+              // If we haven't found a rubric yet, fall back to the submissionReview's rubric
+              if (!rubric && submissionReview && submissionReview.rubric_id) {
+                const { data: fallbackRubricData, error: fallbackRubricError } = await supabase
+                  .from("rubrics")
+                  .select("id, name, review_round, assignment_id")
+                  .eq("id", submissionReview.rubric_id)
+                  .single();
+                if (fallbackRubricError) {
+                  toaster.error({
+                    title: "Error fetching fallback rubric",
+                    description: fallbackRubricError.message
+                  });
+                } else {
+                  rubric = fallbackRubricData || undefined;
+                  reviewRound = rubric?.review_round || null;
+                }
+              }
+            }
+
+            collectedInstances.push({
+              referencedRubricCheck: referencedCheck,
+              comment,
+              submissionReview,
+              rubric,
+              reviewRound,
+              authorProfile
+            });
           }
         }
         if (isMounted) setInstances(collectedInstances);
@@ -1231,7 +1216,15 @@ export function useReferencedRubricCheckInstances(
     return () => {
       isMounted = false;
     };
-  }, [referencing_check_id, submission_id, supabase]);
+  }, [
+    referencing_check_id,
+    submission_id,
+    supabase,
+    submissionController,
+    fileComments,
+    submissionComments,
+    artifactComments
+  ]);
 
   return { instances, isLoading, error };
 }

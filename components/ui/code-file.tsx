@@ -5,7 +5,8 @@ import {
   useSubmissionFileComments,
   useSubmissionReviewByAssignmentId,
   useSubmissionRubric,
-  useReferencingRubricChecks
+  useReferencingRubricChecks,
+  useSubmissionReview
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
@@ -406,47 +407,39 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
-  const { submissionReview: gradingReview } = useSubmissionReviewByAssignmentId(
-    comment.submission_review_id ?? undefined
-  );
 
-  // Fetch rubric check data directly from the database instead of relying on useRubricCheck
-  const { query: rubricCheckQuery } = useShow<HydratedRubricCheck>({
-    resource: "rubric_checks",
-    id: comment.rubric_check_id || -1,
-    queryOptions: {
-      enabled: !!comment.rubric_check_id
-    },
-    meta: {
-      select: "*"
+  // Use submission controller data instead of direct database calls
+  const submissionReview = useSubmissionReview(comment.submission_review_id);
+
+  // Find the rubric check and criteria from the pre-fetched review data
+  const { rubricCheck, rubricCriteria } = useMemo(() => {
+    if (!submissionReview?.rubrics || !comment.rubric_check_id) {
+      return { rubricCheck: undefined, rubricCriteria: undefined };
     }
-  });
 
-  // Fetch rubric criteria data directly from the database
-  const { query: rubricCriteriaQuery } = useShow<HydratedRubricCriteria>({
-    resource: "rubric_criteria",
-    id: rubricCheckQuery?.data?.data?.rubric_criteria_id || -1,
-    queryOptions: {
-      enabled: !!rubricCheckQuery?.data?.data?.rubric_criteria_id
-    },
-    meta: {
-      select: "*"
+    // Search through the review's rubric structure to find the check and its criteria
+    // Note: rubrics from submission reviews have rubric_criteria directly, not rubric_parts
+    for (const criteria of submissionReview.rubrics.rubric_criteria || []) {
+      const check = criteria.rubric_checks?.find((check: HydratedRubricCheck) => check.id === comment.rubric_check_id);
+      if (check) {
+        return { rubricCheck: check, rubricCriteria: criteria };
+      }
     }
-  });
 
-  const rubricCheck = rubricCheckQuery?.data?.data;
-  const rubricCriteria = rubricCriteriaQuery?.data?.data;
-  const isLoading = rubricCheckQuery?.isLoading || rubricCriteriaQuery?.isLoading;
+    return { rubricCheck: undefined, rubricCriteria: undefined };
+  }, [submissionReview, comment.rubric_check_id]);
 
-  if (isLoading) {
+  // If no review data available yet, show loading skeleton
+  if (!submissionReview && comment.submission_review_id) {
     return <Skeleton height="100px" width="100%" />;
   }
 
+  // If we can't find the check/criteria in the review data, show skeleton
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
   }
 
-  const reviewName = comment.submission_review_id ? gradingReview?.name : "Self-Review";
+  const reviewName = comment.submission_review_id ? submissionReview?.name : "Self-Review";
 
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
 
