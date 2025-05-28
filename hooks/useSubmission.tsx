@@ -13,7 +13,8 @@ import {
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   HydratedRubricCriteria,
-  HydratedRubricCheck
+  HydratedRubricCheck,
+  SubmissionWithAllRelatedData
 } from "@/utils/supabase/DatabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
@@ -450,98 +451,124 @@ function SubmissionControllerCreator({
     "submission_artifact_comments",
     (item: unknown) => (item as SubmissionArtifactComment).id
   );
-  const { query } = useShow<SubmissionWithFilesGraderResultsOutputTestsAndRubric>({
+
+  // Single comprehensive query to load all data upfront
+  const { query } = useShow<SubmissionWithAllRelatedData>({
     resource: "submissions",
     id: submission_id,
     meta: {
-      select:
-        "*, assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
+      select: `
+        *,
+        assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))),
+        submission_files(*),
+        assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))),
+        grader_results(*, grader_result_tests(*), grader_result_output(*)),
+        submission_artifacts(*),
+        submission_file_comments(*),
+        submission_comments(*),
+        submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_criteria(*, rubric_checks(*)))),
+        submission_artifact_comments!submission_artifact_comments_submission_id_fkey(*)
+      `.trim()
     }
   });
-  const { data: liveFileComments, isLoading: liveFileCommentsLoading } = useList<SubmissionFileComment>({
+
+  // Set up live subscriptions without initial data loading
+  // We use queryOptions: { enabled: false } to prevent initial loading since we already have the data
+  const [liveSubscriptionsReady, setLiveSubscriptionsReady] = useState(false);
+
+  useList<SubmissionFileComment>({
     resource: "submission_file_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
-    pagination: {
-      pageSize: 1000
+    queryOptions: {
+      enabled: false // Don't load initial data, we already have it from the main query
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_file_comments", event);
     }
   });
-  const { data: liveReviews, isLoading: liveReviewsLoading } = useList<SubmissionReviewWithRubric>({
+
+  useList<SubmissionReviewWithRubric>({
     resource: "submission_reviews",
     meta: {
       select: "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
     },
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
-    pagination: {
-      pageSize: 1000
+    queryOptions: {
+      enabled: false // Don't load initial data
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_reviews", event);
     }
   });
-  const { data: liveComments, isLoading: liveCommentsLoading } = useList<SubmissionComments>({
+
+  useList<SubmissionComments>({
     resource: "submission_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
-    pagination: {
-      pageSize: 1000
+    queryOptions: {
+      enabled: false // Don't load initial data
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_comments", event);
     }
   });
-  const { data: liveArtifactComments, isLoading: liveArtifactCommentsLoading } = useList<SubmissionArtifactComment>({
+
+  useList<SubmissionArtifactComment>({
     resource: "submission_artifact_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
     liveMode: "manual",
-    pagination: {
-      pageSize: 1000
+    queryOptions: {
+      enabled: false // Don't load initial data
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_artifact_comments", event);
     }
   });
-  const anyIsLoading =
-    liveFileCommentsLoading ||
-    liveReviewsLoading ||
-    liveCommentsLoading ||
-    liveArtifactCommentsLoading ||
-    query.isLoading;
+
+  // Process the main query data once it's loaded
   useEffect(() => {
-    if (query.data?.data) {
-      submissionController.submission = query.data.data;
+    if (query.data?.data && !query.isLoading) {
+      const data = query.data.data;
+
+      // Set the main submission data (without the extra fields)
+      const {
+        submission_file_comments,
+        submission_comments,
+        submission_reviews,
+        submission_artifact_comments,
+        ...submissionData
+      } = data;
+
+      submissionController.submission = submissionData as SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+
+      // Set all the related data
+      if (submission_file_comments) {
+        submissionController.setGeneric("submission_file_comments", submission_file_comments);
+      }
+      if (submission_comments) {
+        submissionController.setGeneric("submission_comments", submission_comments);
+      }
+      if (submission_reviews) {
+        submissionController.setGeneric("submission_reviews", submission_reviews);
+      }
+      if (submission_artifact_comments) {
+        submissionController.setGeneric("submission_artifact_comments", submission_artifact_comments);
+      }
+
+      setLiveSubscriptionsReady(true);
     }
-  }, [submissionController, query.data]);
+  }, [query.data, query.isLoading, submissionController]);
+
+  // Set ready when everything is loaded
   useEffect(() => {
-    if (!anyIsLoading) {
+    if (!query.isLoading && liveSubscriptionsReady) {
       setReady(true);
     }
-  }, [anyIsLoading, setReady]);
-  useEffect(() => {
-    if (liveFileComments?.data) {
-      submissionController.setGeneric("submission_file_comments", liveFileComments.data);
-    }
-  }, [submissionController, anyIsLoading, liveFileComments?.data]);
-  useEffect(() => {
-    if (liveComments?.data) {
-      submissionController.setGeneric("submission_comments", liveComments.data);
-    }
-  }, [submissionController, anyIsLoading, liveComments?.data]);
-  useEffect(() => {
-    if (liveReviews?.data) {
-      submissionController.setGeneric("submission_reviews", liveReviews.data);
-    }
-  }, [submissionController, anyIsLoading, liveReviews?.data]);
-  useEffect(() => {
-    if (liveArtifactComments?.data) {
-      submissionController.setGeneric("submission_artifact_comments", liveArtifactComments.data);
-    }
-  }, [submissionController, anyIsLoading, liveArtifactComments?.data]);
-  if (query.isLoading || !liveFileComments?.data) {
+  }, [query.isLoading, liveSubscriptionsReady, setReady]);
+
+  if (query.isLoading) {
     return (
       <div className="fixed inset-0 w-full h-full flex justify-center items-center bg-white/80 z-[9999]">
         <Spinner />
@@ -549,15 +576,18 @@ function SubmissionControllerCreator({
       </div>
     );
   }
+
   if (query.error) {
     toaster.error({
       title: "Error loading submission",
       description: query.error.message
     });
   }
+
   if (!query.data) {
     return <></>;
   }
+
   return <></>;
 }
 export function useSubmissionMaybe() {

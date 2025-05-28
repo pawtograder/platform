@@ -169,6 +169,12 @@ export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"]["Tables"]["submissions"]["Relationships"],
   "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
+export type SubmissionWithAllRelatedData = SubmissionWithFilesGraderResultsOutputTestsAndRubric & {
+  submission_file_comments: SubmissionFileComment[];
+  submission_comments: SubmissionComments[];
+  submission_reviews: SubmissionReviewWithRubric[];
+  submission_artifact_comments: SubmissionArtifactComment[];
+};
 export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
