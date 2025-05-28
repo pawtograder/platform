@@ -13,7 +13,8 @@ ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR SELECT
 USING (
-    authorizeforclassinstructor(class_id) OR authorizeforclassgrader(class_id)
+    authorizeforclassinstructor(class_id) OR authorizeforclassgrader(class_id) 
+    OR authorizeforclass(class_id)
 );
 
 CREATE POLICY "instructors can insert self review settings" 
@@ -46,7 +47,108 @@ ALTER TABLE ONLY "public"."self_review_settings"
 ALTER TABLE "public"."self_review_settings"
     ADD CONSTRAINT "self_review_settings_class_fkey" FOREIGN KEY ("class_id") REFERENCES "public"."classes"("id");
 
-ALTER TABLE "public"."assignments" ADD COLUMN "self_review_setting_id" bigint;
+ALTER TABLE "public"."assignments" ADD COLUMN "self_review_setting_id" bigint NOT NULL;
 
 ALTER TABLE "public"."assignments"
     ADD CONSTRAINT "assignments_self_review_setting_fkey" FOREIGN KEY ("self_review_setting_id") REFERENCES "public"."self_review_settings"("id");
+
+CREATE POLICY "Students can give themselves negative deadline exceptions"
+ON "public"."assignment_due_date_exceptions"
+AS PERMISSIVE 
+FOR INSERT
+WITH CHECK (
+   true
+);
+
+-- auto create self review rubrics and make them mandatory, makes generating them much less complicated... 
+CREATE OR REPLACE FUNCTION public.assignments_grader_config_auto_populate()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+    declare 
+    rubric_id int;
+    self_rubric_id int;
+    begin
+  
+  INSERT INTO autograder (id, class_id) VALUES (NEW.id, NEW.class_id);
+  INSERT INTO autograder_regression_test (autograder_id,repository) VALUES (NEW.id, NEW.template_repo);
+  INSERT INTO rubrics (name, class_id, assignment_id) VALUES ('Grading Rubric', NEW.class_id, NEW.id) RETURNING id into rubric_id;
+  INSERT INTO rubrics (name, class_id, assignment_id) VALUES ('Self Rubric', NEW.class_id, NEW.id) RETURNING id into self_rubric_id;
+  UPDATE assignments set grading_rubric_id=rubric_id WHERE id=NEW.id;
+UPDATE assignments set self_review_rubric_id=self_rubric_id WHERE id=NEW.id;
+  RETURN NULL;
+end;$function$
+;
+
+
+
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+CREATE OR REPLACE FUNCTION auto_assign_self_reviews()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+INSERT INTO review_assignments (
+    due_date,
+    assignee_profile_id,
+    submission_id,
+    assignment_id,
+    rubric_id,
+    class_id
+)
+SELECT 
+    CASE 
+        WHEN ade.hours IS NOT NULL THEN a.due_date + INTERVAL '1 hour' * ade.hours + INTERVAL '1 hour' * srs.deadline_offset
+        ELSE a.due_date + INTERVAL '1 hour' * srs.deadline_offset
+    END as due_date,
+    p.id as assignee_profile_id,
+    (
+        -- submission id is the id of the active submission for this profile
+        SELECT s.id 
+        FROM submissions s 
+        WHERE s.profile_id = p.id 
+        AND s.is_active = TRUE 
+        LIMIT 1
+    ) as submission_id,
+    a.id as assignment_id,
+    a.self_review_rubric_id, -- Fixed: removed "OR," 
+    a.class_id
+FROM assignments a
+CROSS JOIN profiles p
+LEFT JOIN assignment_due_date_exceptions ade ON (
+    ade.assignment_id = a.id 
+    AND ade.student_id = p.id
+)
+JOIN self_review_settings srs ON srs.id = a.self_review_setting_id -- Added this JOIN
+WHERE 
+    -- Profile conditions
+    p.is_private_profile = TRUE
+    AND p.class_id = a.class_id
+    AND EXISTS (
+        -- private profile should exist as a student in class, prevents reviews from being assigned to graders + instructors
+        SELECT 1 FROM user_roles urs 
+        WHERE urs.private_profile_id = p.id 
+        AND urs.role = 'student' -- Added quotes around student
+    )
+    -- The settings for this assignment reflect that self review is enabled
+    AND srs.enabled = true -- Simplified since we're now JOINing on this table
+    -- Self review hasn't been processed for this specific profile yet
+    AND NOT EXISTS (
+        SELECT 1 FROM review_assignments ra 
+        WHERE ra.assignment_id = a.id 
+        AND ra.assignee_profile_id = p.id
+    )
+    -- Assignment deadline has passed (either regular due date or exception due date)
+    AND (
+        -- Case 1: No exception exists, use regular due date
+        (ade.student_id IS NULL AND a.due_date <= NOW())
+        OR
+        -- Case 2: Exception exists, use exception due date
+        (ade.student_id IS NOT NULL AND a.due_date + INTERVAL '1 hour' * ade.hours <= NOW())
+    );    
+END;
+$$;
+
+SELECT cron.schedule('auto_assign_self_reviews', '* * * * *', 'SELECT auto_assign_self_reviews();');
+

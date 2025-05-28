@@ -541,7 +541,7 @@ export type Database = {
           min_group_size: number | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
-          self_review_setting_id: number | null;
+          self_review_setting_id: number;
           slug: string | null;
           student_repo_prefix: string | null;
           template_repo: string | null;
@@ -569,7 +569,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
-          self_review_setting_id?: number | null;
+          self_review_setting_id: number;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -597,7 +597,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
-          self_review_setting_id?: number | null;
+          self_review_setting_id?: number;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;

@@ -8,6 +8,8 @@ import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import { useCallback } from "react";
+import FinishSubmissionEarly from "./finalizeSubmissionEarly";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {
@@ -103,26 +105,29 @@ export default async function AssignmentPage({
         : `profile_id.eq.${enrollment?.private_profile_id}`
     );
 
-  const {data:review_settings } = await client
+  const { data: review_settings } = await client
     .from("self_review_settings")
     .select("*")
-    .eq("id", assignment.self_review_setting_id ?? 0)
-    .limit(1); // TODO make the thing mandatory to avoid this issue
-
+    .eq("id", assignment.self_review_setting_id)
+    .single();
 
   return (
     <Box p={4}>
       <Flex width="100%" alignItems={"center"}>
         <Box width="50%">
-              <Heading size="lg">{assignment.title}</Heading>
+          <Heading size="lg">{assignment.title}</Heading>
           <HStack>
             <Text>Due: </Text>
             <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
           </HStack>
-      </Box>
-          {review_settings && review_settings[0]?. && <Box width="50%" alignItems={"center"} >
-                <Button float="right">Finalize Submission Early</Button>
-          </Box>}
+        </Box>
+        {review_settings && review_settings.allow_early && (
+          <FinishSubmissionEarly
+            assignment={assignment}
+            group_id={assignment_group_id}
+            public_profile_id={enrollment?.public_profile_id}
+          />
+        )}
       </Flex>
 
       <Markdown>{assignment.description}</Markdown>
@@ -142,7 +147,7 @@ export default async function AssignmentPage({
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
       </Box>
-      
+
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog
         assignment={assignment}
