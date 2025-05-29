@@ -101,15 +101,15 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
-      field: "assignment_group_id",
-      operator: "eq",
-      value: submission.assignment_group_id
-    }
+        field: "assignment_group_id",
+        operator: "eq",
+        value: submission.assignment_group_id
+      }
     : {
-      field: "profile_id",
-      operator: "eq",
-      value: submission.profile_id
-    };
+        field: "profile_id",
+        operator: "eq",
+        value: submission.profile_id
+      };
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -236,8 +236,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         <Link href={link}>
                           {historical_submission.grader_results?.score !== undefined
                             ? historical_submission.grader_results?.score +
-                            "/" +
-                            historical_submission.grader_results?.max_score
+                              "/" +
+                              historical_submission.grader_results?.max_score
                             : "Error"}
                         </Link>
                       </Table.Cell>
@@ -245,8 +245,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         <Link href={link}>
                           {historical_submission.submission_reviews?.completed_at &&
                             historical_submission.submission_reviews?.total_score +
-                            "/" +
-                            historical_submission.assignments.total_points}
+                              "/" +
+                              historical_submission.assignments.total_points}
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
