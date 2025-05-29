@@ -10,7 +10,7 @@ import type { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit }
 import { createClient } from "@/utils/supabase/client";
 import type { Assignment, AutograderRegressionTest, Repository } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
-import { toaster } from "./toaster";
+import { toaster } from "@/components/ui/toaster";
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
