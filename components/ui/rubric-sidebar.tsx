@@ -506,7 +506,7 @@ function ReferencedFeedbackHeader({ check_id }: { check_id: number }) {
   );
 }
 
-function ReviewRoundTag({ submission_review_id }: { submission_review_id: number }) {
+export function ReviewRoundTag({ submission_review_id }: { submission_review_id: number }) {
   const submissionReview = useSubmissionReview(submission_review_id);
   if (!submissionReview) {
     return null;

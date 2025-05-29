@@ -19,7 +19,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
-import { useCreate, useUpdate, useShow } from "@refinedev/core";
+import { useCreate, useShow, useUpdate } from "@refinedev/core";
 import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
@@ -46,7 +46,7 @@ import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
-import { CommentActions } from "./rubric-sidebar";
+import { CommentActions, ReviewRoundTag } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 
@@ -479,7 +479,10 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
               </HStack>
               <HStack gap={0}>
                 <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                  {commentAuthor?.name} ({"TODO: review name"})
+                  {commentAuthor?.name}{" "}
+                  {comment.submission_review_id && (
+                    <ReviewRoundTag submission_review_id={comment.submission_review_id} />
+                  )}
                 </Text>
                 <CommentActions comment={comment} setIsEditing={setIsEditing} />
               </HStack>
