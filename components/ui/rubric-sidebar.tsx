@@ -5,13 +5,13 @@ import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
+  RubricCheckReference,
   RubricChecks,
   RubricCriteriaWithRubricChecks,
   SubmissionArtifactComment,
   SubmissionComments,
   SubmissionFileComment,
-  SubmissionReview,
-  RubricCheckReference
+  SubmissionReview
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Tag, Text, VStack } from "@chakra-ui/react";
 
@@ -22,6 +22,7 @@ import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
+import { useRubricCheck } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useReferencedRubricCheckInstances,
@@ -29,20 +30,21 @@ import {
   useRubricCheckInstances,
   useRubricCriteriaInstances,
   useSubmissionMaybe,
+  useSubmissionReview,
   useSubmissionRubric
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useUpdate, useList, useDelete } from "@refinedev/core";
+import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
 import { useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
-import { FaCheckCircle, FaTimesCircle, FaLink, FaTimes } from "react-icons/fa";
+import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
-import PersonAvatar from "./person-avatar";
+import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
 
 interface CheckOptionType extends OptionBase {
@@ -493,30 +495,34 @@ export function RubricCheckComment({
   );
 }
 
+function ReferencedFeedbackHeader({ check_id }: { check_id: number }) {
+  const rubricCheck = useRubricCheck(check_id);
+  return (
+    <Tooltip content={rubricCheck?.description || "No description"} showArrow>
+      <Text fontSize="xs" fontWeight="bold" truncate>
+        {rubricCheck?.name}
+      </Text>
+    </Tooltip>
+  );
+}
+
+function ReviewRoundTag({ submission_review_id }: { submission_review_id: number }) {
+  const submissionReview = useSubmissionReview(submission_review_id);
+  if (!submissionReview) {
+    return null;
+  }
+  return (
+    <Tag.Root size="sm" colorPalette="blue" variant="outline">
+      <Tag.Label>{submissionReview.rubrics.review_round}</Tag.Label>
+    </Tag.Root>
+  );
+}
+
 // New component to display referenced feedback
 function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check_id: number }) {
-  const submission = useSubmissionMaybe();
-  const submission_id = submission?.id;
+  const referencedFeedback = useReferencedRubricCheckInstances(referencing_check_id);
 
-  const { instances, isLoading, error } = useReferencedRubricCheckInstances(referencing_check_id, submission_id);
-
-  if (isLoading) {
-    return (
-      <Text fontSize="xs" color="fg.muted" mt={2}>
-        Loading related feedback...
-      </Text>
-    );
-  }
-
-  if (error) {
-    return (
-      <Text fontSize="xs" color="red.500" mt={2}>
-        Error loading related feedback: {error.message}
-      </Text>
-    );
-  }
-
-  if (!instances || instances.length === 0) {
+  if (!referencedFeedback || referencedFeedback.length === 0) {
     return null;
   }
 
@@ -526,36 +532,22 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
         Related Feedback from Other Reviews:
       </Text>
       <VStack gap={3} alignItems="stretch">
-        {instances.map((instance, index) => (
+        {referencedFeedback.map((instance, index) => (
           <Box key={index} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default" bg="bg.canvas">
             <VStack alignItems="flex-start" mb={1.5}>
-              <Tooltip content={instance.referencedRubricCheck.description || "No description"} showArrow>
-                <Text fontSize="xs" fontWeight="bold" truncate>
-                  {instance.referencedRubricCheck.name}
-                </Text>
-              </Tooltip>
-              {isLineComment(instance.comment) && <SubmissionFileCommentLink comment={instance.comment} />}
-              {isArtifactComment(instance.comment) && <SubmissionArtifactCommentLink comment={instance.comment} />}
-              {instance.reviewRound && instance.rubric && (
-                <Tag.Root size="sm" colorPalette="blue" variant="outline">
-                  <Tag.Label>
-                    {instance.rubric.name} ({instance.reviewRound})
-                  </Tag.Label>
-                </Tag.Root>
-              )}
+              <ReferencedFeedbackHeader check_id={instance.rubric_check_id!} />
+              {isLineComment(instance) && <SubmissionFileCommentLink comment={instance} />}
+              {isArtifactComment(instance) && <SubmissionArtifactCommentLink comment={instance} />}
+              <ReviewRoundTag submission_review_id={instance.submission_review_id!} />
             </VStack>
-            {instance.authorProfile && (
-              <HStack gap={1.5} alignItems="center" mb={1.5}>
-                <PersonAvatar uid={instance.authorProfile.id!} size="2xs" />
-                <Text fontSize="xs" color="fg.muted">
-                  {instance.authorProfile.name || instance.authorProfile.short_name || "Unknown Author"}
-                  {instance.comment.points != null &&
-                    ` (${instance.comment.points > 0 ? "+" : ""}${instance.comment.points} pts)`}
-                </Text>
-              </HStack>
-            )}
+            <HStack gap={1.5} alignItems="center" mb={1.5}>
+              <PersonName uid={instance.author} size="2xs" showAvatar={true} />
+              <Text fontSize="xs" color="fg.muted">
+                {instance.points != null && ` (${instance.points > 0 ? "+" : ""}${instance.points} pts)`}
+              </Text>
+            </HStack>
             <Box fontSize="sm">
-              <Markdown style={{ fontSize: "0.8rem" }}>{instance.comment.comment}</Markdown>
+              <Markdown style={{ fontSize: "0.8rem" }}>{instance.comment}</Markdown>
             </Box>
           </Box>
         ))}

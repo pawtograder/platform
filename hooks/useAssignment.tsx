@@ -2,14 +2,11 @@
 import {
   ActiveSubmissionsWithGradesForAssignment,
   Assignment,
-  AssignmentWithRubrics,
-  HydratedRubric,
-  HydratedRubricCheck,
-  HydratedRubricCriteria,
+  AssignmentWithRubricsAndReferences,
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
@@ -18,7 +15,6 @@ export function useRubricCheck(rubric_check_id: number | null | undefined) {
   if (!rubric_check_id) {
     return undefined;
   }
-  console.log("rubricCheckById", controller.rubricCheckById);
   return controller.rubricCheckById.get(rubric_check_id);
 }
 
@@ -27,7 +23,6 @@ export function useRubricCriteria(rubric_criteria_id: number | null | undefined)
   if (!rubric_criteria_id) {
     return undefined;
   }
-  console.log("rubricCriteriaById", controller.rubricCriteriaById);
   return controller.rubricCriteriaById.get(rubric_criteria_id);
 }
 
@@ -38,203 +33,32 @@ export function useRubric(review_round: RubricReviewRound) {
   return rubric;
 }
 
-type ListUpdateCallback<T> = (
-  data: T[],
-  {
-    entered,
-    left,
-    updated
-  }: {
-    entered: T[];
-    left: T[];
-    updated: T[];
+/**
+ * Returns all referencing rubric checks for which the given check is the referenced check.
+ * @param rubric_check_id Check that is referenced
+ * @returns the referencing rubric checks
+ */
+export function useReferencingRubricChecks(rubric_check_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  if (!rubric_check_id) {
+    return undefined;
   }
-) => void;
-type ItemUpdateCallback<T> = (data: T | undefined) => void;
-export type Unsubscribe = () => void;
-
+  return controller.referencingChecksById.get(rubric_check_id);
+}
 class AssignmentController {
   private _assignment?: Assignment;
-  private _rubrics: HydratedRubric[] = [];
+  private _rubrics: AssignmentWithRubricsAndReferences["rubrics"] = [];
   private _submissions: ActiveSubmissionsWithGradesForAssignment[] = [];
-  rubricCheckById: Map<number, HydratedRubricCheck> = new Map();
-  rubricCriteriaById: Map<number, HydratedRubricCriteria> = new Map();
+  rubricCheckById: Map<
+    number,
+    AssignmentWithRubricsAndReferences["rubrics"][number]["rubric_parts"][number]["rubric_criteria"][number]["rubric_checks"][number]
+  > = new Map();
+  rubricCriteriaById: Map<
+    number,
+    AssignmentWithRubricsAndReferences["rubrics"][number]["rubric_parts"][number]["rubric_criteria"][number]
+  > = new Map();
+  referencingChecksById: Map<number, number[]> = new Map();
 
-  private genericDataSubscribers: { [key: string]: Map<number, ItemUpdateCallback<unknown>[]> } = {};
-  private genericData: { [key: string]: Map<number, unknown> } = {};
-  private genericDataListSubscribers: { [key: string]: ListUpdateCallback<unknown>[] } = {};
-  private genericDataTypeToId: { [key: string]: (item: unknown) => number } = {};
-
-  registerGenericDataType(typeName: string, idGetter: (item: unknown) => number) {
-    if (!this.genericDataTypeToId[typeName]) {
-      this.genericDataTypeToId[typeName] = idGetter;
-      this.genericDataSubscribers[typeName] = new Map();
-      this.genericDataListSubscribers[typeName] = [];
-    }
-  }
-  setGeneric(typeName: string, data: unknown[]) {
-    if (!this.genericData[typeName]) {
-      this.genericData[typeName] = new Map();
-    }
-    const idGetter = this.genericDataTypeToId[typeName];
-    for (const item of data) {
-      const id = idGetter(item);
-      this.genericData[typeName].set(id, item);
-      const itemSubscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-      itemSubscribers.forEach((cb) => cb(item));
-    }
-    const listSubscribers = this.genericDataListSubscribers[typeName] || [];
-    listSubscribers.forEach((cb) =>
-      cb(Array.from(this.genericData[typeName].values()), { entered: data, left: [], updated: [] })
-    );
-  }
-  listGenericData<T>(
-    typeName: string,
-    callback?: ListUpdateCallback<T>,
-    filter?: (item: T) => boolean
-  ): { unsubscribe: Unsubscribe; data: T[] } {
-    const subscribers = this.genericDataListSubscribers[typeName] || [];
-    let filteredCallback = callback as ListUpdateCallback<unknown> | undefined;
-    if (filteredCallback && callback) {
-      if (filter) {
-        filteredCallback = (data, { entered, left, updated }) => {
-          const filteredData = data.filter(filter as (value: unknown) => boolean);
-          const filteredEntered = entered.filter(filter as (value: unknown) => boolean);
-          const filteredLeft = left.filter(filter as (value: unknown) => boolean);
-          const filteredUpdated = updated.filter(filter as (value: unknown) => boolean);
-          (callback as ListUpdateCallback<unknown>)(filteredData, {
-            entered: filteredEntered,
-            left: filteredLeft,
-            updated: filteredUpdated
-          });
-        };
-      }
-      subscribers.push(filteredCallback);
-    }
-    this.genericDataListSubscribers[typeName] = subscribers;
-    const currentData = this.genericData[typeName]?.values() || [];
-    if (filter) {
-      return {
-        unsubscribe: () => {
-          this.genericDataListSubscribers[typeName] =
-            this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
-        },
-        data: (Array.from(currentData) as T[]).filter(filter)
-      };
-    }
-    return {
-      unsubscribe: () => {
-        this.genericDataListSubscribers[typeName] =
-          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
-      },
-      data: Array.from(currentData) as T[]
-    };
-  }
-  getValueWithSubscription<T>(
-    typeName: string,
-    id: number | ((item: T) => boolean),
-    callback?: ItemUpdateCallback<T>
-  ): { unsubscribe: Unsubscribe; data: T | undefined } {
-    if (!this.genericDataTypeToId[typeName]) {
-      throw new Error(`No id getter for type ${typeName}`);
-    }
-    if (typeof id === "function") {
-      const idPredicate = id as (item: unknown) => boolean;
-      const relevantIds = Array.from(this.genericData[typeName]?.keys() || []).filter((_id) => {
-        const item = this.genericData[typeName]?.get(_id);
-        return item !== undefined && idPredicate(item);
-      });
-      if (relevantIds.length == 0) {
-        return {
-          unsubscribe: () => {},
-          data: undefined
-        };
-      } else if (relevantIds.length == 1) {
-        const foundId = relevantIds[0];
-        const subscribers = this.genericDataSubscribers[typeName]?.get(foundId) || [];
-        if (callback) {
-          this.genericDataSubscribers[typeName]?.set(foundId, [
-            ...subscribers,
-            callback as ItemUpdateCallback<unknown>
-          ]);
-        }
-        return {
-          unsubscribe: () => {
-            this.genericDataSubscribers[typeName]?.set(
-              foundId,
-              subscribers.filter((cb) => cb !== callback)
-            );
-          },
-          data: this.genericData[typeName]?.get(foundId) as T | undefined
-        };
-      } else {
-        throw new Error(`Multiple ids found for type ${typeName}`);
-      }
-    } else if (typeof id === "number") {
-      const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-      if (callback) {
-        this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as ItemUpdateCallback<unknown>]);
-      }
-      return {
-        unsubscribe: () => {
-          this.genericDataSubscribers[typeName]?.set(
-            id,
-            subscribers.filter((cb) => cb !== callback)
-          );
-        },
-        data: this.genericData[typeName]?.get(id) as T | undefined
-      };
-    } else {
-      throw new Error(`Invalid id type ${typeof id}`);
-    }
-  }
-  handleGenericDataEvent(typeName: string, event: LiveEvent) {
-    const body = event.payload as unknown;
-    const idGetter = this.genericDataTypeToId[typeName];
-    if (!idGetter) return;
-    const id = idGetter(body);
-    if (!this.genericData[typeName]) {
-      this.genericData[typeName] = new Map();
-    }
-    if (!this.genericDataSubscribers[typeName]) {
-      this.genericDataSubscribers[typeName] = new Map();
-    }
-    if (!this.genericDataListSubscribers[typeName]) {
-      this.genericDataListSubscribers[typeName] = [];
-    }
-    if (event.type === "created") {
-      this.genericData[typeName].set(id, body);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => {
-        const allData = Array.from(this.genericData[typeName].values());
-        cb(allData, { entered: [body], left: [], updated: [] });
-      });
-      if (typeName === "rubrics") {
-        this._rubrics = Array.from(this.genericData[typeName].values()) as HydratedRubric[];
-        this.rebuildRubricDerivedMaps();
-      }
-    } else if (event.type === "updated") {
-      this.genericData[typeName].set(id, body);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [body] })
-      );
-      if (typeName === "rubrics") {
-        this._rubrics = Array.from(this.genericData[typeName].values()) as HydratedRubric[];
-        this.rebuildRubricDerivedMaps();
-      }
-    } else if (event.type === "deleted") {
-      this.genericData[typeName].delete(id);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [body], updated: [] })
-      );
-      if (typeName === "rubrics") {
-        this._rubrics = Array.from(this.genericData[typeName].values()) as HydratedRubric[];
-        this.rebuildRubricDerivedMaps();
-      }
-    }
-  }
   // Assignment
   set assignment(assignment: Assignment) {
     this._assignment = assignment;
@@ -244,7 +68,7 @@ class AssignmentController {
     return this._assignment;
   }
   // Rubrics
-  set rubrics(rubrics: HydratedRubric[]) {
+  set rubrics(rubrics: AssignmentWithRubricsAndReferences["rubrics"]) {
     this._rubrics = rubrics;
     this.rebuildRubricDerivedMaps();
   }
@@ -254,6 +78,7 @@ class AssignmentController {
   private rebuildRubricDerivedMaps() {
     this.rubricCheckById.clear();
     this.rubricCriteriaById.clear();
+    this.referencingChecksById.clear();
     for (const rubric of this._rubrics) {
       if (rubric.rubric_parts) {
         for (const part of rubric.rubric_parts) {
@@ -263,6 +88,16 @@ class AssignmentController {
               if (criteria.rubric_checks) {
                 for (const check of criteria.rubric_checks) {
                   this.rubricCheckById.set(check.id, check);
+                  if (check.rubric_check_references) {
+                    for (const reference of check.rubric_check_references) {
+                      if (!this.referencingChecksById.has(reference.referenced_rubric_check_id)) {
+                        this.referencingChecksById.set(reference.referenced_rubric_check_id, []);
+                      }
+                      this.referencingChecksById
+                        .get(reference.referenced_rubric_check_id)!
+                        .push(reference.referencing_rubric_check_id);
+                    }
+                  }
                 }
               }
             }
@@ -292,7 +127,6 @@ const AssignmentContext = createContext<AssignmentContextType | null>(null);
 export function useAssignmentController() {
   const ctx = useContext(AssignmentContext);
   if (!ctx) throw new Error("useAssignmentController must be used within AssignmentProvider");
-  console.log("ctx", ctx);
   return ctx.assignmentController;
 }
 
@@ -314,8 +148,6 @@ export function AssignmentProvider({
     return <Text>Error: Invalid Assignment ID.</Text>;
   }
 
-  console.log("AssignmentProvider", controller.current);
-
   return (
     <AssignmentContext.Provider value={{ assignmentController: controller.current }}>
       <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller.current} />
@@ -334,7 +166,7 @@ function AssignmentControllerCreator({
   controller: AssignmentController;
 }) {
   // Assignment
-  const { query: assignmentQuery } = useShow<AssignmentWithRubrics>({
+  const { query: assignmentQuery } = useShow<AssignmentWithRubricsAndReferences>({
     resource: "assignments",
     id: assignment_id,
     queryOptions: { enabled: !!assignment_id },
@@ -349,32 +181,17 @@ function AssignmentControllerCreator({
     resource: "submissions_with_grades_for_assignment",
     filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
     pagination: { pageSize: 1000 },
-    liveMode: "manual",
-    queryOptions: { enabled: !!assignment_id },
-    onLiveEvent: (event) => {
-      controller.handleGenericDataEvent("submissions", event);
-    }
+    queryOptions: { enabled: !!assignment_id }
   });
-
-  // Register types for generic data (rubrics, submissions)
-  useEffect(() => {
-    controller.registerGenericDataType("rubrics", (item: unknown) => (item as HydratedRubric).id);
-    controller.registerGenericDataType(
-      "submissions",
-      (item: unknown) => (item as ActiveSubmissionsWithGradesForAssignment).id
-    );
-  }, [controller]);
 
   // Set data in controller
   useEffect(() => {
     if (assignmentQuery.data?.data) {
       controller.assignment = assignmentQuery.data.data;
-      console.log("assignmentQuery.data.data", assignmentQuery.data.data.rubrics);
     }
     controller.rubrics = assignmentQuery.data?.data.rubrics || [];
     if (submissionsData?.data) {
       controller.submissions = submissionsData.data;
-      controller.setGeneric("submissions", submissionsData.data);
     }
     if (!assignmentQuery.isLoading && assignmentQuery.data?.data) {
       setReady(true);

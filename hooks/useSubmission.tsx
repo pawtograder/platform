@@ -1,5 +1,6 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
+import { useRubricCheck as useNewRubricCheck } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   HydratedRubricCheck,
@@ -18,10 +19,8 @@ import {
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
-import { createClient } from "@/utils/supabase/client";
 import { Spinner, Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
-import { PostgrestError } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
@@ -1007,226 +1006,32 @@ export type ReferencedRubricCheckInstance = {
   authorProfile?: Partial<Tables<"profiles">> | null;
 };
 
-export function useReferencedRubricCheckInstances(
-  referencing_check_id: number | undefined | null,
-  submission_id: number | undefined | null
-): { instances: ReferencedRubricCheckInstance[]; isLoading: boolean; error: PostgrestError | Error | null } {
-  const supabase = createClient();
-  const submissionController = useSubmissionController();
-  const [instances, setInstances] = useState<ReferencedRubricCheckInstance[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<PostgrestError | Error | null>(null);
-
+export function useReferencedRubricCheckInstances(referencing_check_id: number | undefined | null) {
   // Get comments from submission controller instead of separate queries
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
   const artifactComments = useSubmissionArtifactComments({});
 
-  useEffect(() => {
-    if (!referencing_check_id || !submission_id || !supabase || !submissionController) {
-      setInstances([]);
-      setIsLoading(!!(referencing_check_id && submission_id && supabase && submissionController));
-      return;
-    }
+  const referencingCheck = useNewRubricCheck(referencing_check_id);
 
-    let isMounted = true;
-    setIsLoading(true);
-    setError(null);
+  const allRelevantComments = useMemo(() => {
+    const referencedCheckIds = referencingCheck?.rubric_check_references.map((ref) => ref.referenced_rubric_check_id);
+    const relevantFileComments = fileComments.filter(
+      (comment) =>
+        comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
+    );
+    const relevantSubmissionComments = submissionComments.filter(
+      (comment) =>
+        comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
+    );
+    const relevantArtifactComments = artifactComments.filter(
+      (comment) =>
+        comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
+    );
+    return [...relevantFileComments, ...relevantSubmissionComments, ...relevantArtifactComments];
+  }, [fileComments, submissionComments, artifactComments, referencingCheck]);
 
-    const fetchInstances = async () => {
-      try {
-        // Still need to fetch rubric check references separately
-        const { data: references, error: referencesError } = await supabase
-          .from("rubric_check_references")
-          .select("*")
-          .eq("referencing_rubric_check_id", referencing_check_id);
-
-        if (referencesError) throw referencesError;
-        if (!isMounted || !references || references.length === 0) {
-          if (isMounted) setInstances([]);
-          return;
-        }
-
-        const collectedInstances: ReferencedRubricCheckInstance[] = [];
-
-        for (const ref of references) {
-          const referenced_rubric_check_id = ref.referenced_rubric_check_id;
-
-          // Still need to fetch referenced checks separately since they're from other rubrics
-          const { data: referencedCheck, error: referencedCheckError } = await supabase
-            .from("rubric_checks")
-            .select("*")
-            .eq("id", referenced_rubric_check_id)
-            .single();
-
-          if (referencedCheckError) {
-            toaster.create({
-              title: `Error fetching referenced check ${referenced_rubric_check_id}`,
-              description: referencedCheckError.message,
-              type: "warning"
-            });
-            continue;
-          }
-          if (!referencedCheck) continue;
-
-          // Use submission controller data for comments instead of separate queries
-          const relevantFileComments = fileComments.filter(
-            (comment) => comment.rubric_check_id === referenced_rubric_check_id && comment.deleted_at === null
-          );
-
-          const relevantSubmissionComments = submissionComments.filter(
-            (comment) => comment.rubric_check_id === referenced_rubric_check_id && comment.deleted_at === null
-          );
-
-          const relevantArtifactComments = artifactComments.filter(
-            (comment) => comment.rubric_check_id === referenced_rubric_check_id && comment.deleted_at === null
-          );
-
-          // Collect all comment types
-          const allRelevantComments = [
-            ...relevantFileComments.map((comment) => ({ ...comment, type: "file" as const })),
-            ...relevantSubmissionComments.map((comment) => ({ ...comment, type: "general" as const })),
-            ...relevantArtifactComments.map((comment) => ({ ...comment, type: "artifact" as const }))
-          ];
-
-          // Fetch author profiles for all comments (since they're not in submission controller)
-          const authorIds = [...new Set(allRelevantComments.map((comment) => comment.author).filter(Boolean))];
-          const authorProfiles = new Map();
-
-          if (authorIds.length > 0) {
-            const { data: profiles, error: profilesError } = await supabase
-              .from("profiles")
-              .select("id, name, avatar_url, flair, short_name")
-              .in("id", authorIds);
-
-            if (profilesError) {
-              toaster.create({
-                title: "Error fetching author profiles:",
-                description: profilesError.message,
-                type: "warning"
-              });
-            } else if (profiles) {
-              profiles.forEach((profile) => authorProfiles.set(profile.id, profile));
-            }
-          }
-
-          for (const rawComment of allRelevantComments) {
-            const comment = {
-              ...rawComment,
-              author_profile: rawComment.author ? authorProfiles.get(rawComment.author) : null
-            } as ReferencedRubricCheckInstance["comment"];
-
-            let submissionReview: Tables<"submission_reviews"> | undefined = undefined;
-            let rubric: Pick<Tables<"rubrics">, "id" | "name" | "review_round" | "assignment_id"> | undefined =
-              undefined;
-            let reviewRound: Enums<"review_round"> | null = null;
-            const authorProfile = comment.author_profile || undefined;
-
-            // Fetch the correct rubric based on the referencedRubricCheck's rubric_criteria_id
-            if (referencedCheck && referencedCheck.rubric_criteria_id) {
-              const { data: criteriaData, error: criteriaError } = await supabase
-                .from("rubric_criteria")
-                .select("rubric_id")
-                .eq("id", referencedCheck.rubric_criteria_id)
-                .single();
-
-              if (criteriaError) {
-                toaster.error({
-                  title: "Error fetching rubric criteria for referenced check",
-                  description: criteriaError.message
-                });
-              } else if (criteriaData && criteriaData.rubric_id) {
-                const { data: rubricData, error: rubricError } = await supabase
-                  .from("rubrics")
-                  .select("id, name, review_round, assignment_id")
-                  .eq("id", criteriaData.rubric_id)
-                  .single();
-                if (rubricError) {
-                  toaster.error({
-                    title: "Error fetching correct rubric",
-                    description: rubricError.message
-                  });
-                } else {
-                  rubric = rubricData || undefined;
-                  reviewRound = rubric?.review_round || null;
-                }
-              }
-            }
-
-            // Check if comment is associated with a submission review (use submission controller data)
-            if (comment.submission_review_id) {
-              const { data: reviewFromController } = submissionController.getValueWithSubscription<SubmissionReview>(
-                "submission_reviews",
-                comment.submission_review_id
-              );
-
-              submissionReview = reviewFromController;
-
-              // If we haven't found a rubric yet, fall back to the submissionReview's rubric
-              if (!rubric && submissionReview && submissionReview.rubric_id) {
-                const { data: fallbackRubricData, error: fallbackRubricError } = await supabase
-                  .from("rubrics")
-                  .select("id, name, review_round, assignment_id")
-                  .eq("id", submissionReview.rubric_id)
-                  .single();
-                if (fallbackRubricError) {
-                  toaster.error({
-                    title: "Error fetching fallback rubric",
-                    description: fallbackRubricError.message
-                  });
-                } else {
-                  rubric = fallbackRubricData || undefined;
-                  reviewRound = rubric?.review_round || null;
-                }
-              }
-            }
-
-            collectedInstances.push({
-              referencedRubricCheck: referencedCheck,
-              comment,
-              submissionReview,
-              rubric,
-              reviewRound,
-              authorProfile
-            });
-          }
-        }
-        if (isMounted) setInstances(collectedInstances);
-      } catch (e: unknown) {
-        toaster.error({
-          title: "Error fetching referenced rubric check instances:",
-          description: e instanceof Error ? e.message : "An unknown error occurred"
-        });
-        if (isMounted) {
-          if (e instanceof Error) {
-            setError(e);
-          } else if (typeof e === "object" && e !== null && "message" in e) {
-            setError(new Error(String(e.message)));
-          } else {
-            setError(new Error("An unknown error occurred"));
-          }
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    fetchInstances();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [
-    referencing_check_id,
-    submission_id,
-    supabase,
-    submissionController,
-    fileComments,
-    submissionComments,
-    artifactComments
-  ]);
-
-  return { instances, isLoading, error };
+  return allRelevantComments;
 }
 
 export function useSubmissionReviewForRubric(
@@ -1290,144 +1095,4 @@ export function useSubmissionReviewForRubric(
   }, [enabled, rubricId, submission, controller, private_profile_id]);
 
   return { submissionReview, isLoading, error };
-}
-
-export function useReferencingRubricChecks(
-  rubricId?: number | null,
-  enabled: boolean = true
-): {
-  referencingChecks: (HydratedRubricCheck & { referencedChecks: HydratedRubricCheck[] })[];
-  isLoading: boolean;
-  error: PostgrestError | Error | null;
-} {
-  const supabase = createClient();
-  const [referencingChecks, setReferencingChecks] = useState<
-    (HydratedRubricCheck & { referencedChecks: HydratedRubricCheck[] })[]
-  >([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<PostgrestError | Error | null>(null);
-
-  useEffect(() => {
-    if (!enabled || !rubricId || !supabase) {
-      setReferencingChecks([]);
-      setIsLoading(false);
-      return;
-    }
-
-    let isMounted = true;
-    setIsLoading(true);
-    setError(null);
-
-    const fetchReferencingChecks = async () => {
-      try {
-        // First, get all checks in the given rubric that are annotations
-        const { data: rubricData, error: rubricError } = await supabase
-          .from("rubrics")
-          .select("*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))")
-          .eq("id", rubricId)
-          .single();
-
-        if (rubricError) throw rubricError;
-        if (!isMounted || !rubricData) {
-          return;
-        }
-
-        const allChecksInRubric: HydratedRubricCheck[] = [];
-        if (rubricData.rubric_parts) {
-          for (const part of rubricData.rubric_parts) {
-            for (const criteria of part.rubric_criteria) {
-              for (const check of criteria.rubric_checks) {
-                allChecksInRubric.push(check as HydratedRubricCheck);
-              }
-            }
-          }
-        }
-
-        // Filter to only annotation checks for files
-        const annotationChecks = allChecksInRubric.filter(
-          (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-        );
-
-        if (annotationChecks.length === 0) {
-          if (isMounted) setReferencingChecks([]);
-          return;
-        }
-
-        const checkIds = annotationChecks.map((check) => check.id);
-
-        // Get all references where these checks are referencing other checks
-        const { data: references, error: referencesError } = await supabase
-          .from("rubric_check_references")
-          .select("*")
-          .in("referencing_rubric_check_id", checkIds);
-
-        if (referencesError) throw referencesError;
-        if (!isMounted || !references || references.length === 0) {
-          if (isMounted) setReferencingChecks([]);
-          return;
-        }
-
-        // Get the referenced checks
-        const referencedCheckIds = references.map((ref) => ref.referenced_rubric_check_id);
-        const { data: referencedChecks, error: referencedChecksError } = await supabase
-          .from("rubric_checks")
-          .select("*")
-          .in("id", referencedCheckIds);
-
-        if (referencedChecksError) throw referencedChecksError;
-        if (!isMounted || !referencedChecks) {
-          return;
-        }
-
-        // Build the result mapping referencing checks to their referenced checks
-        const referencingChecksWithReferences: (HydratedRubricCheck & { referencedChecks: HydratedRubricCheck[] })[] =
-          [];
-
-        for (const check of annotationChecks) {
-          const referencesForThisCheck = references.filter((ref) => ref.referencing_rubric_check_id === check.id);
-
-          if (referencesForThisCheck.length > 0) {
-            const referencedChecksForThisCheck = referencedChecks.filter((refCheck) =>
-              referencesForThisCheck.some((ref) => ref.referenced_rubric_check_id === refCheck.id)
-            );
-
-            // Only include annotation checks that are also for files
-            const filteredReferencedChecks = referencedChecksForThisCheck.filter(
-              (refCheck) =>
-                refCheck.is_annotation && (refCheck.annotation_target === "file" || refCheck.annotation_target === null)
-            );
-
-            if (filteredReferencedChecks.length > 0) {
-              referencingChecksWithReferences.push({
-                ...check,
-                referencedChecks: filteredReferencedChecks as HydratedRubricCheck[]
-              });
-            }
-          }
-        }
-
-        if (isMounted) setReferencingChecks(referencingChecksWithReferences);
-      } catch (e: unknown) {
-        if (isMounted) {
-          if (e instanceof Error) {
-            setError(e);
-          } else if (typeof e === "object" && e !== null && "message" in e) {
-            setError(new Error(String(e.message)));
-          } else {
-            setError(new Error("An unknown error occurred"));
-          }
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    fetchReferencingChecks();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [enabled, rubricId, supabase]);
-
-  return { referencingChecks, isLoading, error };
 }

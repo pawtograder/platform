@@ -3,9 +3,13 @@ import { Database, Json } from "./SupabaseTypes";
 export type { Json };
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
-export type AssignmentWithRubrics = Assignment & {
-  rubrics: HydratedRubric[];
-};
+export type AssignmentWithRubricsAndReferences = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignments"]["Row"],
+  "assignments",
+  Database["public"]["Tables"]["assignments"]["Relationships"],
+  "*, rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
+>;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
 export type ActiveSubmissionsWithGradesForAssignment =
