@@ -60,7 +60,6 @@ WITH CHECK (
    true
 );
 
--- auto create self review rubrics and make them mandatory, makes generating them much less complicated... 
 CREATE OR REPLACE FUNCTION public.assignments_grader_config_auto_populate()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -80,75 +79,90 @@ UPDATE assignments set self_review_rubric_id=self_rubric_id WHERE id=NEW.id;
 end;$function$
 ;
 
-
-
-CREATE EXTENSION IF NOT EXISTS pg_cron;
-
 CREATE OR REPLACE FUNCTION auto_assign_self_reviews()
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
-INSERT INTO review_assignments (
-    due_date,
-    assignee_profile_id,
-    submission_id,
-    assignment_id,
-    rubric_id,
-    class_id
-)
-SELECT 
-    CASE 
-        WHEN ade.hours IS NOT NULL THEN a.due_date + INTERVAL '1 hour' * ade.hours + INTERVAL '1 hour' * srs.deadline_offset
-        ELSE a.due_date + INTERVAL '1 hour' * srs.deadline_offset
-    END as due_date,
-    p.id as assignee_profile_id,
-    (
-        -- submission id is the id of the active submission for this profile
-        SELECT s.id 
-        FROM submissions s 
-        WHERE s.profile_id = p.id 
-        AND s.is_active = TRUE 
-        LIMIT 1
-    ) as submission_id,
-    a.id as assignment_id,
-    a.self_review_rubric_id, -- Fixed: removed "OR," 
-    a.class_id
-FROM assignments a
-CROSS JOIN profiles p
-LEFT JOIN assignment_due_date_exceptions ade ON (
-    ade.assignment_id = a.id 
-    AND ade.student_id = p.id
-)
-JOIN self_review_settings srs ON srs.id = a.self_review_setting_id -- Added this JOIN
-WHERE 
-    -- Profile conditions
-    p.is_private_profile = TRUE
-    AND p.class_id = a.class_id
-    AND EXISTS (
-        -- private profile should exist as a student in class, prevents reviews from being assigned to graders + instructors
-        SELECT 1 FROM user_roles urs 
-        WHERE urs.private_profile_id = p.id 
-        AND urs.role = 'student' -- Added quotes around student
+    INSERT INTO review_assignments (
+        due_date,
+        assignee_profile_id,
+        submission_id,
+        assignment_id,
+        rubric_id,
+        class_id
     )
-    -- The settings for this assignment reflect that self review is enabled
-    AND srs.enabled = true -- Simplified since we're now JOINing on this table
-    -- Self review hasn't been processed for this specific profile yet
-    AND NOT EXISTS (
-        SELECT 1 FROM review_assignments ra 
-        WHERE ra.assignment_id = a.id 
-        AND ra.assignee_profile_id = p.id
+    SELECT 
+        -- due_date: if there is a exception, use that. else, use regular assignment due date.  add hour offset.
+        CASE 
+            WHEN ade.hours IS NOT NULL THEN a.due_date + INTERVAL '1 hour' * ade.hours + INTERVAL '1 hour' * srs.deadline_offset
+            ELSE a.due_date + INTERVAL '1 hour' * srs.deadline_offset
+        END as due_date,
+        -- assignee_profile_id: private profile id is assigned  
+        p.id as assignee_profile_id,
+        -- submission_id: find the id of the active submission for this profile 
+        (
+            SELECT s.id 
+            FROM submissions s 
+            WHERE s.profile_id = p.id 
+            AND s.is_active = TRUE 
+            LIMIT 1
+        ) as submission_id,
+        -- assignment_id: any assignment that has unassigned self reviews that are now needed
+        a.id as assignment_id,
+        -- rubric_id: the self review rubric of the assignment 
+        a.self_review_rubric_id,
+        -- class_id: the class id of the assignment 
+        a.class_id
+    FROM assignments a -- for each assignment x profile combination
+    CROSS JOIN profiles p 
+    LEFT JOIN assignment_due_date_exceptions ade ON (  -- grab any exceptions for this profile for this assignment
+        ade.assignment_id = a.id 
+        AND ade.student_id = p.id
     )
-    -- Assignment deadline has passed (either regular due date or exception due date)
-    AND (
-        -- Case 1: No exception exists, use regular due date
-        (ade.student_id IS NULL AND a.due_date <= NOW())
-        OR
-        -- Case 2: Exception exists, use exception due date
-        (ade.student_id IS NOT NULL AND a.due_date + INTERVAL '1 hour' * ade.hours <= NOW())
-    );    
+    JOIN self_review_settings srs ON srs.id = a.self_review_setting_id -- grab the self review settings for assignment a
+    WHERE -- determine whether this profile needs a review assignment created for this assignment based on the following conditions:
+        -- Profile conditions: only use profiles that are private, for the class of the assignment, and for students
+        p.is_private_profile = TRUE
+        AND p.class_id = a.class_id
+        AND EXISTS (
+            SELECT 1 FROM user_roles urs 
+            WHERE urs.private_profile_id = p.id 
+            AND urs.role = 'student'
+        )
+        -- Self review settings must be enabled
+        AND srs.enabled = true
+        -- There isn't an existing self review assignment for this profile on this assignment
+        AND NOT EXISTS (
+            SELECT 1 FROM review_assignments ra 
+            WHERE ra.assignment_id = a.id 
+            AND ra.assignee_profile_id = p.id
+        )
+        -- Assignment deadline has passed (either regular due date or exception due date)
+        AND (
+            -- Case 1: No exception exists, use regular due date
+            (ade.student_id IS NULL AND a.due_date <= NOW())
+            OR
+            -- Case 2: Exception exists, use exception due date
+            (ade.student_id IS NOT NULL AND a.due_date + INTERVAL '1 hour' * ade.hours <= NOW())
+        );
+
 END;
 $$;
 
-SELECT cron.schedule('auto_assign_self_reviews', '* * * * *', 'SELECT auto_assign_self_reviews();');
+CREATE OR REPLACE FUNCTION auto_assign_self_reviews_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM auto_assign_self_reviews();
+    RETURN NEW;
+END;
+$$;
+
+
+CREATE TRIGGER self_review_insert_after_student_finish 
+AFTER INSERT ON public.assignment_due_date_exceptions 
+FOR EACH ROW
+EXECUTE FUNCTION auto_assign_self_reviews_trigger();
 

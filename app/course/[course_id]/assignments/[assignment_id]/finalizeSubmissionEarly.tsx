@@ -1,11 +1,5 @@
 "use client";
-import {
-  Assignment,
-  AssignmentDueDateException,
-  AssignmentGroupMember,
-  AssignmentGroupWithMembersInvitationsAndJoinRequests,
-  UserProfile
-} from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentDueDateException, AssignmentGroupMember } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
 import { useCreate, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -13,11 +7,11 @@ import { useParams } from "next/navigation";
 export default function FinalizeSubmissionEarly({
   assignment,
   group_id,
-  public_profile_id
+  private_profile_id
 }: {
   assignment: Assignment;
   group_id?: number;
-  public_profile_id?: string;
+  private_profile_id?: string;
 }) {
   const { course_id } = useParams();
   const { mutate: create } = useCreate();
@@ -27,7 +21,7 @@ export default function FinalizeSubmissionEarly({
     meta: {
       select: "*"
     },
-    filters: [{ field: "profile_id", operator: "eq", value: public_profile_id }],
+    filters: [{ field: "profile_id", operator: "eq", value: private_profile_id }],
     pagination: { pageSize: 1 }
   });
 
@@ -40,14 +34,17 @@ export default function FinalizeSubmissionEarly({
     },
 
     filters: [
-      { field: "student_id", operator: "eq", value: public_profile_id },
+      { field: "student_id", operator: "eq", value: private_profile_id },
       { field: "hours", operator: "lt", value: 0 }
     ]
   });
 
   // calculate the number of hours the student is finishing early
   function hoursBetween(time1: string, time2: string) {
-    return -1 * Math.ceil(Math.abs((new Date(time2) as any) - (new Date(time1) as any)) / (1000 * 60 * 60));
+    const date1 = new Date(time1);
+    const date2 = new Date(time2);
+    const diffInMilli = Math.abs(date2.getTime() - date1.getTime());
+    return -1 * Math.ceil(diffInMilli / 3600000); // 3600000 ms = 1 hour
   }
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
@@ -64,7 +61,7 @@ export default function FinalizeSubmissionEarly({
             assignment_group_id: group_id,
             student_id: member.profile_id,
             group_id: memberGroup.data[0].assignment_group_id,
-            creator_id: public_profile_id,
+            creator_id: private_profile_id,
             hours: hoursBetween(assignment.due_date, new Date().toDateString()), // difference between assignment due date and now, should be a negative number
             tokens_consumed: 0
           }
@@ -77,8 +74,8 @@ export default function FinalizeSubmissionEarly({
           class_id: course_id,
           assignment_id: assignment.id,
           assignment_group_id: group_id,
-          student_id: public_profile_id,
-          creator_id: public_profile_id,
+          student_id: private_profile_id,
+          creator_id: private_profile_id,
           hours: hoursBetween(assignment.due_date, new Date().toDateString()), // difference between assignment due date and now, should be a negative number
           tokens_consumed: 0
         }

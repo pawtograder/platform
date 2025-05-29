@@ -1,14 +1,13 @@
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
-import { Repository, SelfReviewSetting } from "@/utils/supabase/DatabaseTypes";
+import { Repository } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Alert, Box, Button, Flex, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
+import { Alert, Box, Flex, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
-import { useCallback } from "react";
 import FinishSubmissionEarly from "./finalizeSubmissionEarly";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
@@ -125,7 +124,7 @@ export default async function AssignmentPage({
           <FinishSubmissionEarly
             assignment={assignment}
             group_id={assignment_group_id}
-            public_profile_id={enrollment?.public_profile_id}
+            private_profile_id={enrollment?.private_profile_id}
           />
         )}
       </Flex>
