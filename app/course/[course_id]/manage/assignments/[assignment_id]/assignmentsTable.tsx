@@ -186,7 +186,7 @@ export default function AssignmentsTable() {
                   .filter((id) => id !== null);
                 const supabase = createClient();
 
-                const { data, error } = await supabase
+                const { error } = await supabase
                   .from("submission_reviews")
                   .update({ released: true })
                   .in("submission_id", submissionIds)
