@@ -2,8 +2,10 @@
 import {
   ActiveSubmissionsWithGradesForAssignment,
   Assignment,
+  AssignmentWithRubrics,
   HydratedRubric,
   HydratedRubricCheck,
+  HydratedRubricCriteria,
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
 import { Text } from "@chakra-ui/react";
@@ -11,9 +13,22 @@ import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
-export function useRubricCheck(rubric_check_id: number) {
+export function useRubricCheck(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
+  if (!rubric_check_id) {
+    return undefined;
+  }
+  console.log("rubricCheckById", controller.rubricCheckById);
   return controller.rubricCheckById.get(rubric_check_id);
+}
+
+export function useRubricCriteria(rubric_criteria_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  if (!rubric_criteria_id) {
+    return undefined;
+  }
+  console.log("rubricCriteriaById", controller.rubricCriteriaById);
+  return controller.rubricCriteriaById.get(rubric_criteria_id);
 }
 
 export function useRubric(review_round: RubricReviewRound) {
@@ -43,6 +58,7 @@ class AssignmentController {
   private _rubrics: HydratedRubric[] = [];
   private _submissions: ActiveSubmissionsWithGradesForAssignment[] = [];
   rubricCheckById: Map<number, HydratedRubricCheck> = new Map();
+  rubricCriteriaById: Map<number, HydratedRubricCriteria> = new Map();
 
   private genericDataSubscribers: { [key: string]: Map<number, ItemUpdateCallback<unknown>[]> } = {};
   private genericData: { [key: string]: Map<number, unknown> } = {};
@@ -195,7 +211,7 @@ class AssignmentController {
       });
       if (typeName === "rubrics") {
         this._rubrics = Array.from(this.genericData[typeName].values()) as HydratedRubric[];
-        this.rebuildRubricCheckById();
+        this.rebuildRubricDerivedMaps();
       }
     } else if (event.type === "updated") {
       this.genericData[typeName].set(id, body);
@@ -205,7 +221,7 @@ class AssignmentController {
       );
       if (typeName === "rubrics") {
         this._rubrics = Array.from(this.genericData[typeName].values()) as HydratedRubric[];
-        this.rebuildRubricCheckById();
+        this.rebuildRubricDerivedMaps();
       }
     } else if (event.type === "deleted") {
       this.genericData[typeName].delete(id);
@@ -215,7 +231,7 @@ class AssignmentController {
       );
       if (typeName === "rubrics") {
         this._rubrics = Array.from(this.genericData[typeName].values()) as HydratedRubric[];
-        this.rebuildRubricCheckById();
+        this.rebuildRubricDerivedMaps();
       }
     }
   }
@@ -230,18 +246,20 @@ class AssignmentController {
   // Rubrics
   set rubrics(rubrics: HydratedRubric[]) {
     this._rubrics = rubrics;
-    this.rebuildRubricCheckById();
+    this.rebuildRubricDerivedMaps();
   }
   get rubrics() {
     return this._rubrics;
   }
-  private rebuildRubricCheckById() {
+  private rebuildRubricDerivedMaps() {
     this.rubricCheckById.clear();
+    this.rubricCriteriaById.clear();
     for (const rubric of this._rubrics) {
       if (rubric.rubric_parts) {
         for (const part of rubric.rubric_parts) {
           if (part.rubric_criteria) {
             for (const criteria of part.rubric_criteria) {
+              this.rubricCriteriaById.set(criteria.id, criteria);
               if (criteria.rubric_checks) {
                 for (const check of criteria.rubric_checks) {
                   this.rubricCheckById.set(check.id, check);
@@ -274,6 +292,7 @@ const AssignmentContext = createContext<AssignmentContextType | null>(null);
 export function useAssignmentController() {
   const ctx = useContext(AssignmentContext);
   if (!ctx) throw new Error("useAssignmentController must be used within AssignmentProvider");
+  console.log("ctx", ctx);
   return ctx.assignmentController;
 }
 
@@ -295,6 +314,8 @@ export function AssignmentProvider({
     return <Text>Error: Invalid Assignment ID.</Text>;
   }
 
+  console.log("AssignmentProvider", controller.current);
+
   return (
     <AssignmentContext.Provider value={{ assignmentController: controller.current }}>
       <AssignmentControllerCreator assignment_id={assignment_id} setReady={setReady} controller={controller.current} />
@@ -313,7 +334,7 @@ function AssignmentControllerCreator({
   controller: AssignmentController;
 }) {
   // Assignment
-  const { query: assignmentQuery } = useShow<Assignment>({
+  const { query: assignmentQuery } = useShow<AssignmentWithRubrics>({
     resource: "assignments",
     id: assignment_id,
     queryOptions: { enabled: !!assignment_id },
@@ -348,7 +369,9 @@ function AssignmentControllerCreator({
   useEffect(() => {
     if (assignmentQuery.data?.data) {
       controller.assignment = assignmentQuery.data.data;
+      console.log("assignmentQuery.data.data", assignmentQuery.data.data.rubrics);
     }
+    controller.rubrics = assignmentQuery.data?.data.rubrics || [];
     if (submissionsData?.data) {
       controller.submissions = submissionsData.data;
       controller.setGeneric("submissions", submissionsData.data);

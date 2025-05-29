@@ -5,9 +5,9 @@ import {
   useSubmissionFileComments,
   useSubmissionReviewByAssignmentId,
   useSubmissionRubric,
-  useReferencingRubricChecks,
-  useSubmissionReview
+  useReferencingRubricChecks
 } from "@/hooks/useSubmission";
+import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   HydratedRubricCheck,
@@ -409,37 +409,45 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   });
 
   // Use submission controller data instead of direct database calls
-  const submissionReview = useSubmissionReview(comment.submission_review_id);
+  // TODO: useAssignment hook
+  // const submissionReview = useSubmissionReview(comment.submission_review_id);
+  const rubricCheck = useRubricCheck(comment.rubric_check_id);
+  const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
 
-  // Find the rubric check and criteria from the pre-fetched review data
-  const { rubricCheck, rubricCriteria } = useMemo(() => {
-    if (!submissionReview?.rubrics || !comment.rubric_check_id) {
-      return { rubricCheck: undefined, rubricCriteria: undefined };
-    }
+  // console.log("submissionReview", submissionReview);
 
-    // Search through the review's rubric structure to find the check and its criteria
-    // Note: rubrics from submission reviews have rubric_criteria directly, not rubric_parts
-    for (const criteria of submissionReview.rubrics.rubric_criteria || []) {
-      const check = criteria.rubric_checks?.find((check: HydratedRubricCheck) => check.id === comment.rubric_check_id);
-      if (check) {
-        return { rubricCheck: check, rubricCriteria: criteria };
-      }
-    }
+  // // Find the rubric check and criteria from the pre-fetched review data
+  // const { rubricCheck, rubricCriteria } = useMemo(() => {
+  //   if (!submissionReview?.rubrics || !comment.rubric_check_id) {
+  //     return { rubricCheck: undefined, rubricCriteria: undefined };
+  //   }
 
-    return { rubricCheck: undefined, rubricCriteria: undefined };
-  }, [submissionReview, comment.rubric_check_id]);
+  //   // Search through the review's rubric structure to find the check and its criteria
+  //   // Note: rubrics from submission reviews have rubric_criteria directly, not rubric_parts
+  //   for (const criteria of submissionReview.rubrics.rubric_criteria || []) {
+  //     const check = criteria.rubric_checks?.find((check: HydratedRubricCheck) => check.id === comment.rubric_check_id);
+  //     if (check) {
+  //       return { rubricCheck: check, rubricCriteria: criteria };
+  //     }
+  //   }
 
-  // If no review data available yet, show loading skeleton
-  if (!submissionReview && comment.submission_review_id) {
-    return <Skeleton height="100px" width="100%" />;
-  }
+  //   return { rubricCheck: undefined, rubricCriteria: undefined };
+  // }, [submissionReview, comment.rubric_check_id]);
+
+  // // If no review data available yet, show loading skeleton
+  // if (!submissionReview && comment.submission_review_id) {
+  //   return <Skeleton height="100px" width="100%" />;
+  // }
+
+  console.log("rubricCheck", rubricCheck);
+  console.log("rubricCriteria", rubricCriteria);
 
   // If we can't find the check/criteria in the review data, show skeleton
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
   }
 
-  const reviewName = comment.submission_review_id ? submissionReview?.name : "Self-Review";
+  // const reviewName = comment.submission_review_id ? submissionReview?.name : "Self-Review";
 
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
 
@@ -475,7 +483,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
               </HStack>
               <HStack gap={0}>
                 <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                  {commentAuthor?.name} ({reviewName})
+                  {commentAuthor?.name} ({"TODO: review name"})
                 </Text>
                 <CommentActions comment={comment} setIsEditing={setIsEditing} />
               </HStack>

@@ -3,6 +3,10 @@ import { Database, Json } from "./SupabaseTypes";
 export type { Json };
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
+export type AssignmentWithRubrics = Assignment & {
+  rubrics: HydratedRubric[];
+};
+
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
 export type ActiveSubmissionsWithGradesForAssignment =
   Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
