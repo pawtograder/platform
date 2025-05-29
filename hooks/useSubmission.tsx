@@ -1,6 +1,9 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
+  HydratedRubricCheck,
+  HydratedRubricCriteria,
   HydratedRubricPart,
   RubricChecks,
   RubricCriteriaWithRubricChecks,
@@ -11,20 +14,17 @@ import {
   SubmissionFileComment,
   SubmissionReview,
   SubmissionReviewWithRubric,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric,
-  HydratedRubricCriteria,
-  HydratedRubricCheck,
-  SubmissionWithAllRelatedData
+  SubmissionWithAllRelatedData,
+  SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { Spinner, Text } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
-import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useRef, useState, useMemo } from "react";
-import { Unsubscribe } from "./useCourseController";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { createClient } from "@/utils/supabase/client";
+import { Spinner, Text } from "@chakra-ui/react";
+import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { PostgrestError } from "@supabase/supabase-js";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useParams } from "next/navigation";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Unsubscribe } from "./useCourseController";
 
 type ListUpdateCallback<T> = (
   data: T[],
@@ -134,7 +134,7 @@ class SubmissionController {
       });
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => {},
+          unsubscribe: () => { },
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -222,7 +222,7 @@ class SubmissionController {
       );
     }
   }
-  constructor() {}
+  constructor() { }
 
   get isReady() {
     return this._submission !== undefined;

@@ -46,7 +46,7 @@ import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -101,15 +101,15 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
   const [hasNewSubmission, setHasNewSubmission] = useState<boolean>(false);
   const groupOrProfileFilter: CrudFilter = submission.assignment_group_id
     ? {
-        field: "assignment_group_id",
-        operator: "eq",
-        value: submission.assignment_group_id
-      }
+      field: "assignment_group_id",
+      operator: "eq",
+      value: submission.assignment_group_id
+    }
     : {
-        field: "profile_id",
-        operator: "eq",
-        value: submission.profile_id
-      };
+      field: "profile_id",
+      operator: "eq",
+      value: submission.profile_id
+    };
   const { data, isLoading } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
@@ -236,8 +236,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         <Link href={link}>
                           {historical_submission.grader_results?.score !== undefined
                             ? historical_submission.grader_results?.score +
-                              "/" +
-                              historical_submission.grader_results?.max_score
+                            "/" +
+                            historical_submission.grader_results?.max_score
                             : "Error"}
                         </Link>
                       </Table.Cell>
@@ -245,8 +245,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                         <Link href={link}>
                           {historical_submission.submission_reviews?.completed_at &&
                             historical_submission.submission_reviews?.total_score +
-                              "/" +
-                              historical_submission.assignments.total_points}
+                            "/" +
+                            historical_submission.assignments.total_points}
                         </Link>
                       </Table.Cell>
                       <Table.Cell>
@@ -876,10 +876,9 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
   return (
-    <Flex direction="column" borderColor="border.muted" borderWidth="2px" borderRadius="md" minW="0px">
+    <Flex direction="column" minW="0px">
       <HStack pl={4} pr={4} pt={2} alignItems="center" justify="space-between" align="center">
         <Box>
-          <Heading size="lg">{submission.assignments.title}</Heading>
           <VStack align="flex-start">
             <HStack gap={1}>
               {submission.is_active && <ActiveSubmissionIcon />}
