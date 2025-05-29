@@ -1,20 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
-import { Textarea, VStack, Portal, HStack, Dialog } from "@chakra-ui/react";
-import { useList, useCreate, HttpError } from "@refinedev/core";
 import { Button } from "@/components/ui/button";
-import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
-import { toaster } from "@/components/ui/toaster";
 import { Field } from "@/components/ui/field";
+import PersonName from "@/components/ui/person-name";
+import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles, useGradersAndInstructors, useStudentRoster } from "@/hooks/useClassProfiles";
+import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
+import { Dialog, HStack, Portal, Text, Textarea, VStack } from "@chakra-ui/react";
+import { HttpError, useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
-import { Controller, SubmitHandler } from "react-hook-form";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useEffect, useMemo } from "react";
+import { Controller, SubmitHandler } from "react-hook-form";
 
 type GradingConflict = Database["public"]["Tables"]["grading_conflicts"]["Row"];
-type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
-type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"];
 
 interface FormOption extends OptionBase {
   value: string;
@@ -38,7 +37,11 @@ export default function AddConflictDialog({
   isOpen: boolean;
   closeModal: () => void;
 }) {
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
+  const studentRoster = useStudentRoster();
+  const gradersAndInstructors = useGradersAndInstructors();
+  const isGrader = role.role === "grader";
+  const isInstructor = role.role === "instructor";
 
   const {
     register,
@@ -55,50 +58,35 @@ export default function AddConflictDialog({
     }
   });
 
-  const { mutate: createConflict, isLoading: isCreating } = useCreate<GradingConflict>();
-
-  const { data: staffData, isLoading: isLoadingStaff } = useList<UserRoleRow & { profiles: ProfileRow }>({
-    resource: "user_roles",
-    filters: [
-      { field: "class_id", operator: "eq", value: courseId },
-      { field: "role", operator: "in", value: ["instructor", "grader"] }
-    ],
-    meta: {
-      select: "*, profiles!private_profile_id(id, name, sortable_name)"
+  // Auto-set grader field for graders
+  useEffect(() => {
+    if (isGrader) {
+      setValue("grader_profile_id", private_profile_id);
     }
-  });
+  }, [isGrader, private_profile_id, setValue]);
+
+  const { mutate: createConflict, isLoading: isCreating } = useCreate<GradingConflict>();
 
   const staffOptions: FormOption[] = useMemo(
     () =>
-      staffData?.data
-        ?.map((userRole) => ({
-          value: userRole.profiles.id,
-          label: userRole.profiles.sortable_name || userRole.profiles.name || userRole.profiles.id
+      gradersAndInstructors
+        ?.map((profile) => ({
+          value: profile.id,
+          label: profile.sortable_name || profile.name || profile.id
         }))
         .sort((a, b) => a.label.localeCompare(b.label)) || [],
-    [staffData]
+    [gradersAndInstructors]
   );
-
-  const { data: studentData, isLoading: isLoadingStudents } = useList<UserRoleRow & { profiles: ProfileRow }>({
-    resource: "user_roles",
-    filters: [
-      { field: "class_id", operator: "eq", value: courseId },
-      { field: "role", operator: "eq", value: "student" }
-    ],
-    meta: {
-      select: "*, profiles!private_profile_id(id, name, sortable_name)"
-    }
-  });
 
   const studentOptions: FormOption[] = useMemo(
     () =>
-      studentData?.data
-        ?.map((userRole) => ({
-          value: userRole.profiles.id,
-          label: userRole.profiles.sortable_name || userRole.profiles.name || userRole.profiles.id
+      studentRoster
+        ?.map((profile) => ({
+          value: profile.id,
+          label: profile.sortable_name || profile.name || profile.id
         }))
         .sort((a, b) => a.label.localeCompare(b.label)) || [],
-    [studentData]
+    [studentRoster]
   );
 
   const onSubmit: SubmitHandler<GradingConflictFormData> = (data: GradingConflictFormData) => {
@@ -140,23 +128,34 @@ export default function AddConflictDialog({
             <Dialog.Body>
               <form onSubmit={handleSubmit(onSubmit)}>
                 <VStack gap={4} align="stretch">
-                  <Field label="Grader" errorText={errors.grader_profile_id?.message as string | undefined}>
-                    <Controller
-                      control={control}
-                      name="grader_profile_id"
-                      rules={{ required: "Grader is required" }}
-                      render={({ field }) => (
-                        <ChakraReactSelect
-                          options={staffOptions}
-                          isLoading={isLoadingStaff}
-                          placeholder="Select Grader"
-                          value={staffOptions.find((c) => c.value === field.value)}
-                          onChange={(option: FormOption | null) => setValue("grader_profile_id", option?.value || "")}
-                          onBlur={field.onBlur}
-                        />
-                      )}
-                    />
-                  </Field>
+                  {isInstructor ? (
+                    <Field label="Grader" errorText={errors.grader_profile_id?.message as string | undefined}>
+                      <Controller
+                        control={control}
+                        name="grader_profile_id"
+                        rules={{ required: "Grader is required" }}
+                        render={({ field }) => (
+                          <ChakraReactSelect
+                            options={staffOptions}
+                            placeholder="Select Grader"
+                            value={staffOptions.find((c) => c.value === field.value)}
+                            onChange={(option: FormOption | null) => setValue("grader_profile_id", option?.value || "")}
+                            onBlur={field.onBlur}
+                          />
+                        )}
+                      />
+                    </Field>
+                  ) : (
+                    <Field label="Grader">
+                      <VStack align="start" p={3} borderRadius="md" border="1px solid" borderColor="gray.200">
+                        <PersonName uid={private_profile_id} />
+                      </VStack>
+                      <Text fontSize="sm" color="fg.muted">
+                        Please contact your instructor to report conflicts regarding other graders
+                      </Text>
+                    </Field>
+                  )}
+
                   <Field label="Student" errorText={errors.student_profile_id?.message as string | undefined}>
                     <Controller
                       control={control}
@@ -165,7 +164,6 @@ export default function AddConflictDialog({
                       render={({ field }) => (
                         <ChakraReactSelect
                           options={studentOptions}
-                          isLoading={isLoadingStudents}
                           placeholder="Select Student"
                           value={studentOptions.find((c) => c.value === field.value)}
                           onChange={(option: FormOption | null) => setValue("student_profile_id", option?.value || "")}

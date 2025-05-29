@@ -577,7 +577,7 @@ export function formatPoints(option: {
   points: number;
 }) {
   if (option.check && option.criteria) {
-    return `Points: ${option.criteria.is_additive ? "+" : "-"}${option.check.points}`;
+    return `Points: ${option.criteria.is_additive ? "+" : "-"}${option.points}`;
   }
   return ``;
 }
@@ -618,14 +618,22 @@ function LineActionPopup({
       }
     };
 
-    // Defer adding the listener
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        close();
+      }
+    };
+
+    // Defer adding the listeners
     const timerId = setTimeout(() => {
       document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKeyDown);
     }, 0);
 
     return () => {
       clearTimeout(timerId);
       document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [visible, close]);
 
@@ -852,7 +860,7 @@ function LineActionPopup({
                 }
                 let comment = message || "";
                 if (selectedSubOption) {
-                  comment = selectedSubOption.comment + (comment ? "\\n" + comment : "");
+                  comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
                 }
                 const finalSubmissionReviewId = submissionReviewId ?? review?.id;
                 if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
@@ -1001,6 +1009,10 @@ function createLine(
   line: number,
   setLineActionPopup: Dispatch<SetStateAction<LineActionPopupDynamicProps>>
 ): Element {
+  let mouseDownTime: number | null = null;
+  let hasMoved = false;
+  let popupShown = false;
+
   return {
     type: "element",
     tagName: "div",
@@ -1023,30 +1035,63 @@ function createLine(
             }
             ev.preventDefault();
             ev.stopPropagation();
-            setLineActionPopup((prev) => {
-              if (line !== prev.lineNumber) {
-                prev.onClose?.();
+            mouseDownTime = Date.now();
+            hasMoved = false;
+            popupShown = false;
+
+            const checkShowPopup = () => {
+              if (!popupShown && mouseDownTime !== null) {
+                const timeHeld = Date.now() - mouseDownTime;
+                if (timeHeld >= 300 || hasMoved) {
+                  popupShown = true;
+                  setLineActionPopup((prev) => {
+                    if (line !== prev.lineNumber) {
+                      prev.onClose?.();
+                    }
+                    return {
+                      ...prev,
+                      lineNumber: line,
+                      top: ev.clientY,
+                      left: ev.clientX,
+                      visible: true,
+                      mode: "marking",
+                      close: () => {
+                        setLineActionPopup((prevClose) => ({
+                          ...prevClose,
+                          visible: false,
+                          onClose: prevClose.lineNumber === line && prevClose.visible ? undefined : prevClose.onClose
+                        }));
+                      },
+                      onClose: undefined
+                    };
+                  });
+                }
               }
-              return {
-                ...prev,
-                lineNumber: line,
-                top: ev.clientY,
-                left: ev.clientX,
-                visible: true,
-                mode: "marking",
-                close: () => {
-                  setLineActionPopup((prevClose) => ({
-                    ...prevClose,
-                    visible: false,
-                    // Clear onClose only if it was for the same line, otherwise preserve it
-                    onClose: prevClose.lineNumber === line && prevClose.visible ? undefined : prevClose.onClose
-                  }));
-                },
-                // Reset onClose, it can be set by specific interactions like context menu,
-                // but ensure it's cleared if we are just clicking for marking
-                onClose: undefined
-              };
-            });
+            };
+
+            // Check immediately for movement
+            const handleMouseMove = () => {
+              if (!hasMoved && mouseDownTime !== null) {
+                hasMoved = true;
+                checkShowPopup();
+              }
+            };
+
+            // Set up movement listener
+            document.addEventListener("mousemove", handleMouseMove);
+
+            // Set up timer for 300ms check
+            const timer = setTimeout(checkShowPopup, 300);
+
+            // Clean up on mouse up
+            const handleMouseUp = () => {
+              mouseDownTime = null;
+              document.removeEventListener("mousemove", handleMouseMove);
+              clearTimeout(timer);
+              document.removeEventListener("mouseup", handleMouseUp);
+            };
+
+            document.addEventListener("mouseup", handleMouseUp);
           },
           onContextMenu: (ev: MouseEvent) => {
             ev.preventDefault();
@@ -1058,12 +1103,12 @@ function createLine(
               setLineActionPopup((prevClose) => ({
                 ...prevClose,
                 visible: false,
-                onClose: undefined // Clear the onClose specific to this instance
+                onClose: undefined
               }));
             };
             setLineActionPopup((prev) => {
               if (line !== prev.lineNumber) {
-                prev.onClose?.(); // Call previous onClose if changing lines
+                prev.onClose?.();
               }
               return {
                 ...prev,
@@ -1074,7 +1119,6 @@ function createLine(
                 mode: "select",
                 close: closeAndCleanup,
                 onClose: () => {
-                  // Specific cleanup for this context menu
                   target.classList.remove("selected");
                 }
               };

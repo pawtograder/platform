@@ -2,10 +2,10 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
+  HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
-  HydratedRubric,
   Submission,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
@@ -18,31 +18,34 @@ import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
-import { RubricCheckComment } from "@/components/ui/rubric-sidebar";
-import { Toaster } from "@/components/ui/toaster";
+import RubricSidebar, { RubricCheckComment } from "@/components/ui/rubric-sidebar";
+import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
+import useModalManager from "@/hooks/useModalManager";
 import {
   SubmissionProvider,
   useAllRubricCheckInstances,
+  useReviewAssignment,
   useRubricCriteriaInstances,
   useSubmission,
   useSubmissionComments,
   useSubmissionReview,
-  useSubmissionRubric,
-  useReviewAssignment,
-  useSubmissionReviewByAssignmentId
+  useSubmissionReviewByAssignmentId,
+  useSubmissionRubric
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useInvalidate, useList, useUpdate, useShow } from "@refinedev/core";
-import { formatRelative, format } from "date-fns";
+import { CrudFilter, useInvalidate, useList, useShow, useUpdate } from "@refinedev/core";
+import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useState, ElementType as ReactElementType, useMemo, useEffect } from "react";
+import { ElementType as ReactElementType, useEffect, useMemo, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import {
   FaBell,
@@ -50,6 +53,7 @@ import {
   FaFile,
   FaHistory,
   FaInfo,
+  FaLink,
   FaQuestionCircle,
   FaRegCheckCircle,
   FaTimesCircle
@@ -60,15 +64,9 @@ import { LuMoon, LuSun } from "react-icons/lu";
 import { PiSignOut } from "react-icons/pi";
 import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
+import AddRubricReferenceModal from "./addRubricReferenceModal";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
-import RubricSidebar from "@/components/ui/rubric-sidebar";
-import { Tables } from "@/utils/supabase/SupabaseTypes";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
-import useModalManager from "@/hooks/useModalManager";
-import AddRubricReferenceModal from "./addRubricReferenceModal";
-import { FaLink } from "react-icons/fa";
-import { toaster } from "@/components/ui/toaster";
 
 interface RubricOptionType extends OptionBase {
   value: number;
@@ -298,12 +296,14 @@ function TestResults() {
         const extraData = test.extra_data as GraderResultTestData;
         if (extraData?.icon && iconMap[extraData.icon]) {
           icon = <Icon as={iconMap[extraData.icon]} />;
+        } else if (test.score === 0 && test.max_score === 0) {
+          icon = <Icon as={FaInfo} color="fg.info" />;
         } else if (test.score == test.max_score) {
-          icon = <Icon as={FaCheckCircle} color="green.500" />;
+          icon = <Icon as={FaCheckCircle} color="fg.success" />;
         } else {
-          icon = <Icon as={FaTimesCircle} color="red.500" />;
+          icon = <Icon as={FaTimesCircle} color="fg.error" />;
         }
-        const showScore = extraData?.hide_score !== "true";
+        const showScore = extraData?.hide_score !== "true" && test.max_score !== 0;
         return (
           <Box key={test.id} border="1px solid" borderColor="border.emphasized" borderRadius="md" p={2} mt={2} w="100%">
             {icon}
@@ -816,7 +816,7 @@ function RubricView() {
 
 function Comments() {
   const comments = useSubmissionComments({}).filter((comment) => !comment.rubric_check_id);
-  if (!comments) {
+  if (!comments || comments.length === 0) {
     return null;
   }
   return (

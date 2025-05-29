@@ -49,7 +49,7 @@ export default function BulkCreateGroup({
     if (typeof parseInt(groupTextField) === "number") {
       setGroupSize(parseInt(groupTextField));
     }
-  }, [setGroupTextField]);
+  }, [setGroupTextField, groupTextField]);
 
   const generateGroups = async () => {
     const newGroups = [];

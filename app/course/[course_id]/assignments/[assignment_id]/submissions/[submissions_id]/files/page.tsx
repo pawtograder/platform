@@ -885,14 +885,14 @@ export default function FilesView() {
   return (
     <>
       <Flex pt={{ base: "sm", md: "0" }} gap={{ base: "0", md: "6" }} direction={{ base: "column" }}>
-        <Box w={{ base: "100%", md: "300px" }} minW={{ base: "100%", md: "300px" }}>
+        <Box w={"100%"} minW={"100%"}>
           <FilePicker curFile={filePickerDisplayIndex} />
           {submission.submission_artifacts && submission.submission_artifacts.length > 0 && (
             <ArtifactPicker curArtifact={artifactPickerDisplayIndex} />
           )}
         </Box>
         <Separator orientation={{ base: "horizontal", md: "vertical" }} />
-        <Box flex="1" overflow="auto">
+        <Box w={"100%"}>
           {fileId ||
           (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
             selectedFile && <CodeFile file={selectedFile} submissionReviewId={finalActiveSubmissionReviewId} />
