@@ -8,7 +8,7 @@ CREATE TABLE "public"."self_review_settings" (
 
 ALTER TABLE "public"."self_review_settings" ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "instructors and graders can view self review settings" 
+CREATE POLICY "anyone in the course can view self review settings" 
 ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR SELECT
@@ -25,7 +25,7 @@ WITH CHECK (
     authorizeforclassinstructor(class_id)
 );
 
-CREATE POLICY "instructors can delete self review settings" 
+CREATE POLICY "instructors can update self review settings" 
 ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR UPDATE
@@ -33,7 +33,7 @@ USING (
     authorizeforclassinstructor(class_id) 
 );
 
-CREATE POLICY "instructors can view delete review settings" 
+CREATE POLICY "instructors can delete review settings" 
 ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR DELETE
@@ -57,7 +57,19 @@ ON "public"."assignment_due_date_exceptions"
 AS PERMISSIVE 
 FOR INSERT
 WITH CHECK (
-   true
+   "hours" < 0 
+);
+
+CREATE POLICY "Deadline exceptions never inserted after early finish"
+ON "public"."assignment_due_date_exceptions"
+AS RESTRICTIVE 
+FOR INSERT
+WITH CHECK (
+   NOT EXISTS (
+    SELECT 1 FROM "public"."assignment_due_date_exceptions" adde
+    WHERE (student_id = adde.student_id OR assignment_group_id = adde.assignment_group_id)
+    AND assignment_id = adde.assignment_id AND class_id = adde.class_id AND adde.hours < 0
+   )
 );
 
 CREATE OR REPLACE FUNCTION public.assignments_grader_config_auto_populate()
@@ -116,23 +128,24 @@ BEGIN
         a.class_id
     FROM assignments a -- for each assignment x profile combination
     CROSS JOIN profiles p 
-    LEFT JOIN assignment_due_date_exceptions ade ON (  -- grab any exceptions for this profile for this assignment
+    LEFT JOIN assignment_due_date_exceptions ade ON (  -- grab any exceptions for this profile for this assignment -- whether they're the student or in the group
         ade.assignment_id = a.id 
-        AND ade.student_id = p.id
+        AND 
+        (ade.student_id = p.id OR (SELECT "assignment_group_id" FROM public.assignment_groups_members WHERE profile_id = p.id LIMIT 1) - ade.assignment_group_id)
     )
     JOIN self_review_settings srs ON srs.id = a.self_review_setting_id -- grab the self review settings for assignment a
-    WHERE -- determine whether this profile needs a review assignment created for this assignment based on the following conditions:
-        -- Profile conditions: only use profiles that are private, for the class of the assignment, and for students
+    WHERE -- determine whether this profile needs a review assignment created for this programming assignment based on the following conditions:
+        -- Profile conditions: only use profiles that are private, for the class of the programming assignment, and students
         p.is_private_profile = TRUE
         AND p.class_id = a.class_id
         AND EXISTS (
             SELECT 1 FROM user_roles urs 
             WHERE urs.private_profile_id = p.id 
-            AND urs.role = 'student'
+            AND urs.role = 'student' 
         )
         -- Self review settings must be enabled
         AND srs.enabled = true
-        -- There isn't an existing self review assignment for this profile on this assignment
+        -- There should not be an existing self review assignment for this profile on this assignment
         AND NOT EXISTS (
             SELECT 1 FROM review_assignments ra 
             WHERE ra.assignment_id = a.id 
@@ -143,7 +156,7 @@ BEGIN
             -- Case 1: No exception exists, use regular due date
             (ade.student_id IS NULL AND a.due_date <= NOW())
             OR
-            -- Case 2: Exception exists, use exception due date
+            -- Case 2: Exception exists, use exception due date ** TODO: right now there could be multiple due date exceptions floating around.  is this handled?
             (ade.student_id IS NOT NULL AND a.due_date + INTERVAL '1 hour' * ade.hours <= NOW())
         );
 
