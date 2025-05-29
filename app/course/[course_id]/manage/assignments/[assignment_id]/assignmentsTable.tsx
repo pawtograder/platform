@@ -1,9 +1,12 @@
 "use client";
 import Link from "@/components/ui/link";
+import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
+import { createClient } from "@/utils/supabase/client";
 import { ActiveSubmissionsWithGradesForAssignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, HStack, Icon, Input, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
+import { useInvalidate } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
 import {
   ColumnDef,
@@ -21,6 +24,7 @@ export default function AssignmentsTable() {
   const course = useCourse();
   const timeZone = course.classes.time_zone || "America/New_York";
   const [pageCount, setPageCount] = useState(0);
+  const invalidate = useInvalidate();
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
       {
@@ -163,13 +167,68 @@ export default function AssignmentsTable() {
     }
   });
   const nRows = getRowCount();
+  const isInstructor = course.role === "instructor";
   const pageSize = getState().pagination.pageSize;
   useEffect(() => {
     setPageCount(Math.ceil(nRows / pageSize));
   }, [nRows, pageSize]);
   return (
-    <VStack>
-      <VStack paddingBottom="55px">
+    <VStack w="100%">
+      <VStack paddingBottom="55px" w="100%">
+        {isInstructor && (
+          <HStack alignItems="flex-end" gap={2} w="100%" justifyContent="flex-end">
+            <Button
+              colorPalette="green"
+              variant="subtle"
+              onClick={async () => {
+                const submissionIds = getRowModel()
+                  .rows.map((s) => s.original.activesubmissionid)
+                  .filter((id) => id !== null);
+                const supabase = createClient();
+
+                const { data, error } = await supabase
+                  .from("submission_reviews")
+                  .update({ released: true })
+                  .in("submission_id", submissionIds)
+                  .select("*");
+                invalidate({ resource: "submissions_with_grades_for_assignment", invalidates: ["list"] });
+
+                if (error) {
+                  toaster.error({ title: "Error", description: error.message });
+                } else {
+                  toaster.success({ title: "Success", description: "All submission reviews released" });
+                }
+              }}
+            >
+              Release All Submission Reviews
+            </Button>
+            <Button
+              variant="ghost"
+              colorPalette="red"
+              onClick={async () => {
+                const submissionIds = getRowModel()
+                  .rows.map((s) => s.original.activesubmissionid)
+                  .filter((id) => id !== null);
+                const supabase = createClient();
+
+                const { error } = await supabase
+                  .from("submission_reviews")
+                  .update({ released: false })
+                  .in("submission_id", submissionIds)
+                  .select("*");
+                invalidate({ resource: "submissions_with_grades_for_assignment", invalidates: ["list"] });
+
+                if (error) {
+                  toaster.error({ title: "Error", description: error.message });
+                } else {
+                  toaster.success({ title: "Success", description: "All submission reviews unreleased" });
+                }
+              }}
+            >
+              Unrelease All Submission Reviews
+            </Button>
+          </HStack>
+        )}
         <Table.Root striped>
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
