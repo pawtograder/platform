@@ -305,6 +305,13 @@ export type UserProfile = GetResult<
   Database["public"]["Tables"]["profiles"]["Relationships"],
   "*"
 >;
+export type UserProfileWithTags = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["profiles"]["Row"],
+  "profiles",
+  Database["public"]["Tables"]["profiles"]["Relationships"],
+  "*, tags_profiles(*, tags(*))"
+>;
 
 export type UserProfileWithUser = GetResult<
   Database["public"],
@@ -522,6 +529,14 @@ export type ClassSection = GetResult<
   Database["public"]["Tables"]["class_sections"]["Row"],
   "class_sections",
   Database["public"]["Tables"]["class_sections"]["Relationships"],
+  "*"
+>;
+
+export type Tag = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["tags"]["Row"],
+  "tags",
+  Database["public"]["Tables"]["tags"]["Relationships"],
   "*"
 >;
 
