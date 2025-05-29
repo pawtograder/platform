@@ -52,20 +52,17 @@ export default function FinalizeSubmissionEarly({
   // back 3 hours to 6:15pm so they can access the self review immediately.
   const finalizeSubmission = () => {
     if (memberGroup && memberGroup.data.length > 0) {
-      memberGroup.data.forEach((member) => {
-        create({
-          resource: "assignment_due_date_exceptions",
-          values: {
-            class_id: course_id,
-            assignment_id: assignment.id,
-            assignment_group_id: group_id,
-            student_id: member.profile_id,
-            group_id: memberGroup.data[0].assignment_group_id,
-            creator_id: private_profile_id,
-            hours: hoursBetween(assignment.due_date, new Date().toDateString()), // difference between assignment due date and now, should be a negative number
-            tokens_consumed: 0
-          }
-        });
+      create({
+        resource: "assignment_due_date_exceptions",
+        values: {
+          class_id: course_id,
+          assignment_id: assignment.id,
+          assignment_group_id: group_id,
+          group_id: memberGroup.data[0].assignment_group_id,
+          creator_id: private_profile_id,
+          hours: hoursBetween(assignment.due_date, new Date().toDateString()), // difference between assignment due date and now, should be a negative number
+          tokens_consumed: 0
+        }
       });
     } else {
       create({

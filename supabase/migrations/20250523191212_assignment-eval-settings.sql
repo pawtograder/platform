@@ -91,91 +91,155 @@ UPDATE assignments set self_review_rubric_id=self_rubric_id WHERE id=NEW.id;
 end;$function$
 ;
 
-CREATE OR REPLACE FUNCTION auto_assign_self_reviews()
-RETURNS void
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    INSERT INTO review_assignments (
-        due_date,
-        assignee_profile_id,
-        submission_id,
-        assignment_id,
-        rubric_id,
-        class_id
-    )
-    SELECT 
-        -- due_date: if there is a exception, use that. else, use regular assignment due date.  add hour offset.
-        CASE 
-            WHEN ade.hours IS NOT NULL THEN a.due_date + INTERVAL '1 hour' * ade.hours + INTERVAL '1 hour' * srs.deadline_offset
-            ELSE a.due_date + INTERVAL '1 hour' * srs.deadline_offset
-        END as due_date,
-        -- assignee_profile_id: private profile id is assigned  
-        p.id as assignee_profile_id,
-        -- submission_id: find the id of the active submission for this profile 
-        (
-            SELECT s.id 
-            FROM submissions s 
-            WHERE s.profile_id = p.id 
-            AND s.is_active = TRUE 
-            LIMIT 1
-        ) as submission_id,
-        -- assignment_id: any assignment that has unassigned self reviews that are now needed
-        a.id as assignment_id,
-        -- rubric_id: the self review rubric of the assignment 
-        a.self_review_rubric_id,
-        -- class_id: the class id of the assignment 
-        a.class_id
-    FROM assignments a -- for each assignment x profile combination
-    CROSS JOIN profiles p 
-    LEFT JOIN assignment_due_date_exceptions ade ON (  -- grab any exceptions for this profile for this assignment -- whether they're the student or in the group
-        ade.assignment_id = a.id 
-        AND 
-        (ade.student_id = p.id OR (SELECT "assignment_group_id" FROM public.assignment_groups_members WHERE profile_id = p.id LIMIT 1) - ade.assignment_group_id)
-    )
-    JOIN self_review_settings srs ON srs.id = a.self_review_setting_id -- grab the self review settings for assignment a
-    WHERE -- determine whether this profile needs a review assignment created for this programming assignment based on the following conditions:
-        -- Profile conditions: only use profiles that are private, for the class of the programming assignment, and students
-        p.is_private_profile = TRUE
-        AND p.class_id = a.class_id
-        AND EXISTS (
-            SELECT 1 FROM user_roles urs 
-            WHERE urs.private_profile_id = p.id 
-            AND urs.role = 'student' 
-        )
-        -- Self review settings must be enabled
-        AND srs.enabled = true
-        -- There should not be an existing self review assignment for this profile on this assignment
-        AND NOT EXISTS (
-            SELECT 1 FROM review_assignments ra 
-            WHERE ra.assignment_id = a.id 
-            AND ra.assignee_profile_id = p.id
-        )
-        -- Assignment deadline has passed (either regular due date or exception due date)
-        AND (
-            -- Case 1: No exception exists, use regular due date
-            (ade.student_id IS NULL AND a.due_date <= NOW())
-            OR
-            -- Case 2: Exception exists, use exception due date ** TODO: right now there could be multiple due date exceptions floating around.  is this handled?
-            (ade.student_id IS NOT NULL AND a.due_date + INTERVAL '1 hour' * ade.hours <= NOW())
-        );
+-- TEMPORARY: REFINE!!!!!!!
+CREATE POLICY "Anyone can insert on review assignments"
+ON "public"."review_assignments"
+AS PERMISSIVE 
+FOR INSERT
+WITH CHECK (
+    authorizeforclass(class_id)
+);
 
-END;
+CREATE OR REPLACE FUNCTION public.auto_assign_self_reviews(this_assignment_id bigint, this_profile_id uuid) 
+RETURNS void 
+LANGUAGE plpgsql 
+AS $$ 
+DECLARE     
+    this_assignment public.assignments;     
+    this_self_review_setting public.self_review_settings;     
+    this_net_deadline_change integer := 0;     
+    this_active_submission_id bigint;     
+    this_group_id bigint; 
+BEGIN     
+    -- Get the assignment first     
+    SELECT * INTO this_assignment FROM public.assignments WHERE id = this_assignment_id;          
+    
+    -- Check if assignment exists     
+    IF this_assignment.id IS NULL THEN         
+        RETURN;     
+    END IF;      
+    
+    -- Confirm this is a private profile for a student in this class, else abort     
+    IF NOT EXISTS (         
+        SELECT 1 FROM user_roles          
+        WHERE private_profile_id = this_profile_id          
+        AND role = 'student'
+        AND class_id = this_assignment.class_id     
+    ) THEN         
+        RETURN;     
+    END IF;      
+    
+    -- Get the group of the student for this assignment     
+    SELECT assignment_group_id INTO this_group_id      
+    FROM public.assignment_groups_members      
+    WHERE profile_id = this_profile_id      
+    AND class_id = this_assignment.class_id      
+    AND assignment_id = this_assignment.id      
+    LIMIT 1;      
+    
+    -- Get the self review setting     
+    SELECT * INTO this_self_review_setting      
+    FROM public.self_review_settings      
+    WHERE id = this_assignment.self_review_setting_id;
+    
+    -- If self reviews are not enabled for this assignment, abort     
+    IF this_self_review_setting.enabled IS NOT TRUE THEN         
+        RETURN;     
+    END IF;          
+    
+    -- If there is an existing review assignment for this student for this assignment, abort     
+    IF EXISTS (         
+        SELECT 1 FROM review_assignments          
+        WHERE assignment_id = this_assignment.id          
+        AND assignee_profile_id = this_profile_id     
+    ) THEN         
+        RETURN;     
+    END IF;      
+    
+    -- Calculate the deadline offset by combining the deadline changes     
+    SELECT COALESCE(SUM(hours), 0) INTO this_net_deadline_change      
+    FROM public.assignment_due_date_exceptions      
+    WHERE assignment_id = this_assignment.id      
+    AND (student_id = this_profile_id OR assignment_group_id = this_group_id);      
+    
+    -- If deadline has not passed, abort     
+    IF NOT (this_assignment.due_date + INTERVAL '1 hour' * this_net_deadline_change <= NOW()) THEN         
+        RETURN;     
+    END IF;      
+    
+    -- Get the active submission id for this profile     
+    SELECT id INTO this_active_submission_id      
+    FROM public.submissions      
+    WHERE profile_id = this_profile_id      
+    AND assignment_id = this_assignment.id
+    AND is_active = TRUE     
+    LIMIT 1;      
+    
+    -- If active submission does not exist, abort     
+    IF this_active_submission_id IS NULL THEN         
+        RETURN;     
+    END IF;          
+    
+    INSERT INTO review_assignments (         
+        due_date,         
+        assignee_profile_id,         
+        submission_id,         
+        assignment_id,         
+        rubric_id,         
+        class_id     
+    )     
+    VALUES (         
+        this_assignment.due_date + INTERVAL '1 hour' * this_net_deadline_change + INTERVAL '1 hour' * this_self_review_setting.deadline_offset,
+        this_profile_id,         
+        this_active_submission_id,         
+        this_assignment.id,         
+        this_assignment.self_review_rubric_id,         
+        this_assignment.class_id     
+    ); 
+END; 
 $$;
+
+ALTER FUNCTION "public"."auto_assign_self_reviews"(this_assignment_id bigint, this_profile_id uuid) OWNER TO "postgres";
+
+GRANT ALL ON FUNCTION "public"."auto_assign_self_reviews"(this_assignment_id bigint, this_profile_id uuid) TO "anon";
+GRANT ALL ON FUNCTION "public"."auto_assign_self_reviews"(this_assignment_id bigint, this_profile_id uuid) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."auto_assign_self_reviews"(this_assignment_id bigint, this_profile_id uuid) TO "service_role";
 
 CREATE OR REPLACE FUNCTION auto_assign_self_reviews_trigger()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM auto_assign_self_reviews();
+    -- if a negative exception was inserted, then student moved forward their deadline.  assign them a self review.
+    PERFORM auto_assign_self_reviews(NEW.assignment_id, NEW.student_id);
     RETURN NEW;
 END;
 $$;
-
 
 CREATE TRIGGER self_review_insert_after_student_finish 
 AFTER INSERT ON public.assignment_due_date_exceptions 
 FOR EACH ROW
 EXECUTE FUNCTION auto_assign_self_reviews_trigger();
 
+-- NOTE: auto_assign_self_reviews_trigger can be reused for assignment due date passing w/o student triggering themselves
+
+-- Function to check for passed dates
+CREATE OR REPLACE FUNCTION check_assignment_deadlines_passed()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- get all assignments where the deadline has passed but the longest late day window has not passed
+    -- for each assignment, get all profiles for the class that assignment is for
+    -- for each assignment x profile combination, call auto_assign_self_reviews to assign reviews to the needed students
+
+    -- special case to consider: professor gives student an extension that is greater than the maximum number of 
+    -- late days for this assignment.  this will never trigger the function to be called 
+    -- -> could have a separate trigger for iterating through exceptions for dates that have passed in the hour or something 
+    -- to account for the super long extensions
+
+END;
+$$;
+
+-- Schedule to run every 5 minutes
+-- SELECT cron.schedule('check_assignment_deadlines_passed', '*/5 * * * *', 'SELECT check_assignment_deadlines_passed();');

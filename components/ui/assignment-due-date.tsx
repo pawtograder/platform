@@ -34,13 +34,13 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
         value: assignment_group_id
       }
     : {
-        field: "profile_id",
+        field: "student_id",
         operator: "eq",
         value: private_profile_id
       };
 
   const { data: negativeProfileExceptionsForAssignment } = useList<AssignmentDueDateException>({
-    resource: "assignment_due_date_exception",
+    resource: "assignment_due_date_exceptions",
     filters: [
       {
         field: "assignment_id",
