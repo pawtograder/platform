@@ -13,7 +13,7 @@ import {
   SubmissionFileComment,
   SubmissionReview
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, HStack, Menu, Portal, RadioGroup, Skeleton, Tag, Text, VStack } from "@chakra-ui/react";
+import { Box, Heading, HStack, Menu, Popover, Portal, RadioGroup, Skeleton, Tag, Text, VStack } from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,7 +22,7 @@ import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
-import { useRubricCheck } from "@/hooks/useAssignment";
+import { useRubricCheck, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useReferencedRubricCheckInstances,
@@ -31,19 +31,21 @@ import {
   useRubricCriteriaInstances,
   useSubmissionMaybe,
   useSubmissionReview,
-  useSubmissionRubric
+  useSubmissionRubric,
+  useWritableReferencingRubricChecks,
+  useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { Select as ChakraReactSelect, OptionBase, Select } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
-import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
-import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import { FaCheckCircle, FaGraduationCap, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
+import { formatPoints, isRubricCheckDataWithOptions, RubricCheckSubOption, RubricCheckSubOptions } from "./code-file";
 import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
 
@@ -273,6 +275,232 @@ function InlineReferenceManager({
     </Box>
   );
 }
+function AddReferencingFeedbackPopover({
+  selectedCheckToReference,
+  commentToReference,
+  close
+}: {
+  selectedCheckToReference: number;
+  commentToReference: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
+  close: () => void;
+}) {
+  const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
+  const check = useRubricCheck(selectedCheckToReference);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const targetSubmissionReviewId = useWritableSubmissionReviews(check?.criteria?.rubric_id);
+  const { mutateAsync: createComment } = useCreate();
+
+  return (
+    <Popover.Root open={selectedCheckToReference !== undefined} positioning={{ placement: "top" }}>
+      <Popover.Trigger></Popover.Trigger>
+      <Portal>
+        <Popover.Positioner>
+          <Popover.Content>
+            <Popover.Arrow />
+            <Popover.Body bg="bg.subtle" p={3} boxShadow="lg">
+              <Heading size="md">Add check: {check?.name}</Heading>
+              <Markdown>{check?.description}</Markdown>
+              {isRubricCheckDataWithOptions(check) && (
+                <Select
+                  options={check.options.map(
+                    (option: RubricCheckSubOption, index: number) =>
+                      ({
+                        label: option.label,
+                        comment: option.label,
+                        value: index.toString(),
+                        index: index.toString(),
+                        points: option.points,
+                        check: {
+                          label: check.name,
+                          value: check.id.toString(),
+                          check,
+                          criteria: check.criteria,
+                          options: []
+                        }
+                      }) as RubricCheckSubOptions
+                  )}
+                  value={selectedSubOption}
+                  onChange={(e: RubricCheckSubOptions | null) => {
+                    setSelectedSubOption(e);
+                  }}
+                  placeholder="Select an option for this check..."
+                  size="sm"
+                />
+              )}
+              {!selectedSubOption && check && check.points !== undefined && (
+                <Text fontSize="sm" color="fg.muted" mt={1} textAlign="left">
+                  {formatPoints({
+                    check,
+                    criteria: check.criteria,
+                    points: check.points
+                  })}
+                </Text>
+              )}
+              {selectedSubOption && check && (
+                <Text fontSize="sm" color="fg.muted" mt={1} textAlign="left">
+                  {formatPoints({
+                    check,
+                    criteria: check.criteria,
+                    points: selectedSubOption.points
+                  })}
+                </Text>
+              )}
+              <MessageInput
+                textAreaRef={messageInputRef}
+                enableGiphyPicker={true}
+                placeholder={
+                  !check
+                    ? "Add a comment about this line and press enter to submit..."
+                    : check.is_comment_required
+                      ? "Add a comment about this check and press enter to submit..."
+                      : "Optionally add a comment, or just press enter to submit..."
+                }
+                allowEmptyMessage={check && !check.is_comment_required}
+                defaultSingleLine={true}
+                sendMessage={async (message, profile_id) => {
+                  if (!check || !targetSubmissionReviewId || targetSubmissionReviewId.length === 0) {
+                    toaster.error({
+                      title: "Error",
+                      description: "Cannot save rubric annotation."
+                    });
+                    return;
+                  }
+                  let points = check?.points;
+                  if (selectedSubOption !== null) {
+                    points = selectedSubOption.points;
+                  }
+                  let comment = message || "";
+                  if (selectedSubOption) {
+                    comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
+                  }
+
+                  const value = {
+                    comment,
+                    rubric_check_id: check.id,
+                    class_id: check.class_id,
+                    submission_id: targetSubmissionReviewId[0].submission_id,
+                    eventually_visible: false,
+                    author: profile_id,
+                    released: false,
+                    points,
+                    submission_review_id: targetSubmissionReviewId[0].id
+                  };
+                  if (isLineComment(commentToReference)) {
+                    await createComment({
+                      resource: "submission_file_comments",
+                      values: {
+                        ...value,
+                        line: commentToReference.line,
+                        submission_file_id: commentToReference.submission_file_id
+                      }
+                    });
+                  } else if (isArtifactComment(commentToReference)) {
+                    await createComment({
+                      resource: "submission_artifact_comments",
+                      values: {
+                        ...value,
+                        submission_artifact_id: commentToReference.submission_artifact_id
+                      }
+                    });
+                  } else {
+                    await createComment({
+                      resource: "submission_comments",
+                      values: {
+                        ...value
+                      }
+                    });
+                  }
+                  close();
+                }}
+              />
+            </Popover.Body>
+          </Popover.Content>
+        </Popover.Positioner>
+      </Portal>
+    </Popover.Root>
+  );
+}
+
+function AddReferencingFeedbackMenu({
+  comment
+}: {
+  comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
+}) {
+  const writableReferencingChecks = useWritableReferencingRubricChecks(comment.rubric_check_id);
+  const rubrics = useRubrics();
+  const [selectedCheckToReference, setSelectedCheckToReference] = useState<number | undefined>(undefined);
+
+  const closePopover = useCallback(() => {
+    setSelectedCheckToReference(undefined);
+  }, []);
+
+  if (!writableReferencingChecks || writableReferencingChecks.length === 0) {
+    return null;
+  }
+  console.log(selectedCheckToReference);
+  const writableReferencingChecksByRubricId = writableReferencingChecks.reduce(
+    (acc, check) => {
+      const rubricId = check.criteria?.rubric_id;
+      if (rubricId) {
+        if (!acc[rubricId]) {
+          acc[rubricId] = [];
+        }
+        acc[rubricId].push(check);
+      }
+      return acc;
+    },
+    {} as Record<string, typeof writableReferencingChecks>
+  );
+  return (
+    <>
+      {selectedCheckToReference && (
+        <AddReferencingFeedbackPopover
+          commentToReference={comment}
+          selectedCheckToReference={selectedCheckToReference}
+          close={closePopover}
+        />
+      )}
+      <Menu.Root
+        onSelect={(value) => {
+          if (value.value) {
+            console.log(value.value);
+            setSelectedCheckToReference(Number(value.value));
+          }
+        }}
+      >
+        <Menu.Trigger asChild>
+          <Button p={0} m={0} colorPalette="green" variant="solid" size="2xs">
+            <Icon as={FaGraduationCap} />
+          </Button>
+        </Menu.Trigger>
+        <Portal>
+          <Menu.Positioner>
+            <Menu.Content>
+              {Object.keys(writableReferencingChecksByRubricId).map((rubricId) => (
+                <Menu.ItemGroup key={rubricId}>
+                  <Menu.ItemGroupLabel>
+                    {rubrics.find((r) => r.id === Number(rubricId))?.review_round}
+                  </Menu.ItemGroupLabel>
+                  {writableReferencingChecksByRubricId[rubricId].map((check) => (
+                    <Menu.Item key={check.check.id} value={check.check.id.toString()}>
+                      {check.check.name}{" "}
+                      {check.check.points && (
+                        <>
+                          ({check.criteria?.is_additive ? "+" : "-"}
+                          {check.check.points})
+                        </>
+                      )}
+                    </Menu.Item>
+                  ))}
+                </Menu.ItemGroup>
+              ))}
+            </Menu.Content>
+          </Menu.Positioner>
+        </Portal>
+      </Menu.Root>
+    </>
+  );
+}
 
 export function CommentActions({
   comment,
@@ -290,35 +518,38 @@ export function CommentActions({
         : "submission_comments"
   });
   return (
-    <Menu.Root
-      onSelect={async (value) => {
-        if (value.value === "edit") {
-          setIsEditing(true);
-        } else if (value.value === "delete") {
-          await updateComment({
-            id: comment.id,
-            values: {
-              edited_by: private_profile_id,
-              deleted_at: new Date()
-            }
-          });
-        }
-      }}
-    >
-      <Menu.Trigger asChild>
-        <Button p={0} m={0} colorPalette="blue" variant="ghost" size="2xs">
-          <Icon as={BsThreeDots} />
-        </Button>
-      </Menu.Trigger>
-      <Portal>
-        <Menu.Positioner>
-          <Menu.Content>
-            <Menu.Item value="edit">Edit</Menu.Item>
-            <Menu.Item value="delete">Delete</Menu.Item>
-          </Menu.Content>
-        </Menu.Positioner>
-      </Portal>
-    </Menu.Root>
+    <HStack gap={1}>
+      <AddReferencingFeedbackMenu comment={comment} />
+      <Menu.Root
+        onSelect={async (value) => {
+          if (value.value === "edit") {
+            setIsEditing(true);
+          } else if (value.value === "delete") {
+            await updateComment({
+              id: comment.id,
+              values: {
+                edited_by: private_profile_id,
+                deleted_at: new Date()
+              }
+            });
+          }
+        }}
+      >
+        <Menu.Trigger asChild>
+          <Button p={0} m={0} colorPalette="blue" variant="ghost" size="2xs">
+            <Icon as={BsThreeDots} />
+          </Button>
+        </Menu.Trigger>
+        <Portal>
+          <Menu.Positioner>
+            <Menu.Content>
+              <Menu.Item value="edit">Edit</Menu.Item>
+              <Menu.Item value="delete">Delete</Menu.Item>
+            </Menu.Content>
+          </Menu.Positioner>
+        </Portal>
+      </Menu.Root>
+    </HStack>
   );
 }
 
@@ -512,7 +743,7 @@ export function ReviewRoundTag({ submission_review_id }: { submission_review_id:
     return null;
   }
   return (
-    <Tag.Root size="sm" colorPalette="blue" variant="outline">
+    <Tag.Root minW="fit-content" flexShrink={0} size="sm" colorPalette="blue" variant="outline">
       <Tag.Label>{submissionReview.rubrics.review_round}</Tag.Label>
     </Tag.Root>
   );

@@ -34,7 +34,8 @@ import {
   useSubmissionFileComments,
   useSubmissionMaybe,
   useSubmissionReview,
-  useSubmissionReviewByAssignmentId
+  useSubmissionReviewByAssignmentId,
+  useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
@@ -871,6 +872,10 @@ export default function FilesView() {
 
   const reviewAssignmentIdFromQuery = searchParams.get("review_assignment_id");
   const selectedRubricIdFromQuery = searchParams.get("selected_rubric_id");
+  const writableSubmissionReviews = useWritableSubmissionReviews(
+    selectedRubricIdFromQuery ? Number(selectedRubricIdFromQuery) : undefined
+  );
+
   const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(
     reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined
   );
@@ -882,7 +887,7 @@ export default function FilesView() {
 
   const activeSubmissionReviewIdToUse = reviewAssignmentIdFromQuery
     ? currentSubmissionReviewRecordId
-    : submissionData?.grading_review_id;
+    : writableSubmissionReviews?.[0]?.id;
 
   const fileId = searchParams.get("file_id");
   const artifactId = searchParams.get("artifact_id");

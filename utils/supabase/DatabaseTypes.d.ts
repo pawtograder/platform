@@ -8,7 +8,7 @@ export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
+  "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
 >;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];

@@ -1,7 +1,6 @@
 "use client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
-  Assignment,
   AssignmentWithRubricsAndReferences,
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
@@ -9,13 +8,23 @@ import { Text } from "@chakra-ui/react";
 import { useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useClassProfiles } from "./useClassProfiles";
 
 export function useRubricCheck(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
   if (!rubric_check_id) {
     return undefined;
   }
-  return controller.rubricCheckById.get(rubric_check_id);
+  const check = controller.rubricCheckById.get(rubric_check_id);
+  if (!check) {
+    return undefined;
+  }
+  const options = check.data instanceof Object && "options" in check.data ? check.data.options : [];
+  return {
+    ...check,
+    options,
+    criteria: controller.rubricCriteriaById.get(check.rubric_criteria_id)
+  };
 }
 
 export function useRubricCriteria(rubric_criteria_id: number | null | undefined) {
@@ -33,6 +42,22 @@ export function useRubric(review_round: RubricReviewRound) {
   return rubric;
 }
 
+export function useRubrics() {
+  const controller = useAssignmentController();
+  return controller.rubrics;
+}
+
+export function useMyReviewAssignments(submission_id?: number) {
+  const controller = useAssignmentController();
+  const { private_profile_id } = useClassProfiles();
+  const assignment = controller.assignment;
+  const reviewAssignments = assignment.review_assignments;
+  const myReviewAssignments = reviewAssignments.filter(
+    (ra) => ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
+  );
+  return myReviewAssignments;
+}
+
 /**
  * Returns all referencing rubric checks for which the given check is the referenced check.
  * @param rubric_check_id Check that is referenced
@@ -45,22 +70,22 @@ export function useReferencingRubricChecks(rubric_check_id: number | null | unde
   }
   return controller.referencingChecksById.get(rubric_check_id);
 }
+
+type OurRubricCheck =
+  AssignmentWithRubricsAndReferences["rubrics"][number]["rubric_parts"][number]["rubric_criteria"][number]["rubric_checks"][number];
 class AssignmentController {
-  private _assignment?: Assignment;
+  private _assignment?: AssignmentWithRubricsAndReferences;
   private _rubrics: AssignmentWithRubricsAndReferences["rubrics"] = [];
   private _submissions: ActiveSubmissionsWithGradesForAssignment[] = [];
-  rubricCheckById: Map<
-    number,
-    AssignmentWithRubricsAndReferences["rubrics"][number]["rubric_parts"][number]["rubric_criteria"][number]["rubric_checks"][number]
-  > = new Map();
+  rubricCheckById: Map<number, OurRubricCheck> = new Map();
   rubricCriteriaById: Map<
     number,
     AssignmentWithRubricsAndReferences["rubrics"][number]["rubric_parts"][number]["rubric_criteria"][number]
   > = new Map();
-  referencingChecksById: Map<number, number[]> = new Map();
+  referencingChecksById: Map<number, OurRubricCheck[]> = new Map();
 
   // Assignment
-  set assignment(assignment: Assignment) {
+  set assignment(assignment: AssignmentWithRubricsAndReferences) {
     this._assignment = assignment;
   }
   get assignment() {
@@ -95,7 +120,7 @@ class AssignmentController {
                       }
                       this.referencingChecksById
                         .get(reference.referenced_rubric_check_id)!
-                        .push(reference.referencing_rubric_check_id);
+                        .push(this.rubricCheckById.get(reference.referencing_rubric_check_id)!);
                     }
                   }
                 }
@@ -172,7 +197,7 @@ function AssignmentControllerCreator({
     queryOptions: { enabled: !!assignment_id },
     meta: {
       select:
-        "*, rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
+        "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
     }
   });
 

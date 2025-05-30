@@ -38,7 +38,7 @@ import {
   useState,
   type ComponentType
 } from "react";
-import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaTimesCircle } from "react-icons/fa";
+import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { Checkbox } from "./checkbox";
 import LineCommentForm from "./line-comments-form";
@@ -64,7 +64,8 @@ export function isRubricCheckDataWithOptions(data: Json | null | undefined): dat
     typeof data === "object" &&
     data !== null &&
     "options" in data &&
-    Array.isArray((data as { options?: unknown }).options)
+    Array.isArray((data as RubricCheckDataWithOptions).options) &&
+    (data as RubricCheckDataWithOptions).options.length > 0
   );
 }
 
@@ -200,6 +201,7 @@ export default function CodeFile({
           flexDirection: "row"
         }
       };
+  console.log(`Submission review id: ${submissionReviewId}`);
   return (
     <Box
       border="1px solid"
@@ -407,45 +409,15 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     resource: "submission_file_comments"
   });
 
-  // Use submission controller data instead of direct database calls
-  // TODO: useAssignment hook
-  // const submissionReview = useSubmissionReview(comment.submission_review_id);
   const rubricCheck = useRubricCheck(comment.rubric_check_id);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
 
-  // console.log("submissionReview", submissionReview);
-
-  // // Find the rubric check and criteria from the pre-fetched review data
-  // const { rubricCheck, rubricCriteria } = useMemo(() => {
-  //   if (!submissionReview?.rubrics || !comment.rubric_check_id) {
-  //     return { rubricCheck: undefined, rubricCriteria: undefined };
-  //   }
-
-  //   // Search through the review's rubric structure to find the check and its criteria
-  //   // Note: rubrics from submission reviews have rubric_criteria directly, not rubric_parts
-  //   for (const criteria of submissionReview.rubrics.rubric_criteria || []) {
-  //     const check = criteria.rubric_checks?.find((check: HydratedRubricCheck) => check.id === comment.rubric_check_id);
-  //     if (check) {
-  //       return { rubricCheck: check, rubricCriteria: criteria };
-  //     }
-  //   }
-
-  //   return { rubricCheck: undefined, rubricCriteria: undefined };
-  // }, [submissionReview, comment.rubric_check_id]);
-
-  // // If no review data available yet, show loading skeleton
-  // if (!submissionReview && comment.submission_review_id) {
-  //   return <Skeleton height="100px" width="100%" />;
-  // }
-
-  // If we can't find the check/criteria in the review data, show skeleton
   if (!rubricCheck || !rubricCriteria) {
     return <Skeleton height="100px" width="100%" />;
   }
 
-  // const reviewName = comment.submission_review_id ? submissionReview?.name : "Self-Review";
-
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
+  const hasPoints = comment.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
 
   return (
     <Box m={0} p={0} w="100%" pb={1}>
@@ -463,29 +435,36 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
           <Box bg="bg.info" pl={1} pr={1} borderRadius="md">
             <Flex w="100%" justifyContent="space-between">
               <HStack>
-                {!comment.released && (
+                {!comment.eventually_visible && (
+                  <Tooltip content="This comment will never be visible to the student">
+                    <Icon as={FaRegEyeSlash} color="fg.muted" />
+                  </Tooltip>
+                )}
+                {comment.eventually_visible && !comment.released && (
                   <Tooltip content="This comment is not released to the student yet">
                     <Icon as={FaEyeSlash} />
                   </Tooltip>
                 )}
-                <Icon
-                  as={rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle}
-                  color={rubricCriteria.is_additive ? "green.500" : "red.500"}
-                />
-                {pointsText}
+                {hasPoints && (
+                  <>
+                    <Icon
+                      as={rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle}
+                      color={rubricCriteria.is_additive ? "green.500" : "red.500"}
+                    />
+                    {pointsText}
+                  </>
+                )}
                 <Text fontSize="sm" color="fg.muted">
                   {rubricCriteria?.name} &gt; {rubricCheck?.name}
                 </Text>
               </HStack>
-              <HStack gap={0}>
+              <HStack gap={0} flexWrap="wrap">
                 <Text fontSize="sm" fontStyle="italic" color="fg.muted">
                   {commentAuthor?.name}{" "}
-                  {comment.submission_review_id && (
-                    <ReviewRoundTag submission_review_id={comment.submission_review_id} />
-                  )}
                 </Text>
-                <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                {comment.submission_review_id && <ReviewRoundTag submission_review_id={comment.submission_review_id} />}
               </HStack>
+              <CommentActions comment={comment} setIsEditing={setIsEditing} />
             </Flex>
           </Box>
           <Box pl={2}>

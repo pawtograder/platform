@@ -1,8 +1,15 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
-import { useRubricCheck as useNewRubricCheck } from "@/hooks/useAssignment";
+import {
+  useAssignmentController,
+  useMyReviewAssignments,
+  useRubricCheck as useNewRubricCheck,
+  useReferencingRubricChecks,
+  useRubrics
+} from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
+  HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
@@ -775,6 +782,25 @@ export function useRubricCriteriaInstances({
 
   return filteredComments;
 }
+export function useSubmissionReviews() {
+  const ctx = useContext(SubmissionContext);
+  const controller = useSubmissionController();
+  const [reviews, setReviews] = useState<SubmissionReviewWithRubric[] | undefined>(undefined);
+  useEffect(() => {
+    if (!ctx || !controller) {
+      return;
+    }
+    const { unsubscribe, data } = controller.listGenericData<SubmissionReviewWithRubric>(
+      "submission_reviews",
+      (data) => {
+        setReviews(data);
+      }
+    );
+    setReviews(data);
+    return () => unsubscribe();
+  }, [ctx, controller]);
+  return reviews;
+}
 export function useSubmissionReview(reviewId?: number | null) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
@@ -1095,4 +1121,52 @@ export function useSubmissionReviewForRubric(
   }, [enabled, rubricId, submission, controller, private_profile_id]);
 
   return { submissionReview, isLoading, error };
+}
+export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {
+  const assignmentController = useAssignmentController();
+  const referencingChecks = useReferencingRubricChecks(rubric_check_id)?.map((eachCheck) => {
+    const reviewCriteria = assignmentController.rubricCriteriaById.get(eachCheck.rubric_criteria_id);
+    return {
+      criteria: reviewCriteria,
+      check: eachCheck
+    };
+  });
+  const writableSubmissionReviews = useWritableSubmissionReviews();
+  return referencingChecks?.filter((rc) =>
+    writableSubmissionReviews?.some((sr) => sr.rubric_id === rc.criteria!.rubric_id)
+  );
+}
+
+export function useWritableSubmissionReviews(rubric_id?: number) {
+  const id = useSubmissionController().submission.id;
+  const submissionReviews = useSubmissionReviews();
+  const rubrics = useRubrics();
+  const assignments = useMyReviewAssignments(id);
+
+  const { role } = useClassProfiles();
+  const memoizedReviews = useMemo(() => {
+    const writableRubrics: HydratedRubric[] = [];
+    if (role.role === "instructor") {
+      writableRubrics.push(...rubrics);
+    }
+    if (role.role === "grader") {
+      writableRubrics.push(
+        ...rubrics.filter((r) => r.review_round === "grading-review" || assignments.some((a) => a.rubric_id === r.id))
+      );
+    }
+    if (role.role === "student") {
+      writableRubrics.push(
+        ...rubrics.filter((r) => r.review_round === "self-review" || assignments.some((a) => a.rubric_id === r.id))
+      );
+    }
+    console.log(`Reviews include: ${submissionReviews?.map((sr) => sr.rubric_id)}`);
+    console.log(`Writable rubrics include: ${writableRubrics.map((r) => r.id)}`);
+    console.log(`Rubric id: ${rubric_id}`);
+    return submissionReviews?.filter(
+      (sr) =>
+        writableRubrics.some((r) => r.id === sr.rubric_id) && (rubric_id === undefined || sr.rubric_id === rubric_id)
+    );
+  }, [role, rubrics, submissionReviews, assignments, rubric_id]);
+  console.log(`Memoized reviews: ${JSON.stringify(memoizedReviews?.map((sr) => sr.rubric_id))}`);
+  return memoizedReviews;
 }
