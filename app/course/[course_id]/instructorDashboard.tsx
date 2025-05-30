@@ -1,24 +1,27 @@
+import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
+import { createClient } from "@/utils/supabase/server";
 import {
+  Box,
+  CardBody,
   CardHeader,
   CardRoot,
-  CardBody,
-  DataListRoot,
   DataListItem,
   DataListItemLabel,
   DataListItemValue,
-  Skeleton
+  DataListRoot,
+  Heading,
+  Skeleton,
+  Stack,
+  VStack
 } from "@chakra-ui/react";
-import { Stack } from "@chakra-ui/react";
-import { Box, Heading } from "@chakra-ui/react";
-import { VStack } from "@chakra-ui/react";
-import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
-import { createClient } from "@/utils/supabase/server";
+import { TZDate } from "@date-fns/tz";
+import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase
     .from("assignments")
-    .select("*,repositories(id), submissions(profile_id, grader_results(score,max_score))")
+    .select("*,repositories(id), submissions(profile_id, grader_results(score,max_score)), classes(time_zone)")
     .eq("class_id", course_id)
     .gte("due_date", new Date().toISOString())
     .order("due_date", { ascending: false })
@@ -70,7 +73,13 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                     <DataListItem>
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
-                        {assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"}
+                        {assignment.due_date
+                          ? formatInTimeZone(
+                              new TZDate(assignment.due_date),
+                              assignment.classes.time_zone || "America/New_York",
+                              "Pp"
+                            )
+                          : "No due date"}
                       </DataListItemValue>
                     </DataListItem>
                     <DataListItem>

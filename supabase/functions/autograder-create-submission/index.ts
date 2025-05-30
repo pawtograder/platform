@@ -8,7 +8,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHash } from "node:crypto";
 import { TZDate } from "npm:@date-fns/tz";
-import { addHours, addSeconds, format } from "npm:date-fns@4";
+import { addHours, addSeconds, format, isAfter } from "npm:date-fns@4";
 import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
@@ -87,20 +87,14 @@ async function handleRequest(req: Request) {
       console.log(`Total extensions: ${totalExtensions}`);
       console.log(`Due date: ${repoData.assignments.due_date}`);
 
-      //omg why is this needed?
-      const tzDate = TZDate.tz(timeZone);
-      const offset = tzDate.getTimezoneOffset();
-      const offsetHours = Math.abs(Math.floor(offset / 60));
-      const offsetMinutes = Math.abs(offset % 60);
-      const offsetStr = `${offset < 0 ? "+" : "-"}${offsetHours.toString().padStart(2, "0")}:${offsetMinutes.toString().padStart(2, "0")}`;
-      const originalDueDate = new TZDate(repoData.assignments.due_date + offsetStr, timeZone);
+      const originalDueDate = new TZDate(repoData.assignments.due_date);
 
       console.log(`Original due date: ${originalDueDate}`);
       const newDueDate = addHours(originalDueDate, totalExtensions);
       console.log(`New due date: ${newDueDate}`);
       const currentDate = TZDate.tz(timeZone);
       console.log(`Current date: ${currentDate}`);
-      if (currentDate > newDueDate) {
+      if (isAfter(currentDate, newDueDate)) {
         //Fail the check run
         await updateCheckRun({
           owner: repository.split("/")[0],
@@ -224,70 +218,77 @@ async function handleRequest(req: Request) {
       });
     }
 
-    // Clone the repository
-    const repo = await cloneRepository(repository, sha);
-    const zip = await openZip.buffer(repo);
-    const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
-
-    // Check the SHA
-    const workflowFile = zip.files.find((file: any) => stripTopDir(file.path) === ".github/workflows/grade.yml");
-    const hash = createHash("sha256");
-    const contents = await workflowFile?.buffer();
-    if (!contents) {
-      throw new UserVisibleError("Failed to read workflow file in repository");
-    }
-    const contentsStr = contents.toString("utf-8");
-    // Retrieve the autograder config
-    const { data: config } = await adminSupabase.from("autograder").select("*").eq("id", assignment_id).single();
-    if (!config) {
-      throw new UserVisibleError("Grader config not found");
-    }
-    hash.update(contentsStr);
-    const hashStr = hash.digest("hex");
-    if (hashStr !== config.workflow_sha) {
-      throw new SecurityError(`Workflow file SHA does not match expected value: ${hashStr} !== ${config.workflow_sha}`);
-    }
-    const pawtograderConfig = config.config as unknown as PawtograderConfig;
-    const expectedFiles = [...pawtograderConfig.submissionFiles.files, ...pawtograderConfig.submissionFiles.testFiles];
-
-    if (expectedFiles.length === 0) {
-      throw new UserVisibleError("Incorrect instructor setup for assignment: no submission files set");
-    }
-    const submittedFiles = zip.files.filter(
-      (file: any) =>
-        file.type === "File" && // Do not submit directories
-        expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
-    );
-    // Make sure that all files that are NOT glob patterns are present
-    const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
-    const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
-      submittedFiles.some((submittedFile: any) => stripTopDir(submittedFile.path) === file)
-    );
-    if (!allNonGlobFilesPresent) {
-      throw new UserVisibleError(`Missing required files: ${nonGlobFiles.join(", ")}`);
-    }
-
-    const submittedFilesWithContents = await Promise.all(
-      submittedFiles.map(async (file: any) => {
-        const contents = await file.buffer();
-        return { name: stripTopDir(file.path), contents };
-      })
-    );
-    // Add files to supabase
-    const { error: fileError } = await adminSupabase.from("submission_files").insert(
-      submittedFilesWithContents.map((file: any) => ({
-        submission_id: submission_id,
-        name: file.name,
-        profile_id: repoData.profile_id,
-        assignment_group_id: repoData.assignment_group_id,
-        contents: file.contents.toString("utf-8"),
-        class_id: repoData.assignments.class_id!
-      }))
-    );
-    if (fileError) {
-      throw new Error(`Failed to insert submission files: ${fileError.message}`);
-    }
     try {
+      // Clone the repository
+      const repo = await cloneRepository(repository, sha);
+      const zip = await openZip.buffer(repo);
+      const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
+
+      // Check the SHA
+      const workflowFile = zip.files.find((file: any) => stripTopDir(file.path) === ".github/workflows/grade.yml");
+      const hash = createHash("sha256");
+      const contents = await workflowFile?.buffer();
+      if (!contents) {
+        throw new UserVisibleError("Failed to read workflow file in repository");
+      }
+      const contentsStr = contents.toString("utf-8");
+      // Retrieve the autograder config
+      const { data: config } = await adminSupabase.from("autograder").select("*").eq("id", assignment_id).single();
+      if (!config) {
+        throw new UserVisibleError("Grader config not found");
+      }
+      hash.update(contentsStr);
+      const hashStr = hash.digest("hex");
+      if (hashStr !== config.workflow_sha) {
+        throw new SecurityError(
+          `Workflow file SHA does not match expected value: ${hashStr} !== ${config.workflow_sha}`
+        );
+      }
+      const pawtograderConfig = config.config as unknown as PawtograderConfig;
+      const expectedFiles = [
+        ...pawtograderConfig.submissionFiles.files,
+        ...pawtograderConfig.submissionFiles.testFiles
+      ];
+
+      if (expectedFiles.length === 0) {
+        throw new UserVisibleError("Incorrect instructor setup for assignment: no submission files set");
+      }
+      const submittedFiles = zip.files.filter(
+        (file: any) =>
+          file.type === "File" && // Do not submit directories
+          expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
+      );
+      // Make sure that all files that are NOT glob patterns are present
+      const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
+      const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
+        submittedFiles.some((submittedFile: any) => stripTopDir(submittedFile.path) === file)
+      );
+      if (!allNonGlobFilesPresent) {
+        throw new UserVisibleError(
+          `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: any) => stripTopDir(submittedFile.path) === file)).join(", ")}`
+        );
+      }
+
+      const submittedFilesWithContents = await Promise.all(
+        submittedFiles.map(async (file: any) => {
+          const contents = await file.buffer();
+          return { name: stripTopDir(file.path), contents };
+        })
+      );
+      // Add files to supabase
+      const { error: fileError } = await adminSupabase.from("submission_files").insert(
+        submittedFilesWithContents.map((file: any) => ({
+          submission_id: submission_id,
+          name: file.name,
+          profile_id: repoData.profile_id,
+          assignment_group_id: repoData.assignment_group_id,
+          contents: file.contents.toString("utf-8"),
+          class_id: repoData.assignments.class_id!
+        }))
+      );
+      if (fileError) {
+        throw new Error(`Failed to insert submission files: ${fileError.message}`);
+      }
       if (!config.grader_repo) {
         throw new UserVisibleError(
           "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment."
@@ -305,7 +306,25 @@ async function handleRequest(req: Request) {
       };
     } catch (err) {
       console.error(err);
-      // TODO update the submission status to failed, save error, etc
+      await adminSupabase.from("grader_results").insert({
+        submission_id: submission_id,
+        errors:
+          err instanceof UserVisibleError
+            ? { user_visible_message: err.details }
+            : { error: JSON.parse(JSON.stringify(err)) },
+        grader_sha: "unknown",
+        score: 0,
+        ret_code: -1,
+        execution_time: 0,
+        class_id: repoData.assignments.class_id!,
+        lint_passed: true,
+        lint_output: "",
+        lint_output_format: "text",
+        max_score: 0,
+        grader_action_sha: "unknown",
+        profile_id: repoData.profile_id,
+        assignment_group_id: repoData.assignment_group_id
+      });
 
       throw err;
     }

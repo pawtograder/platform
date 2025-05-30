@@ -384,7 +384,16 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal, tagData]
+    [
+      currentUser,
+      openEditProfileModal,
+      openEditUserRoleModal,
+      openRemoveStudentModal,
+      tagData,
+      addTag,
+      course_id,
+      handleSingleCheckboxChange
+    ]
   );
 
   const {
@@ -547,13 +556,7 @@ function EnrollmentsTable() {
             ))}
           </Table.Body>
         </Table.Root>
-        <Flex
-          color="black"
-          marginLeft="15px"
-          flexDir={"row"}
-          alignItems={"center"}
-          fontSize="var(--chakra-font-sizes-sm)"
-        >
+        <Flex marginLeft="15px" flexDir={"row"} alignItems={"center"} fontSize="var(--chakra-font-sizes-sm)">
           <PiArrowBendLeftUpBold width={"30px"} height={"30px"} />
           Select people
           <Button

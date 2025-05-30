@@ -1,6 +1,7 @@
-import { formatDueDate } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/server";
 import { Box, DataList, HStack, VStack } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
+import { formatInTimeZone } from "date-fns-tz";
 import AssignmentsTable from "./assignmentsTable";
 export default async function AssignmentHome({
   params
@@ -11,7 +12,7 @@ export default async function AssignmentHome({
   const client = await createClient();
   const { data: assignment } = await client
     .from("assignments")
-    .select("*")
+    .select("*, classes(time_zone)")
     .eq("id", Number.parseInt(assignment_id))
     .single();
   if (!assignment) {
@@ -26,11 +27,27 @@ export default async function AssignmentHome({
             <DataList.Root orientation="horizontal">
               <DataList.Item>
                 <DataList.ItemLabel>Released</DataList.ItemLabel>
-                <DataList.ItemValue>{formatDueDate(assignment.release_date)}</DataList.ItemValue>
+                <DataList.ItemValue>
+                  {assignment.release_date
+                    ? formatInTimeZone(
+                        new TZDate(assignment.release_date),
+                        assignment.classes.time_zone || "America/New_York",
+                        "Pp"
+                      )
+                    : "N/A"}
+                </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>
                 <DataList.ItemLabel>Due</DataList.ItemLabel>
-                <DataList.ItemValue>{formatDueDate(assignment.due_date)}</DataList.ItemValue>
+                <DataList.ItemValue>
+                  {assignment.due_date
+                    ? formatInTimeZone(
+                        new TZDate(assignment.due_date),
+                        assignment.classes.time_zone || "America/New_York",
+                        "Pp"
+                      )
+                    : "N/A"}
+                </DataList.ItemValue>
               </DataList.Item>
             </DataList.Root>
           </VStack>

@@ -283,127 +283,146 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
     console.error(error);
     throw new UserVisibleError(`Failed to insert feedback: ${error.message}`);
   }
-  // Insert feedback for each visibility level
-  for (const visibility of ["hidden", "visible", "after_due_date", "after_published"]) {
-    //Insert output if it exists
-    if (requestBody.feedback.output[visibility as OutputVisibility]) {
-      const output = requestBody.feedback.output[visibility as OutputVisibility];
-      if (output) {
-        console.log(`${visibility}: ${output?.output_format} ${output?.output.substring(0, 100)}...`);
-        const { error: outputError } = await adminSupabase.from("grader_result_output").insert({
-          class_id,
-          student_id: profile_id,
-          assignment_group_id,
-          grader_result_id: resultID.id,
-          visibility: visibility as OutputVisibility,
-          format: output.output_format || "text",
-          output: output.output
-        });
-        console.log(`Inserted output: ${outputError}`);
-        if (outputError) {
-          console.error(outputError);
-          throw new UserVisibleError(`Failed to insert output: ${outputError.message}`);
+  let artifactUploadLinks: { name: string; token: string; path: string }[] = [];
+
+  try {
+    // Insert feedback for each visibility level
+    for (const visibility of ["hidden", "visible", "after_due_date", "after_published"]) {
+      //Insert output if it exists
+      if (requestBody.feedback.output[visibility as OutputVisibility]) {
+        const output = requestBody.feedback.output[visibility as OutputVisibility];
+        if (output) {
+          console.log(`${visibility}: ${output?.output_format} ${output?.output.substring(0, 100)}...`);
+          const { error: outputError } = await adminSupabase.from("grader_result_output").insert({
+            class_id,
+            student_id: profile_id,
+            assignment_group_id,
+            grader_result_id: resultID.id,
+            visibility: visibility as OutputVisibility,
+            format: output.output_format || "text",
+            output: output.output
+          });
+          console.log(`Inserted output: ${outputError}`);
+          if (outputError) {
+            console.error(outputError);
+            throw new UserVisibleError(`Failed to insert output: ${outputError.message}`);
+          }
         }
       }
     }
-  }
-  //Insert test results
-  const { error: testResultsError, data: testResultIDs } = await adminSupabase
-    .from("grader_result_tests")
-    .insert(
-      requestBody.feedback.tests.map((test) => ({
-        class_id: class_id,
-        student_id: profile_id,
-        assignment_group_id,
-        grader_result_id: resultID.id,
-        name: test.name,
-        output: test.output,
-        output_format: test.output_format || "text",
-        name_format: test.name_format || "text",
-        score: test.score,
-        max_score: test.max_score,
-        part: test.part,
-        extra_data: test.extra_data,
-        is_released: !test.hide_until_released,
-        submission_id
-      }))
-    )
-    .select("id");
-  if (testResultsError) {
-    throw new UserVisibleError(`Failed to insert test results: ${testResultsError.message}`);
-  }
-  //Insert any hidden output
-  const hiddenTestOutputs = requestBody.feedback.tests
-    .map((eachTest, idx) => {
-      return {
-        grader_result_test_id: testResultIDs[idx].id,
-        class_id,
-        output: eachTest.hidden_output || "",
-        output_format: eachTest.hidden_output_format || "text"
-      };
-    })
-    .filter((eachTest) => eachTest.output.length > 0);
-  if (hiddenTestOutputs.length > 0) {
-    const { error: hiddenTestOutputsError } = await adminSupabase
-      .from("grader_result_test_output")
-      .insert(hiddenTestOutputs);
-    if (hiddenTestOutputsError) {
-      console.error(hiddenTestOutputsError);
-      throw new UserVisibleError(`Failed to insert hidden test outputs: ${hiddenTestOutputsError.message}`);
-    }
-  }
-  let artifactUploadLinks: { name: string; token: string; path: string }[] = [];
-  if (requestBody.feedback.artifacts) {
-    // Prepare artifact uploads
-    const { error: artifactError, data: artifactIDs } = await adminSupabase
-      .from("submission_artifacts")
+    //Insert test results
+    const { error: testResultsError, data: testResultIDs } = await adminSupabase
+      .from("grader_result_tests")
       .insert(
-        requestBody.feedback.artifacts.map((artifact) => ({
+        requestBody.feedback.tests.map((test) => ({
           class_id: class_id,
-          profile_id: profile_id,
+          student_id: profile_id,
           assignment_group_id,
-          submission_id: submission_id!,
-          autograder_regression_test_id,
-          name: artifact.name,
-          data: artifact.data as any
+          grader_result_id: resultID.id,
+          name: test.name,
+          output: test.output,
+          output_format: test.output_format || "text",
+          name_format: test.name_format || "text",
+          score: test.score,
+          max_score: test.max_score,
+          part: test.part,
+          extra_data: test.extra_data,
+          is_released: !test.hide_until_released,
+          submission_id
         }))
       )
       .select("id");
-    if (artifactError) {
-      console.error(artifactError);
-      throw new UserVisibleError(`Failed to insert artifact: ${artifactError.message}`);
+    if (testResultsError) {
+      throw new UserVisibleError(`Failed to insert test results: ${testResultsError.message}`);
     }
-
-    artifactUploadLinks = await Promise.all(
-      requestBody.feedback.artifacts.map(async (artifact, idx) => {
-        //Insert to grader_result_artifacts
-        const artifactID = artifactIDs[idx].id;
-        const aritfactPath = `classes/${class_id}/profiles/${profile_id ? profile_id : assignment_group_id}/submissions/${submission_id}/${artifactID}`;
-        const signedLink = await adminSupabase.storage.from("submission-artifacts").createSignedUploadUrl(aritfactPath);
-        if (!signedLink.data?.signedUrl) {
-          console.error(signedLink.error);
-          throw new UserVisibleError(`Failed to create signed URL for artifact: ${artifact.name}`);
-        }
+    //Insert any hidden output
+    const hiddenTestOutputs = requestBody.feedback.tests
+      .map((eachTest, idx) => {
         return {
-          name: artifact.name,
-          token: signedLink.data?.token,
-          path: aritfactPath
+          grader_result_test_id: testResultIDs[idx].id,
+          class_id,
+          output: eachTest.hidden_output || "",
+          output_format: eachTest.hidden_output_format || "text"
         };
       })
-    );
-  }
+      .filter((eachTest) => eachTest.output.length > 0);
+    if (hiddenTestOutputs.length > 0) {
+      const { error: hiddenTestOutputsError } = await adminSupabase
+        .from("grader_result_test_output")
+        .insert(hiddenTestOutputs);
+      if (hiddenTestOutputsError) {
+        console.error(hiddenTestOutputsError);
+        throw new UserVisibleError(`Failed to insert hidden test outputs: ${hiddenTestOutputsError.message}`);
+      }
+    }
+    if (requestBody.feedback.artifacts) {
+      // Prepare artifact uploads
+      const { error: artifactError, data: artifactIDs } = await adminSupabase
+        .from("submission_artifacts")
+        .insert(
+          requestBody.feedback.artifacts.map((artifact) => ({
+            class_id: class_id,
+            profile_id: profile_id,
+            assignment_group_id,
+            submission_id: submission_id!,
+            autograder_regression_test_id,
+            name: artifact.name,
+            data: artifact.data as any
+          }))
+        )
+        .select("id");
+      if (artifactError) {
+        console.error(artifactError);
+        throw new UserVisibleError(`Failed to insert artifact: ${artifactError.message}`);
+      }
 
-  console.log("Submission ID", submission_id);
-  console.log("Annotations", requestBody.feedback.annotations);
-  if (submission_id && grading_review_id && requestBody.feedback.annotations) {
-    //Insert any comments
-    await insertComments({
-      adminSupabase,
-      class_id,
-      submission_id,
-      grading_review_id,
-      comments: requestBody.feedback.annotations
-    });
+      artifactUploadLinks = await Promise.all(
+        requestBody.feedback.artifacts.map(async (artifact, idx) => {
+          //Insert to grader_result_artifacts
+          const artifactID = artifactIDs[idx].id;
+          const aritfactPath = `classes/${class_id}/profiles/${profile_id ? profile_id : assignment_group_id}/submissions/${submission_id}/${artifactID}`;
+          const signedLink = await adminSupabase.storage
+            .from("submission-artifacts")
+            .createSignedUploadUrl(aritfactPath);
+          if (!signedLink.data?.signedUrl) {
+            console.error(signedLink.error);
+            throw new UserVisibleError(`Failed to create signed URL for artifact: ${artifact.name}`);
+          }
+          return {
+            name: artifact.name,
+            token: signedLink.data?.token,
+            path: aritfactPath
+          };
+        })
+      );
+    }
+
+    console.log("Submission ID", submission_id);
+    console.log("Annotations", requestBody.feedback.annotations);
+    if (submission_id && grading_review_id && requestBody.feedback.annotations) {
+      //Insert any comments
+      await insertComments({
+        adminSupabase,
+        class_id,
+        submission_id,
+        grading_review_id,
+        comments: requestBody.feedback.annotations
+      });
+    }
+  } catch (e) {
+    console.error(e);
+    if (submission_id) {
+      await adminSupabase
+        .from("grader_results")
+        .update({
+          errors:
+            e instanceof UserVisibleError
+              ? { user_visible_message: e.details }
+              : { error: JSON.parse(JSON.stringify(e)) }
+        })
+        .eq("id", resultID.id);
+    }
+    throw new UserVisibleError(`Failed to insert feedback: ${e.message}`);
   }
 
   // Update the check run status to completed
