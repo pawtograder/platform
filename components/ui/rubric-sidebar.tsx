@@ -37,7 +37,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useDelete, useList, useUpdate, useInvalidate } from "@refinedev/core";
+import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase, Select } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -291,7 +291,9 @@ function AddReferencingFeedbackPopover({
   const check = useRubricCheck(selectedCheckToReference);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const targetSubmissionReviewId = useWritableSubmissionReviews(check?.criteria?.rubric_id);
-  const { mutateAsync: createComment } = useCreate();
+  const { mutateAsync: createComment } = useCreate({
+    resource: "submission_file_comments"
+  });
 
   return (
     <Popover.Root open={selectedCheckToReference !== undefined} positioning={{ placement: "top" }}>
@@ -517,27 +519,8 @@ export function CommentActions({
       ? "submission_file_comments"
       : "submission_comments";
 
-  const invalidateQuery = useInvalidate();
-  const submission = useSubmissionMaybe();
-
   const { mutateAsync: updateComment } = useUpdate({
-    resource: resource,
-    mutationOptions: {
-      onSuccess: () => {
-        // Force invalidation to trigger immediate re-render
-        invalidateQuery({
-          resource: resource,
-          invalidates: ["list"]
-        });
-        if (submission?.id) {
-          invalidateQuery({
-            resource: "submissions",
-            id: submission.id,
-            invalidates: ["detail"]
-          });
-        }
-      }
-    }
+    resource: resource
   });
 
   return (
@@ -648,33 +631,15 @@ export function RubricCheckComment({
   const author = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const submission = useSubmissionMaybe();
   const resource = isArtifactComment(comment)
     ? "submission_artifact_comments"
     : isLineComment(comment)
       ? "submission_file_comments"
       : "submission_comments";
 
-  const invalidateQuery = useInvalidate();
-  const submission = useSubmissionMaybe();
-
   const { mutateAsync: updateComment } = useUpdate({
-    resource: resource,
-    mutationOptions: {
-      onSuccess: () => {
-        // Force invalidation to trigger immediate re-render
-        invalidateQuery({
-          resource: resource,
-          invalidates: ["list"]
-        });
-        if (submission?.id) {
-          invalidateQuery({
-            resource: "submissions",
-            id: submission.id,
-            invalidates: ["detail"]
-          });
-        }
-      }
-    }
+    resource: resource
   });
   const pathname = usePathname();
 
@@ -1144,25 +1109,8 @@ function SubmissionCommentForm({
         ? "submission_file_comments"
         : "submission_comments";
 
-  const invalidateQuery = useInvalidate();
   const { mutateAsync: createComment } = useCreate({
-    resource: resource,
-    mutationOptions: {
-      onSuccess: () => {
-        // Force invalidation to trigger immediate re-render
-        invalidateQuery({
-          resource: resource,
-          invalidates: ["list"]
-        });
-        if (submission?.id) {
-          invalidateQuery({
-            resource: "submissions",
-            id: submission.id,
-            invalidates: ["detail"]
-          });
-        }
-      }
-    }
+    resource: resource
   });
 
   useEffect(() => {

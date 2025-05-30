@@ -495,7 +495,7 @@ function SubmissionControllerCreator({
     pagination: {
       pageSize: 1000
     },
-    liveMode: "manual",
+    liveMode: "auto",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false, // Don't refetch on mount since we have data
@@ -518,7 +518,7 @@ function SubmissionControllerCreator({
     pagination: {
       pageSize: 1000
     },
-    liveMode: "manual",
+    liveMode: "auto",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false,
@@ -538,7 +538,7 @@ function SubmissionControllerCreator({
     pagination: {
       pageSize: 1000
     },
-    liveMode: "manual",
+    liveMode: "auto",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false,
@@ -558,7 +558,7 @@ function SubmissionControllerCreator({
     pagination: {
       pageSize: 1000
     },
-    liveMode: "manual",
+    liveMode: "auto",
     queryOptions: {
       enabled: true, // Need to enable to receive live events
       refetchOnMount: false,
