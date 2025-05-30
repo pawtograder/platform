@@ -13,7 +13,7 @@ import {
   EdgeFunctionError
 } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   Assignment,
   AssignmentGroupInvitation,
   AssignmentGroupJoinRequest,
@@ -39,7 +39,7 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import { CheckCircleIcon, ClockIcon, MinusCircleIcon, XCircleIcon } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";

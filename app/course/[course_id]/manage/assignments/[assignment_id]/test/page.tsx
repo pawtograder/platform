@@ -42,7 +42,6 @@ export default function TestAssignmentPage() {
       { field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }
     ]
   });
-  console.log(repository?.data);
   if (!assignment?.data || !submissions?.data) {
     return <Skeleton height="100px" />;
   }
@@ -58,7 +57,7 @@ export default function TestAssignmentPage() {
         <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
           <Heading size="md">Repository</Heading>
           <Text fontSize="sm" color="fg.muted">
-            <Link href={`https://github.com/${repository.data[0].repository}`}>{repository.data[0].repository}</Link>
+            <Link href={`https://github.com/${repository.data[0]!.repository}`}>{repository.data[0]!.repository}</Link>
           </Text>
         </Box>
       ) : (

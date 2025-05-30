@@ -2,12 +2,12 @@
 
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Skeleton } from "@chakra-ui/react";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
-import { FieldValues } from "react-hook-form";
+import type { FieldValues } from "react-hook-form";
 import AssignmentForm from "../../new/form";
 import { toaster } from "@/components/ui/toaster";
 
@@ -30,25 +30,25 @@ export default function EditAssignment() {
     async (values: FieldValues) => {
       try {
         const supabase = createClient();
-        if (values.copy_groups_from_assignment !== undefined) {
-          if (values.copy_groups_from_assignment !== "") {
+        if (values["copy_groups_from_assignment"] !== undefined) {
+          if (values["copy_groups_from_assignment"] !== "") {
             await assignmentGroupCopyGroupsFromAssignment(
               {
-                source_assignment_id: values.copy_groups_from_assignment,
+                source_assignment_id: values["copy_groups_from_assignment"],
                 target_assignment_id: Number.parseInt(assignment_id as string),
                 class_id: Number.parseInt(course_id as string)
               },
               supabase
             );
           }
-          delete values.copy_groups_from_assignment;
+          delete values["copy_groups_from_assignment"];
         }
         await form.refineCore.onFinish(values);
-        if (values.template_repo) {
+        if (values["template_repo"]) {
           await githubRepoConfigureWebhook(
             {
               assignment_id: Number.parseInt(assignment_id as string),
-              new_repo: values.template_repo,
+              new_repo: values["template_repo"],
               watch_type: "template_repo"
             },
             supabase

@@ -17,6 +17,7 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
+import { toaster } from "@/components/ui/toaster";
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase
@@ -27,7 +28,10 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .order("due_date", { ascending: false })
     .limit(5);
   if (assignmentsError) {
-    console.error(assignmentsError);
+    toaster.error({
+      title: "Error fetching assignments",
+      description: assignmentsError.message
+    });
   }
   const { data: topics } = await supabase.from("discussion_topics").select("*").eq("class_id", course_id);
 

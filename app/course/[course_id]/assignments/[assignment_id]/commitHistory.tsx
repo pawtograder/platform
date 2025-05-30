@@ -1,21 +1,22 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, CloseButton, Dialog, Flex, Heading, Skeleton, Table, Text } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import Link from "@/components/ui/link";
 import { useCourse } from "@/hooks/useCourseController";
 import { triggerWorkflow } from "@/lib/edgeFunctions";
-import { RepositoryCheckRun } from "@/supabase/functions/_shared/FunctionTypes";
+import type { RepositoryCheckRun } from "@/supabase/functions/_shared/FunctionTypes";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useList } from "@refinedev/core";
+import { type CrudFilter, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { FaGitAlt } from "react-icons/fa";
+import { toaster } from "@/components/ui/toaster";
 
 function TriggerWorkflowButton({ repository, sha }: { repository: string; sha: string }) {
   const { course_id } = useParams();
@@ -40,7 +41,10 @@ function TriggerWorkflowButton({ repository, sha }: { repository: string; sha: s
           await triggerWorkflow({ repository, sha, class_id: Number(course_id) }, supabase);
           setIsSuccess(true);
         } catch (error) {
-          console.error(error);
+          toaster.error({
+            title: "Error triggering submission",
+            description: error instanceof Error ? error.message : "An unknown error occurred"
+          });
           setIsError(true);
         } finally {
           setIsLoading(false);
@@ -164,8 +168,8 @@ export function CommitHistoryDialog({
           <Dialog.Body p={0}>
             {repository && repository.data.length > 0 && (
               <CommitHistory
-                repository_id={repository.data[0].id}
-                repository_full_name={repository.data[0].repository}
+                repository_id={repository.data[0]!.id}
+                repository_full_name={repository.data[0]!.repository}
               />
             )}
           </Dialog.Body>

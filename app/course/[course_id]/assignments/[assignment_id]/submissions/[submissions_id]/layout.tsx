@@ -1,7 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -39,7 +39,7 @@ import {
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Tables } from "@/utils/supabase/SupabaseTypes";
+import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
@@ -689,8 +689,8 @@ function RubricView() {
         return;
       }
       if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
-        setSelectedRubricIdState(assignmentRubricsData.data[0].id);
-        updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
+        setSelectedRubricIdState(assignmentRubricsData.data[0]?.id);
+        updateSelectedRubricInURL(assignmentRubricsData.data[0]?.id);
         return;
       }
     }
@@ -710,8 +710,8 @@ function RubricView() {
 
     // Priority 5: Fall back to first available rubric
     if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
-      setSelectedRubricIdState(assignmentRubricsData.data[0].id);
-      updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
+      setSelectedRubricIdState(assignmentRubricsData.data[0]?.id);
+      updateSelectedRubricInURL(assignmentRubricsData.data[0]?.id);
       return;
     }
   }, [

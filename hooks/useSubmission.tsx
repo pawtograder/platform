@@ -27,7 +27,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { type LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
@@ -70,6 +70,9 @@ class SubmissionController {
       this.genericData[typeName] = new Map();
     }
     const idGetter = this.genericDataTypeToId[typeName];
+    if (!idGetter) {
+      throw new Error(`No id getter registered for type ${typeName}. Call registerGenericDataType first.`);
+    }
     for (const item of data) {
       const id = idGetter(item);
       this.genericData[typeName].set(id, item);
@@ -77,9 +80,10 @@ class SubmissionController {
       itemSubscribers.forEach((cb) => cb(item));
     }
     const listSubscribers = this.genericDataListSubscribers[typeName] || [];
+    const dataMap = this.genericData[typeName];
     // TODO is this over-called?
     listSubscribers.forEach((cb) =>
-      cb(Array.from(this.genericData[typeName].values()), { entered: data as unknown[], left: [], updated: [] })
+      cb(Array.from(dataMap.values()), { entered: data as unknown[], left: [], updated: [] })
     );
   }
   listGenericData<T>(
@@ -144,7 +148,7 @@ class SubmissionController {
           data: undefined
         };
       } else if (relevantIds.length == 1) {
-        const foundId = relevantIds[0];
+        const foundId = relevantIds[0]!;
         const subscribers = this.genericDataSubscribers[typeName]?.get(foundId) || [];
         if (callback) {
           this.genericDataSubscribers[typeName]?.set(foundId, [
@@ -211,20 +215,20 @@ class SubmissionController {
       this.genericData[typeName].set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
       this.genericDataListSubscribers[typeName]?.forEach((cb) => {
-        const allData = Array.from(this.genericData[typeName].values());
+        const allData = Array.from(this.genericData[typeName]?.values() || []);
         cb(allData, { entered: [body], left: [], updated: [] });
       });
     } else if (event.type === "updated") {
       this.genericData[typeName].set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
       this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [body] })
+        cb(Array.from(this.genericData[typeName]?.values() || []), { entered: [], left: [], updated: [body] })
       );
     } else if (event.type === "deleted") {
       this.genericData[typeName].delete(id);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
       this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [body], updated: [] })
+        cb(Array.from(this.genericData[typeName]?.values() || []), { entered: [], left: [body], updated: [] })
       );
     }
   }
@@ -275,7 +279,7 @@ export function SubmissionProvider({
   const controller = useRef<SubmissionController>(new SubmissionController());
   const [ready, setReady] = useState(false);
 
-  const submission_id = initial_submission_id ?? Number(params.submissions_id);
+  const submission_id = initial_submission_id ?? Number(params["submissions_id"]);
 
   if (isNaN(submission_id)) {
     toaster.error({

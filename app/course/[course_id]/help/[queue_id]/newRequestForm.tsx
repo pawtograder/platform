@@ -5,8 +5,8 @@ import { useParams } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
 import { RadioCardRoot, RadioCardItem } from "@/components/ui/radio-card";
 import { Fieldset, Button, Heading, Text } from "@chakra-ui/react";
-import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
 import { useRouter } from "next/navigation";
@@ -75,8 +75,8 @@ export default function HelpRequestForm() {
           <Field
             label="Queue"
             required={true}
-            errorText={errors.help_queue?.message?.toString()}
-            invalid={errors.help_queue ? true : false}
+            errorText={errors["help_queue"]?.message?.toString()}
+            invalid={errors["help_queue"] ? true : false}
           >
             <Controller
               name="help_queue"
@@ -110,8 +110,8 @@ export default function HelpRequestForm() {
           <Field
             label="Message"
             required={true}
-            errorText={errors.request?.message?.toString()}
-            invalid={errors.request ? true : false}
+            errorText={errors["request"]?.message?.toString()}
+            invalid={errors["request"] ? true : false}
           >
             <Controller
               name="request"

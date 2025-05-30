@@ -19,6 +19,7 @@ export async function login(formData: FormData) {
 
   if (error) {
     // redirect('/error')
+    // eslint-disable-next-line no-console
     console.log(error);
     return;
   }

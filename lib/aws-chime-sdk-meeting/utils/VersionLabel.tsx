@@ -10,15 +10,7 @@ export const VersionLabel = () => {
   const sdkVersionTag = `${SDKVersioning.sdkName}@${SDKVersioning.sdkVersion}`;
 
   return (
-    <span
-      style={{
-        position: "absolute",
-        bottom: 1,
-        right: 1,
-        color: "#989da5",
-        fontSize: "0.70rem"
-      }}
-    >
+    <span className="absolute bottom-px right-px text-[#989da5] text-[0.70rem]">
       {versionTag} | {sdkVersionTag}
     </span>
   );

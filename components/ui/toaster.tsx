@@ -19,7 +19,7 @@ export const Toaster = () => {
               {toast.description && <Toast.Description>{toast.description}</Toast.Description>}
             </Stack>
             {toast.action && <Toast.ActionTrigger>{toast.action.label}</Toast.ActionTrigger>}
-            {toast.meta?.closable && <Toast.CloseTrigger />}
+            {toast.meta?.["closable"] && <Toast.CloseTrigger />}
           </Toast.Root>
         )}
       </ChakraToaster>

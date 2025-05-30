@@ -1,6 +1,6 @@
 "use client";
 import { useList } from "@refinedev/core";
-import { HelpQueue as HelpQueueType } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue as HelpQueueType } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { Box } from "@chakra-ui/react";
 export default function HelpManagePage() {

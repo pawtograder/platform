@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { BackgroundImageBeach } from "./background-replacement-image";
-import { ReplacementDropdownOptionType, ReplacementOptions, ReplacementType } from "../types/index";
+import { type ReplacementDropdownOptionType, ReplacementOptions, ReplacementType } from "../types/index";
 
 export async function createBlob(option: ReplacementDropdownOptionType): Promise<Blob> {
   const { type, value } = option;
@@ -36,6 +36,7 @@ export async function createColorBlob(color: string): Promise<Blob> {
     return new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (blob !== null) {
+          // eslint-disable-next-line no-console
           console.log(`loaded canvas ${canvas}: ${blob}`);
           resolve(blob);
         } else {
@@ -65,6 +66,7 @@ export async function createImageBlob(image: string): Promise<Blob> {
     const blob = await response.blob();
     return blob;
   } catch (e) {
+    // eslint-disable-next-line no-console
     console.log(`Cannot create image blob with ${image}: ${e}`);
     throw e;
   }
