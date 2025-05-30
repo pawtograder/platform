@@ -50,11 +50,7 @@ ON "public"."assignment_due_date_exceptions"
 AS PERMISSIVE 
 FOR INSERT
 WITH CHECK (
-   "hours" < 0 AND (authorizeforprofile(student_id as profile_id) OR 
-   authorizeforassignmentgroup(
-    SELECT assignment_group_id FROM assignment_groups_members WHERE
-  profile_id = assignment_due_date_exceptions.student_id
-LIMIT 1 as _assignment_group_id))
+   "hours" < 0
 );
 
 ALTER TABLE ONLY "public"."self_review_settings"
@@ -110,7 +106,8 @@ DECLARE
     this_group_id bigint; 
     this_self_review_setting public.self_review_settings;     
     this_net_deadline_change integer := 0;     
-    this_active_submission_id bigint;     
+    this_active_submission_id bigint;
+    utc_now TIME := NOW() AT TIME ZONE 'UTC';
 BEGIN     
     -- Get the assignment first     
     SELECT * INTO this_assignment FROM public.assignments WHERE id = this_assignment_id;          
@@ -158,13 +155,13 @@ BEGIN
     END IF;      
     
     -- Calculate the deadline offset by combining the deadline changes     
-    SELECT COALESCE(SUM(hours), 0) INTO this_net_deadline_change      
+    SELECT COALESCE(SUM("hours"), 0) INTO this_net_deadline_change      
     FROM public.assignment_due_date_exceptions      
     WHERE assignment_id = this_assignment.id      
     AND (student_id = this_profile_id OR assignment_group_id = this_group_id);      
     
     -- If deadline has not passed, abort     
-    IF NOT (this_assignment.due_date + INTERVAL '1 hour' * this_net_deadline_change <= NOW()) THEN         
+    IF NOT (this_assignment.due_date AT TIME ZONE 'UTC' + INTERVAL '1 hour' * this_net_deadline_change <= this_now) THEN         
         RETURN;     
     END IF;      
     
@@ -181,22 +178,24 @@ BEGIN
         RETURN;     
     END IF;          
     
-    INSERT INTO review_assignments (         
+    INSERT INTO review_assignments (   
+        created_at,      
         due_date,         
         assignee_profile_id,         
         submission_id,         
         assignment_id,         
         rubric_id,         
-        class_id,   
+        class_id   
     )     
-    VALUES (         
-        this_assignment.due_date + INTERVAL '1 hour' * this_net_deadline_change + INTERVAL '1 hour' * this_self_review_setting.deadline_offset,
+    VALUES (     
+        utc_now,    
+        this_assignment.due_date AT TIME ZONE 'UTC' + (INTERVAL '1 hour' * this_net_deadline_change) + (INTERVAL '1 hour' * this_self_review_setting.deadline_offset),
         this_profile_id,         
         this_active_submission_id,         
         this_assignment.id,         
         this_assignment.self_review_rubric_id,         
-        this_assignment.class_id,
-    ); 
+        this_assignment.class_id
+    );
 END; 
 $$;
 
@@ -235,19 +234,19 @@ BEGIN
     -- Loop through assginments
     FOR assignment_record IN (
         SELECT * FROM assignments
-        WHERE due_date <= NOW()
+        WHERE due_date AT TIME ZONE 'UTC' <= NOW() AT TIME ZONE 'UTC'
     ) LOOP
          -- For each assignment, get all profiles for the class that assignment is for
         FOR profile_record IN (
             SELECT * FROM public.profiles prof
             WHERE is_private_profile = true
-            AND recent_assignment.class_id = class_id
+            AND assignment_record.class_id = class_id
             AND EXISTS (
                 SELECT 1 FROM user_roles WHERE private_profile_id = prof.id AND "role" = 'student'
             ) 
         ) LOOP
             -- Call the auto_assign_self_reviews function for each assignment x profile combination
-            PERFORM auto_assign_self_reviews(recent_assignment.id, profile_record.id);
+            PERFORM auto_assign_self_reviews(assignment_record.id, profile_record.id);
         END LOOP;
         
     END LOOP;

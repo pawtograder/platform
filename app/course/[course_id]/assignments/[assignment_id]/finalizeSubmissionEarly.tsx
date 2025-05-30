@@ -3,7 +3,7 @@ import { Assignment, AssignmentDueDateException, AssignmentGroupMember } from "@
 import { Box, Button } from "@chakra-ui/react";
 import { useCreate, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { differenceInHours } from "date-fns";
+import { differenceInMinutes } from "date-fns";
 
 export default function FinalizeSubmissionEarly({
   assignment,
@@ -47,7 +47,6 @@ export default function FinalizeSubmissionEarly({
   // ex if something is due at 9:15pm and the student marks "finished" at 6:30pm, their deadline will be moved
   // back 3 hours to 6:15pm so they can access the self review immediately.
   const finalizeSubmission = () => {
-    console.log(-1 * Math.ceil(differenceInHours(new Date(assignment.due_date).toUTCString(), new Date().toUTCString())));
     if (memberGroup && memberGroup.data.length > 0) {
       create({
         resource: "assignment_due_date_exceptions",
@@ -57,8 +56,7 @@ export default function FinalizeSubmissionEarly({
           assignment_group_id: group_id,
           group_id: memberGroup.data[0].assignment_group_id,
           creator_id: private_profile_id,
-          hours:
-            -1 * Math.ceil(differenceInHours(new Date(assignment.due_date).toUTCString(), new Date().toUTCString())), // difference between assignment due date and now, should be a negative number
+          hours: -1 * Math.ceil(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
           tokens_consumed: 0
         }
       });
@@ -71,7 +69,7 @@ export default function FinalizeSubmissionEarly({
           assignment_group_id: group_id,
           student_id: private_profile_id,
           creator_id: private_profile_id,
-          hours: -1 * Math.ceil(differenceInHours(new Date(assignment.due_date).toUTCString(), new Date().toUTCString())), // difference between assignment due date and now, should be a negative number
+          hours: -1 * Math.ceil(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
           tokens_consumed: 0
         }
       });
