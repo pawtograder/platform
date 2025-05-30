@@ -327,7 +327,7 @@ cards:
                 invalid={!!errors.yamlContent}
                 errorText={errors.yamlContent?.message}
               >
-                <VStack align="stretch" gap={2}>
+                <VStack align="stretch" gap={2} width="100%">
                   <HStack justifyContent="space-between" alignItems="center">
                     <Text fontSize="sm">Define your flashcards using YAML format. You can add more cards later.</Text>
                     <Button size="sm" variant="outline" onClick={loadSampleTemplate} type="button">
@@ -339,9 +339,10 @@ cards:
                     name="yamlContent"
                     control={control}
                     render={() => (
-                      <Box border="1px solid" borderRadius="md" overflow="hidden" height="300px">
+                      <Box border="1px solid" borderRadius="md" overflow="hidden" height="300px" width="100%">
                         <Editor
                           height="300px"
+                          width="100%"
                           defaultLanguage="yaml"
                           value={yamlValue}
                           theme={colorMode === "dark" ? "vs-dark" : "vs"}
