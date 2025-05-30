@@ -696,27 +696,34 @@ export function RubricCheckComment({
       </Box>
       <Box pl={1} pr={1} color="fg.muted">
         <HStack gap={1}>
-          {pointsText} {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
+          <Box flexShrink={0}>{pointsText}</Box>{" "}
+          {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
           {isArtifactComment(comment) && <SubmissionArtifactCommentLink comment={comment} />}
           {!isLineComment(comment) && !isArtifactComment(comment) && linkedFileId && submission && check?.file && (
-            <Link
-              href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
-            >
-              {" "}
-              (Ref: {check.file})
-            </Link>
+            <Box flexShrink={1}>
+              <Link
+                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+              >
+                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                  {check.file}
+                </Text>
+              </Link>
+            </Box>
           )}
           {!isLineComment(comment) &&
             !isArtifactComment(comment) &&
             linkedArtifactId &&
             submission &&
             check?.artifact && (
-              <Link
-                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedArtifactId.toString() }).toString()}`}
-              >
-                {" "}
-                (Ref: {check.artifact})
-              </Link>
+              <Box flexShrink={1}>
+                <Link
+                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedArtifactId.toString() }).toString()}`}
+                >
+                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                    {check.artifact}
+                  </Text>
+                </Link>
+              </Box>
             )}
         </HStack>
         {isEditing ? (
@@ -832,11 +839,10 @@ export function RubricCheckAnnotation({
     >
       <HStack>
         <Tooltip
-          content={`This check is an annotation, it can only be applied by ${
-            annotationTarget === "file" || annotationTarget === null
-              ? "clicking on a specific line of code"
-              : "clicking on an artifact"
-          }`}
+          content={`This check is an annotation, it can only be applied by ${annotationTarget === "file" || annotationTarget === null
+            ? "clicking on a specific line of code"
+            : "clicking on an artifact"
+            }`}
         >
           <Icon as={annotationTarget === "file" ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
         </Tooltip>
@@ -854,14 +860,14 @@ export function RubricCheckAnnotation({
       ))}
 
       {/* Inline reference management for preview mode */}
-      {isPreviewMode && assignmentId && classId && currentRubricId && (
+      {(isPreviewMode && assignmentId && classId && currentRubricId) ? (
         <InlineReferenceManager
           check={check}
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
         />
-      )}
+      ) : <></>}
 
       {/* Show referenced feedback for grading mode */}
       {!isPreviewMode && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
@@ -912,8 +918,8 @@ export function RubricCheckGlobal({
   useEffect(() => {
     setIsEditing(
       isSelected &&
-        rubricCheckComments.length === 0 &&
-        criteria.max_checks_per_submission != criteriaCheckComments.length
+      rubricCheckComments.length === 0 &&
+      criteria.max_checks_per_submission != criteriaCheckComments.length
     );
   }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
 
@@ -951,14 +957,18 @@ export function RubricCheckGlobal({
               <Link
                 href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
               >
-                File: {check.file}
+                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                  In: {check.file}
+                </Text>
               </Link>
             )}
             {linkedAritfactId && submission && (
               <Link
                 href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
               >
-                Artifact: {check.artifact}
+                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                  In: {check.artifact}
+                </Text>
               </Link>
             )}
             {gradingIsRequired && (
@@ -1015,14 +1025,18 @@ export function RubricCheckGlobal({
               <Link
                 href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
               >
-                File: {check.file}
+                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                  In: {check.file}
+                </Text>
               </Link>
             )}
             {linkedAritfactId && submission && (
               <Link
                 href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
               >
-                Artifact: {check.artifact}
+                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                  In: {check.artifact}
+                </Text>
               </Link>
             )}
           </Checkbox>
@@ -1035,16 +1049,18 @@ export function RubricCheckGlobal({
                 <Link
                   href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
                 >
-                  {" "}
-                  (File: {check.file})
+                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                    In: {check.file}
+                  </Text>
                 </Link>
               )}
               {linkedAritfactId && submission && (
                 <Link
                   href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
                 >
-                  {" "}
-                  (Artifact: {check.artifact})
+                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                    In: {check.artifact}
+                  </Text>
                 </Link>
               )}
             </Text>
@@ -1145,8 +1161,8 @@ function SubmissionCommentForm({
           }
           const artifactInfo = check.artifact
             ? {
-                submission_artifact_id: linkedArtifactId
-              }
+              submission_artifact_id: linkedArtifactId
+            }
             : {};
 
           const values = {
@@ -1189,7 +1205,7 @@ function RubricCheck({
   currentRubricId?: number;
 }) {
   return (
-    <Box p={1} w="100%">
+    <Box p={0} w="100%">
       {check.is_annotation ? (
         <RubricCheckAnnotation
           check={check}
@@ -1272,7 +1288,7 @@ export function RubricCriteria({
       border="1px solid"
       borderColor={gradingIsRequired ? "border.error" : "border.muted"}
       borderRadius="md"
-      p={2}
+      p={1}
       w="100%"
     >
       <Heading size="sm">
@@ -1401,7 +1417,7 @@ export default function RubricSidebar({
 
   if (isLoading) {
     return (
-      <Box p={2} minW="md" maxW="lg" key="loading-sidebar">
+      <Box p={2} maxW="lg" key="loading-sidebar">
         <Skeleton height="100vh" />
       </Box>
     );
@@ -1417,7 +1433,7 @@ export default function RubricSidebar({
 
   if (!displayRubric) {
     return (
-      <Box p={2} minW="md" maxW="lg" key="no-rubric-sidebar">
+      <Box p={2} maxW="lg" key="no-rubric-sidebar">
         <Text>No rubric information available.</Text>
       </Box>
     );
@@ -1425,18 +1441,7 @@ export default function RubricSidebar({
 
   if (partsToDisplay.length === 0) {
     return (
-      <Box
-        borderLeftWidth="1px"
-        borderColor="border.emphasized"
-        p={2}
-        ml={0}
-        minW="md"
-        maxW="lg"
-        height="100vh"
-        overflowY="auto"
-        overflowX="hidden"
-        key="empty-parts-sidebar"
-      >
+      <Box borderLeftWidth="1px" borderColor="border.emphasized" p={2} ml={0} height="100vh" key="empty-parts-sidebar">
         <VStack align="start" w="100%">
           <Heading size="xl">Grading Rubric</Heading>
           <Text fontSize="lg" fontWeight="semibold">
@@ -1450,17 +1455,7 @@ export default function RubricSidebar({
   }
 
   return (
-    <Box
-      borderLeftWidth="1px"
-      borderColor="border.emphasized"
-      p={2}
-      ml={0}
-      minW="md"
-      maxW="lg"
-      height="100vh"
-      overflowY="auto"
-      overflowX="hidden"
-    >
+    <Box p={0} ml={0} height="100vh">
       <VStack align="start" w="100%">
         <Text fontSize="lg" fontWeight="semibold">
           {displayRubric.name}
