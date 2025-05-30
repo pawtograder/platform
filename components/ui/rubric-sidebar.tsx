@@ -37,7 +37,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
+import { useCreate, useDelete, useList, useUpdate, useInvalidate } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase, Select } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -511,13 +511,35 @@ export function CommentActions({
   setIsEditing: (isEditing: boolean) => void;
 }) {
   const { private_profile_id } = useClassProfiles();
+  const resource = isArtifactComment(comment)
+    ? "submission_artifact_comments"
+    : isLineComment(comment)
+      ? "submission_file_comments"
+      : "submission_comments";
+
+  const invalidateQuery = useInvalidate();
+  const submission = useSubmissionMaybe();
+
   const { mutateAsync: updateComment } = useUpdate({
-    resource: isArtifactComment(comment)
-      ? "submission_artifact_comments"
-      : isLineComment(comment)
-        ? "submission_file_comments"
-        : "submission_comments"
+    resource: resource,
+    mutationOptions: {
+      onSuccess: () => {
+        // Force invalidation to trigger immediate re-render
+        invalidateQuery({
+          resource: resource,
+          invalidates: ["list"]
+        });
+        if (submission?.id) {
+          invalidateQuery({
+            resource: "submissions",
+            id: submission.id,
+            invalidates: ["detail"]
+          });
+        }
+      }
+    }
   });
+
   return (
     <HStack gap={1}>
       <AddReferencingFeedbackMenu comment={comment} />
@@ -537,7 +559,7 @@ export function CommentActions({
         }}
       >
         <Menu.Trigger asChild>
-          <Button p={0} m={0} colorPalette="blue" variant="ghost" size="2xs">
+          <Button p={0} m={2} colorPalette="blue" variant="ghost" size="2xs">
             <Icon as={BsThreeDots} />
           </Button>
         </Menu.Trigger>
@@ -626,15 +648,46 @@ export function RubricCheckComment({
   const author = useUserProfile(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({
-    resource: isArtifactComment(comment)
-      ? "submission_artifact_comments"
-      : isLineComment(comment)
-        ? "submission_file_comments"
-        : "submission_comments"
-  });
+  const resource = isArtifactComment(comment)
+    ? "submission_artifact_comments"
+    : isLineComment(comment)
+      ? "submission_file_comments"
+      : "submission_comments";
+
+  const invalidateQuery = useInvalidate();
   const submission = useSubmissionMaybe();
+
+  const { mutateAsync: updateComment } = useUpdate({
+    resource: resource,
+    mutationOptions: {
+      onSuccess: () => {
+        // Force invalidation to trigger immediate re-render
+        invalidateQuery({
+          resource: resource,
+          invalidates: ["list"]
+        });
+        if (submission?.id) {
+          invalidateQuery({
+            resource: "submissions",
+            id: submission.id,
+            invalidates: ["detail"]
+          });
+        }
+      }
+    }
+  });
   const pathname = usePathname();
+
+  const handleEditComment = useCallback(
+    async (message: string) => {
+      await updateComment({
+        id: comment.id,
+        values: { comment: message }
+      });
+      setIsEditing(false);
+    },
+    [updateComment, comment.id, setIsEditing]
+  );
 
   const linkedFileId =
     check?.file && submission ? submission.submission_files.find((f) => f.name === check.file)?.id : undefined;
@@ -711,13 +764,7 @@ export function RubricCheckComment({
               setIsEditing(false);
             }}
             sendButtonText="Save"
-            sendMessage={async (message) => {
-              await updateComment({
-                id: comment.id,
-                values: { comment: message }
-              });
-              setIsEditing(false);
-            }}
+            sendMessage={handleEditComment}
           />
         ) : (
           <Markdown>{comment.comment}</Markdown>
@@ -1090,13 +1137,32 @@ function SubmissionCommentForm({
 }) {
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
+  const resource =
+    check.is_annotation && check.annotation_target === "artifact"
+      ? "submission_artifact_comments"
+      : check.is_annotation
+        ? "submission_file_comments"
+        : "submission_comments";
+
+  const invalidateQuery = useInvalidate();
   const { mutateAsync: createComment } = useCreate({
-    resource:
-      check.is_annotation && check.annotation_target === "artifact"
-        ? "submission_artifact_comments"
-        : check.is_annotation
-          ? "submission_file_comments"
-          : "submission_comments"
+    resource: resource,
+    mutationOptions: {
+      onSuccess: () => {
+        // Force invalidation to trigger immediate re-render
+        invalidateQuery({
+          resource: resource,
+          invalidates: ["list"]
+        });
+        if (submission?.id) {
+          invalidateQuery({
+            resource: "submissions",
+            id: submission.id,
+            invalidates: ["detail"]
+          });
+        }
+      }
+    }
   });
 
   useEffect(() => {
