@@ -204,28 +204,27 @@ BEGIN
 END;
 $$;
 
+-- For after a student marks their assignment "finished early" to get the self review
 CREATE TRIGGER self_review_insert_after_student_finish 
 AFTER INSERT ON public.assignment_due_date_exceptions 
 FOR EACH ROW
 EXECUTE FUNCTION auto_assign_self_reviews_trigger();
 
-
+-- For regular and extended assignment deadlines
 CREATE OR REPLACE FUNCTION check_assignment_deadlines_passed()
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE 
-    recent_assignment public.assignments;
+    assignment_record public.assignments;
     profile_record public.profiles;
 BEGIN
-    -- Loop through recent assignments
-    FOR recent_assignment IN (
+    -- Loop through assginments
+    FOR assignment_record IN (
         SELECT * FROM assignments
-        WHERE due_date <= NOW()  -- add 1 for flexibility in case someone turns in close to deadline to ensure captured
-          AND due_date + INTERVAL '1 hour' * (max_late_tokens * 24 + 1) >= NOW()
+        WHERE due_date <= NOW()
     ) LOOP
-        
          -- For each assignment, get all profiles for the class that assignment is for
         FOR profile_record IN (
             SELECT * FROM public.profiles prof
@@ -233,11 +232,10 @@ BEGIN
             AND recent_assignment.class_id = class_id
             AND EXISTS (
                 SELECT 1 FROM user_roles WHERE private_profile_id = prof.id AND "role" = 'student'
-            )
+            ) 
         ) LOOP
             -- Call the auto_assign_self_reviews function for each assignment x profile combination
             PERFORM auto_assign_self_reviews(recent_assignment.id, profile_record.id);
-            
         END LOOP;
         
     END LOOP;
@@ -250,8 +248,3 @@ grant usage on schema cron to postgres; grant all privileges on all tables in sc
 
 -- schedule function to run every minute
 SELECT cron.schedule('check_assignment_deadlines_passed', '* * * * *', 'SELECT check_assignment_deadlines_passed();');
-
--- special case to consider: professor gives student an extension that is greater than the maximum number of 
--- late days for this assignment.  this will never trigger the function to be called 
--- -> could have a separate trigger for iterating through exceptions for dates that have passed in the hour or something 
--- to account for the super long extensions

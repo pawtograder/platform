@@ -3,6 +3,7 @@ import { Assignment, AssignmentDueDateException, AssignmentGroupMember } from "@
 import { Box, Button } from "@chakra-ui/react";
 import { useCreate, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
+import { differenceInHours } from "date-fns";
 
 export default function FinalizeSubmissionEarly({
   assignment,
@@ -42,14 +43,6 @@ export default function FinalizeSubmissionEarly({
     ]
   });
 
-  // calculate the number of hours the student is finishing early
-  function hoursBetween(time1: string, time2: string) {
-    const date1 = new Date(time1);
-    const date2 = new Date(time2);
-    const diffInMilli = Math.abs(date2.getTime() - date1.getTime());
-    return -1 * Math.ceil(diffInMilli / 3600000); // 3600000 ms = 1 hour
-  }
-
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
   // ex if something is due at 9:15pm and the student marks "finished" at 6:30pm, their deadline will be moved
   // back 3 hours to 6:15pm so they can access the self review immediately.
@@ -63,7 +56,8 @@ export default function FinalizeSubmissionEarly({
           assignment_group_id: group_id,
           group_id: memberGroup.data[0].assignment_group_id,
           creator_id: private_profile_id,
-          hours: hoursBetween(assignment.due_date, new Date().toDateString()), // difference between assignment due date and now, should be a negative number
+          hours:
+            -1 * Math.ceil(differenceInHours(new Date().toUTCString(), new Date(assignment.due_date).toUTCString())), // difference between assignment due date and now, should be a negative number
           tokens_consumed: 0
         }
       });
@@ -76,7 +70,8 @@ export default function FinalizeSubmissionEarly({
           assignment_group_id: group_id,
           student_id: private_profile_id,
           creator_id: private_profile_id,
-          hours: hoursBetween(assignment.due_date, new Date().toDateString()), // difference between assignment due date and now, should be a negative number
+          hours:
+            -1 * Math.ceil(differenceInHours(new Date().toUTCString(), new Date(assignment.due_date).toUTCString())), // difference between assignment due date and now, should be a negative number
           tokens_consumed: 0
         }
       });
