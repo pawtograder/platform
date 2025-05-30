@@ -3804,6 +3804,61 @@ export type Database = {
           }
         ];
       };
+      tags: {
+        Row: {
+          class_id: number;
+          color: string;
+          created_at: string;
+          creator_id: string;
+          id: string;
+          name: string;
+          profile_id: string;
+          visible: boolean;
+        };
+        Insert: {
+          class_id: number;
+          color: string;
+          created_at?: string;
+          creator_id?: string;
+          id?: string;
+          name: string;
+          profile_id: string;
+          visible: boolean;
+        };
+        Update: {
+          class_id?: number;
+          color?: string;
+          created_at?: string;
+          creator_id?: string;
+          id?: string;
+          name?: string;
+          profile_id?: string;
+          visible?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "tags_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "tags_creator_fkey";
+            columns: ["creator_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          },
+          {
+            foreignKeyName: "tags_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       user_roles: {
         Row: {
           canvas_id: number | null;

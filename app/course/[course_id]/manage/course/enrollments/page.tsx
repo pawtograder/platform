@@ -1,39 +1,50 @@
 "use client";
-import { ClassSection, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { Button } from "@/components/ui/button";
+import InlineAddTag from "@/components/ui/inline-add-tag";
+import PersonTags from "@/components/ui/person-tags";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
+import useAuthState from "@/hooks/useAuthState";
+import useModalManager from "@/hooks/useModalManager";
+import useTags, { useTagsForProfile } from "@/hooks/useTags";
+import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
+import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
+  Checkbox,
   Container,
+  Dialog,
+  Fieldset,
+  Flex,
   Heading,
   HStack,
   Icon,
   Input,
   List,
   NativeSelect,
+  NativeSelectField,
+  Portal,
   Table,
   Text,
-  VStack,
-  Dialog,
-  Portal
+  VStack
 } from "@chakra-ui/react";
+import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
-import { useParams } from "next/navigation";
-import { useMemo, useState, useEffect, useCallback } from "react";
-import AddSingleStudent from "./addSingleStudent";
-import { useInvalidate, useList, useDelete } from "@refinedev/core";
+import { Select } from "chakra-react-select";
+import { CheckIcon } from "lucide-react";
 import Link from "next/link";
-import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
-import { FaLink, FaEdit, FaUserCog, FaTrash, FaFileImport } from "react-icons/fa";
-import { toaster, Toaster } from "@/components/ui/toaster";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FaEdit, FaFileImport, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
+import AddSingleStudent from "./addSingleStudent";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
-import RemoveStudentModal from "./removeStudentModal";
-import useAuthState from "@/hooks/useAuthState";
-import useModalManager from "@/hooks/useModalManager";
-import { Tooltip } from "@/components/ui/tooltip";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
-import { Button } from "@/components/ui/button";
+import RemoveStudentModal from "./removeStudentModal";
+import { PiArrowBendLeftUpBold } from "react-icons/pi";
+import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -47,11 +58,23 @@ type RemoveStudentModalData = {
   role: UserRoleWithPrivateProfileAndUser["role"];
 };
 
+function RetrieveTagsForProfile(profile_id: string) {
+  const forProf = useTagsForProfile(profile_id);
+  return forProf;
+}
+
 function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
   const invalidate = useInvalidate();
   const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
+  // full list of tags with profiles and courses
+  // unique list of tags with just name + color
+  const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
+    new Set<UserRoleWithPrivateProfileAndUser>()
+  );
+
+  const { tags: tagData } = useTags();
 
   const {
     isOpen: isEditProfileModalOpen,
@@ -112,9 +135,59 @@ function EnrollmentsTable() {
     },
     [deleteUserRole, invalidate, removingStudentData?.userName, closeRemoveStudentModal]
   );
+  const handleSingleCheckboxChange = useCallback((user: UserRoleWithPrivateProfileAndUser, checked: boolean) => {
+    if (checked === true) {
+      checkedBoxesRef.current.add(user);
+    } else {
+      checkedBoxesRef.current.delete(user);
+    }
+    setCheckedBoxes(new Set(checkedBoxesRef.current));
+  }, []);
+
+  const checkboxClear = () => {
+    checkedBoxesRef.current.clear();
+    setCheckedBoxes(new Set(checkedBoxesRef.current)); // Clear all
+  };
+
+  const checkedBoxesRef = useRef(new Set<UserRoleWithPrivateProfileAndUser>());
+  const { mutateAsync: addTag } = useCreate<Tag>({
+    resource: "tags",
+    mutationOptions: {
+      onSuccess: () => {
+        invalidate({ resource: "tags", invalidates: ["list"] });
+      }
+    }
+  });
+
+  useEffect(() => {
+    if (checkedBoxes.size === 0) {
+      setStrategy("none");
+    }
+  }, [checkedBoxes]);
 
   const columns = useMemo<ColumnDef<UserRoleWithPrivateProfileAndUser>[]>(
     () => [
+      {
+        id: "checkbox",
+        header: "",
+        cell: ({ row }) => {
+          return (
+            <Checkbox.Root
+              checked={
+                Array.from(checkedBoxesRef.current).find((box) => {
+                  return box.private_profile_id === row.original.private_profile_id;
+                }) != undefined
+              }
+              onCheckedChange={(checked) => handleSingleCheckboxChange(row.original, checked.checked.valueOf() == true)}
+            >
+              <Checkbox.HiddenInput />
+              <Checkbox.Control>
+                <CheckIcon></CheckIcon>
+              </Checkbox.Control>
+            </Checkbox.Root>
+          );
+        }
+      },
       {
         id: "class_id",
         accessorKey: "class_id",
@@ -187,6 +260,46 @@ function EnrollmentsTable() {
             return <Icon aria-label="Linked to Canvas" as={FaLink} />;
           }
           return null;
+        }
+      },
+      {
+        id: "tags",
+        header: "Tags",
+        accessorKey: "tags",
+        filterFn: (row, id, filterValue) => {
+          const profileTagNames = tagData
+            .filter((tag) => {
+              return (
+                tag.profile_id === row.original.private_profile_id || tag.profile_id === row.original.public_profile_id
+              );
+            })
+            .map((tag) => {
+              return tag.name;
+            });
+          return profileTagNames.includes(filterValue);
+        },
+        cell: ({ row }) => {
+          const tagsFor = RetrieveTagsForProfile(row.original.private_profile_id);
+          return (
+            <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
+              <PersonTags profile_id={row.original.private_profile_id} showRemove />
+              <InlineAddTag
+                addTag={async (name: string, color?: string) => {
+                  await addTag({
+                    values: {
+                      name: name.startsWith("~") ? name.slice(1) : name,
+                      color: color || "gray",
+                      visible: !name.startsWith("~"),
+                      profile_id: row.original.private_profile_id,
+                      class_id: course_id as string
+                    }
+                  });
+                }}
+                currentTags={tagsFor.tags}
+                allowExpand={false}
+              />
+            </Flex>
+          );
         }
       },
       {
@@ -271,7 +384,7 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal]
+    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal, tagData]
   );
 
   const {
@@ -322,6 +435,8 @@ function EnrollmentsTable() {
   useEffect(() => {
     setPageCount(Math.ceil(nRows / pageSize));
   }, [nRows, pageSize]);
+  const [strategy, setStrategy] = useState<"add" | "remove" | "none">("none");
+  const { mutate: deleteMutation } = useDelete();
 
   return (
     <VStack align="start" w="100%">
@@ -339,7 +454,7 @@ function EnrollmentsTable() {
                           <>
                             <Text
                               onClick={header.column.getToggleSortingHandler()}
-                              textAlign={header.id === "actions" ? "center" : undefined}
+                              textAlign={header.id === "actions" || header.id === "checkbox" ? "center" : undefined}
                             >
                               {flexRender(header.column.columnDef.header, header.getContext())}
                               {{
@@ -347,13 +462,61 @@ function EnrollmentsTable() {
                                 desc: " 🔽"
                               }[header.column.getIsSorted() as string] ?? null}
                             </Text>
-                            {header.id !== "actions" && (
+                            {header.id === "checkbox" && (
+                              <Checkbox.Root
+                                checked={checkedBoxesRef.current.size === getRowModel().rows.length}
+                                onCheckedChange={(checked) => {
+                                  if (checked.checked.valueOf() === true) {
+                                    getRowModel()
+                                      .rows.map((row) => row.original)
+                                      .forEach((row) => {
+                                        checkedBoxesRef.current.add(row);
+                                      });
+                                    setCheckedBoxes(new Set(checkedBoxesRef.current));
+                                  } else {
+                                    checkboxClear();
+                                  }
+                                }}
+                              >
+                                <Checkbox.HiddenInput />
+                                <Checkbox.Control>
+                                  {" "}
+                                  <CheckIcon></CheckIcon>
+                                </Checkbox.Control>
+                              </Checkbox.Root>
+                            )}
+                            {header.id !== "actions" && header.id !== "checkbox" && header.id !== "tags" && (
                               <Input
                                 id={header.id}
                                 value={(header.column.getFilterValue() as string) ?? ""}
                                 onChange={(e) => {
                                   header.column.setFilterValue(e.target.value);
                                 }}
+                              />
+                            )}
+                            {header.id === "tags" && (
+                              <Select
+                                isMulti={false}
+                                id={header.id}
+                                onChange={(e) => {
+                                  if (e) {
+                                    header.column.setFilterValue(e.value?.name);
+                                    checkboxClear();
+                                  }
+                                }}
+                                options={[
+                                  ...Array.from(
+                                    tagData
+                                      .reduce((map, p) => {
+                                        if (!map.has(p.name)) {
+                                          map.set(p.name, p);
+                                        }
+                                        return map;
+                                      }, new Map())
+                                      .values()
+                                  ).map((p) => ({ label: p.name, value: p })),
+                                  { label: "<none>", value: null }
+                                ]}
                               />
                             )}
                           </>
@@ -384,6 +547,132 @@ function EnrollmentsTable() {
             ))}
           </Table.Body>
         </Table.Root>
+        <Flex
+          color="black"
+          marginLeft="15px"
+          flexDir={"row"}
+          alignItems={"center"}
+          fontSize="var(--chakra-font-sizes-sm)"
+        >
+          <PiArrowBendLeftUpBold width={"30px"} height={"30px"} />
+          Select people
+          <Button
+            height="fit-content"
+            padding="0"
+            width="fit-content"
+            variant={"ghost"}
+            colorPalette={"blue"}
+            onClick={() => {
+              getRowModel()
+                .rows.map((row) => row.original)
+                .forEach((row) => {
+                  checkedBoxesRef.current.add(row);
+                });
+              setCheckedBoxes(new Set(checkedBoxesRef.current));
+            }}
+          >
+            (or select all {getRowModel().rows.length})
+          </Button>
+          , then
+          <Flex>
+            <Fieldset.Root size="sm" ml="2">
+              <Fieldset.Content display="flex" flexDir={"row"} alignItems={"center"}>
+                <NativeSelect.Root disabled={checkedBoxes.size < 1}>
+                  <NativeSelectField
+                    value={strategy}
+                    onChange={(e) => {
+                      setStrategy(e.target.value as "add" | "remove" | "none");
+                    }}
+                  >
+                    <option value="none">{"<Select>"}</option>
+                    <option value="add">Add tag</option>
+                    <option value="remove">Remove tag</option>
+                  </NativeSelectField>
+                </NativeSelect.Root>
+                {strategy === "add" && (
+                  <InlineAddTag
+                    addTag={async (name: string, color?: string) => {
+                      checkedBoxes.forEach(async (profile) => {
+                        await addTag({
+                          values: {
+                            name: name.startsWith("~") ? name.slice(1) : name,
+                            color: color || "gray",
+                            visible: !name.startsWith("~"),
+                            profile_id: profile.private_profile_id,
+                            class_id: course_id as string
+                          }
+                        });
+                      });
+                      setStrategy("none");
+                    }}
+                    currentTags={tagData.filter((tag) => {
+                      return Array.from(checkedBoxes)
+                        .map((row) => row.private_profile_id)
+                        .includes(tag.profile_id);
+                    })}
+                    allowExpand={true}
+                  />
+                )}
+                {strategy === "remove" && (
+                  <InlineRemoveTag
+                    tagOptions={
+                      checkedBoxes.size === 0
+                        ? []
+                        : Array.from(
+                            tagData
+                              .reduce((map, tag) => {
+                                const key = JSON.stringify({ name: tag.name, color: tag.color, visible: tag.visible });
+                                if (!map.has(key)) {
+                                  map.set(key, tag);
+                                }
+                                return map;
+                              }, new Map())
+                              .values()
+                          ).filter((tag) => {
+                            const checkedProfileIds = Array.from(checkedBoxes).map((box) => box.private_profile_id);
+
+                            return checkedProfileIds.every((profileId) =>
+                              tagData.some(
+                                (t) =>
+                                  t.profile_id === profileId &&
+                                  t.name === tag.name &&
+                                  t.color === tag.color &&
+                                  t.visible === tag.visible
+                              )
+                            );
+                          })
+                    }
+                    removeTag={(tagName: string, tagColor: string, tagVisibility: boolean) => {
+                      checkedBoxes.forEach(async (profile) => {
+                        const findTag = tagData.find((tag) => {
+                          return (
+                            tag.name === tagName &&
+                            tag.color === tagColor &&
+                            tagVisibility === tag.visible &&
+                            tag.profile_id === profile.private_profile_id
+                          );
+                        });
+                        if (!findTag) {
+                          toaster.error({
+                            title: "Error removing tag",
+                            type: "Tag not found on profile " + profile.profiles.name
+                          });
+                          return;
+                        }
+                        deleteMutation({
+                          resource: "tags",
+                          id: findTag.id
+                        });
+                      });
+                      setStrategy("none");
+                    }}
+                  />
+                )}
+              </Fieldset.Content>
+            </Fieldset.Root>
+          </Flex>
+        </Flex>
+
         <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
           <HStack gap={2}>
             <Button size="sm" onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>

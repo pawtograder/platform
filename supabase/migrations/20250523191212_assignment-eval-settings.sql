@@ -45,6 +45,18 @@ USING (
     authorizeforclassinstructor(class_id)
 );
 
+CREATE POLICY "Students can give themselves negative deadline exceptions"
+ON "public"."assignment_due_date_exceptions"
+AS PERMISSIVE 
+FOR INSERT
+WITH CHECK (
+   "hours" < 0 AND (authorizeforprofile(student_id as profile_id) OR 
+   authorizeforassignmentgroup(
+    SELECT assignment_group_id FROM assignment_groups_members WHERE
+  profile_id = assignment_due_date_exceptions.student_id
+LIMIT 1 as _assignment_group_id))
+);
+
 ALTER TABLE ONLY "public"."self_review_settings"
     ADD CONSTRAINT "self_review_settings_pkey" PRIMARY KEY ("id");
 

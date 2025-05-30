@@ -235,7 +235,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                       </Table.Cell>
                       <Table.Cell>
                         <Link href={link}>
-                          {historical_submission.grader_results?.score !== undefined
+                          {historical_submission.grader_results?.score !== undefined &&
+                          historical_submission.grader_results?.errors === null
                             ? historical_submission.grader_results?.score +
                               "/" +
                               historical_submission.grader_results?.max_score
