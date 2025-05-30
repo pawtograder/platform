@@ -859,7 +859,7 @@ export function useAssignmentDueDate(assignment: Assignment) {
     };
   }
   const hoursExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.hours, 0);
-  const originalDueDate = formatWithTimeZone(assignment.due_date, time_zone);
+  const originalDueDate = new TZDate(assignment.due_date);
   const dueDate = addHours(originalDueDate, hoursExtended);
   const lateTokensConsumed = dueDateExceptions.reduce((acc, curr) => acc + curr.tokens_consumed, 0);
   return {

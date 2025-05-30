@@ -59,13 +59,13 @@ export default function AssignmentsTable() {
           if (props.getValue() === null) {
             return <Text></Text>;
           }
-          return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
+          return <Text>{new TZDate(props.getValue() as string).toLocaleString()}</Text>;
         },
         filterFn: (row, id, filterValue) => {
           if (row.original.late_due_date === null) {
             return false;
           }
-          const date = new TZDate(row.original.late_due_date, timeZone);
+          const date = new TZDate(row.original.late_due_date);
           const filterString = String(filterValue).toLowerCase();
           return date.toLocaleString().toLowerCase().includes(filterString);
         }

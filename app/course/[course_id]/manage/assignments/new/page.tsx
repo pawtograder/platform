@@ -1,12 +1,14 @@
 "use client";
+import { toaster } from "@/components/ui/toaster";
+import { useCourse } from "@/hooks/useCourseController";
+import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { TZDate } from "@date-fns/tz";
 import { useForm } from "@refinedev/react-hook-form";
-import { useRouter, useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
 import CreateAssignment from "./form";
-import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { toaster } from "@/components/ui/toaster";
 import { useCreate } from "@refinedev/core";
 
 export default function NewAssignmentPage() {
@@ -14,6 +16,9 @@ export default function NewAssignmentPage() {
   const form = useForm<Assignment>({ refineCoreProps: { resource: "assignments", action: "create" } });
   const router = useRouter();
   const { getValues } = form;
+  const { time_zone } = useCourse();
+  const timezone = time_zone || "America/New_York";
+
   const { mutateAsync } = useCreate();
   const onSubmit = useCallback(async () => {
     async function create() {
@@ -46,8 +51,8 @@ export default function NewAssignmentPage() {
         .insert({
           title: getValues("title"),
           slug: getValues("slug"),
-          release_date: getValues("release_date"),
-          due_date: getValues("due_date"),
+          release_date: new TZDate(getValues("release_date"), timezone).toISOString(),
+          due_date: new TZDate(getValues("due_date"), timezone).toISOString(),
           allow_late: getValues("allow_late"),
           description: getValues("description"),
           max_late_tokens: getValues("max_late_tokens") || null,
@@ -59,8 +64,7 @@ export default function NewAssignmentPage() {
           min_group_size: getValues("min_group_size") || null,
           max_group_size: getValues("max_group_size") || null,
           allow_student_formed_groups: getValues("allow_student_formed_groups"),
-          group_formation_deadline: getValues("group_formation_deadline") || null,
-          self_review_setting_id: settings.data.id as number
+          group_formation_deadline: getValues("group_formation_deadline") || null
         })
         .select("id, self_review_rubric_id")
         .single();
