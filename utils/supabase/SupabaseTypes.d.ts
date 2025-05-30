@@ -1,31 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never;
-    };
-    Views: {
-      [_ in never]: never;
-    };
-    Functions: {
-      graphql: {
-        Args: {
-          operationName?: string;
-          query?: string;
-          variables?: Json;
-          extensions?: Json;
-        };
-        Returns: Json;
-      };
-    };
-    Enums: {
-      [_ in never]: never;
-    };
-    CompositeTypes: {
-      [_ in never]: never;
-    };
-  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -1256,6 +1231,7 @@ export type Database = {
         Row: {
           action: Database["public"]["Enums"]["flashcard_actions"];
           card_id: number | null;
+          class_id: number;
           created_at: string;
           deck_id: number;
           duration_on_card_ms: number;
@@ -1265,6 +1241,7 @@ export type Database = {
         Insert: {
           action: Database["public"]["Enums"]["flashcard_actions"];
           card_id?: number | null;
+          class_id: number;
           created_at?: string;
           deck_id: number;
           duration_on_card_ms: number;
@@ -1274,6 +1251,7 @@ export type Database = {
         Update: {
           action?: Database["public"]["Enums"]["flashcard_actions"];
           card_id?: number | null;
+          class_id?: number;
           created_at?: string;
           deck_id?: number;
           duration_on_card_ms?: number;
@@ -1286,6 +1264,13 @@ export type Database = {
             columns: ["card_id"];
             isOneToOne: false;
             referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
             referencedColumns: ["id"];
           },
           {
@@ -1307,6 +1292,7 @@ export type Database = {
       flashcards: {
         Row: {
           answer: string;
+          class_id: number;
           created_at: string;
           deck_id: number;
           deleted_at: string | null;
@@ -1318,6 +1304,7 @@ export type Database = {
         };
         Insert: {
           answer: string;
+          class_id: number;
           created_at?: string;
           deck_id: number;
           deleted_at?: string | null;
@@ -1329,6 +1316,7 @@ export type Database = {
         };
         Update: {
           answer?: string;
+          class_id?: number;
           created_at?: string;
           deck_id?: number;
           deleted_at?: string | null;
@@ -1339,6 +1327,13 @@ export type Database = {
           updated_at?: string | null;
         };
         Relationships: [
+          {
+            foreignKeyName: "flashcards_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
           {
             foreignKeyName: "flashcards_deck_id_fkey";
             columns: ["deck_id"];
@@ -3046,6 +3041,7 @@ export type Database = {
       student_flashcard_deck_progress: {
         Row: {
           card_id: number;
+          class_id: number;
           created_at: string;
           first_answered_correctly_at: string | null;
           is_mastered: boolean;
@@ -3055,6 +3051,7 @@ export type Database = {
         };
         Insert: {
           card_id: number;
+          class_id: number;
           created_at?: string;
           first_answered_correctly_at?: string | null;
           is_mastered?: boolean;
@@ -3064,6 +3061,7 @@ export type Database = {
         };
         Update: {
           card_id?: number;
+          class_id?: number;
           created_at?: string;
           first_answered_correctly_at?: string | null;
           is_mastered?: boolean;
@@ -3077,6 +3075,13 @@ export type Database = {
             columns: ["card_id"];
             isOneToOne: false;
             referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
             referencedColumns: ["id"];
           },
           {
@@ -4580,9 +4585,6 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
-  graphql_public: {
-    Enums: {}
-  },
   pgmq_public: {
     Enums: {}
   },

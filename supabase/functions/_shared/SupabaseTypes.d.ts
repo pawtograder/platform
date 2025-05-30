@@ -1231,6 +1231,7 @@ export type Database = {
         Row: {
           action: Database["public"]["Enums"]["flashcard_actions"];
           card_id: number | null;
+          class_id: number;
           created_at: string;
           deck_id: number;
           duration_on_card_ms: number;
@@ -1240,6 +1241,7 @@ export type Database = {
         Insert: {
           action: Database["public"]["Enums"]["flashcard_actions"];
           card_id?: number | null;
+          class_id: number;
           created_at?: string;
           deck_id: number;
           duration_on_card_ms: number;
@@ -1249,6 +1251,7 @@ export type Database = {
         Update: {
           action?: Database["public"]["Enums"]["flashcard_actions"];
           card_id?: number | null;
+          class_id?: number;
           created_at?: string;
           deck_id?: number;
           duration_on_card_ms?: number;
@@ -1261,6 +1264,13 @@ export type Database = {
             columns: ["card_id"];
             isOneToOne: false;
             referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
             referencedColumns: ["id"];
           },
           {
@@ -1282,6 +1292,7 @@ export type Database = {
       flashcards: {
         Row: {
           answer: string;
+          class_id: number;
           created_at: string;
           deck_id: number;
           deleted_at: string | null;
@@ -1293,6 +1304,7 @@ export type Database = {
         };
         Insert: {
           answer: string;
+          class_id: number;
           created_at?: string;
           deck_id: number;
           deleted_at?: string | null;
@@ -1304,6 +1316,7 @@ export type Database = {
         };
         Update: {
           answer?: string;
+          class_id?: number;
           created_at?: string;
           deck_id?: number;
           deleted_at?: string | null;
@@ -1314,6 +1327,13 @@ export type Database = {
           updated_at?: string | null;
         };
         Relationships: [
+          {
+            foreignKeyName: "flashcards_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
           {
             foreignKeyName: "flashcards_deck_id_fkey";
             columns: ["deck_id"];
@@ -3021,6 +3041,7 @@ export type Database = {
       student_flashcard_deck_progress: {
         Row: {
           card_id: number;
+          class_id: number;
           created_at: string;
           first_answered_correctly_at: string | null;
           is_mastered: boolean;
@@ -3030,6 +3051,7 @@ export type Database = {
         };
         Insert: {
           card_id: number;
+          class_id: number;
           created_at?: string;
           first_answered_correctly_at?: string | null;
           is_mastered?: boolean;
@@ -3039,6 +3061,7 @@ export type Database = {
         };
         Update: {
           card_id?: number;
+          class_id?: number;
           created_at?: string;
           first_answered_correctly_at?: string | null;
           is_mastered?: boolean;
@@ -3052,6 +3075,13 @@ export type Database = {
             columns: ["card_id"];
             isOneToOne: false;
             referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
             referencedColumns: ["id"];
           },
           {
@@ -3925,6 +3955,61 @@ export type Database = {
             columns: ["repository_id"];
             isOneToOne: false;
             referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      tags: {
+        Row: {
+          class_id: number;
+          color: string;
+          created_at: string;
+          creator_id: string;
+          id: string;
+          name: string;
+          profile_id: string;
+          visible: boolean;
+        };
+        Insert: {
+          class_id: number;
+          color: string;
+          created_at?: string;
+          creator_id?: string;
+          id?: string;
+          name: string;
+          profile_id: string;
+          visible: boolean;
+        };
+        Update: {
+          class_id?: number;
+          color?: string;
+          created_at?: string;
+          creator_id?: string;
+          id?: string;
+          name?: string;
+          profile_id?: string;
+          visible?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "tags_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "tags_creator_fkey";
+            columns: ["creator_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          },
+          {
+            foreignKeyName: "tags_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
             referencedColumns: ["id"];
           }
         ];
