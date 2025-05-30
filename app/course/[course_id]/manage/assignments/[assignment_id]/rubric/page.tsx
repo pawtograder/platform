@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import RubricSidebar from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { AssignmentProvider } from "@/hooks/useAssignment";
 import {
   Assignment,
   HydratedRubric,
@@ -1117,256 +1118,260 @@ export default function RubricPage() {
   }
 
   return (
-    <Flex w="100%" minW="0" direction="column">
-      <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
-        <Toaster />
-        <HStack>
-          <Heading size="md">
-            {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubric
-          </Heading>
-          <Button
-            variant="surface"
-            size="xs"
-            onClick={() => {
-              if (assignmentDetails && activeReviewRound) {
-                const demoTemplate = createNewRubricTemplate(
-                  assignment_id as string,
-                  assignmentDetails.class_id,
-                  activeReviewRound
-                );
-                setActiveRubric(demoTemplate);
-                setValue(YAML.stringify(HydratedRubricToYamlRubric(demoTemplate)));
+    <AssignmentProvider assignment_id={Number(assignment_id)}>
+      <Flex w="100%" minW="0" direction="column">
+        <HStack w="100%" mt={2} mb={2} justifyContent="space-between" pr={2}>
+          <Toaster />
+          <HStack>
+            <Heading size="md">
+              {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubric
+            </Heading>
+            <Button
+              variant="surface"
+              size="xs"
+              onClick={() => {
+                if (assignmentDetails && activeReviewRound) {
+                  const demoTemplate = createNewRubricTemplate(
+                    assignment_id as string,
+                    assignmentDetails.class_id,
+                    activeReviewRound
+                  );
+                  setActiveRubric(demoTemplate);
+                  setValue(YAML.stringify(HydratedRubricToYamlRubric(demoTemplate)));
+                  setStashedEditorStates((prev) => {
+                    const newState = { ...prev };
+                    if (activeReviewRound) delete newState[activeReviewRound];
+                    return newState;
+                  });
+                  setHasUnsavedChanges(true);
+                  toaster.success({
+                    title: "Demo Loaded",
+                    description: "Demo rubric is loaded in the editor. Save to persist."
+                  });
+                }
+              }}
+            >
+              Load Demo Rubric
+            </Button>
+          </HStack>
+        </HStack>
+        <Tabs.Root
+          value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
+          onValueChange={(details) => {
+            if (details.value) {
+              handleReviewRoundChange(details.value as HydratedRubric["review_round"]);
+            }
+          }}
+          lazyMount
+          unmountOnExit
+          mb={0}
+        >
+          <Tabs.List>
+            {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
+              <Tabs.Trigger key={rr || "undefined_round"} value={rr || "undefined_round_val"}>
+                {" "}
+                {rr
+                  ? rr
+                      .split("-")
+                      .map((w) => w[0].toUpperCase() + w.slice(1))
+                      .join(" ")
+                  : "Select Round"}
+                {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
+              </Tabs.Trigger>
+            ))}
+          </Tabs.List>
+        </Tabs.Root>
+        <VStack w="100%" h="100%" border="1px solid" borderColor={"border.subtle"}>
+          <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="end">
+            <Button
+              variant="ghost"
+              colorPalette="red"
+              size="xs"
+              onClick={() => {
+                if (initialActiveRubricSnapshot) {
+                  setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
+                  setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
+                  toaster.create({
+                    title: "Reset",
+                    description: "Editor reset to last saved state for this tab.",
+                    type: "info"
+                  });
+                } else {
+                  if (assignmentDetails && activeReviewRound) {
+                    const minimal = createMinimalNewHydratedRubric(
+                      assignment_id as string,
+                      assignmentDetails.class_id,
+                      activeReviewRound
+                    );
+                    setActiveRubric(minimal);
+                    setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
+                    setValue("");
+                  } else {
+                    setActiveRubric(undefined);
+                    setInitialActiveRubricSnapshot(undefined);
+                    setValue("");
+                  }
+                  toaster.create({
+                    title: "Reset",
+                    description: "Editor reset to an empty state for this tab.",
+                    type: "info"
+                  });
+                }
+                setHasUnsavedChanges(false);
+                if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
                 setStashedEditorStates((prev) => {
                   const newState = { ...prev };
                   if (activeReviewRound) delete newState[activeReviewRound];
                   return newState;
                 });
-                setHasUnsavedChanges(true);
-                toaster.success({
-                  title: "Demo Loaded",
-                  description: "Demo rubric is loaded in the editor. Save to persist."
-                });
-              }
-            }}
-          >
-            Load Demo Rubric
-          </Button>
-        </HStack>
-      </HStack>
-      <Tabs.Root
-        value={activeReviewRound || REVIEW_ROUNDS_AVAILABLE[0]}
-        onValueChange={(details) => {
-          if (details.value) {
-            handleReviewRoundChange(details.value as HydratedRubric["review_round"]);
-          }
-        }}
-        lazyMount
-        unmountOnExit
-        mb={0}
-      >
-        <Tabs.List>
-          {REVIEW_ROUNDS_AVAILABLE.map((rr) => (
-            <Tabs.Trigger key={rr || "undefined_round"} value={rr || "undefined_round_val"}>
-              {" "}
-              {rr
-                ? rr
-                    .split("-")
-                    .map((w) => w[0].toUpperCase() + w.slice(1))
-                    .join(" ")
-                : "Select Round"}
-              {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
-            </Tabs.Trigger>
-          ))}
-        </Tabs.List>
-      </Tabs.Root>
-      <VStack w="100%" h="100%" border="1px solid" borderColor={"border.subtle"}>
-        <HStack pt={2} mt={0} bg="bg.subtle" w="100%" justifyContent="end">
-          <Button
-            variant="ghost"
-            colorPalette="red"
-            size="xs"
-            onClick={() => {
-              if (initialActiveRubricSnapshot) {
-                setActiveRubric(JSON.parse(JSON.stringify(initialActiveRubricSnapshot)));
-                setValue(YAML.stringify(HydratedRubricToYamlRubric(initialActiveRubricSnapshot)));
-                toaster.create({
-                  title: "Reset",
-                  description: "Editor reset to last saved state for this tab.",
-                  type: "info"
-                });
-              } else {
-                if (assignmentDetails && activeReviewRound) {
-                  const minimal = createMinimalNewHydratedRubric(
-                    assignment_id as string,
-                    assignmentDetails.class_id,
-                    activeReviewRound
-                  );
-                  setActiveRubric(minimal);
-                  setInitialActiveRubricSnapshot(JSON.parse(JSON.stringify(minimal)));
-                  setValue("");
-                } else {
-                  setActiveRubric(undefined);
-                  setInitialActiveRubricSnapshot(undefined);
-                  setValue("");
-                }
-                toaster.create({
-                  title: "Reset",
-                  description: "Editor reset to an empty state for this tab.",
-                  type: "info"
-                });
-              }
-              setHasUnsavedChanges(false);
-              if (activeReviewRound) setUnsavedStatusPerTab((prev) => ({ ...prev, [activeReviewRound]: false }));
-              setStashedEditorStates((prev) => {
-                const newState = { ...prev };
-                if (activeReviewRound) delete newState[activeReviewRound];
-                return newState;
-              });
-            }}
-          >
-            Reset
-          </Button>
-          <Button
-            colorPalette="green"
-            loadingText="Saving..."
-            loading={isSaving}
-            disabled={isSaving || !hasUnsavedChanges}
-            onClick={async () => {
-              try {
-                setIsSaving(true);
-                await saveRubric(value);
-                toaster.success({
-                  title: "Rubric Saved",
-                  description: "The rubric has been saved successfully."
-                });
-              } catch (error) {
-                if (error instanceof Error) {
-                  toaster.error({
-                    title: "Failed to save rubric",
-                    description: `An unexpected error occurred: ${error.message}`
+              }}
+            >
+              Reset
+            </Button>
+            <Button
+              colorPalette="green"
+              loadingText="Saving..."
+              loading={isSaving}
+              disabled={isSaving || !hasUnsavedChanges}
+              onClick={async () => {
+                try {
+                  setIsSaving(true);
+                  await saveRubric(value);
+                  toaster.success({
+                    title: "Rubric Saved",
+                    description: "The rubric has been saved successfully."
                   });
-                } else {
-                  toaster.error({
-                    title: "Failed to save rubric",
-                    description: "An unknown error occurred during the save process."
-                  });
+                } catch (error) {
+                  if (error instanceof Error) {
+                    toaster.error({
+                      title: "Failed to save rubric",
+                      description: `An unexpected error occurred: ${error.message}`
+                    });
+                  } else {
+                    toaster.error({
+                      title: "Failed to save rubric",
+                      description: "An unknown error occurred during the save process."
+                    });
+                  }
+                } finally {
+                  setIsSaving(false);
                 }
-              } finally {
-                setIsSaving(false);
-              }
-            }}
-          >
-            Save
-          </Button>
-        </HStack>
-        <Flex w="100%" minW="0" flexGrow={1}>
-          <Box w="100%" minW="0">
-            <VStack w="100%" h="100%">
-              {isLoadingCurrentRubric && !activeRubric && (
-                <Center height="calc(100vh - 150px)" width="100%">
-                  <Spinner size="xl" />
-                </Center>
-              )}
-              {isSaving && (
-                <Center height="calc(100vh - 150px)" width="100%">
-                  <Spinner size="xl" />
-                </Center>
-              )}
-              {!isSaving && (!isLoadingCurrentRubric || activeRubric) && (
-                <Editor
-                  height="calc(100vh - 150px)"
-                  width="100%"
-                  defaultLanguage="yaml"
-                  path={`rubric-${activeReviewRound || "new"}.yml`}
-                  beforeMount={handleEditorWillMount}
-                  value={value}
-                  theme={colorMode === "dark" ? "vs-dark" : "vs"}
-                  onValidate={(markers) => {
-                    // If the editor is empty, don't show schema validation errors.
-                    // Schema errors for an empty document are not helpful.
-                    if (value.trim() === "") {
-                      setError(undefined);
-                      setErrorMarkers([]);
-                      return;
-                    }
-
-                    if (markers.length > 0) {
-                      setError("YAML syntax error. Please fix the errors in the editor.");
-                      setErrorMarkers(markers.map((m) => ({ message: m.message, startLineNumber: m.startLineNumber })));
-                    } else {
-                      setError(undefined);
-                      setErrorMarkers([]);
-                    }
-                  }}
-                  onChange={handleEditorChange}
-                />
-              )}
-            </VStack>
-          </Box>
-          <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
-            {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
-
-            {isLoadingCurrentRubric && !rubricForSidebar && (
-              <Center h="100%">
-                {" "}
-                <Spinner />{" "}
-              </Center>
-            )}
-
-            {!isLoadingCurrentRubric && !error && !rubricForSidebar && activeReviewRound && (
-              <Center h="100%">
-                <VStack>
-                  <Text>No rubric configured for {activeReviewRound}.</Text>
-                  <Text fontSize="sm">You can load a demo or start typing.</Text>
-                </VStack>
-              </Center>
-            )}
-
-            {!error && rubricForSidebar && (
-              <VStack gap={4} align="stretch">
-                <RubricSidebar
-                  initialRubric={rubricForSidebar}
-                  assignmentId={Number(assignment_id)}
-                  classId={assignmentDetails?.class_id}
-                />
-              </VStack>
-            )}
-            {error && (
-              <Box
-                position="absolute"
-                top="0"
-                left="0"
-                width="100%"
-                height="100%"
-                backgroundColor="bg.surface"
-                p={4}
-                display="flex"
-                flexDirection="column"
-                zIndex="1"
-              >
-                <Heading size="sm" color="fg.error" mb={2}>
-                  YAML Error
-                </Heading>
-                <Text color="fg.error" mb={2}>
-                  {error}
-                </Text>
-                {errorMarkers.length > 0 && (
-                  <List.Root>
-                    {errorMarkers.map((marker, index) => (
-                      <List.Item key={index}>
-                        <Text color="fg.error" fontSize="sm">
-                          Line {marker.startLineNumber}: {marker.message}
-                        </Text>
-                      </List.Item>
-                    ))}
-                  </List.Root>
+              }}
+            >
+              Save
+            </Button>
+          </HStack>
+          <Flex w="100%" minW="0" flexGrow={1}>
+            <Box w="100%" minW="0">
+              <VStack w="100%" h="100%">
+                {isLoadingCurrentRubric && !activeRubric && (
+                  <Center height="calc(100vh - 150px)" width="100%">
+                    <Spinner size="xl" />
+                  </Center>
                 )}
-              </Box>
-            )}
-          </Box>
-        </Flex>
-      </VStack>
-    </Flex>
+                {isSaving && (
+                  <Center height="calc(100vh - 150px)" width="100%">
+                    <Spinner size="xl" />
+                  </Center>
+                )}
+                {!isSaving && (!isLoadingCurrentRubric || activeRubric) && (
+                  <Editor
+                    height="calc(100vh - 150px)"
+                    width="100%"
+                    defaultLanguage="yaml"
+                    path={`rubric-${activeReviewRound || "new"}.yml`}
+                    beforeMount={handleEditorWillMount}
+                    value={value}
+                    theme={colorMode === "dark" ? "vs-dark" : "vs"}
+                    onValidate={(markers) => {
+                      // If the editor is empty, don't show schema validation errors.
+                      // Schema errors for an empty document are not helpful.
+                      if (value.trim() === "") {
+                        setError(undefined);
+                        setErrorMarkers([]);
+                        return;
+                      }
+
+                      if (markers.length > 0) {
+                        setError("YAML syntax error. Please fix the errors in the editor.");
+                        setErrorMarkers(
+                          markers.map((m) => ({ message: m.message, startLineNumber: m.startLineNumber }))
+                        );
+                      } else {
+                        setError(undefined);
+                        setErrorMarkers([]);
+                      }
+                    }}
+                    onChange={handleEditorChange}
+                  />
+                )}
+              </VStack>
+            </Box>
+            <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
+              {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
+
+              {isLoadingCurrentRubric && !rubricForSidebar && (
+                <Center h="100%">
+                  {" "}
+                  <Spinner />{" "}
+                </Center>
+              )}
+
+              {!isLoadingCurrentRubric && !error && !rubricForSidebar && activeReviewRound && (
+                <Center h="100%">
+                  <VStack>
+                    <Text>No rubric configured for {activeReviewRound}.</Text>
+                    <Text fontSize="sm">You can load a demo or start typing.</Text>
+                  </VStack>
+                </Center>
+              )}
+
+              {!error && rubricForSidebar && (
+                <VStack gap={4} align="stretch">
+                  <RubricSidebar
+                    initialRubric={rubricForSidebar}
+                    assignmentId={Number(assignment_id)}
+                    classId={assignmentDetails?.class_id}
+                  />
+                </VStack>
+              )}
+              {error && (
+                <Box
+                  position="absolute"
+                  top="0"
+                  left="0"
+                  width="100%"
+                  height="100%"
+                  backgroundColor="bg.surface"
+                  p={4}
+                  display="flex"
+                  flexDirection="column"
+                  zIndex="1"
+                >
+                  <Heading size="sm" color="fg.error" mb={2}>
+                    YAML Error
+                  </Heading>
+                  <Text color="fg.error" mb={2}>
+                    {error}
+                  </Text>
+                  {errorMarkers.length > 0 && (
+                    <List.Root>
+                      {errorMarkers.map((marker, index) => (
+                        <List.Item key={index}>
+                          <Text color="fg.error" fontSize="sm">
+                            Line {marker.startLineNumber}: {marker.message}
+                          </Text>
+                        </List.Item>
+                      ))}
+                    </List.Root>
+                  )}
+                </Box>
+              )}
+            </Box>
+          </Flex>
+        </VStack>
+      </Flex>
+    </AssignmentProvider>
   );
 }
 

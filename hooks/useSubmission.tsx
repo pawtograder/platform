@@ -1159,14 +1159,10 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
         ...rubrics.filter((r) => r.review_round === "self-review" || assignments.some((a) => a.rubric_id === r.id))
       );
     }
-    console.log(`Reviews include: ${submissionReviews?.map((sr) => sr.rubric_id)}`);
-    console.log(`Writable rubrics include: ${writableRubrics.map((r) => r.id)}`);
-    console.log(`Rubric id: ${rubric_id}`);
     return submissionReviews?.filter(
       (sr) =>
         writableRubrics.some((r) => r.id === sr.rubric_id) && (rubric_id === undefined || sr.rubric_id === rubric_id)
     );
   }, [role, rubrics, submissionReviews, assignments, rubric_id]);
-  console.log(`Memoized reviews: ${JSON.stringify(memoizedReviews?.map((sr) => sr.rubric_id))}`);
   return memoizedReviews;
 }

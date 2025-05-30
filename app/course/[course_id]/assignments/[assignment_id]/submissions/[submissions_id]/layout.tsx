@@ -41,7 +41,7 @@ import { createClient } from "@/utils/supabase/client";
 import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useInvalidate, useList, useShow, useUpdate } from "@refinedev/core";
+import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
@@ -66,6 +66,7 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
+import { useRubrics } from "@/hooks/useAssignment";
 
 interface RubricOptionType extends OptionBase {
   value: number;
@@ -635,18 +636,19 @@ function RubricView() {
     error: reviewAssignmentError
   } = useReviewAssignment(reviewAssignmentId);
 
-  const assignmentId = submission.assignments.id;
-
-  const { data: assignmentRubricsData, isLoading: isLoadingAssignmentRubrics } = useList<Tables<"rubrics">>({
-    resource: "rubrics",
-    filters: [{ field: "assignment_id", operator: "eq", value: assignmentId }],
-    queryOptions: {
-      enabled: !!assignmentId
-    },
-    meta: {
-      select: "id, name, review_round"
-    }
-  });
+  // Use cached rubrics from useAssignment hook instead of making a separate API call
+  const allRubrics = useRubrics();
+  const assignmentRubricsData = useMemo(
+    () => ({
+      data: allRubrics.map((rubric) => ({
+        id: rubric.id,
+        name: rubric.name,
+        review_round: rubric.review_round
+      }))
+    }),
+    [allRubrics]
+  );
+  const isLoadingAssignmentRubrics = false; // Since useRubrics provides cached data
 
   // Function to update URL with selected rubric ID
   const updateSelectedRubricInURL = useCallback(
@@ -724,24 +726,15 @@ function RubricView() {
   const rubricIdToDisplay =
     reviewAssignmentId && reviewAssignment?.rubric_id ? reviewAssignment.rubric_id : selectedRubricIdState;
 
-  const { query: rubricToDisplayQuery } = useShow<HydratedRubric>({
-    resource: "rubrics",
-    id: rubricIdToDisplay,
-    queryOptions: {
-      enabled: !!rubricIdToDisplay
-    },
-    meta: {
-      select: "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))"
-    }
-  });
-  const rubricToDisplayData = rubricToDisplayQuery?.data?.data;
-  const isLoadingRubricToDisplay = rubricToDisplayQuery?.isLoading;
+  // Use cached rubrics from useAssignment hook instead of making a separate API call
+  const rubricToDisplayData = allRubrics.find((rubric) => rubric.id === rubricIdToDisplay);
+  const isLoadingRubricToDisplay = false; // Since useRubrics provides cached data
 
   const assignmentRubricData = rubricToDisplayData;
   let preparedInitialRubric: HydratedRubric | undefined = undefined;
 
   if (assignmentRubricData) {
-    // useShow with the correct select should directly return HydratedRubric
+    // Using cached rubric data from useRubrics hook
     preparedInitialRubric = assignmentRubricData;
   }
 

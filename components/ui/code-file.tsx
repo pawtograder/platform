@@ -1,5 +1,5 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import { useRubricCheck, useRubricCriteria, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useSubmission,
@@ -17,9 +17,8 @@ import {
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
-import { useCreate, useShow, useUpdate } from "@refinedev/core";
+import { useCreate, useUpdate } from "@refinedev/core";
 import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
@@ -201,7 +200,6 @@ export default function CodeFile({
           flexDirection: "row"
         }
       };
-  console.log(`Submission review id: ${submissionReviewId}`);
   return (
     <Box
       border="1px solid"
@@ -409,6 +407,8 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     resource: "submission_file_comments"
   });
 
+  const { submissionReview } = useSubmissionReviewByAssignmentId(comment.submission_review_id);
+
   const rubricCheck = useRubricCheck(comment.rubric_check_id);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
 
@@ -460,7 +460,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
               </HStack>
               <HStack gap={0} flexWrap="wrap">
                 <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                  {commentAuthor?.name}{" "}
+                  {`${commentAuthor?.name} ${submissionReview?.name}`}
                 </Text>
                 {comment.submission_review_id && <ReviewRoundTag submission_review_id={comment.submission_review_id} />}
               </HStack>
@@ -629,21 +629,13 @@ function LineActionPopup({
   const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
   const { rubric: selectedRubric } = useSubmissionRubric(reviewAssignmentId);
 
-  // Use the manually selected rubric if provided, otherwise fall back to the default behavior
-  const { query: manuallySelectedRubricQuery } = useShow<
-    Database["public"]["Tables"]["rubrics"]["Row"] & { rubric_parts: HydratedRubricPart[] }
-  >({
-    resource: "rubrics",
-    id: selectedRubricId || -1,
-    queryOptions: {
-      enabled: !!selectedRubricId
-    },
-    meta: {
-      select: "*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))"
-    }
-  });
+  // Use the cached rubrics from useAssignment hook instead of making a separate API call
+  const allRubrics = useRubrics();
+  const manuallySelectedRubric = selectedRubricId
+    ? allRubrics.find((rubric) => rubric.id === selectedRubricId)
+    : undefined;
 
-  const effectiveRubric = selectedRubricId ? manuallySelectedRubricQuery?.data?.data : selectedRubric;
+  const effectiveRubric = selectedRubricId ? manuallySelectedRubric : selectedRubric;
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);

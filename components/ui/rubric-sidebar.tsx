@@ -42,7 +42,7 @@ import { Select as ChakraReactSelect, OptionBase, Select } from "chakra-react-se
 import { format, formatRelative } from "date-fns";
 import { usePathname, useSearchParams } from "next/navigation";
 import path from "path";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaGraduationCap, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { formatPoints, isRubricCheckDataWithOptions, RubricCheckSubOption, RubricCheckSubOptions } from "./code-file";
@@ -85,36 +85,39 @@ function InlineReferenceManager({
     }
   });
 
-  // Get all rubrics for this assignment to build the options
-  const { data: allRubricsData, isLoading: isLoadingRubrics } = useList<HydratedRubric>({
-    resource: "rubrics",
-    filters: [
-      { field: "assignment_id", operator: "eq", value: assignmentId },
-      { field: "id", operator: "ne", value: currentRubricId } // Exclude current rubric
-    ],
-    meta: {
-      select: "id, name, review_round, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))"
-    },
-    queryOptions: {
-      enabled: !!assignmentId && isAddingReference && !!currentRubricId
-    }
-  });
+  // Use cached rubrics data instead of making new API request
+  const allRubrics = useRubrics();
+  const otherRubrics = allRubrics.filter((rubric) => rubric.id !== currentRubricId);
 
-  // Get details of referenced checks
+  // Get details of referenced checks using cached data from assignment controller
   const referencedCheckIds = existingReferencesData?.data?.map((ref) => ref.referenced_rubric_check_id) || [];
-  const { data: referencedChecksData } = useList<HydratedRubricCheck>({
-    resource: "rubric_checks",
-    filters: [{ field: "id", operator: "in", value: referencedCheckIds }],
-    queryOptions: {
-      enabled: referencedCheckIds.length > 0
-    }
-  });
+
+  // Create a map of all rubric checks for fast lookup
+  const rubricCheckById = useMemo(() => {
+    const checkById = new Map<number, HydratedRubricCheck>();
+
+    allRubrics.forEach((rubric) => {
+      rubric.rubric_parts.forEach((part) => {
+        part.rubric_criteria.forEach((criteria) => {
+          criteria.rubric_checks.forEach((check) => {
+            checkById.set(check.id, check);
+          });
+        });
+      });
+    });
+
+    return checkById;
+  }, [allRubrics]);
+
+  const referencedChecks = referencedCheckIds
+    .map((id) => rubricCheckById.get(id))
+    .filter(Boolean) as HydratedRubricCheck[];
 
   const { mutate: createReference } = useCreate();
   const { mutate: deleteReference } = useDelete();
 
   // Build check options from other rubrics only
-  const checkOptions: CheckOptionType[] = (allRubricsData?.data || []).flatMap((rubric) =>
+  const checkOptions: CheckOptionType[] = otherRubrics.flatMap((rubric) =>
     rubric.rubric_parts.flatMap((part) =>
       part.rubric_criteria.flatMap((criteria) =>
         criteria.rubric_checks
@@ -189,7 +192,6 @@ function InlineReferenceManager({
   };
 
   const existingReferences = existingReferencesData?.data || [];
-  const referencedChecks = referencedChecksData?.data || [];
 
   return (
     <Box mt={2}>
@@ -234,7 +236,7 @@ function InlineReferenceManager({
             value={selectedCheckOption}
             onChange={(option) => setSelectedCheckOption(option || undefined)}
             placeholder="Select check to reference..."
-            isLoading={isLoadingRubrics}
+            isLoading={false}
             formatOptionLabel={(option) => (
               <VStack alignItems="flex-start" gap={0}>
                 <Text fontSize="sm">{option.label}</Text>
@@ -275,6 +277,7 @@ function InlineReferenceManager({
     </Box>
   );
 }
+
 function AddReferencingFeedbackPopover({
   selectedCheckToReference,
   commentToReference,
@@ -437,7 +440,6 @@ function AddReferencingFeedbackMenu({
   if (!writableReferencingChecks || writableReferencingChecks.length === 0) {
     return null;
   }
-  console.log(selectedCheckToReference);
   const writableReferencingChecksByRubricId = writableReferencingChecks.reduce(
     (acc, check) => {
       const rubricId = check.criteria?.rubric_id;
@@ -463,7 +465,6 @@ function AddReferencingFeedbackMenu({
       <Menu.Root
         onSelect={(value) => {
           if (value.value) {
-            console.log(value.value);
             setSelectedCheckToReference(Number(value.value));
           }
         }}
