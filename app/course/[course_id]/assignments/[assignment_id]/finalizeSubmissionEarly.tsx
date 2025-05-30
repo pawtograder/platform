@@ -21,7 +21,10 @@ export default function FinalizeSubmissionEarly({
     meta: {
       select: "*"
     },
-    filters: [{ field: "profile_id", operator: "eq", value: private_profile_id }],
+    filters: [
+      { field: "profile_id", operator: "eq", value: private_profile_id },
+      { field: "assignment_id", operator: "eq", value: assignment.id }
+    ],
     pagination: { pageSize: 1 }
   });
 

@@ -12,6 +12,7 @@ CREATE POLICY "anyone in the course can view self review settings"
 ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR SELECT
+TO authenticated
 USING (
     authorizeforclassinstructor(class_id) OR authorizeforclassgrader(class_id) 
     OR authorizeforclass(class_id)
@@ -21,6 +22,7 @@ CREATE POLICY "instructors can insert self review settings"
 ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR INSERT
+TO authenticated
 WITH CHECK (
     authorizeforclassinstructor(class_id)
 );
@@ -29,6 +31,7 @@ CREATE POLICY "instructors can update self review settings"
 ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR UPDATE
+TO authenticated
 USING (
     authorizeforclassinstructor(class_id) 
 );
@@ -37,6 +40,7 @@ CREATE POLICY "instructors can delete review settings"
 ON "public"."self_review_settings"
 AS PERMISSIVE
 FOR DELETE
+TO authenticated
 USING (
     authorizeforclassinstructor(class_id)
 );
@@ -52,18 +56,11 @@ ALTER TABLE "public"."assignments" ADD COLUMN "self_review_setting_id" bigint NO
 ALTER TABLE "public"."assignments"
     ADD CONSTRAINT "assignments_self_review_setting_fkey" FOREIGN KEY ("self_review_setting_id") REFERENCES "public"."self_review_settings"("id");
 
-CREATE POLICY "Students can give themselves negative deadline exceptions"
-ON "public"."assignment_due_date_exceptions"
-AS PERMISSIVE 
-FOR INSERT
-WITH CHECK (
-   "hours" < 0 
-);
-
 CREATE POLICY "Deadline exceptions never inserted after early finish"
 ON "public"."assignment_due_date_exceptions"
 AS RESTRICTIVE 
 FOR INSERT
+TO authenticated
 WITH CHECK (
    NOT EXISTS (
     SELECT 1 FROM "public"."assignment_due_date_exceptions" adde
@@ -91,25 +88,17 @@ UPDATE assignments set self_review_rubric_id=self_rubric_id WHERE id=NEW.id;
 end;$function$
 ;
 
--- TEMPORARY: REFINE!!!!!!!
-CREATE POLICY "Anyone can insert on review assignments"
-ON "public"."review_assignments"
-AS PERMISSIVE 
-FOR INSERT
-WITH CHECK (
-    authorizeforclass(class_id)
-);
-
 CREATE OR REPLACE FUNCTION public.auto_assign_self_reviews(this_assignment_id bigint, this_profile_id uuid) 
 RETURNS void 
 LANGUAGE plpgsql 
+SECURITY DEFINER
 AS $$ 
 DECLARE     
     this_assignment public.assignments;     
+    this_group_id bigint; 
     this_self_review_setting public.self_review_settings;     
     this_net_deadline_change integer := 0;     
     this_active_submission_id bigint;     
-    this_group_id bigint; 
 BEGIN     
     -- Get the assignment first     
     SELECT * INTO this_assignment FROM public.assignments WHERE id = this_assignment_id;          
@@ -186,7 +175,7 @@ BEGIN
         submission_id,         
         assignment_id,         
         rubric_id,         
-        class_id     
+        class_id,   
     )     
     VALUES (         
         this_assignment.due_date + INTERVAL '1 hour' * this_net_deadline_change + INTERVAL '1 hour' * this_self_review_setting.deadline_offset,
@@ -194,7 +183,7 @@ BEGIN
         this_active_submission_id,         
         this_assignment.id,         
         this_assignment.self_review_rubric_id,         
-        this_assignment.class_id     
+        this_assignment.class_id,
     ); 
 END; 
 $$;
@@ -210,7 +199,6 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    -- if a negative exception was inserted, then student moved forward their deadline.  assign them a self review.
     PERFORM auto_assign_self_reviews(NEW.assignment_id, NEW.student_id);
     RETURN NEW;
 END;
@@ -221,25 +209,49 @@ AFTER INSERT ON public.assignment_due_date_exceptions
 FOR EACH ROW
 EXECUTE FUNCTION auto_assign_self_reviews_trigger();
 
--- NOTE: auto_assign_self_reviews_trigger can be reused for assignment due date passing w/o student triggering themselves
 
--- Function to check for passed dates
 CREATE OR REPLACE FUNCTION check_assignment_deadlines_passed()
 RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
 AS $$
+DECLARE 
+    recent_assignment public.assignments;
+    profile_record public.profiles;
 BEGIN
-    -- get all assignments where the deadline has passed but the longest late day window has not passed
-    -- for each assignment, get all profiles for the class that assignment is for
-    -- for each assignment x profile combination, call auto_assign_self_reviews to assign reviews to the needed students
-
-    -- special case to consider: professor gives student an extension that is greater than the maximum number of 
-    -- late days for this assignment.  this will never trigger the function to be called 
-    -- -> could have a separate trigger for iterating through exceptions for dates that have passed in the hour or something 
-    -- to account for the super long extensions
-
+    -- Loop through recent assignments
+    FOR recent_assignment IN (
+        SELECT * FROM assignments
+        WHERE due_date <= NOW()  -- add 1 for flexibility in case someone turns in close to deadline to ensure captured
+          AND due_date + INTERVAL '1 hour' * (max_late_tokens * 24 + 1) >= NOW()
+    ) LOOP
+        
+         -- For each assignment, get all profiles for the class that assignment is for
+        FOR profile_record IN (
+            SELECT * FROM public.profiles prof
+            WHERE is_private_profile = true
+            AND recent_assignment.class_id = class_id
+            AND EXISTS (
+                SELECT 1 FROM user_roles WHERE private_profile_id = prof.id AND "role" = 'student'
+            )
+        ) LOOP
+            -- Call the auto_assign_self_reviews function for each assignment x profile combination
+            PERFORM auto_assign_self_reviews(recent_assignment.id, profile_record.id);
+            
+        END LOOP;
+        
+    END LOOP;
 END;
 $$;
 
--- Schedule to run every 5 minutes
--- SELECT cron.schedule('check_assignment_deadlines_passed', '*/5 * * * *', 'SELECT check_assignment_deadlines_passed();');
+create extension pg_cron with schema pg_catalog;
+
+grant usage on schema cron to postgres; grant all privileges on all tables in schema cron to postgres;
+
+-- schedule function to run every minute
+SELECT cron.schedule('check_assignment_deadlines_passed', '* * * * *', 'SELECT check_assignment_deadlines_passed();');
+
+-- special case to consider: professor gives student an extension that is greater than the maximum number of 
+-- late days for this assignment.  this will never trigger the function to be called 
+-- -> could have a separate trigger for iterating through exceptions for dates that have passed in the hour or something 
+-- to account for the super long extensions
