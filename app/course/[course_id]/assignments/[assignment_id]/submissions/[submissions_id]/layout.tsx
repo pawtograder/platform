@@ -745,11 +745,11 @@ function RubricView() {
             </Heading>
             <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
             <Text fontSize="sm">
-              Due: {reviewAssignment.due_date ? format(new Date(reviewAssignment.due_date), "Pp") : "N/A"}
+              Due: {reviewAssignment.due_date ? format(new TZDate(reviewAssignment.due_date), "Pp") : "N/A"}
             </Text>
             {reviewAssignment.release_date && (
               <Text fontSize="sm">
-                Grading visible to student after: {format(new Date(reviewAssignment.release_date), "Pp")}
+                Grading visible to student after: {format(new TZDate(reviewAssignment.release_date), "Pp")}
               </Text>
             )}
           </Box>

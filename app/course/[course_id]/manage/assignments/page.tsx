@@ -1,6 +1,8 @@
+import Link from "@/components/ui/link";
 import { createClient } from "@/utils/supabase/server";
 import { Box, Button, HStack, Table } from "@chakra-ui/react";
-import Link from "@/components/ui/link";
+import { TZDate } from "@date-fns/tz";
+import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import SyncStaffTeamButton from "./syncStaffTeamButton";
 
@@ -13,7 +15,7 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
   const client = await createClient();
   const assignments = await client
     .from("assignments")
-    .select("*, submissions(profile_id, assignment_group_id)")
+    .select("*, submissions(profile_id, assignment_group_id), classes(time_zone)")
     .eq("class_id", Number(course_id));
 
   let actions = <></>;
@@ -43,8 +45,24 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
               <Table.Cell>
                 <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>{assignment.title}</Link>
               </Table.Cell>
-              <Table.Cell>{assignment.release_date}</Table.Cell>
-              <Table.Cell>{assignment.due_date}</Table.Cell>
+              <Table.Cell>
+                {assignment.release_date
+                  ? formatInTimeZone(
+                      new TZDate(assignment.release_date),
+                      assignment.classes.time_zone || "America/New_York",
+                      "Pp"
+                    )
+                  : "N/A"}
+              </Table.Cell>
+              <Table.Cell>
+                {assignment.due_date
+                  ? formatInTimeZone(
+                      new TZDate(assignment.due_date),
+                      assignment.classes.time_zone || "America/New_York",
+                      "Pp"
+                    )
+                  : "N/A"}
+              </Table.Cell>
               <Table.Cell>{numUniqueSubmissions(assignment.submissions)}</Table.Cell>
             </Table.Row>
           ))}

@@ -6,7 +6,8 @@ import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils
 import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useCreate, useList } from "@refinedev/core";
-import { addHours, format } from "date-fns";
+import { addHours, isAfter } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";
 import { Alert } from "./alert";
 import { Button } from "./button";
@@ -49,9 +50,8 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
     .filter((e) => e.assignment_id === assignment.id)
     .map((e) => e.hours)
     .reduce((a, b) => a + b, 0);
-  const timezone = course.time_zone || "America/New_York";
-  const ourDueDate = addHours(new TZDate(assignment.due_date, timezone), extensionsInHours);
-  if (ourDueDate < new TZDate(new Date(), timezone)) {
+  const ourDueDate = addHours(new TZDate(assignment.due_date), extensionsInHours);
+  if (isAfter(new TZDate(new Date()), ourDueDate)) {
     return <Text>(Firm date: You have passed the due date)</Text>;
   }
   return (
@@ -155,9 +155,10 @@ export function AssignmentDueDate({
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
+  console.log(dueDate);
   return (
     <HStack gap={1}>
-      <Text>{format(dueDate, "MMM d h:mm aaa")}</Text>
+      <Text>{formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}</Text>
       {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
       {hoursExtended > 0 && (
         <Text>

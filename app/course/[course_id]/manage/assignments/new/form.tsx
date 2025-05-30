@@ -16,13 +16,15 @@ import { Button } from "@/components/ui/button";
 import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
+import { appendTimezoneOffset } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
+function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
   const { course_id } = useParams();
   const { data: otherAssignments } = useList({
     resource: "assignments",
@@ -38,10 +40,15 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
     const groupConfig = form.getValues("group_config");
     return groupConfig === "groups" || groupConfig === "both";
   });
+  const groupConfig = form.watch("group_config");
+  useEffect(() => {
+    setWithGroups(groupConfig === "groups" || groupConfig === "both");
+  }, [groupConfig]);
 
   const {
     register,
     getValues,
+    control,
     formState: { errors }
   } = form;
   return (
@@ -160,14 +167,28 @@ function GroupConfigurationSubform({ form }: { form: UseFormReturnType<Assignmen
                 invalid={errors.group_formation_deadline ? true : false}
                 required={withGroups}
               >
-                <Input
-                  type="datetime-local"
-                  {...register("group_formation_deadline", {
-                    required:
-                      getValues("group_config") === "groups" || getValues("group_config") === "both"
-                        ? "This is required for group assignments"
-                        : false
-                  })}
+                <Controller
+                  name="group_formation_deadline"
+                  control={control}
+                  rules={{ required: "This is required" }}
+                  render={({ field }) => {
+                    const hasATimezoneOffset =
+                      field.value &&
+                      (field.value.charAt(field.value.length - 6) === "+" ||
+                        field.value.charAt(field.value.length - 6) === "-");
+                    const localValue =
+                      field.value && hasATimezoneOffset
+                        ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                        : field.value;
+                    return (
+                      <Input
+                        type="datetime-local"
+                        value={localValue || ""}
+                        onChange={field.onChange}
+                        onBlur={field.onBlur}
+                      />
+                    );
+                  }}
                 />
               </Field>
             </Fieldset.Content>
@@ -197,11 +218,19 @@ export default function AssignmentForm({
 
   const course = useCourse();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const timezone = course.classes.time_zone || "America/New_York";
   const onSubmitWrapper = useCallback(
     async (values: FieldValues) => {
       setIsSubmitting(true);
+      // Convert the release and due dates to UTC
+      const valuesWithDates = {
+        ...values,
+        release_date: appendTimezoneOffset(values.release_date, timezone),
+        due_date: appendTimezoneOffset(values.due_date, timezone),
+        group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone)
+      };
       try {
-        await onSubmit(values);
+        await onSubmit(valuesWithDates);
       } catch (error) {
         toaster.error({
           title: "Changes not saved",
@@ -215,7 +244,7 @@ export default function AssignmentForm({
         setIsSubmitting(false);
       }
     },
-    [onSubmit]
+    [onSubmit, timezone]
   );
 
   return (
@@ -287,7 +316,29 @@ export default function AssignmentForm({
               invalid={errors.release_date ? true : false}
               required={true}
             >
-              <Input type="datetime-local" {...register("release_date", { required: "This is required" })} />
+              <Controller
+                name="release_date"
+                control={control}
+                rules={{ required: "This is required" }}
+                render={({ field }) => {
+                  const hasATimezoneOffset =
+                    field.value &&
+                    (field.value.charAt(field.value.length - 6) === "+" ||
+                      field.value.charAt(field.value.length - 6) === "-");
+                  const localValue =
+                    field.value && hasATimezoneOffset
+                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                      : field.value;
+                  return (
+                    <Input
+                      type="datetime-local"
+                      value={localValue || ""}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                    />
+                  );
+                }}
+              />
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
@@ -298,7 +349,29 @@ export default function AssignmentForm({
               invalid={errors.due_date ? true : false}
               required={true}
             >
-              <Input type="datetime-local" {...register("due_date", { required: "This is required" })} />
+              <Controller
+                name="due_date"
+                control={control}
+                rules={{ required: "This is required" }}
+                render={({ field }) => {
+                  const hasATimezoneOffset =
+                    field.value &&
+                    (field.value.charAt(field.value.length - 6) === "+" ||
+                      field.value.charAt(field.value.length - 6) === "-");
+                  const localValue =
+                    field.value && hasATimezoneOffset
+                      ? new TZDate(field.value, timezone).toISOString().slice(0, -13)
+                      : field.value;
+                  return (
+                    <Input
+                      type="datetime-local"
+                      value={localValue || ""}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                    />
+                  );
+                }}
+              />
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
@@ -340,7 +413,7 @@ export default function AssignmentForm({
               />
             </Field>
           </Fieldset.Content>
-          <GroupConfigurationSubform form={form} />
+          <GroupConfigurationSubform form={form} timezone={timezone} />
           <Fieldset.Content>
             <Button type="submit" loading={isSubmitting} colorPalette="green" formNoValidate>
               Save
