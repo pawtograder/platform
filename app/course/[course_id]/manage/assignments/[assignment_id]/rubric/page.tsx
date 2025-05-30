@@ -1173,7 +1173,8 @@ export default function RubricPage() {
                 {rr
                   ? rr
                       .split("-")
-                      .map((w) => w[0].toUpperCase() + w.slice(1))
+                      .filter((w) => w.length > 0)
+                      .map((w) => (w[0]?.toUpperCase() ?? "") + w.slice(1))
                       .join(" ")
                   : "Select Round"}
                 {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}

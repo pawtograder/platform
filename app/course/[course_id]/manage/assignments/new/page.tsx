@@ -69,6 +69,6 @@ export default function NewAssignmentPage() {
       }
     }
     await create();
-  }, [course_id, getValues, router]);
+  }, [course_id, getValues, router, timezone]);
   return <CreateAssignment form={form} onSubmit={onSubmit} />;
 }

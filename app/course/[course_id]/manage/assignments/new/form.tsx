@@ -225,9 +225,9 @@ export default function AssignmentForm({
       // Convert the release and due dates to UTC
       const valuesWithDates = {
         ...values,
-        release_date: appendTimezoneOffset(values.release_date, timezone),
-        due_date: appendTimezoneOffset(values.due_date, timezone),
-        group_formation_deadline: appendTimezoneOffset(values.group_formation_deadline, timezone)
+        release_date: appendTimezoneOffset(values["release_date"], timezone),
+        due_date: appendTimezoneOffset(values["due_date"], timezone),
+        group_formation_deadline: appendTimezoneOffset(values["group_formation_deadline"], timezone)
       };
       try {
         await onSubmit(valuesWithDates);

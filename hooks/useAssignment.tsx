@@ -19,7 +19,7 @@ export function useRubricCheck(rubric_check_id: number | null | undefined) {
   if (!check) {
     return undefined;
   }
-  const options = check.data instanceof Object && "options" in check.data ? check.data.options : [];
+  const options = check.data instanceof Object && "options" in check.data ? check.data["options"] : [];
   return {
     ...check,
     options,
@@ -167,7 +167,7 @@ export function AssignmentProvider({
   const params = useParams();
   const controller = useRef<AssignmentController>(new AssignmentController());
   const [ready, setReady] = useState(false);
-  const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
+  const assignment_id = initial_assignment_id ?? Number(params["assignment_id"]);
 
   if (!assignment_id || isNaN(assignment_id)) {
     return <Text>Error: Invalid Assignment ID.</Text>;

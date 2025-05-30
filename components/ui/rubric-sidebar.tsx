@@ -383,12 +383,12 @@ function AddReferencingFeedbackPopover({
                     comment,
                     rubric_check_id: check.id,
                     class_id: check.class_id,
-                    submission_id: targetSubmissionReviewId[0].submission_id,
+                    submission_id: targetSubmissionReviewId[0]!.submission_id,
                     eventually_visible: false,
                     author: profile_id,
                     released: false,
                     points,
-                    submission_review_id: targetSubmissionReviewId[0].id
+                    submission_review_id: targetSubmissionReviewId[0]!.id
                   };
                   if (isLineComment(commentToReference)) {
                     await createComment({
@@ -484,7 +484,7 @@ function AddReferencingFeedbackMenu({
                   <Menu.ItemGroupLabel>
                     {rubrics.find((r) => r.id === Number(rubricId))?.review_round}
                   </Menu.ItemGroupLabel>
-                  {writableReferencingChecksByRubricId[rubricId].map((check) => (
+                  {writableReferencingChecksByRubricId[rubricId]?.map((check) => (
                     <Menu.Item key={check.check.id} value={check.check.id.toString()}>
                       {check.check.name}{" "}
                       {check.check.points && (

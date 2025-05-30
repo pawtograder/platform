@@ -87,7 +87,7 @@ export default function GraderResults() {
   if (query.data.data.grader_results?.errors) {
     const errors = query.data.data.grader_results.errors;
     const userVisibleMessage =
-      typeof errors === "object" && "user_visible_message" in errors ? errors.user_visible_message : null;
+      typeof errors === "object" && "user_visible_message" in errors ? errors["user_visible_message"] : null;
     return (
       <Box>
         <Alert title="Submission Error" status="error" p={4} m={4}>

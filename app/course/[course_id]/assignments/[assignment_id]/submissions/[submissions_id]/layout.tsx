@@ -689,8 +689,8 @@ function RubricView() {
         return;
       }
       if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
-        setSelectedRubricIdState(assignmentRubricsData.data[0].id);
-        updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
+        setSelectedRubricIdState(assignmentRubricsData.data[0]?.id);
+        updateSelectedRubricInURL(assignmentRubricsData.data[0]?.id);
         return;
       }
     }
@@ -710,8 +710,8 @@ function RubricView() {
 
     // Priority 5: Fall back to first available rubric
     if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
-      setSelectedRubricIdState(assignmentRubricsData.data[0].id);
-      updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
+      setSelectedRubricIdState(assignmentRubricsData.data[0]?.id);
+      updateSelectedRubricInURL(assignmentRubricsData.data[0]?.id);
       return;
     }
   }, [

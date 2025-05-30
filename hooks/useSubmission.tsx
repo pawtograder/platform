@@ -212,23 +212,23 @@ class SubmissionController {
     }
 
     if (event.type === "created") {
-      dataMap.set(id, body);
+      this.genericData[typeName].set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
       this.genericDataListSubscribers[typeName]?.forEach((cb) => {
-        const allData = Array.from(this.genericData[typeName].values());
+        const allData = Array.from(this.genericData[typeName]?.values() || []);
         cb(allData, { entered: [body], left: [], updated: [] });
       });
     } else if (event.type === "updated") {
-      dataMap.set(id, body);
+      this.genericData[typeName].set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
       this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(dataMap.values()), { entered: [], left: [], updated: [body] })
+        cb(Array.from(this.genericData[typeName]?.values() || []), { entered: [], left: [], updated: [body] })
       );
     } else if (event.type === "deleted") {
-      dataMap.delete(id);
+      this.genericData[typeName].delete(id);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
       this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(dataMap.values()), { entered: [], left: [body], updated: [] })
+        cb(Array.from(this.genericData[typeName]?.values() || []), { entered: [], left: [body], updated: [] })
       );
     }
   }

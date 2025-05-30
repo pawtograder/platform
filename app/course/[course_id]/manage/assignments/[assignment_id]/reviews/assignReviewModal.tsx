@@ -2,7 +2,7 @@
 
 import { createClient } from "@/utils/supabase/client";
 import { Input, Text, VStack } from "@chakra-ui/react";
-import { HttpError, useCreate, useList, useOne, useUpdate } from "@refinedev/core";
+import { HttpError, useCreate, useList, useUpdate } from "@refinedev/core";
 import { Select as ChakraReactSelect } from "chakra-react-select";
 import { format } from "date-fns";
 import { useEffect, useMemo } from "react";
