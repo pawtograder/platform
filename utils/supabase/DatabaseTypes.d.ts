@@ -3,6 +3,14 @@ import type { Database, Json } from "./SupabaseTypes";
 export type { Json };
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
+export type AssignmentWithRubricsAndReferences = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignments"]["Row"],
+  "assignments",
+  Database["public"]["Tables"]["assignments"]["Relationships"],
+  "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
+>;
+
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
 export type ActiveSubmissionsWithGradesForAssignment =
   Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"] & {
@@ -169,6 +177,12 @@ export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"]["Tables"]["submissions"]["Relationships"],
   "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
+export type SubmissionWithAllRelatedData = SubmissionWithFilesGraderResultsOutputTestsAndRubric & {
+  submission_file_comments: SubmissionFileComment[];
+  submission_comments: SubmissionComments[];
+  submission_reviews: SubmissionReviewWithRubric[];
+  submission_artifact_comments: SubmissionArtifactComment[];
+};
 export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
@@ -260,6 +274,9 @@ export type RubricChecks = GetResult<
   Database["public"]["Tables"]["rubric_checks"]["Relationships"],
   "*"
 >;
+
+export type RubricReviewRound = Database["public"]["Enums"]["review_round"];
+
 export type Rubric = GetResult<
   Database["public"],
   Database["public"]["Tables"]["rubrics"]["Row"],
@@ -531,5 +548,13 @@ export type Tag = GetResult<
   Database["public"]["Tables"]["tags"]["Row"],
   "tags",
   Database["public"]["Tables"]["tags"]["Relationships"],
+  "*"
+>;
+
+export type RubricCheckReference = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["rubric_check_references"]["Row"],
+  "rubric_check_references",
+  Database["public"]["Tables"]["rubric_check_references"]["Relationships"],
   "*"
 >;

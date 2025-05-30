@@ -1,14 +1,14 @@
 "use client";
 
 import { CommitHistoryDialog } from "@/app/course/[course_id]/assignments/[assignment_id]/commitHistory";
-import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
-import { useParams } from "next/navigation";
-import { useOne, useList } from "@refinedev/core";
-import type { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { format } from "date-fns";
-import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import CreateStudentReposButton from "@/app/course/[course_id]/assignments/createStudentReposButton";
+import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
+import { useList, useOne } from "@refinedev/core";
+import { format } from "date-fns";
+import { useParams } from "next/navigation";
 export default function TestAssignmentPage() {
   const { course_id, assignment_id } = useParams();
   const { data: assignment } = useOne<Assignment>({
@@ -101,7 +101,9 @@ export default function TestAssignmentPage() {
                 </Table.Cell>
                 <Table.Cell>
                   <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                    {submission.grader_results?.score}/{submission.grader_results?.max_score}
+                    {submission.grader_results?.errors || submission.grader_results?.score === undefined
+                      ? "Error"
+                      : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
                   </Link>
                 </Table.Cell>
                 <Table.Cell>

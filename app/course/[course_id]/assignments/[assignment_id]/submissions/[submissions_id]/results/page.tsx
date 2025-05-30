@@ -84,6 +84,24 @@ export default function GraderResults() {
   if (!query.data) {
     return <Box>No grader results found</Box>;
   }
+  if (query.data.data.grader_results?.errors) {
+    const errors = query.data.data.grader_results.errors;
+    const userVisibleMessage =
+      typeof errors === "object" && "user_visible_message" in errors ? errors.user_visible_message : null;
+    return (
+      <Box>
+        <Alert title="Submission Error" status="error" p={4} m={4}>
+          An error occurred while creating the submission. Your code has not been submitted, although a record will
+          still exist <Link href={`https://github.com/${query.data.data.repository}`}>in your GitHub repository</Link>.
+          {userVisibleMessage && (
+            <Box p={2} fontWeight="bold">
+              Error: {String(userVisibleMessage)}
+            </Box>
+          )}
+        </Alert>
+      </Box>
+    );
+  }
   if (!query.data.data.grader_results) {
     return (
       <Container>

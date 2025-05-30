@@ -165,7 +165,9 @@ export default async function AssignmentPage({
               </Table.Cell>
               <Table.Cell>
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
-                  {submission.grader_results?.score}/{submission.grader_results?.max_score}
+                  {submission.grader_results?.errors || submission.grader_results?.score === undefined
+                    ? "Error"
+                    : `${submission.grader_results?.score}/${submission.grader_results?.max_score}`}
                 </Link>
               </Table.Cell>
               <Table.Cell>

@@ -1,6 +1,17 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
-import type {
+import {
+  useAssignmentController,
+  useMyReviewAssignments,
+  useRubricCheck as useNewRubricCheck,
+  useReferencingRubricChecks,
+  useRubrics
+} from "@/hooks/useAssignment";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import {
+  HydratedRubric,
+  HydratedRubricCheck,
+  HydratedRubricCriteria,
   HydratedRubricPart,
   RubricChecks,
   RubricCriteriaWithRubricChecks,
@@ -11,18 +22,15 @@ import type {
   SubmissionFileComment,
   SubmissionReview,
   SubmissionReviewWithRubric,
-  SubmissionWithFilesGraderResultsOutputTestsAndRubric,
-  HydratedRubricCriteria,
-  HydratedRubricCheck
+  SubmissionWithAllRelatedData,
+  SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
+import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { type LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import type { Unsubscribe } from "./useCourseController";
-import type { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
-import { createClient } from "@/utils/supabase/client";
-import type { PostgrestError } from "@supabase/supabase-js";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Unsubscribe } from "./useCourseController";
 
 type ListUpdateCallback<T> = (
   data: T[],
@@ -88,8 +96,15 @@ class SubmissionController {
     if (filteredCallback && callback) {
       if (filter) {
         filteredCallback = (data, { entered, left, updated }) => {
-          data = data.filter(filter as (value: unknown) => boolean); // Added assertion for filter
-          (callback as ListUpdateCallback<unknown>)(data, { entered, left, updated });
+          const filteredData = data.filter(filter as (value: unknown) => boolean);
+          const filteredEntered = entered.filter(filter as (value: unknown) => boolean);
+          const filteredLeft = left.filter(filter as (value: unknown) => boolean);
+          const filteredUpdated = updated.filter(filter as (value: unknown) => boolean);
+          (callback as ListUpdateCallback<unknown>)(filteredData, {
+            entered: filteredEntered,
+            left: filteredLeft,
+            updated: filteredUpdated
+          });
         };
       }
       subscribers.push(filteredCallback);
@@ -100,7 +115,7 @@ class SubmissionController {
       return {
         unsubscribe: () => {
           this.genericDataListSubscribers[typeName] =
-            this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== callback) || [];
+            this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
         },
         data: (Array.from(currentData) as T[]).filter(filter)
       };
@@ -108,7 +123,7 @@ class SubmissionController {
     return {
       unsubscribe: () => {
         this.genericDataListSubscribers[typeName] =
-          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== callback) || [];
+          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
       },
       data: Array.from(currentData) as T[]
     };
@@ -174,20 +189,35 @@ class SubmissionController {
   handleGenericDataEvent(typeName: string, event: LiveEvent) {
     const body = event.payload as unknown; // Assertion for event.payload
     const idGetter = this.genericDataTypeToId[typeName];
+
     if (!idGetter) {
-      throw new Error(`No id getter registered for type ${typeName}. Call registerGenericDataType first.`);
+      toaster.error({
+        title: "Error",
+        description: `No id getter registered for type ${typeName}`
+      });
+      return;
     }
+
     const id = idGetter(body);
+
+    // Ensure the maps are initialized before handling events
     if (!this.genericData[typeName]) {
       this.genericData[typeName] = new Map();
     }
-    const dataMap = this.genericData[typeName];
+    if (!this.genericDataSubscribers[typeName]) {
+      this.genericDataSubscribers[typeName] = new Map();
+    }
+    if (!this.genericDataListSubscribers[typeName]) {
+      this.genericDataListSubscribers[typeName] = [];
+    }
+
     if (event.type === "created") {
       dataMap.set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(dataMap.values()), { entered: [body], left: [], updated: [] })
-      );
+      this.genericDataListSubscribers[typeName]?.forEach((cb) => {
+        const allData = Array.from(this.genericData[typeName].values());
+        cb(allData, { entered: [body], left: [], updated: [] });
+      });
     } else if (event.type === "updated") {
       dataMap.set(id, body);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
@@ -336,7 +366,8 @@ export function useSubmissionComments({
     const { unsubscribe, data } = submissionController.listGenericData<SubmissionComments>(
       "submission_comments",
       (data, { entered, left, updated }) => {
-        setComments(data.filter((comment) => comment.deleted_at === null));
+        const filteredData = data.filter((comment) => comment.deleted_at === null);
+        setComments(filteredData);
         if (onEnter) {
           onEnter(entered.filter((comment) => comment.deleted_at === null));
         }
@@ -419,114 +450,174 @@ function SubmissionControllerCreator({
     throw new Error("SubmissionContext not found");
   }
   const submissionController = ctx.submissionController;
-  const { query } = useShow<SubmissionWithFilesGraderResultsOutputTestsAndRubric>({
+
+  // Register all generic data types BEFORE setting up live subscriptions
+  submissionController.registerGenericDataType(
+    "submission_file_comments",
+    (item: unknown) => (item as SubmissionFileComment).id
+  );
+  submissionController.registerGenericDataType(
+    "submission_comments",
+    (item: unknown) => (item as SubmissionComments).id
+  );
+  submissionController.registerGenericDataType(
+    "submission_reviews",
+    (item: unknown) => (item as SubmissionReviewWithRubric).id
+  );
+  submissionController.registerGenericDataType(
+    "submission_artifact_comments",
+    (item: unknown) => (item as SubmissionArtifactComment).id
+  );
+
+  // Single comprehensive query to load all data upfront
+  const { query } = useShow<SubmissionWithAllRelatedData>({
     resource: "submissions",
     id: submission_id,
     meta: {
-      select:
-        "*, assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), submission_files(*), assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_artifacts(*)"
+      select: `
+        *,
+        assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))),
+        submission_files(*),
+        assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))),
+        grader_results(*, grader_result_tests(*), grader_result_output(*)),
+        submission_artifacts(*),
+        submission_file_comments(*),
+        submission_comments(*),
+        submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_criteria(*, rubric_checks(*)))),
+        submission_artifact_comments!submission_artifact_comments_submission_id_fkey(*)
+      `.trim()
     }
   });
-  const { data: liveFileComments, isLoading: liveFileCommentsLoading } = useList<SubmissionFileComment>({
+
+  // Set up live subscriptions with proper event handling
+  // We need these enabled to receive live events, but we'll ignore the initial data since we already loaded it
+  const [liveSubscriptionsReady, setLiveSubscriptionsReady] = useState(false);
+
+  useList<SubmissionFileComment>({
     resource: "submission_file_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    liveMode: "manual",
     pagination: {
       pageSize: 1000
+    },
+    liveMode: "manual",
+    queryOptions: {
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false, // Don't refetch on mount since we have data
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_file_comments", event);
     }
   });
-  const { data: liveReviews, isLoading: liveReviewsLoading } = useList<SubmissionReviewWithRubric>({
+
+  useList<SubmissionReviewWithRubric>({
     resource: "submission_reviews",
     meta: {
       select: "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
     },
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    liveMode: "manual",
     pagination: {
       pageSize: 1000
+    },
+    liveMode: "manual",
+    queryOptions: {
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false,
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_reviews", event);
     }
   });
-  const { data: liveComments, isLoading: liveCommentsLoading } = useList<SubmissionComments>({
+
+  useList<SubmissionComments>({
     resource: "submission_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    liveMode: "manual",
     pagination: {
       pageSize: 1000
+    },
+    liveMode: "manual",
+    queryOptions: {
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false,
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_comments", event);
     }
   });
-  const { data: liveArtifactComments, isLoading: liveArtifactCommentsLoading } = useList<SubmissionArtifactComment>({
+
+  useList<SubmissionArtifactComment>({
     resource: "submission_artifact_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    liveMode: "manual",
     pagination: {
       pageSize: 1000
+    },
+    liveMode: "manual",
+    queryOptions: {
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false,
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
     },
     onLiveEvent: (event) => {
       submissionController.handleGenericDataEvent("submission_artifact_comments", event);
     }
   });
-  const anyIsLoading =
-    liveFileCommentsLoading ||
-    liveReviewsLoading ||
-    liveCommentsLoading ||
-    liveArtifactCommentsLoading ||
-    query.isLoading;
+
+  // Process the main query data once it's loaded
   useEffect(() => {
-    if (query.data?.data) {
-      submissionController.submission = query.data.data;
+    if (query.data?.data && !query.isLoading) {
+      const data = query.data.data;
+
+      // Set the main submission data (without the extra fields)
+      const {
+        submission_file_comments,
+        submission_comments,
+        submission_reviews,
+        submission_artifact_comments,
+        ...submissionData
+      } = data;
+
+      submissionController.submission = submissionData as SubmissionWithFilesGraderResultsOutputTestsAndRubric;
+
+      // Set all the related data
+      if (submission_file_comments) {
+        submissionController.setGeneric("submission_file_comments", submission_file_comments);
+      }
+      if (submission_comments) {
+        submissionController.setGeneric("submission_comments", submission_comments);
+      }
+      if (submission_reviews) {
+        submissionController.setGeneric("submission_reviews", submission_reviews);
+      }
+      if (submission_artifact_comments) {
+        submissionController.setGeneric("submission_artifact_comments", submission_artifact_comments);
+      }
+
+      setLiveSubscriptionsReady(true);
     }
-  }, [submissionController, query.data]);
+  }, [query.data, query.isLoading, submissionController]);
+
+  // Set ready when everything is loaded
   useEffect(() => {
-    if (!anyIsLoading) {
+    if (!query.isLoading && liveSubscriptionsReady) {
       setReady(true);
     }
-  }, [anyIsLoading, setReady]);
-  submissionController.registerGenericDataType(
-    "submission_file_comments",
-    (item: unknown) => (item as SubmissionFileComment).id
-  );
-  useEffect(() => {
-    if (liveFileComments?.data) {
-      submissionController.setGeneric("submission_file_comments", liveFileComments.data);
-    }
-  }, [submissionController, anyIsLoading, liveFileComments?.data]);
-  submissionController.registerGenericDataType(
-    "submission_comments",
-    (item: unknown) => (item as SubmissionComments).id
-  );
-  useEffect(() => {
-    if (liveComments?.data) {
-      submissionController.setGeneric("submission_comments", liveComments.data);
-    }
-  }, [submissionController, anyIsLoading, liveComments?.data]);
-  submissionController.registerGenericDataType(
-    "submission_reviews",
-    (item: unknown) => (item as SubmissionReviewWithRubric).id
-  );
-  useEffect(() => {
-    if (liveReviews?.data) {
-      submissionController.setGeneric("submission_reviews", liveReviews.data);
-    }
-  }, [submissionController, anyIsLoading, liveReviews?.data]);
-  submissionController.registerGenericDataType(
-    "submission_artifact_comments",
-    (item: unknown) => (item as SubmissionArtifactComment).id
-  );
-  useEffect(() => {
-    if (liveArtifactComments?.data) {
-      submissionController.setGeneric("submission_artifact_comments", liveArtifactComments.data);
-    }
-  }, [submissionController, anyIsLoading, liveArtifactComments?.data]);
-  if (query.isLoading || !liveFileComments?.data) {
+  }, [query.isLoading, liveSubscriptionsReady, setReady]);
+
+  if (query.isLoading) {
     return (
       <div className="fixed inset-0 w-full h-full flex justify-center items-center bg-white/80 z-[9999]">
         <Spinner />
@@ -534,15 +625,18 @@ function SubmissionControllerCreator({
       </div>
     );
   }
+
   if (query.error) {
     toaster.error({
       title: "Error loading submission",
       description: query.error.message
     });
   }
+
   if (!query.data) {
     return <></>;
   }
+
   return <></>;
 }
 export function useSubmissionMaybe() {
@@ -564,14 +658,16 @@ export function useAllRubricCheckInstances(review_id: number | undefined) {
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
 
-  if (!ctx) {
-    return [];
-  }
-  if (!review_id) {
-    return [];
-  }
-  const comments = [...fileComments, ...submissionComments];
-  return comments.filter((c) => c.submission_review_id === review_id);
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!ctx || !review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments];
+    return comments.filter((c) => c.submission_review_id === review_id);
+  }, [ctx, fileComments, submissionComments, review_id]);
+
+  return filteredComments;
 }
 export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
   const ctx = useContext(SubmissionContext);
@@ -579,14 +675,18 @@ export function useRubricCheckInstances(check: RubricChecks, review_id: number |
   const submissionComments = useSubmissionComments({});
   const artifactComments = useSubmissionArtifactComments({});
 
-  if (!ctx) {
-    return [];
-  }
-  if (!review_id) {
-    return [];
-  }
-  const comments = [...fileComments, ...submissionComments, ...artifactComments];
-  return comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!ctx || !review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments, ...artifactComments];
+    const filtered = comments.filter((c) => check.id === c.rubric_check_id && c.submission_review_id === review_id);
+
+    return filtered;
+  }, [ctx, fileComments, submissionComments, artifactComments, check.id, review_id]);
+
+  return filteredComments;
 }
 export function useSubmissionRubric(reviewAssignmentId?: number | null): {
   rubric: (Database["public"]["Tables"]["rubrics"]["Row"] & { rubric_parts: HydratedRubricPart[] }) | undefined;
@@ -655,30 +755,55 @@ export function useRubricCriteriaInstances({
   const fileComments = useSubmissionFileComments({});
   const submissionComments = useSubmissionComments({});
   const rubricData = useSubmissionRubric(review_id); // Pass review_id to useSubmissionRubric
-  if (!review_id) {
-    return [];
-  }
-  const comments = [...fileComments, ...submissionComments];
-  if (criteria) {
-    return comments.filter(
-      (eachComment) =>
-        eachComment.submission_review_id === review_id &&
-        criteria.rubric_checks.find((eachCheck: RubricChecks) => eachCheck.id === eachComment.rubric_check_id)
+
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments];
+    if (criteria) {
+      return comments.filter(
+        (eachComment) =>
+          eachComment.submission_review_id === review_id &&
+          criteria.rubric_checks.find((eachCheck: RubricChecks) => eachCheck.id === eachComment.rubric_check_id)
+      );
+    }
+    if (rubric_id) {
+      const allCriteria: HydratedRubricCriteria[] =
+        rubricData?.rubric?.rubric_parts?.flatMap((part) => part.rubric_criteria || []) || [];
+      const allChecks: HydratedRubricCheck[] = allCriteria.flatMap(
+        (eachCriteria: HydratedRubricCriteria) => eachCriteria.rubric_checks || []
+      );
+      return comments.filter(
+        (eachComment) =>
+          eachComment.submission_review_id === review_id &&
+          allChecks.find((eachCheck: HydratedRubricCheck) => eachCheck.id === eachComment.rubric_check_id)
+      );
+    }
+    throw new Error("Either criteria or rubric_id must be provided");
+  }, [fileComments, submissionComments, review_id, criteria, rubric_id, rubricData]);
+
+  return filteredComments;
+}
+export function useSubmissionReviews() {
+  const ctx = useContext(SubmissionContext);
+  const controller = useSubmissionController();
+  const [reviews, setReviews] = useState<SubmissionReviewWithRubric[] | undefined>(undefined);
+  useEffect(() => {
+    if (!ctx || !controller) {
+      return;
+    }
+    const { unsubscribe, data } = controller.listGenericData<SubmissionReviewWithRubric>(
+      "submission_reviews",
+      (data) => {
+        setReviews(data);
+      }
     );
-  }
-  if (rubric_id) {
-    const allCriteria: HydratedRubricCriteria[] =
-      rubricData?.rubric?.rubric_parts?.flatMap((part) => part.rubric_criteria || []) || [];
-    const allChecks: HydratedRubricCheck[] = allCriteria.flatMap(
-      (eachCriteria: HydratedRubricCriteria) => eachCriteria.rubric_checks || []
-    );
-    return comments.filter(
-      (eachComment) =>
-        eachComment.submission_review_id === review_id &&
-        allChecks.find((eachCheck: HydratedRubricCheck) => eachCheck.id === eachComment.rubric_check_id)
-    );
-  }
-  throw new Error("Either criteria or rubric_id must be provided");
+    setReviews(data);
+    return () => unsubscribe();
+  }, [ctx, controller]);
+  return reviews;
 }
 export function useSubmissionReview(reviewId?: number | null) {
   const ctx = useContext(SubmissionContext);
@@ -778,7 +903,7 @@ export function useReviewAssignment(reviewAssignmentId?: number) {
     },
     meta: {
       select:
-        "*, profiles!assignee_profile_id(*), rubrics!inner(*, rubric_parts!inner(*, rubric_criteria!inner(*, rubric_checks!inner(*)))), review_assignment_rubric_parts!inner(*, rubric_parts!inner(*, rubric_criteria!inner(*, rubric_checks!inner(*))))"
+        "*, profiles!assignee_profile_id(*), rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*)))), review_assignment_rubric_parts(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
     }
   });
 
@@ -911,217 +1036,137 @@ export type ReferencedRubricCheckInstance = {
   authorProfile?: Partial<Tables<"profiles">> | null;
 };
 
-// Define a more specific type for comments with author_profile from eager loading
-type CommentWithAuthorProfile = (
-  | Tables<"submission_file_comments">
-  | Tables<"submission_comments">
-  | Tables<"submission_artifact_comments">
-) & {
-  author_profile?: Partial<Tables<"profiles">> | null;
-};
+export function useReferencedRubricCheckInstances(referencing_check_id: number | undefined | null) {
+  // Get comments from submission controller instead of separate queries
+  const fileComments = useSubmissionFileComments({});
+  const submissionComments = useSubmissionComments({});
+  const artifactComments = useSubmissionArtifactComments({});
 
-export function useReferencedRubricCheckInstances(
-  referencing_check_id: number | undefined | null,
-  submission_id: number | undefined | null
-): { instances: ReferencedRubricCheckInstance[]; isLoading: boolean; error: PostgrestError | Error | null } {
-  const supabase = createClient();
-  const [instances, setInstances] = useState<ReferencedRubricCheckInstance[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<PostgrestError | Error | null>(null);
+  const referencingCheck = useNewRubricCheck(referencing_check_id);
+
+  const allRelevantComments = useMemo(() => {
+    const referencedCheckIds = referencingCheck?.rubric_check_references.map((ref) => ref.referenced_rubric_check_id);
+    const relevantFileComments = fileComments.filter(
+      (comment) =>
+        comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
+    );
+    const relevantSubmissionComments = submissionComments.filter(
+      (comment) =>
+        comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
+    );
+    const relevantArtifactComments = artifactComments.filter(
+      (comment) =>
+        comment.rubric_check_id && referencedCheckIds?.includes(comment.rubric_check_id) && comment.deleted_at === null
+    );
+    return [...relevantFileComments, ...relevantSubmissionComments, ...relevantArtifactComments];
+  }, [fileComments, submissionComments, artifactComments, referencingCheck]);
+
+  return allRelevantComments;
+}
+
+export function useSubmissionReviewForRubric(
+  rubricId?: number | null,
+  enabled: boolean = true
+): {
+  submissionReview: SubmissionReview | undefined;
+  isLoading: boolean;
+  error: Error | undefined;
+} {
+  const controller = useSubmissionController();
+  const submission = controller?.submission;
+  const { private_profile_id } = useClassProfiles();
+
+  const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
+  const [isLoading, setIsLoading] = useState<boolean>(enabled);
+  const [error, setError] = useState<Error | undefined>(undefined);
 
   useEffect(() => {
-    if (!referencing_check_id || !submission_id || !supabase) {
-      setInstances([]);
-      // setIsLoading(referencing_check_id && submission_id ? true : false); // Original
-      // Corrected logic: only set loading true if we intend to fetch
-      setIsLoading(!!(referencing_check_id && submission_id && supabase));
-      if (!supabase && referencing_check_id && submission_id) {
-        // Waiting for supabase client, setIsLoading(true) is appropriate if we expect supabase to appear
-        // For simplicity, if supabase is null, we are not loading yet from this hook's perspective for this run.
-        // The initial true might be okay if supabase is guaranteed to load shortly.
-        // Let's stick to false if critical deps are missing to avoid infinite loading states if supabase never arrives.
-        setIsLoading(false);
-      }
+    if (!enabled || !rubricId || !submission || !controller || !private_profile_id) {
+      setSubmissionReview(undefined);
+      setIsLoading(false);
+      setError(undefined);
       return;
     }
 
-    let isMounted = true;
     setIsLoading(true);
-    setError(null);
+    setError(undefined);
 
-    const fetchInstances = async () => {
-      try {
-        const { data: references, error: referencesError } = await supabase
-          .from("rubric_check_references")
-          .select("*")
-          .eq("referencing_rubric_check_id", referencing_check_id);
-
-        if (referencesError) throw referencesError;
-        if (!isMounted || !references || references.length === 0) {
-          if (isMounted) setInstances([]);
-          return;
-        }
-
-        const collectedInstances: ReferencedRubricCheckInstance[] = [];
-
-        for (const ref of references) {
-          const referenced_rubric_check_id = ref.referenced_rubric_check_id;
-
-          const { data: referencedCheck, error: referencedCheckError } = await supabase
-            .from("rubric_checks")
-            .select("*")
-            .eq("id", referenced_rubric_check_id)
-            .single();
-
-          if (referencedCheckError) {
-            toaster.create({
-              title: `Error fetching referenced check ${referenced_rubric_check_id}`,
-              description: referencedCheckError.message,
-              type: "warning"
-            });
-            continue;
-          }
-          if (!referencedCheck) continue;
-
-          const allCommentsSource: {
-            type: "file" | "general" | "artifact";
-            data: CommentWithAuthorProfile[] | null;
-            error: PostgrestError | null;
-          }[] = [];
-
-          const fileCommentsResult = await supabase
-            .from("submission_file_comments")
-            .select(
-              "*, author_profile:profiles!submission_file_comments_author_fkey(id, name, avatar_url, flair, short_name)"
-            )
-            .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id);
-          allCommentsSource.push({
-            type: "file",
-            data: fileCommentsResult.data as CommentWithAuthorProfile[] | null,
-            error: fileCommentsResult.error
-          });
-
-          const generalCommentsResult = await supabase
-            .from("submission_comments")
-            .select(
-              "*, author_profile:profiles!submission_comments_author_fkey(id, name, avatar_url, flair, short_name)"
-            )
-            .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id);
-          allCommentsSource.push({
-            type: "general",
-            data: generalCommentsResult.data as CommentWithAuthorProfile[] | null,
-            error: generalCommentsResult.error
-          });
-
-          const artifactCommentsResult = await supabase
-            .from("submission_artifact_comments")
-            .select(
-              "*, author_profile:profiles!submission_artifact_comments_author_fkey(id, name, avatar_url, flair, short_name)"
-            )
-            .eq("rubric_check_id", referenced_rubric_check_id)
-            .eq("submission_id", submission_id);
-          allCommentsSource.push({
-            type: "artifact",
-            data: artifactCommentsResult.data as CommentWithAuthorProfile[] | null,
-            error: artifactCommentsResult.error
-          });
-
-          for (const source of allCommentsSource) {
-            if (source.error) {
-              toaster.create({
-                title: `Error fetching ${source.type} comments:`,
-                description: source.error.message,
-                type: "warning"
-              });
-            }
-            if (!source.data) continue;
-
-            for (const rawComment of source.data) {
-              // rawComment is now CommentWithAuthorProfile
-              const comment = {
-                ...rawComment,
-                type: source.type
-                // author_profile is already part of rawComment due to CommentWithAuthorProfile type
-              } as ReferencedRubricCheckInstance["comment"];
-
-              let submissionReview: Tables<"submission_reviews"> | undefined = undefined;
-              let rubric: Pick<Tables<"rubrics">, "id" | "name" | "review_round" | "assignment_id"> | undefined =
-                undefined;
-              let reviewRound: Enums<"review_round"> | null = null;
-              const authorProfile = comment.author_profile || undefined;
-
-              if (comment.submission_review_id) {
-                const { data: reviewData, error: reviewError } = await supabase
-                  .from("submission_reviews")
-                  .select("*")
-                  .eq("id", comment.submission_review_id)
-                  .single();
-
-                if (reviewError) {
-                  toaster.create({
-                    title: "Error fetching submission review:",
-                    description: reviewError.message,
-                    type: "warning"
-                  });
-                } else submissionReview = reviewData || undefined;
-
-                if (submissionReview && submissionReview.rubric_id) {
-                  const { data: rubricData, error: rubricError } = await supabase
-                    .from("rubrics")
-                    .select("id, name, review_round, assignment_id")
-                    .eq("id", submissionReview.rubric_id)
-                    .single();
-                  if (rubricError) {
-                    toaster.create({
-                      title: "Error fetching rubric:",
-                      description: rubricError.message,
-                      type: "warning"
-                    });
-                  } else {
-                    rubric = rubricData || undefined;
-                    reviewRound = rubric?.review_round || null;
-                  }
-                }
-              }
-              collectedInstances.push({
-                referencedRubricCheck: referencedCheck,
-                comment,
-                submissionReview,
-                rubric,
-                reviewRound,
-                authorProfile
-              });
-            }
-          }
-        }
-        if (isMounted) setInstances(collectedInstances);
-      } catch (e: unknown) {
-        toaster.error({
-          title: "Error fetching referenced rubric check instances:",
-          description: e instanceof Error ? e.message : "An unknown error occurred"
-        });
-        if (isMounted) {
-          if (e instanceof Error) {
-            setError(e);
-          } else if (typeof e === "object" && e !== null && "message" in e) {
-            setError(new Error(String(e.message)));
-          } else {
-            setError(new Error("An unknown error occurred"));
-          }
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
+    // Try to find an existing submission review for this rubric
+    const { unsubscribe, data: existingReview } = controller.getValueWithSubscription<SubmissionReview>(
+      "submission_reviews",
+      (sr) => sr.submission_id === submission.id && sr.rubric_id === rubricId,
+      (updatedReview) => {
+        setSubmissionReview(updatedReview);
       }
+    );
+
+    if (existingReview) {
+      setSubmissionReview(existingReview);
+      setIsLoading(false);
+    } else {
+      // No existing review found - create a placeholder that will be properly created when first comment is made
+      const newReviewPlaceholder: Partial<SubmissionReview> = {
+        submission_id: submission.id,
+        rubric_id: rubricId,
+        grader: private_profile_id,
+        class_id: submission.class_id,
+        name: `Review for submission ${submission.id}`,
+        total_score: 0,
+        total_autograde_score: 0,
+        tweak: 0,
+        released: false
+        // id will be undefined until saved to database
+      };
+      setSubmissionReview(newReviewPlaceholder as SubmissionReview);
+      setIsLoading(false);
+    }
+
+    return () => unsubscribe();
+  }, [enabled, rubricId, submission, controller, private_profile_id]);
+
+  return { submissionReview, isLoading, error };
+}
+export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {
+  const assignmentController = useAssignmentController();
+  const referencingChecks = useReferencingRubricChecks(rubric_check_id)?.map((eachCheck) => {
+    const reviewCriteria = assignmentController.rubricCriteriaById.get(eachCheck.rubric_criteria_id);
+    return {
+      criteria: reviewCriteria,
+      check: eachCheck
     };
+  });
+  const writableSubmissionReviews = useWritableSubmissionReviews();
+  return referencingChecks?.filter((rc) =>
+    writableSubmissionReviews?.some((sr) => sr.rubric_id === rc.criteria!.rubric_id)
+  );
+}
 
-    fetchInstances();
+export function useWritableSubmissionReviews(rubric_id?: number) {
+  const id = useSubmissionController().submission.id;
+  const submissionReviews = useSubmissionReviews();
+  const rubrics = useRubrics();
+  const assignments = useMyReviewAssignments(id);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [referencing_check_id, submission_id, supabase]);
-
-  return { instances, isLoading, error };
+  const { role } = useClassProfiles();
+  const memoizedReviews = useMemo(() => {
+    const writableRubrics: HydratedRubric[] = [];
+    if (role.role === "instructor") {
+      writableRubrics.push(...rubrics);
+    }
+    if (role.role === "grader") {
+      writableRubrics.push(
+        ...rubrics.filter((r) => r.review_round === "grading-review" || assignments.some((a) => a.rubric_id === r.id))
+      );
+    }
+    if (role.role === "student") {
+      writableRubrics.push(
+        ...rubrics.filter((r) => r.review_round === "self-review" || assignments.some((a) => a.rubric_id === r.id))
+      );
+    }
+    return submissionReviews?.filter(
+      (sr) =>
+        writableRubrics.some((r) => r.id === sr.rubric_id) && (rubric_id === undefined || sr.rubric_id === rubric_id)
+    );
+  }, [role, rubrics, submissionReviews, assignments, rubric_id]);
+  return memoizedReviews;
 }

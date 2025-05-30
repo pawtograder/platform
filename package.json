@@ -66,6 +66,7 @@
     "csv-parse": "^5.6.0",
     "csv-writer": "^1.6.0",
     "date-fns": "^4.1.0",
+    "date-fns-tz": "^3.2.0",
     "diff": "^7.0.0",
     "emoji-mart": "^5.6.0",
     "jszip": "^3.10.1",
@@ -137,7 +138,7 @@
     "tailwind-merge": "^2.5.2",
     "tailwindcss": "3.4.17",
     "tailwindcss-animate": "^1.0.7",
-    "typescript": "5.7.2",
+    "typescript": "^5.7.3",
     "typescript-eslint": "^8.32.0",
     "typescript-json-schema": "^0.65.1"
   }

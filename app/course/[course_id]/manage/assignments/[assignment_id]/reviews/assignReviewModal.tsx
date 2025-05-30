@@ -1,27 +1,28 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { type HttpError, useCreate, useList, useUpdate } from "@refinedev/core";
-import { useForm, Controller } from "react-hook-form";
-import { format } from "date-fns";
-import { VStack, Text, Input } from "@chakra-ui/react";
-import { Select as ChakraReactSelect } from "chakra-react-select";
-import { FaPlus } from "react-icons/fa";
 import { createClient } from "@/utils/supabase/client";
+import { Input, Text, VStack } from "@chakra-ui/react";
+import { HttpError, useCreate, useList, useOne, useUpdate } from "@refinedev/core";
+import { Select as ChakraReactSelect } from "chakra-react-select";
+import { format } from "date-fns";
+import { useEffect, useMemo } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { FaPlus } from "react-icons/fa";
 
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { toaster } from "@/components/ui/toaster";
-import { Field } from "@/components/ui/field";
-import {
-  DialogRoot,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogBody,
-  DialogFooter,
-  DialogCloseTrigger
-} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import {
+  DialogBody,
+  DialogCloseTrigger,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
+import { Field } from "@/components/ui/field";
+import { toaster } from "@/components/ui/toaster";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { TZDate } from "@date-fns/tz";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -93,7 +94,7 @@ export default function AssignReviewModal({
             assignee_profile_id: initialData.assignee_profile_id,
             submission_id: initialData.submission_id,
             rubric_id: initialData.rubric_id,
-            due_date: initialData.due_date ? format(new Date(initialData.due_date), "yyyy-MM-dd'T'HH:mm") : "",
+            due_date: initialData.due_date ? format(new TZDate(initialData.due_date), "yyyy-MM-dd'T'HH:mm") : "",
             rubric_part_ids: initialData.review_assignment_rubric_parts?.map((p) => p.rubric_part_id) || [],
             release_date: initialData.release_date
               ? format(new Date(initialData.release_date), "yyyy-MM-dd'T'HH:mm")
@@ -395,10 +396,10 @@ export default function AssignReviewModal({
             assignee_profile_id: initialData.assignee_profile_id,
             submission_id: initialData.submission_id,
             rubric_id: initialData.rubric_id,
-            due_date: initialData.due_date ? format(new Date(initialData.due_date), "yyyy-MM-dd'T'HH:mm") : "",
+            due_date: initialData.due_date ? format(new TZDate(initialData.due_date), "yyyy-MM-dd'T'HH:mm") : "",
             rubric_part_ids: initialData.review_assignment_rubric_parts?.map((p) => p.rubric_part_id) || [],
             release_date: initialData.release_date
-              ? format(new Date(initialData.release_date), "yyyy-MM-dd'T'HH:mm")
+              ? format(new TZDate(initialData.release_date), "yyyy-MM-dd'T'HH:mm")
               : undefined,
             max_allowable_late_tokens: initialData.max_allowable_late_tokens ?? 0
           }

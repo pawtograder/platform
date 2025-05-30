@@ -50,10 +50,7 @@ function AdjustDueDateDialog({
   const studentOrGroup = group ? "group" : "student";
   const dueDateFor = group ? `Group: ${group.name}` : `Student: ${student.name}`;
   const hoursExtended = extensions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
-  const late_due_date = addHours(
-    new TZDate(assignment.due_date!, course.time_zone || "America/New_York"),
-    hoursExtended
-  );
+  const late_due_date = addHours(new TZDate(assignment.due_date!), hoursExtended);
   const { mutateAsync: deleteException } = useDelete();
   const {
     handleSubmit,
@@ -276,10 +273,7 @@ export default function DueDateExceptions() {
                 (group && exception.assignment_group_id === group.assignment_groups.id)
             );
             const hoursExtended = exceptions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
-            const late_due_date = addHours(
-              new TZDate(assignment.data.due_date!, course.classes.time_zone || "America/New_York"),
-              hoursExtended
-            );
+            const late_due_date = addHours(new TZDate(assignment.data.due_date!), hoursExtended);
             const grantors = exceptions?.map((exception) => exception.creator_id);
             const uniqueGrantors = [...new Set(grantors)];
             return (

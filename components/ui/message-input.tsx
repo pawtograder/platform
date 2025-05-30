@@ -321,7 +321,7 @@ export default function MessageInput(props: MessageInputProps) {
             variant="solid"
             colorPalette="green"
             size="xs"
-            ml={2}
+            m={2}
           >
             {props.sendButtonText ? props.sendButtonText : "Send"}
           </Button>
