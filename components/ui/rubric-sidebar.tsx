@@ -839,10 +839,11 @@ export function RubricCheckAnnotation({
     >
       <HStack>
         <Tooltip
-          content={`This check is an annotation, it can only be applied by ${annotationTarget === "file" || annotationTarget === null
-            ? "clicking on a specific line of code"
-            : "clicking on an artifact"
-            }`}
+          content={`This check is an annotation, it can only be applied by ${
+            annotationTarget === "file" || annotationTarget === null
+              ? "clicking on a specific line of code"
+              : "clicking on an artifact"
+          }`}
         >
           <Icon as={annotationTarget === "file" ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
         </Tooltip>
@@ -860,14 +861,16 @@ export function RubricCheckAnnotation({
       ))}
 
       {/* Inline reference management for preview mode */}
-      {(isPreviewMode && assignmentId && classId && currentRubricId) ? (
+      {isPreviewMode && assignmentId && classId && currentRubricId ? (
         <InlineReferenceManager
           check={check}
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
         />
-      ) : <></>}
+      ) : (
+        <></>
+      )}
 
       {/* Show referenced feedback for grading mode */}
       {!isPreviewMode && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
@@ -918,8 +921,8 @@ export function RubricCheckGlobal({
   useEffect(() => {
     setIsEditing(
       isSelected &&
-      rubricCheckComments.length === 0 &&
-      criteria.max_checks_per_submission != criteriaCheckComments.length
+        rubricCheckComments.length === 0 &&
+        criteria.max_checks_per_submission != criteriaCheckComments.length
     );
   }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
 
@@ -1161,8 +1164,8 @@ function SubmissionCommentForm({
           }
           const artifactInfo = check.artifact
             ? {
-              submission_artifact_id: linkedArtifactId
-            }
+                submission_artifact_id: linkedArtifactId
+              }
             : {};
 
           const values = {
