@@ -255,7 +255,7 @@ export default function DynamicCourseNav() {
               })}
           </HStack>
         </VStack>
-        <TimeZoneWarning courseTz={enrollment.classes.time_zone} />
+        <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
         <UserMenu />
       </Flex>
     </Box>
