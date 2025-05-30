@@ -8,7 +8,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHash } from "node:crypto";
 import { TZDate } from "npm:@date-fns/tz";
-import { addHours, addSeconds, format } from "npm:date-fns@4";
+import { addHours, addSeconds, format, isAfter } from "npm:date-fns@4";
 import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
@@ -87,20 +87,14 @@ async function handleRequest(req: Request) {
       console.log(`Total extensions: ${totalExtensions}`);
       console.log(`Due date: ${repoData.assignments.due_date}`);
 
-      //omg why is this needed?
-      const tzDate = TZDate.tz(timeZone);
-      const offset = tzDate.getTimezoneOffset();
-      const offsetHours = Math.abs(Math.floor(offset / 60));
-      const offsetMinutes = Math.abs(offset % 60);
-      const offsetStr = `${offset < 0 ? "+" : "-"}${offsetHours.toString().padStart(2, "0")}:${offsetMinutes.toString().padStart(2, "0")}`;
-      const originalDueDate = new TZDate(repoData.assignments.due_date + offsetStr, timeZone);
+      const originalDueDate = new TZDate(repoData.assignments.due_date);
 
       console.log(`Original due date: ${originalDueDate}`);
       const newDueDate = addHours(originalDueDate, totalExtensions);
       console.log(`New due date: ${newDueDate}`);
       const currentDate = TZDate.tz(timeZone);
       console.log(`Current date: ${currentDate}`);
-      if (currentDate > newDueDate) {
+      if (isAfter(currentDate, newDueDate)) {
         //Fail the check run
         await updateCheckRun({
           owner: repository.split("/")[0],

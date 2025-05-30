@@ -1,5 +1,6 @@
 "use client";
 
+import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import {
   DrawerBackdrop,
@@ -20,17 +21,17 @@ import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from 
 import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
-import React, { Fragment, useEffect, useRef } from "react";
+import React, { Fragment, useEffect, useRef, useState } from "react";
 import { FaScroll } from "react-icons/fa";
 import {
+  FiAlertCircle,
   FiClipboard,
   FiCompass,
   FiMenu,
   FiMessageSquare,
   FiSettings,
   FiStar,
-  FiUsers,
-  FiAlertCircle
+  FiUsers
 } from "react-icons/fi";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "../UserMenu";
@@ -124,6 +125,18 @@ function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[
         <DrawerCloseTrigger />
       </DrawerContent>
     </DrawerRoot>
+  );
+}
+function TimeZoneWarning({ courseTz }: { courseTz: string }) {
+  const [dismissed, setDismissed] = useState(false);
+  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (courseTz === browserTz || dismissed) {
+    return <></>;
+  }
+  return (
+    <Alert status="warning" w="fit-content" closable onClose={() => setDismissed(true)}>
+      Warning: This course is in {courseTz} but your computer appears to be in {browserTz}
+    </Alert>
   );
 }
 export default function DynamicCourseNav() {
@@ -244,6 +257,7 @@ export default function DynamicCourseNav() {
               })}
           </HStack>
         </VStack>
+        <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
         <UserMenu />
       </Flex>
     </Box>

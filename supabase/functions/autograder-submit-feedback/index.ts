@@ -283,6 +283,8 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
     console.error(error);
     throw new UserVisibleError(`Failed to insert feedback: ${error.message}`);
   }
+  let artifactUploadLinks: { name: string; token: string; path: string }[] = [];
+
   try {
     // Insert feedback for each visibility level
     for (const visibility of ["hidden", "visible", "after_due_date", "after_published"]) {
@@ -353,7 +355,6 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
         throw new UserVisibleError(`Failed to insert hidden test outputs: ${hiddenTestOutputsError.message}`);
       }
     }
-    let artifactUploadLinks: { name: string; token: string; path: string }[] = [];
     if (requestBody.feedback.artifacts) {
       // Prepare artifact uploads
       const { error: artifactError, data: artifactIDs } = await adminSupabase
