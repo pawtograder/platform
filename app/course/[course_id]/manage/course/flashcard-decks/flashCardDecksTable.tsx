@@ -24,9 +24,11 @@ interface FlashcardDecksTableProps {
 
 interface UserNameProps {
   userId: string;
+  courseId: string | number;
 }
 
-function UserName({ userId }: UserNameProps) {
+function UserName({ userId, courseId }: UserNameProps) {
+  // First, get the user's basic info
   const { data: userData } = useList<{ name: string }>({
     resource: "users",
     meta: {
@@ -44,7 +46,56 @@ function UserName({ userId }: UserNameProps) {
     }
   });
 
-  return <Text>{userData?.data?.[0]?.name || "Unknown User"}</Text>;
+  // Then, get the user's profile info through user_roles for this course
+  const { data: userRoleData } = useList<{ private_profile_id: string }>({
+    resource: "user_roles",
+    meta: {
+      select: "private_profile_id"
+    },
+    filters: [
+      {
+        field: "user_id",
+        operator: "eq",
+        value: userId
+      },
+      {
+        field: "class_id",
+        operator: "eq",
+        value: courseId
+      }
+    ],
+    queryOptions: {
+      enabled: !!userId && !!courseId
+    }
+  });
+
+  const privateProfileId = userRoleData?.data?.[0]?.private_profile_id;
+
+  // Finally, get the profile name if we have a private profile ID
+  const { data: profileData } = useList<{ name: string }>({
+    resource: "profiles",
+    meta: {
+      select: "name"
+    },
+    filters: [
+      {
+        field: "id",
+        operator: "eq",
+        value: privateProfileId
+      }
+    ],
+    queryOptions: {
+      enabled: !!privateProfileId
+    }
+  });
+
+  const userName = userData?.data?.[0]?.name;
+  const profileName = profileData?.data?.[0]?.name;
+
+  // Display user name if available, otherwise fall back to private profile name
+  const displayName = userName || profileName || "Unknown User";
+
+  return <Text>{displayName}</Text>;
 }
 
 export default function FlashCardDecksTable({ courseId, onDeckDeleted }: FlashcardDecksTableProps) {
@@ -150,7 +201,7 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
         enableColumnFilter: true,
         cell: function render(props: CellContext<FlashcardDeckRow, unknown>) {
           const creatorId = props.getValue() as string;
-          return <UserName userId={creatorId} />;
+          return <UserName userId={creatorId} courseId={courseId} />;
         }
       },
       {

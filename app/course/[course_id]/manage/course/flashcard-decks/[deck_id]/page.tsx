@@ -1,31 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { VStack, HStack, Heading, Text, Box, IconButton, Spinner, Badge, Textarea } from "@chakra-ui/react";
-import { useForm } from "react-hook-form";
-import { useOne, useUpdate, useList, useDelete } from "@refinedev/core";
-import { FaEdit, FaSave, FaTimes, FaPlus, FaTrash, FaArrowLeft } from "react-icons/fa";
+import { VStack, HStack, Heading, Text, Box, IconButton, Spinner, Badge } from "@chakra-ui/react";
+import { useOne, useList, useDelete } from "@refinedev/core";
+import { FaEdit, FaPlus, FaTrash, FaArrowLeft } from "react-icons/fa";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import Link from "@/components/ui/link";
-import { toaster } from "@/components/ui/toaster";
+import { toaster, Toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import AddFlashCardModal from "./addFlashCardModal";
+import EditFlashCardModal from "./editFlashCardModal";
+import EditDeckModal from "./editDeckModal";
 
 // Type definitions
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
-type FlashcardDeckUpdate = Database["public"]["Tables"]["flashcard_decks"]["Update"];
-
-interface FlashcardDeckFormData {
-  name: string;
-  description?: string;
-}
 
 export default function FlashcardDeckPage() {
   const params = useParams();
@@ -33,10 +26,23 @@ export default function FlashcardDeckPage() {
   const course_id = params.course_id as string;
   const deck_id = params.deck_id as string;
 
-  const [isEditing, setIsEditing] = useState(false);
-
   // Modal management for adding flashcards
   const { isOpen: isAddCardModalOpen, openModal: openAddCardModal, closeModal: closeAddCardModal } = useModalManager();
+
+  // Modal management for editing flashcards
+  const {
+    isOpen: isEditCardModalOpen,
+    modalData: editingCardId,
+    openModal: openEditCardModal,
+    closeModal: closeEditCardModal
+  } = useModalManager<number>();
+
+  // Modal management for editing deck
+  const {
+    isOpen: isEditDeckModalOpen,
+    openModal: openEditDeckModal,
+    closeModal: closeEditDeckModal
+  } = useModalManager();
 
   // Fetch deck data
   const {
@@ -85,79 +91,22 @@ export default function FlashcardDeckPage() {
     }
   });
 
-  // Update deck mutation
-  const { mutate: updateDeck, isLoading: isUpdating } = useUpdate();
-
   // Delete flashcard mutation
   const { mutate: deleteFlashcard } = useDelete();
-
-  // Form for editing deck details
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors, isDirty }
-  } = useForm<FlashcardDeckFormData>();
 
   const deck = deckData?.data;
   const flashcards = flashcardsData?.data || [];
 
-  // Reset form when deck data changes or editing mode changes
-  useEffect(() => {
-    if (deck && isEditing) {
-      reset({
-        name: deck.name,
-        description: deck.description || ""
-      });
-    }
-  }, [deck, isEditing, reset]);
-
-  const handleEdit = () => {
-    setIsEditing(true);
-  };
-
-  const handleCancel = () => {
-    setIsEditing(false);
-    reset();
-  };
-
-  const handleSave = (data: FlashcardDeckFormData) => {
-    if (!deck) return;
-
-    const updateData: FlashcardDeckUpdate = {
-      name: data.name,
-      description: data.description || null,
-      updated_at: new Date().toISOString()
-    };
-
-    updateDeck(
-      {
-        resource: "flashcard_decks",
-        id: deck.id,
-        values: updateData
-      },
-      {
-        onSuccess: () => {
-          toaster.create({
-            title: "Success",
-            description: "Deck updated successfully",
-            type: "success"
-          });
-          setIsEditing(false);
-          refetchDeck();
-        },
-        onError: (error) => {
-          toaster.create({
-            title: "Error",
-            description: "Failed to update deck: " + error.message,
-            type: "error"
-          });
-        }
-      }
-    );
-  };
-
   const handleFlashcardAdded = () => {
+    refetchFlashcards();
+  };
+
+  const handleFlashcardUpdated = () => {
+    refetchFlashcards();
+  };
+
+  const handleDeckUpdated = () => {
+    refetchDeck();
     refetchFlashcards();
   };
 
@@ -206,19 +155,21 @@ export default function FlashcardDeckPage() {
   }
 
   return (
-    <VStack align="stretch" w="100%" gap={6} p={6}>
+    <VStack align="stretch" w="100%" gap={8} p={6} maxW="6xl" mx="auto">
       {/* Header Section */}
-      <HStack justifyContent="space-between" alignItems="start">
-        <HStack gap={4}>
+      <HStack justifyContent="space-between" alignItems="flex-start">
+        <HStack gap={4} align="flex-start">
           <Link href={`/course/${course_id}/manage/course/flashcard-decks`}>
-            <IconButton variant="ghost" size="sm">
+            <IconButton variant="ghost" size="sm" aria-label="Go back to flashcard decks">
               <FaArrowLeft />
             </IconButton>
           </Link>
-          <VStack align="start" gap={1}>
-            <HStack gap={2}>
-              <Heading size="lg">{deck.name}</Heading>
-              <Badge colorPalette="blue">{flashcards.length} cards</Badge>
+          <VStack align="start" gap={2}>
+            <HStack gap={3} align="center">
+              <Heading size="xl">{deck.name}</Heading>
+              <Badge variant="subtle" px={2} py={1}>
+                {flashcards.length} {flashcards.length === 1 ? "card" : "cards"}
+              </Badge>
             </HStack>
             <Text fontSize="sm">
               Created {format(new Date(deck.created_at), "MMM d, yyyy 'at' h:mm a")}
@@ -229,106 +180,110 @@ export default function FlashcardDeckPage() {
           </VStack>
         </HStack>
 
-        <HStack gap={2}>
-          {!isEditing ? (
-            <Button onClick={handleEdit} variant="outline">
-              <FaEdit style={{ marginRight: "8px" }} />
-              Edit Deck
-            </Button>
-          ) : (
-            <HStack gap={2}>
-              <Button onClick={handleSubmit(handleSave)} loading={isUpdating} disabled={!isDirty}>
-                <FaSave style={{ marginRight: "8px" }} />
-                Save Changes
-              </Button>
-              <Button onClick={handleCancel} variant="outline">
-                <FaTimes style={{ marginRight: "8px" }} />
-                Cancel
-              </Button>
-            </HStack>
-          )}
+        <HStack gap={3}>
+          <Button onClick={() => openEditDeckModal()} variant="outline" size="sm">
+            <FaEdit />
+            Edit Deck (YAML)
+          </Button>
         </HStack>
       </HStack>
 
       {/* Deck Details Section */}
-      <Box p={6} rounded="lg" border="1px">
-        <VStack align="stretch" gap={4}>
-          <Field label="Deck Name" required invalid={!!errors.name}>
-            {isEditing ? (
-              <Input {...register("name", { required: "Name is required" })} placeholder="Enter deck name" />
-            ) : (
-              <Text fontWeight="medium">{deck.name}</Text>
-            )}
+      <Box p={6} rounded="xl" border="1px" shadow="sm">
+        <VStack align="stretch" gap={6}>
+          <Field label="Deck Name">
+            <Text fontSize="md" fontWeight="medium">
+              {deck.name}
+            </Text>
           </Field>
 
-          <Field label="Description" invalid={!!errors.description}>
-            {isEditing ? (
-              <Textarea {...register("description")} placeholder="Enter deck description" rows={3} />
-            ) : (
-              <Text>{deck.description || "No description provided"}</Text>
-            )}
+          <Field label="Description">
+            <Text fontSize="md">{deck.description || "No description provided"}</Text>
           </Field>
         </VStack>
       </Box>
 
       {/* Flashcards Section */}
-      <VStack align="stretch" gap={4}>
+      <VStack align="stretch" gap={6}>
         <HStack justifyContent="space-between" alignItems="center">
-          <Heading size="md">Flashcards ({flashcards.length})</Heading>
-          <Button onClick={() => openAddCardModal()}>
-            <FaPlus style={{ marginRight: "8px" }} />
+          <Heading size="lg">Flashcards</Heading>
+          <Button onClick={() => openAddCardModal()} size="sm">
+            <FaPlus />
             Add Flashcard
           </Button>
         </HStack>
 
         {isFlashcardsLoading ? (
-          <VStack align="center" justify="center" h="100px">
-            <Spinner />
+          <VStack align="center" justify="center" h="120px">
+            <Spinner size="lg" />
             <Text>Loading flashcards...</Text>
           </VStack>
         ) : flashcards.length === 0 ? (
-          <Box p={8} rounded="lg" border="1px" textAlign="center">
-            <Text mb={4}>No flashcards in this deck yet</Text>
-            <Button onClick={() => openAddCardModal()}>
-              <FaPlus style={{ marginRight: "8px" }} />
+          <Box p={8} rounded="xl" border="1px" textAlign="center">
+            <Text mb={4} fontSize="md">
+              No flashcards in this deck yet
+            </Text>
+            <Button onClick={() => openAddCardModal()} variant="solid">
+              <FaPlus />
               Add Your First Flashcard
             </Button>
           </Box>
         ) : (
-          <VStack align="stretch" gap={3}>
+          <VStack align="stretch" gap={4}>
             {flashcards.map((card, index) => (
-              <Box key={card.id} p={4} rounded="lg" border="1px" shadow="sm">
-                <HStack justifyContent="space-between" alignItems="start">
-                  <VStack align="start" gap={2} flex={1}>
-                    <HStack gap={2}>
-                      <Badge variant="outline">{index + 1}</Badge>
-                      <Text fontWeight="medium">{card.title}</Text>
+              <Box
+                key={card.id}
+                p={5}
+                rounded="lg"
+                border="1px"
+                shadow="sm"
+                _hover={{ shadow: "md" }}
+                transition="all 0.2s"
+              >
+                <HStack justifyContent="space-between" alignItems="flex-start" gap={4}>
+                  <VStack align="start" gap={3} flex={1}>
+                    <HStack gap={3} align="center">
+                      <Badge variant="outline" fontSize="xs">
+                        #{index + 1}
+                      </Badge>
+                      <Text fontWeight="semibold" fontSize="md">
+                        {card.title}
+                      </Text>
                     </HStack>
-                    <Box>
-                      <Text fontSize="sm" mb={1}>
+
+                    <Box w="100%">
+                      <Text fontSize="sm" fontWeight="medium" mb={1}>
                         Prompt:
                       </Text>
-                      <Text fontSize="sm">{card.prompt}</Text>
+                      <Text fontSize="sm" lineHeight="1.5">
+                        {card.prompt}
+                      </Text>
                     </Box>
-                    <Box>
-                      <Text fontSize="sm" mb={1}>
+
+                    <Box w="100%">
+                      <Text fontSize="sm" fontWeight="medium" mb={1}>
                         Answer:
                       </Text>
-                      <Text fontSize="sm">{card.answer}</Text>
+                      <Text fontSize="sm" lineHeight="1.5">
+                        {card.answer}
+                      </Text>
                     </Box>
                   </VStack>
 
-                  <HStack gap={2}>
-                    <Link href={`/course/${course_id}/manage/course/flashcard-decks/${deck_id}/flashcard/${card.id}`}>
-                      <Button size="sm" variant="outline">
-                        <FaEdit style={{ marginRight: "4px" }} />
-                        Edit
-                      </Button>
-                    </Link>
+                  <HStack gap={2} flexShrink={0}>
+                    <Button size="sm" variant="outline" onClick={() => openEditCardModal(card.id)}>
+                      <FaEdit />
+                      Edit
+                    </Button>
                     <PopConfirm
                       triggerLabel="Delete flashcard"
                       trigger={
-                        <IconButton size="sm" variant="outline" colorPalette="red">
+                        <IconButton
+                          size="sm"
+                          variant="outline"
+                          colorPalette="red"
+                          aria-label={`Delete flashcard: ${card.title}`}
+                        >
                           <FaTrash />
                         </IconButton>
                       }
@@ -352,6 +307,26 @@ export default function FlashcardDeckPage() {
         deckId={deck_id}
         onSuccess={handleFlashcardAdded}
       />
+
+      {/* Edit Flashcard Modal */}
+      {editingCardId && (
+        <EditFlashCardModal
+          isOpen={isEditCardModalOpen}
+          onClose={closeEditCardModal}
+          flashcardId={editingCardId}
+          onSuccess={handleFlashcardUpdated}
+        />
+      )}
+
+      {/* Edit Deck Modal */}
+      <EditDeckModal
+        isOpen={isEditDeckModalOpen}
+        onClose={closeEditDeckModal}
+        deckId={deck_id}
+        onSuccess={handleDeckUpdated}
+      />
+
+      <Toaster />
     </VStack>
   );
 }

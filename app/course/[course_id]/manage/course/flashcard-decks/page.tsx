@@ -8,6 +8,7 @@ import { useParams } from "next/navigation";
 import useModalManager from "@/hooks/useModalManager";
 import FlashCardDecksTable from "./flashCardDecksTable";
 import CreateDeckModal from "./createDeckModal";
+import { Toaster } from "@/components/ui/toaster";
 
 export default function FlashcardDecksPage() {
   const params = useParams();
@@ -32,32 +33,35 @@ export default function FlashcardDecksPage() {
   };
 
   return (
-    <VStack align="stretch" w="100%" gap={6} p={6}>
-      {/* Header Section */}
-      <VStack align="stretch" gap={4}>
-        <HStack justifyContent="space-between" alignItems="center">
-          <VStack align="start" gap={2}>
-            <Heading size="lg">Flashcard Decks</Heading>
-            <Text color="gray.600">
-              Create and manage flashcard decks for student practice. Students can use these decks to study course
-              material.
-            </Text>
-          </VStack>
+    <>
+      <Toaster />
+      <VStack align="stretch" w="100%" gap={6} p={6}>
+        {/* Header Section */}
+        <VStack align="stretch" gap={4}>
+          <HStack justifyContent="space-between" alignItems="center">
+            <VStack align="start" gap={2}>
+              <Heading size="lg">Flashcard Decks</Heading>
+              <Text color="gray.600">
+                Create and manage flashcard decks for student practice. Students can use these decks to study course
+                material.
+              </Text>
+            </VStack>
 
-          <Button onClick={handleCreateDeck}>
-            <FaPlus style={{ marginRight: "8px" }} />
-            Create New Deck
-          </Button>
-        </HStack>
+            <Button onClick={handleCreateDeck}>
+              <FaPlus style={{ marginRight: "8px" }} />
+              Create New Deck
+            </Button>
+          </HStack>
+        </VStack>
+
+        {/* Table Section */}
+        <VStack align="stretch" w="100%">
+          <FlashCardDecksTable key={refreshKey} courseId={course_id} onDeckDeleted={handleDeckDeleted} />
+        </VStack>
+
+        {/* Create Deck Modal */}
+        <CreateDeckModal isOpen={isCreateModalOpen} onClose={closeCreateModal} onSuccess={handleDeckCreated} />
       </VStack>
-
-      {/* Table Section */}
-      <VStack align="stretch" w="100%">
-        <FlashCardDecksTable key={refreshKey} courseId={course_id} onDeckDeleted={handleDeckDeleted} />
-      </VStack>
-
-      {/* Create Deck Modal */}
-      <CreateDeckModal isOpen={isCreateModalOpen} onClose={closeCreateModal} onSuccess={handleDeckCreated} />
-    </VStack>
+    </>
   );
 }

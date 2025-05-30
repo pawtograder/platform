@@ -6,7 +6,6 @@ import { useParams } from "next/navigation";
 import { useCreate } from "@refinedev/core";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -79,6 +78,7 @@ export default function AddFlashCardModal({ isOpen, onClose, deckId, onSuccess }
             description: "Flashcard created successfully",
             type: "success"
           });
+
           reset();
           handleClose();
           onSuccess?.();
@@ -96,20 +96,25 @@ export default function AddFlashCardModal({ isOpen, onClose, deckId, onSuccess }
 
   return (
     <DialogRoot open={isOpen} onOpenChange={(e) => (e.open ? undefined : handleClose())}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add New Flashcard</DialogTitle>
+      <DialogContent maxW="2xl">
+        <DialogHeader pb={4}>
+          <DialogTitle fontSize="xl" fontWeight="semibold">
+            Add New Flashcard
+          </DialogTitle>
         </DialogHeader>
-        <DialogBody>
+
+        <DialogBody py={0}>
           <form onSubmit={handleSubmit(onSubmit)}>
-            <VStack align="stretch" gap={4}>
+            <VStack align="stretch" gap={6}>
               <Field label="Title" required invalid={!!errors.title} errorText={errors.title?.message}>
-                <Input
+                <Textarea
                   {...register("title", {
                     required: "Title is required",
                     minLength: { value: 1, message: "Title cannot be empty" }
                   })}
                   placeholder="Enter flashcard title"
+                  rows={1}
+                  resize="vertical"
                 />
               </Field>
 
@@ -120,7 +125,8 @@ export default function AddFlashCardModal({ isOpen, onClose, deckId, onSuccess }
                     minLength: { value: 1, message: "Prompt cannot be empty" }
                   })}
                   placeholder="Enter the question or prompt"
-                  rows={3}
+                  rows={4}
+                  resize="vertical"
                 />
               </Field>
 
@@ -131,17 +137,19 @@ export default function AddFlashCardModal({ isOpen, onClose, deckId, onSuccess }
                     minLength: { value: 1, message: "Answer cannot be empty" }
                   })}
                   placeholder="Enter the answer"
-                  rows={3}
+                  rows={4}
+                  resize="vertical"
                 />
               </Field>
             </VStack>
           </form>
         </DialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={handleClose}>
+
+        <DialogFooter pt={6}>
+          <Button variant="outline" onClick={handleClose} disabled={isCreating || isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit(onSubmit)} loading={isCreating || isSubmitting}>
+          <Button onClick={handleSubmit(onSubmit)} loading={isCreating || isSubmitting} colorPalette="green">
             Add Flashcard
           </Button>
         </DialogFooter>

@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { VStack, HStack, Text, Textarea, Box } from "@chakra-ui/react";
 import { useForm, Controller } from "react-hook-form";
 import { useParams } from "next/navigation";
-import { useCreate } from "@refinedev/core";
+import { useUpdate, useOne, useList, useDelete, useCreate } from "@refinedev/core";
 import Editor, { Monaco } from "@monaco-editor/react";
 import { configureMonacoYaml } from "monaco-yaml";
 import { Button } from "@/components/ui/button";
@@ -26,12 +26,16 @@ import useAuthState from "@/hooks/useAuthState";
 import * as YAML from "yaml";
 
 // Type definitions
-type FlashcardDeckInsert = Database["public"]["Tables"]["flashcard_decks"]["Insert"];
+type FlashcardDeckUpdate = Database["public"]["Tables"]["flashcard_decks"]["Update"];
+type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
+type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 type FlashcardInsert = Database["public"]["Tables"]["flashcards"]["Insert"];
+type FlashcardUpdate = Database["public"]["Tables"]["flashcards"]["Update"];
 
-interface CreateDeckModalProps {
+interface EditDeckModalProps {
   isOpen: boolean;
   onClose: () => void;
+  deckId: string;
   onSuccess?: () => void;
 }
 
@@ -42,6 +46,7 @@ interface FlashcardDeckFormData {
 }
 
 interface YamlCard {
+  id?: number;
   title: string;
   prompt: string;
   answer: string;
@@ -49,6 +54,13 @@ interface YamlCard {
 
 interface ParsedFlashcardYaml {
   cards?: YamlCard[];
+}
+
+interface FlashcardChanges {
+  toCreate: YamlCard[];
+  toUpdate: YamlCard[];
+  toDelete: number[];
+  numItemsWithBadIDs: number;
 }
 
 function validateYamlCards(cards: YamlCard[]): void {
@@ -71,7 +83,64 @@ function validateYamlCards(cards: YamlCard[]): void {
   }
 }
 
-export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDeckModalProps) {
+function findFlashcardChanges(newCards: YamlCard[], existingCards: FlashcardRow[]): FlashcardChanges {
+  const existingCardMap = new Map(existingCards.map((card) => [card.id, card]));
+
+  const toCreate: YamlCard[] = [];
+  const toUpdate: YamlCard[] = [];
+
+  let numItemsWithBadIDs = 0;
+  for (const newCard of newCards) {
+    if (newCard.id === undefined || newCard.id === null || newCard.id <= 0) {
+      toCreate.push(newCard);
+    } else {
+      const existingCard = existingCardMap.get(newCard.id);
+      if (existingCard) {
+        // Check if the card has changed
+        if (
+          newCard.title !== existingCard.title ||
+          newCard.prompt !== existingCard.prompt ||
+          newCard.answer !== existingCard.answer
+        ) {
+          toUpdate.push(newCard);
+        }
+        existingCardMap.delete(newCard.id);
+      } else {
+        numItemsWithBadIDs++;
+        toCreate.push(newCard);
+      }
+    }
+  }
+
+  const toDelete: number[] = Array.from(existingCardMap.keys());
+
+  return { toCreate, toUpdate, toDelete, numItemsWithBadIDs };
+}
+
+function flashcardsToYaml(flashcards: FlashcardRow[]): string {
+  if (flashcards.length === 0) {
+    return `# Flashcard Deck Configuration
+# Define your flashcards using YAML format
+
+cards: []`;
+  }
+
+  const yamlData = {
+    cards: flashcards.map((card) => ({
+      id: card.id,
+      title: card.title,
+      prompt: card.prompt,
+      answer: card.answer
+    }))
+  };
+
+  return YAML.stringify(yamlData, {
+    blockQuote: "literal",
+    lineWidth: 0
+  });
+}
+
+export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: EditDeckModalProps) {
   const params = useParams();
   const course_id = params.course_id as string;
   const { colorMode } = useColorMode();
@@ -93,8 +162,52 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
     }
   });
 
-  const { mutateAsync: createDeck } = useCreate<FlashcardDeckInsert>();
+  // Fetch deck data
+  const { data: deckData, isLoading: isDeckLoading } = useOne<FlashcardDeckRow>({
+    resource: "flashcard_decks",
+    id: deckId,
+    queryOptions: {
+      enabled: !!deckId && isOpen
+    }
+  });
+
+  // Fetch existing flashcards
+  const { data: flashcardsData, isLoading: isFlashcardsLoading } = useList<FlashcardRow>({
+    resource: "flashcards",
+    filters: [
+      {
+        field: "deck_id",
+        operator: "eq",
+        value: deckId
+      },
+      {
+        field: "deleted_at",
+        operator: "null",
+        value: null
+      }
+    ],
+    sorters: [
+      {
+        field: "order",
+        order: "asc"
+      },
+      {
+        field: "created_at",
+        order: "asc"
+      }
+    ],
+    queryOptions: {
+      enabled: !!deckId && isOpen
+    }
+  });
+
+  const { mutateAsync: updateDeck } = useUpdate<FlashcardDeckUpdate>();
   const { mutateAsync: createFlashcard } = useCreate<FlashcardInsert>();
+  const { mutateAsync: updateFlashcard } = useUpdate<FlashcardUpdate>();
+  const { mutateAsync: deleteFlashcard } = useDelete();
+
+  const deck = deckData?.data;
+  const flashcards = useMemo(() => flashcardsData?.data || [], [flashcardsData?.data]);
 
   // Handle Monaco Editor setup
   const handleEditorWillMount = useCallback((monaco: Monaco) => {
@@ -127,19 +240,35 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
     [setValue]
   );
 
+  // Load current deck data into form
+  useEffect(() => {
+    if (deck && isOpen && !isDeckLoading && !isFlashcardsLoading) {
+      // Generate YAML from current flashcard data in database
+      const currentYaml = flashcardsToYaml(flashcards);
+
+      reset({
+        name: deck.name,
+        description: deck.description || "",
+        yamlContent: currentYaml
+      });
+
+      setYamlValue(currentYaml);
+    }
+  }, [deck, flashcards, isOpen, isDeckLoading, isFlashcardsLoading, reset]);
+
   // Form submission handler
   const onSubmit = async (data: FlashcardDeckFormData) => {
     try {
-      if (!user?.id) {
+      if (!user?.id || !deck) {
         toaster.create({
           title: "Error",
-          description: "You must be logged in to create a flashcard deck.",
+          description: "You must be logged in to edit a flashcard deck.",
           type: "error"
         });
         return;
       }
 
-      // Parse YAML content if provided
+      // Parse YAML content
       let parsedCards: YamlCard[] = [];
       if (data.yamlContent && data.yamlContent.trim() !== "") {
         try {
@@ -160,47 +289,89 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
         }
       }
 
-      // Create the deck (without source_yml)
-      const deckData: FlashcardDeckInsert = {
+      // Update the deck metadata (without source_yml)
+      const deckUpdateData: FlashcardDeckUpdate = {
         name: data.name.trim(),
         description: data.description?.trim() || null,
-        class_id: Number(course_id),
-        creator_id: user.id
+        updated_at: new Date().toISOString()
       };
 
-      const createdDeckResult = await createDeck({
+      await updateDeck({
         resource: "flashcard_decks",
-        values: deckData
+        id: deck.id,
+        values: deckUpdateData
       });
 
-      const newDeckId = createdDeckResult?.data?.id;
+      // Handle flashcard changes
+      const flashcardChanges = findFlashcardChanges(parsedCards, flashcards);
 
-      if (!newDeckId) {
-        throw new Error("Failed to create flashcard deck or retrieve its ID.");
+      if (flashcardChanges.numItemsWithBadIDs > 0) {
+        toaster.create({
+          title: "Items in YAML had invalid IDs",
+          description: `${flashcardChanges.numItemsWithBadIDs} items found with an "id" that appears to be a copy/paste from elsewhere. Treating as new items.`,
+          type: "warning"
+        });
       }
 
-      // Create flashcards from parsed YAML
-      if (parsedCards.length > 0) {
-        for (const [index, card] of parsedCards.entries()) {
-          const flashcardData: FlashcardInsert = {
-            deck_id: newDeckId,
-            class_id: Number(course_id),
+      // Delete removed flashcards
+      await Promise.all(
+        flashcardChanges.toDelete.map((id: number) =>
+          deleteFlashcard({
+            resource: "flashcards",
+            id: id
+          })
+        )
+      );
+
+      // Create new flashcards
+      for (const [index, card] of flashcardChanges.toCreate.entries()) {
+        const flashcardData: FlashcardInsert = {
+          deck_id: deck.id,
+          class_id: Number(course_id),
+          title: card.title.trim(),
+          prompt: card.prompt.trim(),
+          answer: card.answer.trim(),
+          order: index + 1 + flashcardChanges.toUpdate.length // Place new cards after existing ones
+        };
+
+        await createFlashcard({
+          resource: "flashcards",
+          values: flashcardData
+        });
+      }
+
+      // Update existing flashcards
+      await Promise.all(
+        flashcardChanges.toUpdate.map((card) => {
+          const updateData: FlashcardUpdate = {
             title: card.title.trim(),
             prompt: card.prompt.trim(),
             answer: card.answer.trim(),
-            order: index + 1
+            updated_at: new Date().toISOString()
           };
 
-          await createFlashcard({
+          return updateFlashcard({
             resource: "flashcards",
-            values: flashcardData
+            id: card.id!,
+            values: updateData
+          });
+        })
+      );
+
+      // Update order for all remaining cards to ensure proper sequencing
+      for (const [index, card] of parsedCards.entries()) {
+        if (card.id && card.id > 0) {
+          await updateFlashcard({
+            resource: "flashcards",
+            id: card.id,
+            values: { order: index + 1 }
           });
         }
       }
 
       toaster.create({
         title: "Success",
-        description: `Flashcard deck "${data.name}" has been created successfully${parsedCards.length > 0 ? ` with ${parsedCards.length} cards` : ""}.`,
+        description: `Flashcard deck "${data.name}" has been updated successfully.`,
         type: "success"
       });
 
@@ -209,7 +380,7 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
     } catch (error) {
       toaster.create({
         title: "Error",
-        description: `Failed to create flashcard deck: ${error instanceof Error ? error.message : "Unknown error"}`,
+        description: `Failed to update flashcard deck: ${error instanceof Error ? error.message : "Unknown error"}`,
         type: "error"
       });
     }
@@ -222,49 +393,28 @@ export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDe
     onClose();
   }, [reset, onClose]);
 
-  // Reset form when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      reset({
-        name: "",
-        description: "",
-        yamlContent: ""
-      });
-      setYamlValue("");
-    }
-  }, [isOpen, reset]);
-
-  // Sample YAML template
-  const sampleYaml = `# Flashcard Deck Configuration
-# Define your flashcards using YAML format
-
-cards:
-  - title: "Sample Card 1"
-    prompt: |
-      What is the capital of France?
-    answer: |
-      Paris is the capital and largest city of France.
-  
-  - title: "Sample Card 2"
-    prompt: |
-      Explain the concept of recursion in programming.
-    answer: |
-      Recursion is a programming technique where a function calls itself to solve smaller instances of the same problem.
-      
-      Key components:
-      - Base case: condition to stop recursion
-      - Recursive case: function calls itself with modified parameters
-      
-      Example: calculating factorial
-      \`\`\`
-      factorial(n) = n * factorial(n-1) if n > 1
-      factorial(1) = 1 (base case)
-      \`\`\``;
-
-  const loadSampleTemplate = () => {
-    setYamlValue(sampleYaml);
-    setValue("yamlContent", sampleYaml);
-  };
+  if (isDeckLoading || isFlashcardsLoading) {
+    return (
+      <DialogRoot
+        open={isOpen}
+        onOpenChange={(details) => {
+          if (!details.open) handleClose();
+        }}
+        size="xl"
+      >
+        <DialogContent maxHeight="90vh">
+          <DialogHeader>
+            <DialogTitle>Edit Flashcard Deck</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <VStack align="center" justify="center" h="300px">
+              <Text>Loading deck...</Text>
+            </VStack>
+          </DialogBody>
+        </DialogContent>
+      </DialogRoot>
+    );
+  }
 
   return (
     <DialogRoot
@@ -276,14 +426,14 @@ cards:
     >
       <DialogContent maxHeight="90vh">
         <DialogHeader>
-          <DialogTitle>Create New Flashcard Deck</DialogTitle>
+          <DialogTitle>Edit Flashcard Deck</DialogTitle>
           <DialogCloseTrigger aria-label="Close dialog">
             <FaPlus style={{ transform: "rotate(45deg)" }} />
           </DialogCloseTrigger>
         </DialogHeader>
 
         <DialogBody>
-          <form onSubmit={handleSubmit(onSubmit)} id="create-deck-form">
+          <form onSubmit={handleSubmit(onSubmit)} id="edit-deck-form">
             <VStack gap={4} align="stretch">
               {/* Deck Name */}
               <Field label="Deck Name" invalid={!!errors.name} errorText={errors.name?.message} required>
@@ -328,12 +478,9 @@ cards:
                 errorText={errors.yamlContent?.message}
               >
                 <VStack align="stretch" gap={2}>
-                  <HStack justifyContent="space-between" alignItems="center">
-                    <Text fontSize="sm">Define your flashcards using YAML format. You can add more cards later.</Text>
-                    <Button size="sm" variant="outline" onClick={loadSampleTemplate} type="button">
-                      Load Sample Template
-                    </Button>
-                  </HStack>
+                  <Text fontSize="sm">
+                    Edit your flashcards using YAML format. Changes will update the corresponding database records.
+                  </Text>
 
                   <Controller
                     name="yamlContent"
@@ -364,8 +511,8 @@ cards:
                   />
 
                   <Text fontSize="xs">
-                    The YAML configuration is optional. You can create an empty deck and add cards later through the
-                    deck management interface.
+                    Note: Cards with valid IDs will be updated, cards without IDs will be created as new cards, and
+                    cards removed from the YAML will be deleted.
                   </Text>
                 </VStack>
               </Field>
@@ -378,8 +525,8 @@ cards:
             <Button variant="outline" onClick={handleClose} disabled={isSubmitting}>
               Cancel
             </Button>
-            <Button type="submit" form="create-deck-form" loading={isSubmitting} colorPalette="green">
-              Create Deck
+            <Button type="submit" form="edit-deck-form" loading={isSubmitting} colorPalette="green">
+              Update Deck
             </Button>
           </HStack>
         </DialogFooter>
