@@ -1,4 +1,4 @@
-INSERT into public.classes(name, semester, slug, is_demo, github_org) VALUES ('Demo Class', 20281, 'demo-class', true, 'autograder-dev');
+INSERT into public.classes(name, semester, slug, is_demo, github_org, time_zone) VALUES ('Demo Class', 20281, 'demo-class', true, 'autograder-dev', 'America/New_York');
 
 INSERT INTO public.assignments (
   id,
