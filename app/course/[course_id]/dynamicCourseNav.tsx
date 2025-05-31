@@ -45,7 +45,7 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/assignments`
   },
   { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion` },
-  // { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
+  { name: "Flashcards", icon: TbCards, student_only: true, target: `/course/${courseID}/flashcards` },
   {
     name: "Get Help Now",
     student_only: true,
@@ -156,6 +156,7 @@ export default function DynamicCourseNav() {
     return <Skeleton height="40" width="100%" />;
   }
   const course = enrollment.classes as CourseWithFeatures;
+
   return (
     <Box
       px={{ base: 4, md: 4 }}
