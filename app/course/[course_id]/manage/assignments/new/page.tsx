@@ -27,8 +27,8 @@ export default function NewAssignmentPage() {
         .insert({
           title: getValues("title"),
           slug: getValues("slug"),
-          release_date: new TZDate(getValues("release_date"), timezone).toISOString(),
-          due_date: new TZDate(getValues("due_date"), timezone).toISOString(),
+          release_date: getValues("release_date") ? new TZDate(getValues("release_date"), timezone).toISOString() : "",
+          due_date: getValues("due_date") ? new TZDate(getValues("due_date"), timezone).toISOString() : "",
           allow_late: getValues("allow_late"),
           description: getValues("description"),
           max_late_tokens: getValues("max_late_tokens") || null,
@@ -40,7 +40,9 @@ export default function NewAssignmentPage() {
           min_group_size: getValues("min_group_size") || null,
           max_group_size: getValues("max_group_size") || null,
           allow_student_formed_groups: getValues("allow_student_formed_groups"),
-          group_formation_deadline: new TZDate(getValues("group_formation_deadline"), timezone).toISOString() || null
+          group_formation_deadline: getValues("group_formation_deadline")
+            ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
+            : null
         })
         .select("id")
         .single();
