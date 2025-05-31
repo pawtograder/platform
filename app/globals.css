@@ -1,3 +1,8 @@
 :root {
   --nav-height: 140px;
 }
+
+a,
+button {
+  cursor: pointer;
+}

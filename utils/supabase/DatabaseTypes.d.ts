@@ -558,3 +558,46 @@ export type RubricCheckReference = GetResult<
   Database["public"]["Tables"]["rubric_check_references"]["Relationships"],
   "*"
 >;
+
+/**
+ * Flashcard Deck Types
+ */
+export type FlashcardDeck = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_decks"]["Row"],
+  "flashcard_decks",
+  Database["public"]["Tables"]["flashcard_decks"]["Relationships"],
+  "*"
+>;
+
+export type Flashcard = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcards"]["Row"],
+  "flashcards",
+  Database["public"]["Tables"]["flashcards"]["Relationships"],
+  "*"
+>;
+
+export type FlashcardDeckWithCards = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_decks"]["Row"],
+  "flashcard_decks",
+  Database["public"]["Tables"]["flashcard_decks"]["Relationships"],
+  "*, flashcards(*)"
+>;
+
+export type StudentFlashcardDeckProgress = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["student_flashcard_deck_progress"]["Row"],
+  "student_flashcard_deck_progress",
+  Database["public"]["Tables"]["student_flashcard_deck_progress"]["Relationships"],
+  "*"
+>;
+
+export type FlashcardInteractionLog = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"],
+  "flashcard_interaction_logs",
+  Database["public"]["Tables"]["flashcard_interaction_logs"]["Relationships"],
+  "*"
+>;

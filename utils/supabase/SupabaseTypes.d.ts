@@ -1,31 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never;
-    };
-    Views: {
-      [_ in never]: never;
-    };
-    Functions: {
-      graphql: {
-        Args: {
-          operationName?: string;
-          query?: string;
-          variables?: Json;
-          extensions?: Json;
-        };
-        Returns: Json;
-      };
-    };
-    Enums: {
-      [_ in never]: never;
-    };
-    CompositeTypes: {
-      [_ in never]: never;
-    };
-  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -1197,6 +1172,173 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      flashcard_decks: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          creator_id: string;
+          deleted_at: string | null;
+          description: string | null;
+          id: number;
+          name: string;
+          source_yml: string | null;
+          updated_at: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          creator_id: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          id?: number;
+          name: string;
+          source_yml?: string | null;
+          updated_at?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          creator_id?: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          id?: number;
+          name?: string;
+          source_yml?: string | null;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_decks_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_decks_creator_id_fkey";
+            columns: ["creator_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      flashcard_interaction_logs: {
+        Row: {
+          action: Database["public"]["Enums"]["flashcard_actions"];
+          card_id: number | null;
+          class_id: number;
+          created_at: string;
+          deck_id: number;
+          duration_on_card_ms: number;
+          id: number;
+          student_id: string;
+        };
+        Insert: {
+          action: Database["public"]["Enums"]["flashcard_actions"];
+          card_id?: number | null;
+          class_id: number;
+          created_at?: string;
+          deck_id: number;
+          duration_on_card_ms: number;
+          id?: number;
+          student_id: string;
+        };
+        Update: {
+          action?: Database["public"]["Enums"]["flashcard_actions"];
+          card_id?: number | null;
+          class_id?: number;
+          created_at?: string;
+          deck_id?: number;
+          duration_on_card_ms?: number;
+          id?: number;
+          student_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_interaction_logs_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      flashcards: {
+        Row: {
+          answer: string;
+          class_id: number;
+          created_at: string;
+          deck_id: number;
+          deleted_at: string | null;
+          id: number;
+          order: number | null;
+          prompt: string;
+          title: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          answer: string;
+          class_id: number;
+          created_at?: string;
+          deck_id: number;
+          deleted_at?: string | null;
+          id?: number;
+          order?: number | null;
+          prompt: string;
+          title: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          answer?: string;
+          class_id?: number;
+          created_at?: string;
+          deck_id?: number;
+          deleted_at?: string | null;
+          id?: number;
+          order?: number | null;
+          prompt?: string;
+          title?: string;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcards_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcards_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
             referencedColumns: ["id"];
           }
         ];
@@ -2896,6 +3038,61 @@ export type Database = {
           }
         ];
       };
+      student_flashcard_deck_progress: {
+        Row: {
+          card_id: number;
+          class_id: number;
+          created_at: string;
+          first_answered_correctly_at: string | null;
+          is_mastered: boolean;
+          last_answered_correctly_at: string | null;
+          student_id: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          card_id: number;
+          class_id: number;
+          created_at?: string;
+          first_answered_correctly_at?: string | null;
+          is_mastered?: boolean;
+          last_answered_correctly_at?: string | null;
+          student_id: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          card_id?: number;
+          class_id?: number;
+          created_at?: string;
+          first_answered_correctly_at?: string | null;
+          is_mastered?: boolean;
+          last_answered_correctly_at?: string | null;
+          student_id?: string;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "student_flashcard_deck_progress_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       submission_artifact_comments: {
         Row: {
           author: string;
@@ -4275,6 +4472,15 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
+      flashcard_actions:
+        | "deck_viewed"
+        | "card_prompt_viewed"
+        | "card_answer_viewed"
+        | "card_marked_got_it"
+        | "card_marked_keep_trying"
+        | "card_returned_to_deck"
+        | "deck_progress_reset_all"
+        | "deck_progress_reset_card";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
     };
     CompositeTypes: {
@@ -4379,9 +4585,6 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
-  graphql_public: {
-    Enums: {}
-  },
   pgmq_public: {
     Enums: {}
   },
@@ -4392,6 +4595,16 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
+      flashcard_actions: [
+        "deck_viewed",
+        "card_prompt_viewed",
+        "card_answer_viewed",
+        "card_marked_got_it",
+        "card_marked_keep_trying",
+        "card_returned_to_deck",
+        "deck_progress_reset_all",
+        "deck_progress_reset_card"
+      ],
       review_round: ["self-review", "grading-review", "meta-grading-review"]
     }
   }
