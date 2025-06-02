@@ -1,28 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { VStack, HStack, Text, Textarea, Box } from "@chakra-ui/react";
-import { useForm, Controller } from "react-hook-form";
-import { useParams } from "next/navigation";
-import { useCreate } from "@refinedev/core";
-import Editor, { Monaco } from "@monaco-editor/react";
-import { configureMonacoYaml } from "monaco-yaml";
 import { Button } from "@/components/ui/button";
-import { Field } from "@/components/ui/field";
-import {
-  DialogRoot,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogBody,
-  DialogFooter,
-  DialogCloseTrigger
-} from "@/components/ui/dialog";
-import { toaster } from "@/components/ui/toaster";
 import { useColorMode } from "@/components/ui/color-mode";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { FaPlus } from "react-icons/fa";
+import {
+  DialogBody,
+  DialogCloseTrigger,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle
+} from "@/components/ui/dialog";
+import { Field } from "@/components/ui/field";
+import { toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
+import Editor, { Monaco } from "@monaco-editor/react";
+import { useCreate } from "@refinedev/core";
+import { configureMonacoYaml } from "monaco-yaml";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";
 
 // Type definitions
@@ -282,7 +282,7 @@ cards:
           </DialogCloseTrigger>
         </DialogHeader>
 
-        <DialogBody>
+        <DialogBody overflowY="auto">
           <form onSubmit={handleSubmit(onSubmit)} id="create-deck-form">
             <VStack gap={4} align="stretch">
               {/* Deck Name */}

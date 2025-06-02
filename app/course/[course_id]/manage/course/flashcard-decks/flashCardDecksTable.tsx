@@ -1,18 +1,19 @@
 "use client";
 
-import { useMemo, useCallback } from "react";
-import { IconButton, HStack, Table, Text, Input, Spinner, VStack } from "@chakra-ui/react";
+import { Button } from "@/components/ui/button";
+import Link from "@/components/ui/link";
+import Markdown from "@/components/ui/markdown";
+import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, HStack, IconButton, Input, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useDelete, useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
-import { ColumnDef, flexRender, Row, CellContext } from "@tanstack/react-table";
-import { FaTrash } from "react-icons/fa";
-import { format } from "date-fns";
-import Link from "@/components/ui/link";
-import { Button } from "@/components/ui/button";
-import { PopConfirm } from "@/components/ui/popconfirm";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { toaster } from "@/components/ui/toaster";
+import { CellContext, ColumnDef, flexRender, Row } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
+import { format } from "date-fns";
+import { useCallback, useMemo } from "react";
+import { FaTrash } from "react-icons/fa";
 
 // Type definitions
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
@@ -172,8 +173,7 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
           const description = props.getValue() as string | null;
           if (!description) return <Text color="gray.500">No description</Text>;
           return (
-            <Text
-              maxWidth="300px"
+            <Box maxWidth="300px"
               title={description}
               css={{
                 overflow: "hidden",
@@ -183,8 +183,8 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
                 WebkitBoxOrient: "vertical"
               }}
             >
-              {description}
-            </Text>
+              <Markdown>{description}</Markdown>
+            </Box>
           );
         },
         filterFn: (row: Row<FlashcardDeckRow>, id, filterValue: string) => {
@@ -264,7 +264,7 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
                 confirmHeader="Delete Flashcard Deck"
                 confirmText={`Are you sure you want to delete the deck "${deck.name}"? This action cannot be undone.`}
                 onConfirm={() => handleDeleteDeck(deck.id, deck.name)}
-                onCancel={() => {}}
+                onCancel={() => { }}
               />
             </HStack>
           );

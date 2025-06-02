@@ -1,20 +1,21 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
-import { VStack, HStack, Heading, Text, Box, IconButton, Spinner, Badge } from "@chakra-ui/react";
-import { useOne, useList, useDelete } from "@refinedev/core";
-import { FaEdit, FaPlus, FaTrash, FaArrowLeft } from "react-icons/fa";
-import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { PopConfirm } from "@/components/ui/popconfirm";
 import Link from "@/components/ui/link";
+import Markdown from "@/components/ui/markdown";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Badge, Box, Heading, HStack, IconButton, Spinner, Text, VStack } from "@chakra-ui/react";
+import { useDelete, useList, useOne } from "@refinedev/core";
+import { format } from "date-fns";
+import { useParams, useRouter } from "next/navigation";
+import { FaArrowLeft, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import AddFlashCardModal from "./addFlashCardModal";
-import EditFlashCardModal from "./editFlashCardModal";
 import EditDeckModal from "./editDeckModal";
+import EditFlashCardModal from "./editFlashCardModal";
 
 // Type definitions
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
@@ -198,7 +199,7 @@ export default function FlashcardDeckPage() {
           </Field>
 
           <Field label="Description">
-            <Text fontSize="md">{deck.description || "No description provided"}</Text>
+            <Markdown>{deck.description || "No description provided"}</Markdown>
           </Field>
         </VStack>
       </Box>
@@ -255,18 +256,18 @@ export default function FlashcardDeckPage() {
                       <Text fontSize="sm" fontWeight="medium" mb={1}>
                         Prompt:
                       </Text>
-                      <Text fontSize="sm" lineHeight="1.5">
-                        {card.prompt}
-                      </Text>
+                      <Box fontSize="sm" lineHeight="1.5">
+                        <Markdown>{card.prompt}</Markdown>
+                      </Box>
                     </Box>
 
                     <Box w="100%">
                       <Text fontSize="sm" fontWeight="medium" mb={1}>
                         Answer:
                       </Text>
-                      <Text fontSize="sm" lineHeight="1.5">
-                        {card.answer}
-                      </Text>
+                      <Box fontSize="sm" lineHeight="1.5">
+                        <Markdown>{card.answer}</Markdown>
+                      </Box>
                     </Box>
                   </VStack>
 
@@ -290,7 +291,7 @@ export default function FlashcardDeckPage() {
                       confirmHeader="Delete Flashcard"
                       confirmText="Are you sure you want to delete this flashcard? This action cannot be undone."
                       onConfirm={() => handleDeleteFlashcard(card.id)}
-                      onCancel={() => {}}
+                      onCancel={() => { }}
                     />
                   </HStack>
                 </HStack>
