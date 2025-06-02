@@ -121,11 +121,7 @@ export default async function AssignmentPage({
           </HStack>
         </Box>
         {review_settings && review_settings.allow_early && (
-          <FinishSubmissionEarly
-            assignment={assignment}
-            group_id={assignment_group_id}
-            private_profile_id={enrollment?.private_profile_id}
-          />
+          <FinishSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} />
         )}
       </Flex>
 

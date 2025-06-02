@@ -7,11 +7,9 @@ import { addHours, addMinutes, differenceInMinutes } from "date-fns";
 
 export default function FinalizeSubmissionEarly({
   assignment,
-  group_id,
   private_profile_id
 }: {
   assignment: Assignment;
-  group_id?: number;
   private_profile_id?: string;
 }) {
   const { course_id } = useParams();
@@ -28,6 +26,8 @@ export default function FinalizeSubmissionEarly({
     ],
     pagination: { pageSize: 1 }
   });
+
+  const group_id = memberGroup?.data[0].assignment_group_id;
 
   const groupOrProfileFilter: CrudFilter = group_id
     ? {
@@ -48,23 +48,20 @@ export default function FinalizeSubmissionEarly({
     meta: {
       select: "*"
     },
-    filters: [
-      groupOrProfileFilter,
-    ]
+    filters: [groupOrProfileFilter]
   });
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
   // ex if something is due at 9:15pm and the student marks "finished" at 6:30pm, their deadline will be moved
   // back 3 hours to 6:15pm so they can access the self review immediately.
   const finalizeSubmission = () => {
-    if (memberGroup && memberGroup.data.length > 0) {
+    if (group_id) {
       create({
         resource: "assignment_due_date_exceptions",
         values: {
           class_id: course_id,
           assignment_id: assignment.id,
           assignment_group_id: group_id,
-          group_id: memberGroup.data[0].assignment_group_id,
           creator_id: private_profile_id,
           hours: -1 * Math.floor(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
           minutes: (-1 * differenceInMinutes(new Date(assignment.due_date), new Date())) % 60,
@@ -77,7 +74,6 @@ export default function FinalizeSubmissionEarly({
         values: {
           class_id: course_id,
           assignment_id: assignment.id,
-          assignment_group_id: group_id,
           student_id: private_profile_id,
           creator_id: private_profile_id,
           hours: -1 * Math.floor(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
