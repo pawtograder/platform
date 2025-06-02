@@ -173,7 +173,8 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
           const description = props.getValue() as string | null;
           if (!description) return <Text color="gray.500">No description</Text>;
           return (
-            <Box maxWidth="300px"
+            <Box
+              maxWidth="300px"
               title={description}
               css={{
                 overflow: "hidden",
@@ -264,7 +265,7 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
                 confirmHeader="Delete Flashcard Deck"
                 confirmText={`Are you sure you want to delete the deck "${deck.name}"? This action cannot be undone.`}
                 onConfirm={() => handleDeleteDeck(deck.id, deck.name)}
-                onCancel={() => { }}
+                onCancel={() => {}}
               />
             </HStack>
           );

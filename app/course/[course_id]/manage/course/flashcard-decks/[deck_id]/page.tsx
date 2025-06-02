@@ -291,7 +291,7 @@ export default function FlashcardDeckPage() {
                       confirmHeader="Delete Flashcard"
                       confirmText="Are you sure you want to delete this flashcard? This action cannot be undone."
                       onConfirm={() => handleDeleteFlashcard(card.id)}
-                      onCancel={() => { }}
+                      onCancel={() => {}}
                     />
                   </HStack>
                 </HStack>
