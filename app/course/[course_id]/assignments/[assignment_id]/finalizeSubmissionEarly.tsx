@@ -14,8 +14,7 @@ export default function FinalizeSubmissionEarly({
 }) {
   const { course_id } = useParams();
   const { mutate: create } = useCreate();
-  // teammates of current user, whose due date should also be moved forward
-  const { data: memberGroup } = useList<AssignmentGroupMember>({
+  const { data: groupMember } = useList<AssignmentGroupMember>({
     resource: "assignment_groups_members",
     meta: {
       select: "*"
@@ -27,7 +26,8 @@ export default function FinalizeSubmissionEarly({
     pagination: { pageSize: 1 }
   });
 
-  const group_id = memberGroup?.data[0].assignment_group_id;
+  const group_id =
+    groupMember?.data && groupMember?.data.length > 0 ? groupMember.data[0].assignment_group_id : undefined;
 
   const groupOrProfileFilter: CrudFilter = group_id
     ? {
@@ -48,7 +48,7 @@ export default function FinalizeSubmissionEarly({
     meta: {
       select: "*"
     },
-    filters: [groupOrProfileFilter]
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }, groupOrProfileFilter]
   });
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.

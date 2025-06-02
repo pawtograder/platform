@@ -38,7 +38,7 @@ export default function EditAssignment() {
           update(
             {
               resource: "self_review_settings",
-              id: data?.data.self_review_setting_id ?? 0,
+              id: data?.data.self_review_setting_id,
               values: {
                 enabled: isEnabled,
                 deadline_offset: isEnabled ? values.deadline_offset : null,

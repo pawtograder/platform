@@ -40,7 +40,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
         value: private_profile_id
       };
 
-  const { data: negativeProfileExceptionsForAssignment } = useList<AssignmentDueDateException>({
+  const { data: exceptionsForProfile } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
     filters: [
       {
@@ -48,16 +48,11 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
         operator: "eq",
         value: assignment.id
       },
-      groupOrProfileFilter,
-      {
-        field: "hours",
-        operator: "lt",
-        value: 0
-      }
+      groupOrProfileFilter
     ]
   });
 
-  if (!lateTokens || !dueDate || !negativeProfileExceptionsForAssignment) {
+  if (!lateTokens || !dueDate || !exceptionsForProfile) {
     return <Skeleton height="20px" width="80px" />;
   }
   const lateTokensUsedByStudent = lateTokens.filter((e) => e.tokens_consumed > 0).length;
@@ -68,7 +63,11 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (course.late_tokens_per_student === 0) {
     return <Text>(No late submissions allowed)</Text>;
   }
-  if (negativeProfileExceptionsForAssignment.data.length > 0) {
+  if (
+    exceptionsForProfile.data.filter((exception) => {
+      return exception.hours * 60 + exception.minutes < 0;
+    }).length > 0
+  ) {
     return <Text>(You may not extend the due date for this assignment as you finalized early)</Text>;
   }
   if (lateTokensUsedByStudent >= course.late_tokens_per_student) {

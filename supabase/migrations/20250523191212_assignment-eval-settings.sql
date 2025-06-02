@@ -47,13 +47,13 @@ USING (
 
 ALTER TABLE "public"."assignment_due_date_exceptions" ADD COLUMN "minutes" integer NOT NULL default 0;
 
-
 CREATE POLICY "Students can give themselves negative deadline exceptions"
 ON "public"."assignment_due_date_exceptions"
 AS PERMISSIVE 
 FOR INSERT
+TO authenticated
 WITH CHECK (
-   ("hours" < 0 OR "minutes" < 0) AND 
+   (("hours" * 60 + "minutes" < 0)) AND 
 (authorizeforprofile(student_id) OR authorizeforassignmentgroup(assignment_group_id)));
 
 ALTER TABLE ONLY "public"."self_review_settings"
@@ -157,9 +157,8 @@ BEGIN
     ) THEN 
        RETURN;       
     END IF;      
-
     
-        SELECT COALESCE(SUM("hours"), 0) INTO this_net_deadline_change_hours      
+    SELECT COALESCE(SUM("hours"), 0) INTO this_net_deadline_change_hours      
     FROM public.assignment_due_date_exceptions      
     WHERE assignment_id = this_assignment.id      
     AND (student_id = this_profile_id OR assignment_group_id = this_group_id);     
@@ -175,7 +174,6 @@ BEGIN
     INTERVAL '1 minute' * this_net_deadline_change_minutes <= utc_now) THEN         
        RETURN;       
     END IF;      
-
     
     -- Get the active submission id for this profile     
     SELECT id INTO this_active_submission_id      
@@ -189,7 +187,7 @@ BEGIN
     IF this_active_submission_id IS NULL THEN  
         RETURN;       
     END IF;          
-    
+
     INSERT INTO review_assignments (   
         due_date,         
         assignee_profile_id,         

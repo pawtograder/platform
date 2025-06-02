@@ -64,9 +64,10 @@ export default function NewAssignmentPage() {
           min_group_size: getValues("min_group_size") || null,
           max_group_size: getValues("max_group_size") || null,
           allow_student_formed_groups: getValues("allow_student_formed_groups"),
-          group_formation_deadline: getValues("group_formation_deadline") || null
+          group_formation_deadline: new TZDate(getValues("group_formation_deadline"), timezone).toISOString() || null,
+          self_review_setting_id: settings.data.id as number
         })
-        .select("id, self_review_rubric_id")
+        .select("id")
         .single();
       if (error || !data) {
         toaster.error({
