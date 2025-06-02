@@ -1,7 +1,7 @@
 "use client";
 import { Assignment, AssignmentDueDateException, AssignmentGroupMember } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
-import { useCreate, useList } from "@refinedev/core";
+import { CrudFilter, useCreate, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { addHours, addMinutes, differenceInMinutes } from "date-fns";
 
@@ -29,6 +29,18 @@ export default function FinalizeSubmissionEarly({
     pagination: { pageSize: 1 }
   });
 
+  const groupOrProfileFilter: CrudFilter = group_id
+    ? {
+        field: "assignment_group_id",
+        operator: "eq",
+        value: group_id
+      }
+    : {
+        field: "student_id",
+        operator: "eq",
+        value: private_profile_id
+      };
+
   // records of student's group already moving their due date forward.  you shouldn't move your due
   // date forward multiple times
   const { data: extensionRecordsForStudent } = useList<AssignmentDueDateException>({
@@ -37,17 +49,7 @@ export default function FinalizeSubmissionEarly({
       select: "*"
     },
     filters: [
-      group_id
-        ? {
-            field: "assignment_group_id",
-            operator: "eq",
-            value: group_id
-          }
-        : {
-            field: "student_id",
-            operator: "eq",
-            value: private_profile_id
-          }
+      groupOrProfileFilter,
     ]
   });
 
@@ -106,8 +108,11 @@ export default function FinalizeSubmissionEarly({
       <Button
         float="right"
         disabled={
-          // disabled when previously finalized early
-          deadlinePassed()
+          (extensionRecordsForStudent?.data &&
+            extensionRecordsForStudent.data.filter((record) => {
+              return record.hours < 0 || record.minutes < 0;
+            }).length > 0) ||
+          deadlinePassed() // to avoid clicking quickly twice while review processing
         }
         onClick={finalizeSubmission}
       >
