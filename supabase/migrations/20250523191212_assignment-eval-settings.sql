@@ -51,8 +51,8 @@ AS PERMISSIVE
 FOR INSERT
 TO authenticated
 WITH CHECK (
-   "hours" < 0
-);
+   "hours" < 0 AND (authorizeforprofile(student_id) OR authorizeforassignmentgroup(assignment_group_id))
+); 
 
 ALTER TABLE ONLY "public"."self_review_settings"
     ADD CONSTRAINT "self_review_settings_pkey" PRIMARY KEY ("id");
