@@ -250,8 +250,8 @@ DECLARE
     profile_record public.profiles;
 BEGIN
     FOR assignment_record IN (
-        SELECT * FROM assignments
-        WHERE due_date AT TIME ZONE 'UTC' <= NOW() AT TIME ZONE 'UTC'
+        SELECT * FROM assignments -- non archived assignment with passed deadline
+        WHERE archived_at IS NULL AND (due_date AT TIME ZONE 'UTC' <= NOW() AT TIME ZONE 'UTC');  
     ) LOOP
         FOR profile_record IN (
             SELECT * FROM public.profiles prof
