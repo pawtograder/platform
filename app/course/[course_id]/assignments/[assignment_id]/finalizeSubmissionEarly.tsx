@@ -3,7 +3,7 @@ import { Assignment, AssignmentDueDateException, AssignmentGroupMember } from "@
 import { Box, Button } from "@chakra-ui/react";
 import { useCreate, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { differenceInMinutes } from "date-fns";
+import { addHours, addMinutes, differenceInMinutes } from "date-fns";
 
 export default function FinalizeSubmissionEarly({
   assignment,
@@ -31,15 +31,23 @@ export default function FinalizeSubmissionEarly({
 
   // records of student's group already moving their due date forward.  you shouldn't move your due
   // date forward multiple times
-  const { data: finalizedEarlyRecordsForStudent } = useList<AssignmentDueDateException>({
+  const { data: extensionRecordsForStudent } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
     meta: {
       select: "*"
     },
-
     filters: [
-      { field: "student_id", operator: "eq", value: private_profile_id },
-      { field: "hours", operator: "lt", value: 0 }
+      group_id
+        ? {
+            field: "assignment_group_id",
+            operator: "eq",
+            value: group_id
+          }
+        : {
+            field: "student_id",
+            operator: "eq",
+            value: private_profile_id
+          }
     ]
   });
 
@@ -56,7 +64,8 @@ export default function FinalizeSubmissionEarly({
           assignment_group_id: group_id,
           group_id: memberGroup.data[0].assignment_group_id,
           creator_id: private_profile_id,
-          hours: -1 * Math.ceil(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
+          hours: -1 * Math.floor(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
+          minutes: (-1 * differenceInMinutes(new Date(assignment.due_date), new Date())) % 60,
           tokens_consumed: 0
         }
       });
@@ -69,12 +78,28 @@ export default function FinalizeSubmissionEarly({
           assignment_group_id: group_id,
           student_id: private_profile_id,
           creator_id: private_profile_id,
-          hours: -1 * Math.ceil(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
+          hours: -1 * Math.floor(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
+          minutes: (-1 * differenceInMinutes(new Date(assignment.due_date), new Date())) % 60,
           tokens_consumed: 0
         }
       });
     }
   };
+
+  function deadlinePassed(): boolean {
+    if (extensionRecordsForStudent === undefined) {
+      return differenceInMinutes(Date.now(), new Date(assignment.due_date)) > 0;
+    } else {
+      const extension = extensionRecordsForStudent.data.reduce(
+        (prev, cur) => {
+          return { hours: cur.hours + prev.hours, minutes: cur.minutes + prev.minutes };
+        },
+        { hours: 0, minutes: 0 }
+      );
+      const modifiedDueDate = addMinutes(addHours(new Date(assignment.due_date), extension.hours), extension.minutes);
+      return differenceInMinutes(Date.now(), modifiedDueDate) > 0;
+    }
+  }
 
   return (
     <Box width="50%" alignItems={"center"}>
@@ -82,9 +107,7 @@ export default function FinalizeSubmissionEarly({
         float="right"
         disabled={
           // disabled when previously finalized early
-          finalizedEarlyRecordsForStudent &&
-          finalizedEarlyRecordsForStudent.data &&
-          finalizedEarlyRecordsForStudent.data.length > 0
+          deadlinePassed()
         }
         onClick={finalizeSubmission}
       >

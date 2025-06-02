@@ -49,6 +49,7 @@ CREATE POLICY "Students can give themselves negative deadline exceptions"
 ON "public"."assignment_due_date_exceptions"
 AS PERMISSIVE 
 FOR INSERT
+TO authenticated
 WITH CHECK (
    "hours" < 0
 );
@@ -63,6 +64,9 @@ ALTER TABLE "public"."assignments" ADD COLUMN "self_review_setting_id" bigint NO
 
 ALTER TABLE "public"."assignments"
     ADD CONSTRAINT "assignments_self_review_setting_fkey" FOREIGN KEY ("self_review_setting_id") REFERENCES "public"."self_review_settings"("id");
+
+
+ALTER TABLE "public"."assignment_due_date_exceptions" ADD COLUMN "minutes" integer NOT NULL default 0;
 
 CREATE POLICY "Deadline exceptions never inserted after early finish"
 ON "public"."assignment_due_date_exceptions"
@@ -105,17 +109,17 @@ DECLARE
     this_assignment public.assignments;     
     this_group_id bigint; 
     this_self_review_setting public.self_review_settings;     
-    this_net_deadline_change integer := 0;     
+    this_net_deadline_change_hours integer := 0;     
+    this_net_deadline_change_minutes integer := 0;     
     this_active_submission_id bigint;
-    utc_now TIME := NOW() AT TIME ZONE 'UTC';
+    utc_now TIMESTAMP := NOW() AT TIME ZONE 'UTC';
 BEGIN     
     -- Get the assignment first     
     SELECT * INTO this_assignment FROM public.assignments WHERE id = this_assignment_id;          
     
     -- Check if assignment exists     
     IF this_assignment.id IS NULL THEN         
-        RETURN;     
-    END IF;      
+RETURN;           END IF;      
     
     -- Confirm this is a private profile for a student in this class, else abort     
     IF NOT EXISTS (         
@@ -124,8 +128,7 @@ BEGIN
         AND role = 'student'
         AND class_id = this_assignment.class_id     
     ) THEN         
-        RETURN;     
-    END IF;      
+RETURN;           END IF;      
     
     -- Get the group of the student for this assignment     
     SELECT assignment_group_id INTO this_group_id      
@@ -142,7 +145,7 @@ BEGIN
     
     -- If self reviews are not enabled for this assignment, abort     
     IF this_self_review_setting.enabled IS NOT TRUE THEN         
-        RETURN;     
+        RETURN;       
     END IF;          
     
     -- If there is an existing review assignment for this student for this assignment, abort     
@@ -151,31 +154,38 @@ BEGIN
         WHERE assignment_id = this_assignment.id          
         AND assignee_profile_id = this_profile_id     
     ) THEN         
-        RETURN;     
+       RETURN;       
     END IF;      
     
     -- Calculate the deadline offset by combining the deadline changes     
-    SELECT COALESCE(SUM("hours"), 0) INTO this_net_deadline_change      
+    SELECT COALESCE(SUM("hours"), 0) INTO this_net_deadline_change_hours      
     FROM public.assignment_due_date_exceptions      
     WHERE assignment_id = this_assignment.id      
-    AND (student_id = this_profile_id OR assignment_group_id = this_group_id);      
+    AND (student_id = this_profile_id OR assignment_group_id = this_group_id);     
+
+    SELECT COALESCE(SUM("minutes"), 0) INTO this_net_deadline_change_minutes 
+    FROM public.assignment_due_date_exceptions      
+    WHERE assignment_id = this_assignment.id      
+    AND (student_id = this_profile_id OR assignment_group_id = this_group_id);     
+
     
     -- If deadline has not passed, abort     
-    IF NOT (this_assignment.due_date AT TIME ZONE 'UTC' + INTERVAL '1 hour' * this_net_deadline_change <= this_now) THEN         
-        RETURN;     
+    IF NOT (this_assignment.due_date AT TIME ZONE 'UTC' + INTERVAL '1 hour' * this_net_deadline_change_hours  + 
+    INTERVAL '1 minute' * this_net_deadline_change_minutes <= utc_now) THEN         
+       RETURN;       
     END IF;      
     
     -- Get the active submission id for this profile     
     SELECT id INTO this_active_submission_id      
     FROM public.submissions      
     WHERE profile_id = this_profile_id      
-    AND assignment_id = this_assignment.id
-    AND is_active = TRUE     
+    AND assignment_id = this_assignment_id
+    AND is_active = true     
     LIMIT 1;      
     
     -- If active submission does not exist, abort     
-    IF this_active_submission_id IS NULL THEN         
-        RETURN;     
+    IF this_active_submission_id IS NULL THEN  
+        RETURN;       
     END IF;          
     
     INSERT INTO review_assignments (   
@@ -189,7 +199,7 @@ BEGIN
     )     
     VALUES (     
         utc_now,    
-        this_assignment.due_date AT TIME ZONE 'UTC' + (INTERVAL '1 hour' * this_net_deadline_change) + (INTERVAL '1 hour' * this_self_review_setting.deadline_offset),
+        this_assignment.due_date AT TIME ZONE 'UTC' + (INTERVAL '1 hour' * this_net_deadline_change_hours) + (INTERVAL '1 minute' * this_net_deadline_change_minutes) + (INTERVAL '1 hour' * this_self_review_setting.deadline_offset),
         this_profile_id,         
         this_active_submission_id,         
         this_assignment.id,         
@@ -209,8 +219,18 @@ CREATE OR REPLACE FUNCTION auto_assign_self_reviews_trigger()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
+DECLARE 
+    profile_record uuid;
 BEGIN
-    PERFORM auto_assign_self_reviews(NEW.assignment_id, NEW.student_id);
+    IF NEW.assignment_group_id IS NOT NULL THEN -- if exception is for a group, create for all in group 
+        FOR profile_record IN (
+            SELECT "profile_id" FROM public.assignment_groups_members WHERE assignment_group_id = NEW.assignment_group_id AND assignment_id = NEW.assignment_id
+        ) LOOP
+            PERFORM auto_assign_self_reviews(NEW.assignment_id, profile_record);
+        END LOOP;
+    ELSE -- else create only for single student
+        PERFORM auto_assign_self_reviews(NEW.assignment_id, NEW.student_id);
+    END IF;
     RETURN NEW;
 END;
 $$;
@@ -231,12 +251,10 @@ DECLARE
     assignment_record public.assignments;
     profile_record public.profiles;
 BEGIN
-    -- Loop through assginments
     FOR assignment_record IN (
         SELECT * FROM assignments
         WHERE due_date AT TIME ZONE 'UTC' <= NOW() AT TIME ZONE 'UTC'
     ) LOOP
-         -- For each assignment, get all profiles for the class that assignment is for
         FOR profile_record IN (
             SELECT * FROM public.profiles prof
             WHERE is_private_profile = true
@@ -245,7 +263,6 @@ BEGIN
                 SELECT 1 FROM user_roles WHERE private_profile_id = prof.id AND "role" = 'student'
             ) 
         ) LOOP
-            -- Call the auto_assign_self_reviews function for each assignment x profile combination
             PERFORM auto_assign_self_reviews(assignment_record.id, profile_record.id);
         END LOOP;
         
@@ -257,5 +274,4 @@ create extension pg_cron with schema pg_catalog;
 
 grant usage on schema cron to postgres; grant all privileges on all tables in schema cron to postgres;
 
--- schedule function to run every minute
 SELECT cron.schedule('check_assignment_deadlines_passed', '* * * * *', 'SELECT check_assignment_deadlines_passed();');
