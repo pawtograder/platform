@@ -21,6 +21,7 @@ import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
 import RubricSidebar, { RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import { Toaster } from "@/components/ui/toaster";
+import { useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import {
@@ -66,7 +67,6 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
-import { useRubrics } from "@/hooks/useAssignment";
 
 interface RubricOptionType extends OptionBase {
   value: number;
@@ -780,11 +780,11 @@ function RubricView() {
       top="0"
       borderLeftWidth="1px"
       borderColor="border.emphasized"
-      p={2}
+      py={2}
+      px={1}
       ml={0}
-      minW="md"
-      maxW="lg"
       height="100vh"
+      overflowX="hidden"
       overflowY="auto"
     >
       <VStack align="start" gap={2}>

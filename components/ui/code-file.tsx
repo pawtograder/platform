@@ -775,6 +775,11 @@ function LineActionPopup({
       />
     );
   }
+  //Adjust top so that it is less likely to end up off of the screen
+  if (top + 250 > window.innerHeight && window.innerHeight > 250) {
+    top = top - 250;
+  }
+
   const components: SelectComponentsConfig<RubricCheckSelectOption, false, RubricCriteriaSelectGroupOption> = {
     GroupHeading: (props) => {
       return (
@@ -798,7 +803,9 @@ function LineActionPopup({
       return (
         <chakraComponents.SingleValue {...props}>
           {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
-          {isRubricCheckDataWithOptions(props.data.check?.data) ? `(Select an option)` : `${points} points`}
+          {isRubricCheckDataWithOptions(props.data.check?.data)
+            ? `(Select an option)`
+            : points !== undefined && `${points} aa points`}
         </chakraComponents.SingleValue>
       );
     },
