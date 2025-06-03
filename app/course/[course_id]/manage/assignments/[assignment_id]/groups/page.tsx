@@ -232,6 +232,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                       <Table.Row>
                         <Table.ColumnHeader>Group</Table.ColumnHeader>
                         <Table.ColumnHeader>Members</Table.ColumnHeader>
+                        <Table.ColumnHeader>Common Tag</Table.ColumnHeader>
                         <Table.ColumnHeader>Actions</Table.ColumnHeader>
                       </Table.Row>
                     </Table.Header>
@@ -249,6 +250,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                                 );
                               })}
                             </Table.Cell>
+                            <Table.Cell>{group.tagName}</Table.Cell>
                             <Table.Cell>
                               <Button
                                 variant={"surface"}

@@ -1,4 +1,9 @@
-import { Assignment, AssignmentGroupWithMembersInvitationsAndJoinRequests } from "@/utils/supabase/DatabaseTypes";
+import {
+  Assignment,
+  AssignmentGroupWithMembersInvitationsAndJoinRequests,
+  Tag,
+  UserRole
+} from "@/utils/supabase/DatabaseTypes";
 import {
   Button,
   Dialog,
@@ -14,6 +19,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
 import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
+import { Select } from "chakra-react-select";
+import useTags from "@/hooks/useTags";
+import { useList } from "@refinedev/core";
 
 export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
   const students = useStudentRoster();
@@ -42,6 +50,8 @@ export default function BulkCreateGroup({
   const [generatedGroups, setGeneratedGroups] = useState<GroupCreateData[]>([]);
   const { addGroupsToCreate } = useGroupManagement();
   const supabase = createClient();
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
   /**
    * When group field is changed to a new number, update groupsize
    */
@@ -50,6 +60,11 @@ export default function BulkCreateGroup({
       setGroupSize(parseInt(groupTextField));
     }
   }, [setGroupTextField, groupTextField]);
+
+  const { data: user_roles } = useList<UserRole>({
+    resource: "user_roles",
+    filters: [{ field: "class_id", operator: "eq", value: assignment.class_id }]
+  });
 
   const generateGroups = async () => {
     const newGroups = [];
@@ -80,9 +95,77 @@ export default function BulkCreateGroup({
     setGeneratedGroups(newGroups);
   };
 
+  const generateGroupWithTags = async () => {
+    const newGroups = [];
+    // shuffle ungrouped profiles
+    for (let i = ungroupedProfiles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j], ungroupedProfiles[i]];
+    }
+
+    const tagMap = new Map<string, string[]>();
+    const noTagKey = crypto.randomUUID();
+    for (const profile of ungroupedProfiles) {
+      const userRole = user_roles?.data.find((role) => {
+        return role.public_profile_id == profile.id || role.private_profile_id == profile.id;
+      });
+      const tag = tags.find((tag) => {
+        return (
+          (tag.profile_id == userRole?.public_profile_id || tag.profile_id == userRole?.private_profile_id) &&
+          selectedTags.includes(tag.name)
+        );
+      });
+      if (!tag) {
+        const existing = tagMap.get(noTagKey) ?? [];
+        existing.push(profile.id);
+        tagMap.set(noTagKey, existing);
+      } else {
+        const existing = tagMap.get(tag.name) ?? [];
+        existing.push(profile.id);
+        tagMap.set(tag.name, existing);
+      }
+    }
+
+    // create as many even groups as possible
+    for (const tagGroupName of tagMap.keys()) {
+      let index = 0;
+      const tagGroup = tagMap.get(tagGroupName) ?? [];
+      while (index <= tagGroup.length - groupSize) {
+        const response = await supabase.rpc("generate_anon_name");
+        newGroups.push({
+          name: response.data ?? "",
+          member_ids: tagGroup.slice(index, index + groupSize),
+          tagName: tagGroupName !== noTagKey ? tagGroupName : undefined
+        });
+        index += groupSize;
+      }
+      while (index < tagGroup.length && newGroups.length > 0) {
+        const createdGroup: GroupCreateData = newGroups.pop()!;
+        createdGroup?.member_ids.push(tagGroup[index]);
+        newGroups.push(createdGroup);
+        index += 1;
+      }
+      tagMap.set(tagGroupName, tagGroup);
+    }
+    setGeneratedGroups(newGroups);
+  };
+
   const isGroupSizeInvalid = (size: number) => {
     return size > (assignment.max_group_size ?? ungroupedProfiles.length) || size < (assignment.min_group_size ?? 1);
   };
+
+  const { tags } = useTags();
+
+  const uniqueTags: Tag[] = Array.from(
+    tags
+      .reduce((map, tag) => {
+        if (!map.has(tag.name + tag.color + tag.visible)) {
+          map.set(tag.name + tag.color + tag.visible, tag);
+        }
+        return map;
+      }, new Map())
+      .values()
+  );
 
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom" size="lg">
@@ -121,7 +204,27 @@ export default function BulkCreateGroup({
                   </Field.ErrorText>
                   <Field.HelperText>In the case of an uneven number, we will prefer larger groups.</Field.HelperText>
                 </Field.Root>
-                <Button onClick={() => generateGroups()} colorPalette={"gray"} disabled={Number.isNaN(groupSize)}>
+                <Field.Root>
+                  <Field.Label>Select tags to separate students by (optional)</Field.Label>
+                  <Select
+                    isMulti={true}
+                    onChange={(e) => {
+                      setSelectedTags(
+                        Array.from(e.values()).map((val) => {
+                          return val.value;
+                        })
+                      );
+                    }}
+                    options={uniqueTags.map((tag) => ({ label: tag.name, value: tag.name }))}
+                  />
+                  <Field.HelperText>If a student has multiple of these tags, we will group them with the tag entered first.</Field.HelperText>
+                </Field.Root>
+
+                <Button
+                  onClick={() => (selectedTags.length > 0 ? generateGroupWithTags() : generateGroups())}
+                  colorPalette={"gray"}
+                  disabled={Number.isNaN(groupSize)}
+                >
                   Generate Groups
                 </Button>
                 {generatedGroups.length > 0 && (
@@ -130,6 +233,7 @@ export default function BulkCreateGroup({
                       <Table.Row>
                         <Table.ColumnHeader>Name</Table.ColumnHeader>
                         <Table.ColumnHeader>Members</Table.ColumnHeader>
+                        <Table.ColumnHeader>Tag</Table.ColumnHeader>
                       </Table.Row>
                     </Table.Header>
                     <Table.Body>
@@ -145,6 +249,7 @@ export default function BulkCreateGroup({
                                   })?.name + " "
                               )}
                             </Table.Cell>
+                            <Table.Cell>{group.tagName}</Table.Cell>
                           </Table.Row>
                         );
                       })}
