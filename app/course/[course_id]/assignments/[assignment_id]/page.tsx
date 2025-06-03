@@ -105,7 +105,7 @@ export default async function AssignmentPage({
     );
 
   const { data: review_settings } = await client
-    .from("self_review_settings")
+    .from("assignment_self_review_settings")
     .select("*")
     .eq("id", assignment.self_review_setting_id)
     .single();

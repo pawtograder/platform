@@ -12,7 +12,7 @@ import { useClassProfiles } from "./useClassProfiles";
 
 export function useSelfReviewSettings() {
   const controller = useAssignmentController();
-  return controller.assignment.self_review_settings;
+  return controller.assignment.assignment_self_review_settings;
 }
 
 export function useRubricCheck(rubric_check_id: number | null | undefined) {
@@ -202,7 +202,7 @@ function AssignmentControllerCreator({
     queryOptions: { enabled: !!assignment_id },
     meta: {
       select:
-        "*, self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
+        "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
     }
   });
 
