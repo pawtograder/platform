@@ -384,7 +384,16 @@ function EnrollmentsTable() {
         }
       }
     ],
-    [currentUser, openEditProfileModal, openEditUserRoleModal, openRemoveStudentModal, tagData]
+    [
+      currentUser,
+      openEditProfileModal,
+      openEditUserRoleModal,
+      openRemoveStudentModal,
+      tagData,
+      addTag,
+      course_id,
+      handleSingleCheckboxChange
+    ]
   );
 
   const {

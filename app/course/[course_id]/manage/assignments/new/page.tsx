@@ -5,11 +5,11 @@ import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } f
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
+import { useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
 import CreateAssignment from "./form";
-import { useCreate } from "@refinedev/core";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
@@ -51,8 +51,8 @@ export default function NewAssignmentPage() {
         .insert({
           title: getValues("title"),
           slug: getValues("slug"),
-          release_date: new TZDate(getValues("release_date"), timezone).toISOString(),
-          due_date: new TZDate(getValues("due_date"), timezone).toISOString(),
+          release_date: getValues("release_date") ? new TZDate(getValues("release_date"), timezone).toISOString() : "",
+          due_date: getValues("due_date") ? new TZDate(getValues("due_date"), timezone).toISOString() : "",
           allow_late: getValues("allow_late"),
           description: getValues("description"),
           max_late_tokens: getValues("max_late_tokens") || null,
@@ -64,8 +64,10 @@ export default function NewAssignmentPage() {
           min_group_size: getValues("min_group_size") || null,
           max_group_size: getValues("max_group_size") || null,
           allow_student_formed_groups: getValues("allow_student_formed_groups"),
-          group_formation_deadline: new TZDate(getValues("group_formation_deadline"), timezone).toISOString() || null,
-          self_review_setting_id: settings.data.id as number
+          self_review_setting_id: settings.data.id as number,
+          group_formation_deadline: getValues("group_formation_deadline")
+            ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
+            : null
         })
         .select("id")
         .single();
