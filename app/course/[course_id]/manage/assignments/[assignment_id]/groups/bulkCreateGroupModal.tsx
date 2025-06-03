@@ -5,6 +5,7 @@ import {
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import {
+  Box,
   Button,
   Dialog,
   DialogActionTrigger,
@@ -19,9 +20,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
 import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
-import { Select } from "chakra-react-select";
+import { MultiValue, Select } from "chakra-react-select";
 import useTags from "@/hooks/useTags";
 import { useList } from "@refinedev/core";
+import TagDisplay from "@/components/ui/tag";
 
 export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
   const students = useStudentRoster();
@@ -50,7 +52,21 @@ export default function BulkCreateGroup({
   const [generatedGroups, setGeneratedGroups] = useState<GroupCreateData[]>([]);
   const { addGroupsToCreate } = useGroupManagement();
   const supabase = createClient();
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<
+    MultiValue<{
+      label: string;
+      value: {
+        class_id: number;
+        color: string;
+        created_at: string;
+        creator_id: string;
+        id: string;
+        name: string;
+        profile_id: string;
+        visible: boolean;
+      };
+    }>
+  >([]);
 
   /**
    * When group field is changed to a new number, update groupsize
@@ -102,9 +118,9 @@ export default function BulkCreateGroup({
       const j = Math.floor(Math.random() * (i + 1));
       [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j], ungroupedProfiles[i]];
     }
-
     const tagMap = new Map<string, string[]>();
     const noTagKey = crypto.randomUUID();
+    // sort profiles into tag categories
     for (const profile of ungroupedProfiles) {
       const userRole = user_roles?.data.find((role) => {
         return role.public_profile_id == profile.id || role.private_profile_id == profile.id;
@@ -112,7 +128,9 @@ export default function BulkCreateGroup({
       const tag = tags.find((tag) => {
         return (
           (tag.profile_id == userRole?.public_profile_id || tag.profile_id == userRole?.private_profile_id) &&
-          selectedTags.includes(tag.name)
+          selectedTags.find((t) => {
+            return t.value.name == tag.name && t.value.color == tag.color;
+          })
         );
       });
       if (!tag) {
@@ -120,32 +138,35 @@ export default function BulkCreateGroup({
         existing.push(profile.id);
         tagMap.set(noTagKey, existing);
       } else {
-        const existing = tagMap.get(tag.name) ?? [];
+        const key = JSON.stringify({ name: tag.name, color: tag.color });
+        const existing = tagMap.get(key) ?? [];
         existing.push(profile.id);
-        tagMap.set(tag.name, existing);
+        tagMap.set(key, existing);
       }
     }
-
-    // create as many even groups as possible
-    for (const tagGroupName of tagMap.keys()) {
+    // create groups within each tag category
+    for (const key of tagMap.keys()) {
       let index = 0;
-      const tagGroup = tagMap.get(tagGroupName) ?? [];
+      const tagGroup = tagMap.get(key) ?? [];
+      // create as many even groups as possible
       while (index <= tagGroup.length - groupSize) {
         const response = await supabase.rpc("generate_anon_name");
         newGroups.push({
           name: response.data ?? "",
           member_ids: tagGroup.slice(index, index + groupSize),
-          tagName: tagGroupName !== noTagKey ? tagGroupName : undefined
+          tagName: key !== noTagKey ? JSON.parse(key).name : undefined,
+          tagColor: key !== noTagKey ? JSON.parse(key).color : undefined
         });
         index += groupSize;
       }
+      // divide extra profiles evenly across groups of that category
       while (index < tagGroup.length && newGroups.length > 0) {
         const createdGroup: GroupCreateData = newGroups.pop()!;
         createdGroup?.member_ids.push(tagGroup[index]);
         newGroups.push(createdGroup);
         index += 1;
       }
-      tagMap.set(tagGroupName, tagGroup);
+      tagMap.set(key, tagGroup);
     }
     setGeneratedGroups(newGroups);
   };
@@ -166,6 +187,17 @@ export default function BulkCreateGroup({
       }, new Map())
       .values()
   );
+
+  const tagDisplay = (group: GroupCreateData) => {
+    const tag = tags.find((t) => {
+      return t.name === group.tagName && t.color === group.tagColor;
+    });
+    if (tag) {
+      return <TagDisplay tag={tag} />;
+    } else {
+      return <></>;
+    }
+  };
 
   return (
     <Dialog.Root key={"center"} placement={"center"} motionPreset="slide-in-bottom" size="lg">
@@ -207,17 +239,34 @@ export default function BulkCreateGroup({
                 <Field.Root>
                   <Field.Label>Select tags to separate students by (optional)</Field.Label>
                   <Select
+                    getOptionValue={(option) => option.value.id}
                     isMulti={true}
                     onChange={(e) => {
-                      setSelectedTags(
-                        Array.from(e.values()).map((val) => {
-                          return val.value;
-                        })
-                      );
+                      setSelectedTags(e);
                     }}
-                    options={uniqueTags.map((tag) => ({ label: tag.name, value: tag.name }))}
+                    options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
+                    components={{
+                      Option: ({ data, ...props }) => (
+                        <Box
+                          key={data.value.id}
+                          {...props.innerProps}
+                          p="4px 8px"
+                          cursor="pointer"
+                          _hover={{ bg: "gray.100" }}
+                        >
+                          {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                        </Box>
+                      ),
+                      MultiValue: ({ data, ...props }) => (
+                        <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer">
+                          {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                        </Box>
+                      )
+                    }}
                   />
-                  <Field.HelperText>If a student has multiple of these tags, we will group them with the tag entered first.</Field.HelperText>
+                  <Field.HelperText>
+                    If a student has multiple of these tags, we will group them with the tag entered first.
+                  </Field.HelperText>
                 </Field.Root>
 
                 <Button
@@ -249,7 +298,7 @@ export default function BulkCreateGroup({
                                   })?.name + " "
                               )}
                             </Table.Cell>
-                            <Table.Cell>{group.tagName}</Table.Cell>
+                            <Table.Cell>{tagDisplay(group)}</Table.Cell>
                           </Table.Row>
                         );
                       })}
