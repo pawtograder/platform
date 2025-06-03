@@ -1,6 +1,6 @@
-import { Container, Heading, SimpleGrid, Text, VStack } from "@chakra-ui/react";
+import { Container, Heading, SimpleGrid, Text, VStack, Box, Badge } from "@chakra-ui/react";
 import { createClient } from "@/utils/supabase/server";
-import FlashcardDeckCard from "@/components/ui/flashcard-deck";
+import FlashcardDeckCard from "@/app/course/[course_id]/flashcards/flashcard-deck";
 import type { FlashcardDeck } from "@/utils/supabase/DatabaseTypes";
 
 /**
@@ -31,39 +31,65 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
 
   if (error) {
     return (
-      <Container>
+      <Container maxW="6xl" py={8}>
         <VStack align="stretch" gap={6}>
-          <Heading size="lg" mb={4}>
+          <Heading size="xl" textAlign="center">
             Flashcard Decks
           </Heading>
-          <Text color="red.500">Error loading flashcard decks. Please try again later.</Text>
+          <Box p={8} borderRadius="xl" border="1px solid">
+            <Text textAlign="center" fontSize="lg">
+              Error loading flashcard decks. Please try again later.
+            </Text>
+          </Box>
         </VStack>
       </Container>
     );
   }
 
   return (
-    <Container maxW="6xl">
-      <VStack align="stretch" gap={6}>
-        <Heading size="lg" mb={4} m={2} textAlign="center">
-          Flashcard Decks
-        </Heading>
+    <Container maxW="7xl" py={8}>
+      <VStack align="stretch" gap={8}>
+        {/* Header Section */}
+        <Box textAlign="center" mb={4}>
+          <Heading size="2xl" mb={4}>
+            Flashcard Decks
+          </Heading>
+          <Text fontSize="lg" maxW="2xl" mx="auto">
+            Practice and reinforce your learning with interactive flashcard decks
+          </Text>
+        </Box>
 
         {!flashcardDecks || flashcardDecks.length === 0 ? (
-          <VStack align="center" justify="center" minH="200px" gap={4}>
-            <Text fontSize="lg" color="gray.600" textAlign="center">
-              No flashcard decks available yet.
-            </Text>
-            <Text fontSize="md" color="gray.500" textAlign="center">
-              Your instructor will create flashcard decks for you to practice with.
-            </Text>
+          <VStack align="center" justify="center" minH="400px" gap={6} borderRadius="2xl" p={12} border="2px dashed">
+            <Box p={6} borderRadius="full" mb={2}>
+              <Text fontSize="4xl">📚</Text>
+            </Box>
+            <VStack gap={3}>
+              <Heading size="lg">No flashcard decks yet</Heading>
+              <Text fontSize="lg" textAlign="center">
+                Your instructor will create flashcard decks for you to practice with.
+              </Text>
+              <Text fontSize="md" textAlign="center">
+                Check back later or contact your instructor if you think this is an error.
+              </Text>
+            </VStack>
           </VStack>
         ) : (
-          <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4, xl: 5 }} gap={6} justifyItems="center">
-            {flashcardDecks.map((deck: FlashcardDeck) => (
-              <FlashcardDeckCard key={deck.id} deck={deck} courseId={course_id} />
-            ))}
-          </SimpleGrid>
+          <>
+            {/* Deck count badge */}
+            <Box display="flex" justifyContent="center" mb={2}>
+              <Badge variant="subtle" fontSize="sm" px={3} py={1} borderRadius="full">
+                {flashcardDecks.length} deck{flashcardDecks.length !== 1 ? "s" : ""} available
+              </Badge>
+            </Box>
+
+            {/* Cards Grid */}
+            <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4, xl: 5 }} gap={24} justifyItems="center" px={4}>
+              {flashcardDecks.map((deck: FlashcardDeck) => (
+                <FlashcardDeckCard key={deck.id} deck={deck} courseId={course_id} />
+              ))}
+            </SimpleGrid>
+          </>
         )}
       </VStack>
     </Container>
