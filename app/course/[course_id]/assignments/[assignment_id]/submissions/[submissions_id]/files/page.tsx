@@ -937,12 +937,8 @@ export default function FilesView() {
         <Separator orientation={{ base: "horizontal", md: "vertical" }} />
         <Box w={"100%"}>
           {fileId ||
-            (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
-            selectedFile && (
-              <CodeFile
-                file={selectedFile}
-              />
-            )
+          (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
+            selectedFile && <CodeFile file={selectedFile} />
           ) : selectedArtifact ? (
             selectedArtifact.data !== null ? (
               <ArtifactWithComments

@@ -99,11 +99,7 @@ type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
   file: SubmissionFile;
 };
 
-export default function CodeFile({
-  file,
-}: {
-  file: SubmissionFile;
-}) {
+export default function CodeFile({ file }: { file: SubmissionFile }) {
   const submission = useSubmission();
   const submissionReview = useActiveSubmissionReview();
   const showCommentsFeature = submission.released !== null || submissionReview !== undefined;
@@ -115,7 +111,7 @@ export default function CodeFile({
     left: 0,
     visible: false,
     mode: "select",
-    close: () => { }
+    close: () => {}
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -167,26 +163,26 @@ export default function CodeFile({
   });
   const commentsCSS = showCommentsFeature
     ? {
-      "& .source-code-line": {
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "row",
-        "&:hover": {
-          bg: "yellow.subtle",
-          width: "100%",
-          cursor: "cell"
+        "& .source-code-line": {
+          cursor: "pointer",
+          display: "flex",
+          flexDirection: "row",
+          "&:hover": {
+            bg: "yellow.subtle",
+            width: "100%",
+            cursor: "cell"
+          }
+        },
+        "& .selected": {
+          bg: "yellow.subtle"
         }
-      },
-      "& .selected": {
-        bg: "yellow.subtle"
       }
-    }
     : {
-      "& .source-code-line": {
-        display: "flex",
-        flexDirection: "row"
-      }
-    };
+        "& .source-code-line": {
+          display: "flex",
+          flexDirection: "row"
+        }
+      };
   return (
     <Box
       border="1px solid"
@@ -259,10 +255,7 @@ export default function CodeFile({
         </HStack>
       </Flex>
       {/* Pass dynamic props from state, and other props directly */}
-      <LineActionPopup
-        {...lineActionPopupProps}
-        file={file}
-      />
+      <LineActionPopup {...lineActionPopupProps} file={file} />
       <CodeLineCommentContext.Provider
         value={{
           submission,
