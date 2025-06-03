@@ -1,16 +1,16 @@
 "use client";
 
+import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Skeleton } from "@chakra-ui/react";
+import { useOne, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
 import { FieldValues } from "react-hook-form";
 import AssignmentForm from "../../new/form";
-import { toaster } from "@/components/ui/toaster";
-import { useOne, useUpdate } from "@refinedev/core";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
 
 export default function EditAssignment() {
   const { course_id, assignment_id } = useParams();
@@ -66,6 +66,9 @@ export default function EditAssignment() {
           }
           delete values.copy_groups_from_assignment;
         }
+        values.eval_config = undefined;
+        values.allow_early = undefined;
+        values.deadline_offset = undefined;
         await form.refineCore.onFinish(values);
         if (values.template_repo) {
           await githubRepoConfigureWebhook(

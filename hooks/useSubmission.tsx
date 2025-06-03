@@ -31,6 +31,7 @@ import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
+import { SubmissionReviewProvider } from "./useSubmissionReview";
 
 type ListUpdateCallback<T> = (
   data: T[],
@@ -288,7 +289,7 @@ export function SubmissionProvider({
   return (
     <SubmissionContext.Provider value={{ submissionController: controller.current }}>
       <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
-      {ready && children}
+      {ready && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
     </SubmissionContext.Provider>
   );
 }
@@ -479,7 +480,7 @@ function SubmissionControllerCreator({
         submission_artifacts(*),
         submission_file_comments(*),
         submission_comments(*),
-        submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_criteria(*, rubric_checks(*)))),
+        submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))),
         submission_artifact_comments!submission_artifact_comments_submission_id_fkey(*)
       `.trim()
     }
@@ -801,40 +802,35 @@ export function useSubmissionReviews() {
   }, [ctx, controller]);
   return reviews;
 }
+
 export function useSubmissionReview(reviewId?: number | null) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
   const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
 
-  let effectiveReviewId = reviewId;
-  if (effectiveReviewId === undefined || effectiveReviewId === null) {
-    if (controller?.submission?.grading_review_id) {
-      effectiveReviewId = controller.submission.grading_review_id;
-    }
-  }
-
   useEffect(() => {
-    if (!ctx || !controller || effectiveReviewId === undefined || effectiveReviewId === null) {
+    if (!ctx || !controller || (!reviewId && !ctx.submissionController.submission.grading_review_id)) {
       setReview(undefined);
       return;
     }
+    const effectiveReviewId = reviewId || ctx.submissionController.submission.grading_review_id;
 
     const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReviewWithRubric>(
       "submission_reviews",
-      effectiveReviewId,
+      effectiveReviewId ?? -1,
       (data) => {
         setReview(data);
       }
     );
     setReview(data);
     return () => unsubscribe();
-  }, [ctx, controller, effectiveReviewId]);
+  }, [ctx, controller, reviewId]);
 
   if (!ctx) {
     return undefined;
   }
 
-  if (effectiveReviewId === undefined || (effectiveReviewId === null && reviewId === undefined)) {
+  if (!reviewId && !ctx.submissionController.submission.grading_review_id) {
     toaster.create({
       title: "No review ID available",
       description:

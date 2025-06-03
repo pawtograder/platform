@@ -1,31 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never;
-    };
-    Views: {
-      [_ in never]: never;
-    };
-    Functions: {
-      graphql: {
-        Args: {
-          operationName?: string;
-          query?: string;
-          variables?: Json;
-          extensions?: Json;
-        };
-        Returns: Json;
-      };
-    };
-    Enums: {
-      [_ in never]: never;
-    };
-    CompositeTypes: {
-      [_ in never]: never;
-    };
-  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -2510,6 +2485,7 @@ export type Database = {
           release_date: string | null;
           rubric_id: number;
           submission_id: number;
+          submission_review_id: number;
         };
         Insert: {
           assignee_profile_id: string;
@@ -2522,6 +2498,7 @@ export type Database = {
           release_date?: string | null;
           rubric_id: number;
           submission_id: number;
+          submission_review_id: number;
         };
         Update: {
           assignee_profile_id?: string;
@@ -2534,6 +2511,7 @@ export type Database = {
           release_date?: string | null;
           rubric_id?: number;
           submission_id?: number;
+          submission_review_id?: number;
         };
         Relationships: [
           {
@@ -2605,6 +2583,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "review_assignments_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "submission_reviews";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -4224,6 +4209,10 @@ export type Database = {
         Args: { requested_submission_id: number };
         Returns: boolean;
       };
+      authorize_for_submission_review: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
       authorize_for_submission_reviewable: {
         Args: {
           requested_submission_id: number;
@@ -4432,9 +4421,6 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
-  graphql_public: {
-    Enums: {}
-  },
   pgmq_public: {
     Enums: {}
   },

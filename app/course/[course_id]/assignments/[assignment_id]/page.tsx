@@ -7,8 +7,8 @@ import { Alert, Box, Flex, Heading, HStack, Link, Table, Text, VStack } from "@c
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
-import ManageGroupWidget from "./manageGroupWidget";
 import FinishSubmissionEarly from "./finalizeSubmissionEarly";
+import ManageGroupWidget from "./manageGroupWidget";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {

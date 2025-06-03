@@ -1,12 +1,8 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useRubricCheck, useRubricCriteria, useRubrics } from "@/hooks/useAssignment";
+import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import {
-  useSubmission,
-  useSubmissionFileComments,
-  useSubmissionReviewByAssignmentId,
-  useSubmissionRubric
-} from "@/hooks/useSubmission";
+import { useSubmission, useSubmissionFileComments, useSubmissionReviewByAssignmentId } from "@/hooks/useSubmission";
+import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   HydratedRubricCheck,
@@ -101,25 +97,16 @@ export type LineActionPopupDynamicProps = {
 
 type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
   file: SubmissionFile;
-  submissionReviewId?: number;
-  reviewAssignmentId?: number;
-  selectedRubricId?: number;
 };
 
 export default function CodeFile({
   file,
-  submissionReviewId,
-  reviewAssignmentId,
-  selectedRubricId
 }: {
   file: SubmissionFile;
-  submissionReviewId?: number;
-  reviewAssignmentId?: number;
-  selectedRubricId?: number;
 }) {
-  const isGraderOrInstructor = useIsGraderOrInstructor();
   const submission = useSubmission();
-  const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
+  const submissionReview = useActiveSubmissionReview();
+  const showCommentsFeature = submission.released !== null || submissionReview !== undefined;
 
   const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
   const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
@@ -128,7 +115,7 @@ export default function CodeFile({
     left: 0,
     visible: false,
     mode: "select",
-    close: () => {}
+    close: () => { }
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -180,26 +167,26 @@ export default function CodeFile({
   });
   const commentsCSS = showCommentsFeature
     ? {
-        "& .source-code-line": {
-          cursor: "pointer",
-          display: "flex",
-          flexDirection: "row",
-          "&:hover": {
-            bg: "yellow.subtle",
-            width: "100%",
-            cursor: "cell"
-          }
-        },
-        "& .selected": {
-          bg: "yellow.subtle"
+      "& .source-code-line": {
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "row",
+        "&:hover": {
+          bg: "yellow.subtle",
+          width: "100%",
+          cursor: "cell"
         }
+      },
+      "& .selected": {
+        bg: "yellow.subtle"
       }
+    }
     : {
-        "& .source-code-line": {
-          display: "flex",
-          flexDirection: "row"
-        }
-      };
+      "& .source-code-line": {
+        display: "flex",
+        flexDirection: "row"
+      }
+    };
   return (
     <Box
       border="1px solid"
@@ -275,9 +262,6 @@ export default function CodeFile({
       <LineActionPopup
         {...lineActionPopupProps}
         file={file}
-        submissionReviewId={submissionReviewId}
-        reviewAssignmentId={reviewAssignmentId}
-        selectedRubricId={selectedRubricId}
       />
       <CodeLineCommentContext.Provider
         value={{
@@ -297,7 +281,7 @@ export default function CodeFile({
             setExpanded((prev) => prev.filter((l) => l !== line));
           },
           showCommentsFeature,
-          submissionReviewId: submissionReviewId
+          submissionReviewId: submissionReview?.id
         }}
       >
         <VStack
@@ -407,8 +391,6 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     resource: "submission_file_comments"
   });
 
-  const { submissionReview } = useSubmissionReviewByAssignmentId(comment.submission_review_id);
-
   const rubricCheck = useRubricCheck(comment.rubric_check_id);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
 
@@ -432,9 +414,9 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
           borderColor="border.info"
           borderRadius="md"
         >
-          <Box bg="bg.info" pl={1} pr={1} borderRadius="md">
+          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
-              <HStack>
+              <HStack flexGrow={10}>
                 {!comment.eventually_visible && (
                   <Tooltip content="This comment will never be visible to the student">
                     <Icon as={FaRegEyeSlash} color="fg.muted" />
@@ -460,7 +442,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
               </HStack>
               <HStack gap={0} flexWrap="wrap">
                 <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                  {`${commentAuthor?.name} ${submissionReview?.name}`}
+                  {commentAuthor?.name}
                 </Text>
                 {comment.submission_review_id && <ReviewRoundTag submission_review_id={comment.submission_review_id} />}
               </HStack>
@@ -613,29 +595,9 @@ export function formatPoints(option: {
   return ``;
 }
 
-function LineActionPopup({
-  lineNumber,
-  top,
-  left,
-  visible,
-  close,
-  mode,
-  file,
-  submissionReviewId,
-  reviewAssignmentId,
-  selectedRubricId
-}: LineActionPopupComponentProps) {
+function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
   const submission = useSubmission();
-  const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
-  const { rubric: selectedRubric } = useSubmissionRubric(reviewAssignmentId);
-
-  // Use the cached rubrics from useAssignment hook instead of making a separate API call
-  const allRubrics = useRubrics();
-  const manuallySelectedRubric = selectedRubricId
-    ? allRubrics.find((rubric) => rubric.id === selectedRubricId)
-    : undefined;
-
-  const effectiveRubric = selectedRubricId ? manuallySelectedRubric : selectedRubric;
+  const review = useActiveSubmissionReview();
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -708,9 +670,9 @@ function LineActionPopup({
   // Only show criteria that have annotation checks
   let criteriaWithAnnotationChecks: HydratedRubricCriteria[] = [];
 
-  if (effectiveRubric?.rubric_parts) {
+  if (review?.rubrics?.rubric_parts) {
     // Using the effective rubric (either manually selected or default)
-    criteriaWithAnnotationChecks = effectiveRubric.rubric_parts
+    criteriaWithAnnotationChecks = review.rubrics.rubric_parts
       .flatMap((part: HydratedRubricPart) => part.rubric_criteria || [])
       .filter((criteria: HydratedRubricCriteria) =>
         criteria.rubric_checks.some(
@@ -805,7 +767,7 @@ function LineActionPopup({
           {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
           {isRubricCheckDataWithOptions(props.data.check?.data)
             ? `(Select an option)`
-            : points !== undefined && `${points} aa points`}
+            : points !== undefined && `${points} points`}
         </chakraComponents.SingleValue>
       );
     },
@@ -929,8 +891,8 @@ function LineActionPopup({
                 if (selectedSubOption) {
                   comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
                 }
-                const finalSubmissionReviewId = submissionReviewId ?? review?.id;
-                if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
+                const submissionReviewId = review?.id;
+                if (!submissionReviewId && selectedCheckOption.check?.id) {
                   toaster.error({
                     title: "Error saving comment",
                     description: "Submission review ID is missing, cannot save rubric annotation."
@@ -947,12 +909,19 @@ function LineActionPopup({
                   author: profile_id,
                   released: review ? review.released : true,
                   points,
-                  submission_review_id: finalSubmissionReviewId,
+                  submission_review_id: submissionReviewId,
                   eventually_visible: eventuallyVisible
                 };
-                await createComment({ values });
-                setCurrentMode(mode);
-                close();
+                try {
+                  await createComment({ values });
+                  setCurrentMode(mode);
+                  close();
+                } catch (e) {
+                  toaster.error({
+                    title: "Error saving annotation",
+                    description: e instanceof Error ? e.message : "Unknown error"
+                  });
+                }
               }}
             />
           </>

@@ -36,6 +36,7 @@ import {
   useSubmissionReviewForRubric,
   useSubmissionRubric
 } from "@/hooks/useSubmission";
+import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
@@ -622,19 +623,19 @@ function RubricView() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { replace } = useRouter();
-  const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+
   const selectedRubricIdParam = searchParams.get("selected_rubric_id");
-  const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
   const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(
     selectedRubricIdParam ? parseInt(selectedRubricIdParam, 10) : undefined
   );
-  const prevReviewAssignmentIdRef = useRef<number | undefined>(reviewAssignmentId);
+  const prevReviewAssignmentIdRef = useRef<number | undefined>(activeReviewAssignmentId);
 
   const {
     reviewAssignment,
     isLoading: isLoadingReviewAssignment,
     error: reviewAssignmentError
-  } = useReviewAssignment(reviewAssignmentId);
+  } = useReviewAssignment(activeReviewAssignmentId);
 
   // Use cached rubrics from useAssignment hook instead of making a separate API call
   const allRubrics = useRubrics();
@@ -668,14 +669,14 @@ function RubricView() {
   useEffect(() => {
     // Check if we're transitioning out of peer review mode
     const wasInPeerReview = prevReviewAssignmentIdRef.current !== undefined;
-    const isNowInPeerReview = reviewAssignmentId !== undefined;
+    const isNowInPeerReview = activeReviewAssignmentId !== undefined;
     const exitingPeerReview = wasInPeerReview && !isNowInPeerReview;
 
     // Update the ref for next comparison
-    prevReviewAssignmentIdRef.current = reviewAssignmentId;
+    prevReviewAssignmentIdRef.current = activeReviewAssignmentId;
 
     // Priority 1: If we're in peer review mode, always use the review assignment's rubric
-    if (reviewAssignmentId && reviewAssignment?.rubric_id) {
+    if (activeReviewAssignmentId && reviewAssignment?.rubric_id) {
       setSelectedRubricIdState(reviewAssignment.rubric_id);
       updateSelectedRubricInURL(reviewAssignment.rubric_id);
       return;
@@ -715,7 +716,7 @@ function RubricView() {
       return;
     }
   }, [
-    reviewAssignmentId,
+    activeReviewAssignmentId,
     reviewAssignment?.rubric_id,
     submission.assignments.grading_rubric_id,
     assignmentRubricsData?.data,
@@ -724,7 +725,7 @@ function RubricView() {
   ]);
 
   const rubricIdToDisplay =
-    reviewAssignmentId && reviewAssignment?.rubric_id ? reviewAssignment.rubric_id : selectedRubricIdState;
+    activeReviewAssignmentId && reviewAssignment?.rubric_id ? reviewAssignment.rubric_id : selectedRubricIdState;
 
   // Use cached rubrics from useAssignment hook instead of making a separate API call
   const rubricToDisplayData = allRubrics.find((rubric) => rubric.id === rubricIdToDisplay);
@@ -739,17 +740,17 @@ function RubricView() {
   }
 
   const mainSubmissionReviewData = useSubmissionReview();
-  const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
+  const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(activeReviewAssignmentId);
 
   // Find or create submission review for the selected rubric
   const { submissionReview: selectedRubricReviewData } = useSubmissionReviewForRubric(
     selectedRubricIdState,
-    !reviewAssignmentId // Only enabled when not in peer review mode
+    !activeReviewAssignmentId // Only enabled when not in peer review mode
   );
 
   // Determine which review to use based on context
   let activeReviewForSidebar: SubmissionReview | undefined;
-  if (reviewAssignmentId && peerReviewSubmissionData && peerReviewSubmissionData.id) {
+  if (activeReviewAssignmentId && peerReviewSubmissionData && peerReviewSubmissionData.id) {
     // Peer review mode - use peer review data only if it has a valid ID
     activeReviewForSidebar = peerReviewSubmissionData;
   } else if (selectedRubricIdState && selectedRubricReviewData && selectedRubricReviewData.id) {
@@ -772,7 +773,7 @@ function RubricView() {
   const displayScoreFromReview = activeReviewForSidebar;
 
   const showHandGradingControls =
-    isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!reviewAssignmentId;
+    isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!activeReviewAssignmentId;
 
   return (
     <Box
@@ -788,11 +789,11 @@ function RubricView() {
       overflowY="auto"
     >
       <VStack align="start" gap={2}>
-        {isLoadingReviewAssignment && reviewAssignmentId && <Skeleton height="100px" />}
-        {reviewAssignmentError && reviewAssignmentId && (
+        {isLoadingReviewAssignment && activeReviewAssignmentId && <Skeleton height="100px" />}
+        {reviewAssignmentError && activeReviewAssignmentId && (
           <Text color="red.500">Error loading review details: {reviewAssignmentError.message}</Text>
         )}
-        {reviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
+        {activeReviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
           <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
             <Heading size="md">
               Review Task: {reviewAssignment.rubrics?.name} ({reviewAssignment.rubrics?.review_round})
@@ -808,7 +809,7 @@ function RubricView() {
             )}
           </Box>
         )}
-        {!reviewAssignmentId && !isLoadingAssignmentRubrics && rubricOptions.length > 1 && (
+        {!activeReviewAssignmentId && !isLoadingAssignmentRubrics && rubricOptions.length > 1 && (
           <Box w="full">
             <Text fontSize="sm" fontWeight="bold" mb={1}>
               Select Rubric to View:
@@ -821,7 +822,7 @@ function RubricView() {
                 updateSelectedRubricInURL(option?.value);
               }}
               isLoading={isLoadingAssignmentRubrics || isLoadingRubricToDisplay}
-              isDisabled={!!reviewAssignmentId}
+              isDisabled={!!activeReviewAssignmentId}
               chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
             />
           </Box>
@@ -831,13 +832,13 @@ function RubricView() {
             Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
           </Heading>
         )}
-        {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
+        {!activeReviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
         {showHandGradingControls && (
           <RubricSidebar
             initialRubric={preparedInitialRubric}
-            reviewAssignmentId={reviewAssignmentId}
+            reviewAssignmentId={activeReviewAssignmentId}
             submissionReview={activeReviewForSidebar}
           />
         )}
@@ -867,6 +868,7 @@ function Comments() {
 
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
   return (
@@ -921,13 +923,13 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         bg="bg.muted"
         defaultValue="results"
       >
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "results")}>
+        <NextLink prefetch={true} href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "files")}>
+        <NextLink prefetch={true} href={linkToSubPage(pathname, "files", searchParams)}>
           <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files

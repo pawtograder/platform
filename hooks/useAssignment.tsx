@@ -10,6 +10,11 @@ import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
 
+export function useSelfReviewSettings() {
+  const controller = useAssignmentController();
+  return controller.assignment.self_review_settings;
+}
+
 export function useRubricCheck(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
   if (!rubric_check_id) {
@@ -197,7 +202,7 @@ function AssignmentControllerCreator({
     queryOptions: { enabled: !!assignment_id },
     meta: {
       select:
-        "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
+        "*, self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
     }
   });
 
