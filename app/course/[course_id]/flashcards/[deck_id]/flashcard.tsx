@@ -30,6 +30,14 @@ type FlashcardProps = {
  * Handles the display of a single flashcard with proper interaction flows.
  * Styled to match the flashcard deck cards with compact design and consistent dimensions.
  * Features a flipping animation that transitions between question and answer sides.
+ * @param currentCard - The current flashcard being displayed
+ * @param flashcards - All flashcards in the deck for numbering purposes
+ * @param availableCards - Available cards (not yet mastered) for numbering purposes
+ * @param showAnswer - Whether the answer is currently shown
+ * @param onShowAnswer - Callback to show the answer
+ * @param onGotIt - Callback when user marks card as "Got It"
+ * @param onKeepTrying - Callback when user marks card as "Keep Trying"
+ * @returns A flashcard component with a flipping animation that transitions between question and answer sides.
  */
 export default function Flashcard({
   currentCard,

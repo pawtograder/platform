@@ -15,6 +15,10 @@ type FlashcardDeckCardProps = {
   courseId: string;
 };
 
+/**
+ * Skeleton for the FlashcardDeckCard component
+ * @returns A skeleton component for the FlashcardDeckCard
+ */
 export const FlashcardDeckCardSkeleton = () => {
   return (
     <Card.Root

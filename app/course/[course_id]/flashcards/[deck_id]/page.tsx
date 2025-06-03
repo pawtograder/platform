@@ -23,6 +23,7 @@ type StudentFlashcardProgressRow = Database["public"]["Tables"]["student_flashca
 /**
  * Page component for students to practice flashcards.
  * Includes comprehensive interaction logging for analytics and persistent progress tracking.
+ * @returns A React component that displays the flashcard deck and allows the user to practice the flashcards.
  */
 export default function FlashcardsDeckPage() {
   const params = useParams();

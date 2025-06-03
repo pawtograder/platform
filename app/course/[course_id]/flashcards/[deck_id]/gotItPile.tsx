@@ -16,6 +16,9 @@ type GotItPileProps = {
 /**
  * Component displaying the collection of mastered flashcards with options to return them to practice.
  * Shows a grid of card-shaped entries that the user has marked as "Got It" with return functionality.
+ * @param gotItCards - Array of flashcards that have been mastered
+ * @param onReturnCard - Callback to return a card back to the practice pile
+ * @returns A component displaying the collection of mastered flashcards with options to return them to practice.
  */
 export default function GotItPile({ gotItCards, onReturnCard }: GotItPileProps) {
   if (gotItCards.length === 0) {
