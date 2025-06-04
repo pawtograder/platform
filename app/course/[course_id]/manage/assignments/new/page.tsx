@@ -9,6 +9,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
 import CreateAssignment from "./form";
+import { useCreate } from "@refinedev/core";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
@@ -17,10 +18,12 @@ export default function NewAssignmentPage() {
   const { getValues } = form;
   const { time_zone } = useCourse();
   const timezone = time_zone || "America/New_York";
+  const { mutate, mutateAsync } = useCreate();
 
   const onSubmit = useCallback(async () => {
     async function create() {
       const supabase = createClient();
+
       // console.log(getValues("submission_files"));
       const { data, error } = await supabase
         .from("assignments")

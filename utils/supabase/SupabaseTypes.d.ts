@@ -1201,6 +1201,118 @@ export type Database = {
           }
         ];
       };
+      email_distribution_item: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          email_distribution_list_id: number | null;
+          id: number;
+          profile_id: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          email_distribution_list_id?: number | null;
+          id?: number;
+          profile_id?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          email_distribution_list_id?: number | null;
+          id?: number;
+          profile_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "email_distribution_item_keys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_distribution_item_keys_list_fkey";
+            columns: ["email_distribution_list_id"];
+            isOneToOne: false;
+            referencedRelation: "email_distribution_list";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_distribution_item_keys_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      email_distribution_list: {
+        Row: {
+          assignment_id: number | null;
+          class_id: number;
+          created_at: string;
+          id: number;
+          name: string;
+          tag_id: string | null;
+          type: Database["public"]["Enums"]["distribution_list_type"];
+        };
+        Insert: {
+          assignment_id?: number | null;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          name: string;
+          tag_id?: string | null;
+          type: Database["public"]["Enums"]["distribution_list_type"];
+        };
+        Update: {
+          assignment_id?: number | null;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          name?: string;
+          tag_id?: string | null;
+          type?: Database["public"]["Enums"]["distribution_list_type"];
+        };
+        Relationships: [
+          {
+            foreignKeyName: "email_distribution_list_keys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_distribution_list_keys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "email_distribution_list_keys_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "email_distribution_list_keys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_distribution_list_keys_tag_id_fkey";
+            columns: ["tag_id"];
+            isOneToOne: false;
+            referencedRelation: "tags";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       grader_keys: {
         Row: {
           class_id: number;
@@ -4274,6 +4386,7 @@ export type Database = {
       app_role: "admin" | "instructor" | "grader" | "student";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
+      distribution_list_type: "have_submitted" | "have_not_submitted" | "tag" | "custom";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
     };
@@ -4391,6 +4504,7 @@ export const Constants = {
       app_role: ["admin", "instructor", "grader", "student"],
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
+      distribution_list_type: ["have_submitted", "have_not_submitted", "tag", "custom"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       review_round: ["self-review", "grading-review", "meta-grading-review"]
     }
