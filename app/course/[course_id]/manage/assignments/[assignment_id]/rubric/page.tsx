@@ -1,7 +1,7 @@
 "use client";
 import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
-import RubricSidebar from "@/components/ui/rubric-sidebar";
+import { RubricSidebar } from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { AssignmentProvider } from "@/hooks/useAssignment";
 import {
@@ -19,7 +19,16 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
-import { HttpError, useCreate, useDataProvider, useDelete, useList, useShow, useUpdate } from "@refinedev/core";
+import {
+  HttpError,
+  useCreate,
+  useDataProvider,
+  useDelete,
+  useInvalidate,
+  useList,
+  useShow,
+  useUpdate
+} from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -295,6 +304,8 @@ export default function RubricPage() {
   const { assignment_id } = useParams();
   const { colorMode } = useColorMode();
   const dataProviderHook = useDataProvider();
+
+  const invalidate = useInvalidate();
 
   const { query: assignmentQuery } = useShow<Assignment>({
     resource: "assignments",
@@ -864,6 +875,7 @@ export default function RubricPage() {
             resource: "rubrics",
             values: newRubricPayload
           });
+          invalidate({ resource: "assignments", invalidates: ["all"] });
           currentEffectiveRubricId = createdTopLevelRubric.data.id as number;
           if (!currentEffectiveRubricId) throw new Error("Failed to create rubric shell.");
 
@@ -1328,11 +1340,7 @@ export default function RubricPage() {
 
               {!error && rubricForSidebar && (
                 <VStack gap={4} align="stretch">
-                  <RubricSidebar
-                    initialRubric={rubricForSidebar}
-                    assignmentId={Number(assignment_id)}
-                    classId={assignmentDetails?.class_id}
-                  />
+                  <RubricSidebar initialRubric={rubricForSidebar} />
                 </VStack>
               )}
               {error && (

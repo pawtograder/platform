@@ -1,5 +1,5 @@
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useSubmissionReview } from "@/hooks/useSubmission";
+import { useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
 import {
   SubmissionFile,
   SubmissionFileComment,
@@ -43,7 +43,7 @@ export default function LineCommentForm({
   const invalidateQuery = useInvalidate();
   const [eventuallyVisible, setEventuallyVisible] = useState(defaultEventuallyVisible ?? true);
 
-  const fetchedSubmissionReview = useSubmissionReview(submissionReviewId);
+  const fetchedSubmissionReview = useSubmissionReviewOrGradingReview(submissionReviewId);
   const isLoadingReviewDetails = submissionReviewId !== undefined && fetchedSubmissionReview === undefined;
 
   const postComment = useCallback(
