@@ -1,5 +1,4 @@
 import AssignmentGradingToolbar from "@/components/ui/assignment-grading-toolbar";
-import AssignmentSelfReviewToolbar from "@/components/ui/assignment-self-review-toolbar";
 import { AssignmentProvider } from "@/hooks/useAssignment";
 import { isInstructorOrGrader } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
@@ -20,7 +19,6 @@ export default async function SubmissionsLayout({
     .eq("id", Number(assignment_id))
     .single();
   const showGradingToolbar = await isInstructorOrGrader(Number(course_id));
-  const hasSelfReview = !showGradingToolbar && assignment?.self_review_settings?.enabled;
   return (
     <AssignmentProvider assignment_id={Number(assignment_id)}>
       <VStack w="100%" gap={0}>
@@ -35,7 +33,6 @@ export default async function SubmissionsLayout({
         >
           <Heading size="lg">{assignment?.title}</Heading>
           {showGradingToolbar && <AssignmentGradingToolbar />}
-          {hasSelfReview && <AssignmentSelfReviewToolbar />}
         </HStack>
 
         <Box borderColor="border.muted" borderWidth="2px" w="100%" borderTopRadius={0} borderBottomRadius="md">

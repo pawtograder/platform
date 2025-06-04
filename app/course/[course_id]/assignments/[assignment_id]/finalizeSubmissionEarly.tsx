@@ -1,9 +1,10 @@
 "use client";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { Assignment, AssignmentDueDateException, AssignmentGroupMember } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
 import { CrudFilter, useCreate, useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
 import { addHours, addMinutes, differenceInMinutes } from "date-fns";
+import { useParams } from "next/navigation";
 
 export default function FinalizeSubmissionEarly({
   assignment,
@@ -101,19 +102,29 @@ export default function FinalizeSubmissionEarly({
 
   return (
     <Box width="50%" alignItems={"center"}>
-      <Button
-        float="right"
-        disabled={
-          (extensionRecordsForStudent?.data &&
-            extensionRecordsForStudent.data.filter((record) => {
-              return record.hours < 0 || record.minutes < 0;
-            }).length > 0) ||
-          deadlinePassed() // to avoid clicking quickly twice while review processing
+      <PopConfirm
+        triggerLabel="Finalize Submission Early"
+        trigger={
+          <Button
+            float="right"
+            variant="surface"
+            colorPalette="green"
+            disabled={
+              (extensionRecordsForStudent?.data &&
+                extensionRecordsForStudent.data.filter((record) => {
+                  return record.hours < 0 || record.minutes < 0;
+                }).length > 0) ||
+              deadlinePassed() // to avoid clicking quickly twice while review processing
+            }
+          >
+            Finalize Submission Early
+          </Button>
         }
-        onClick={finalizeSubmission}
-      >
-        Finalize Submission Early
-      </Button>
+        confirmHeader="Finalize Submission Early"
+        confirmText="Are you sure you want to finalize your submission early? You will not be able to change your submission after this."
+        onConfirm={finalizeSubmission}
+        onCancel={() => {}}
+      />
     </Box>
   );
 }

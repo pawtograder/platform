@@ -102,7 +102,7 @@ type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
 export default function CodeFile({ file }: { file: SubmissionFile }) {
   const submission = useSubmission();
   const submissionReview = useActiveSubmissionReview();
-  const showCommentsFeature = submission.released !== null || submissionReview !== undefined;
+  const showCommentsFeature = true; //submission.released !== null || submissionReview !== undefined;
 
   const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
   const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
@@ -673,13 +673,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
             check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
         )
       );
-  } else if (submission.assignments.rubrics?.rubric_criteria) {
-    // Fallback to submission's rubric (different structure)
-    criteriaWithAnnotationChecks = submission.assignments.rubrics.rubric_criteria.filter((criteria) =>
-      criteria.rubric_checks.some(
-        (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-      )
-    );
   }
   const criteria: RubricCriteriaSelectGroupOption[] =
     (criteriaWithAnnotationChecks?.map((criteria) => ({
@@ -741,7 +734,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
         <chakraComponents.GroupHeading {...props}>
           {props.data.criteria ? (
             <>
-              Criteria: {props.data.label} ({props.data.criteria.total_points} points total)
+              Criteria: {props.data.label}
+              {props.data.criteria.total_points ? ` (${props.data.criteria.total_points} points total)` : ""}
             </>
           ) : (
             <>
@@ -754,20 +748,24 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
     SingleValue: (props) => {
       const points =
         props.data.criteria &&
+        props.data.check?.points &&
         "(" + (props.data.criteria.is_additive ? "+" : "-" + props.data.check?.points?.toString()) + ")";
       return (
         <chakraComponents.SingleValue {...props}>
           {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
           {isRubricCheckDataWithOptions(props.data.check?.data)
             ? `(Select an option)`
-            : points !== undefined && `${points} points`}
+            : points
+              ? `${points} points`
+              : ""}
         </chakraComponents.SingleValue>
       );
     },
     Option: (props) => {
       const points =
-        props.data.criteria &&
-        "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")";
+        props.data.criteria && props.data.check?.points
+          ? "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")"
+          : "";
       return (
         <chakraComponents.Option {...props}>
           {props.data.label} {points}
@@ -834,7 +832,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 size="sm"
               />
             )}
-            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points !== undefined && (
+            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points ? (
               <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
                 {formatPoints({
                   check: selectedCheckOption.check,
@@ -842,8 +840,10 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   points: selectedCheckOption.check.points
                 })}
               </Text>
+            ) : (
+              <></>
             )}
-            {selectedSubOption && selectedCheckOption.check && (
+            {selectedSubOption && selectedCheckOption.check ? (
               <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
                 {formatPoints({
                   check: selectedCheckOption.check,
@@ -851,6 +851,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   points: selectedSubOption.points
                 })}
               </Text>
+            ) : (
+              <></>
             )}
             {isGraderOrInstructor && (
               <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>

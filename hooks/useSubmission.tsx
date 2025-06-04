@@ -666,6 +666,24 @@ export function useAllRubricCheckInstances(review_id: number | undefined) {
 
   return filteredComments;
 }
+export function useAllCommentsForReview(review_id: number | undefined) {
+  const ctx = useContext(SubmissionContext);
+  const fileComments = useSubmissionFileComments({});
+  const submissionComments = useSubmissionComments({});
+  const artifactComments = useSubmissionArtifactComments({});
+
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!ctx || !review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments, ...artifactComments];
+    const filtered = comments.filter((c) => c.submission_review_id === review_id);
+
+    return filtered;
+  }, [ctx, fileComments, submissionComments, artifactComments, review_id]);
+  return filteredComments;
+}
 export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
   const ctx = useContext(SubmissionContext);
   const fileComments = useSubmissionFileComments({});
@@ -803,7 +821,7 @@ export function useSubmissionReviews() {
   return reviews;
 }
 
-export function useSubmissionReview(reviewId?: number | null) {
+export function useSubmissionReviewOrGradingReview(reviewId?: number | null) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
   const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
@@ -826,7 +844,7 @@ export function useSubmissionReview(reviewId?: number | null) {
     return () => unsubscribe();
   }, [ctx, controller, reviewId]);
 
-  if (!ctx) {
+  if (!ctx || !reviewId) {
     return undefined;
   }
 
@@ -1056,32 +1074,18 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
   return allRelevantComments;
 }
 
-export function useSubmissionReviewForRubric(
-  rubricId?: number | null,
-  enabled: boolean = true
-): {
-  submissionReview: SubmissionReview | undefined;
-  isLoading: boolean;
-  error: Error | undefined;
-} {
+export function useSubmissionReviewForRubric(rubricId?: number | null): SubmissionReview | undefined {
   const controller = useSubmissionController();
   const submission = controller?.submission;
   const { private_profile_id } = useClassProfiles();
 
   const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState<boolean>(enabled);
-  const [error, setError] = useState<Error | undefined>(undefined);
 
   useEffect(() => {
-    if (!enabled || !rubricId || !submission || !controller || !private_profile_id) {
+    if (!rubricId || !submission || !controller || !private_profile_id) {
       setSubmissionReview(undefined);
-      setIsLoading(false);
-      setError(undefined);
       return;
     }
-
-    setIsLoading(true);
-    setError(undefined);
 
     // Try to find an existing submission review for this rubric
     const { unsubscribe, data: existingReview } = controller.getValueWithSubscription<SubmissionReview>(
@@ -1094,29 +1098,14 @@ export function useSubmissionReviewForRubric(
 
     if (existingReview) {
       setSubmissionReview(existingReview);
-      setIsLoading(false);
     } else {
-      // No existing review found - create a placeholder that will be properly created when first comment is made
-      const newReviewPlaceholder: Partial<SubmissionReview> = {
-        submission_id: submission.id,
-        rubric_id: rubricId,
-        grader: private_profile_id,
-        class_id: submission.class_id,
-        name: `Review for submission ${submission.id}`,
-        total_score: 0,
-        total_autograde_score: 0,
-        tweak: 0,
-        released: false
-        // id will be undefined until saved to database
-      };
-      setSubmissionReview(newReviewPlaceholder as SubmissionReview);
-      setIsLoading(false);
+      setSubmissionReview(undefined);
     }
 
     return () => unsubscribe();
-  }, [enabled, rubricId, submission, controller, private_profile_id]);
+  }, [rubricId, submission, controller, private_profile_id]);
 
-  return { submissionReview, isLoading, error };
+  return submissionReview;
 }
 export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {
   const assignmentController = useAssignmentController();
@@ -1157,7 +1146,9 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
     }
     return submissionReviews?.filter(
       (sr) =>
-        writableRubrics.some((r) => r.id === sr.rubric_id) && (rubric_id === undefined || sr.rubric_id === rubric_id)
+        writableRubrics.some((r) => r.id === sr.rubric_id) &&
+        (rubric_id === undefined || sr.rubric_id === rubric_id) &&
+        (role.role === "instructor" || role.role == "grader" || !sr.completed_at)
     );
   }, [role, rubrics, submissionReviews, assignments, rubric_id]);
   return memoizedReviews;

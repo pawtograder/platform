@@ -51,6 +51,26 @@ begin
 end;
 $function$
 ;
+CREATE OR REPLACE FUNCTION public.authorize_for_submission_review_writable(submission_review_id bigint)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+begin
+    -- Only write to a submission review if there is a review assignment for the user and it is not done.
+    return (
+        select exists (
+            select 1
+            from submission_reviews sr
+            left join review_assignments ra
+                on ra.submission_review_id = sr.id
+            left join user_roles ur on ur.private_profile_id = ra.assignee_profile_id and ur.class_id=sr.class_id
+            where sr.id=authorize_for_submission_review_writable.submission_review_id and sr.completed_at is null and ur.user_id = auth.uid()
+        )
+    );
+end;
+$function$
+;
 CREATE OR REPLACE FUNCTION public.assignments_grader_config_auto_populate()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -176,8 +196,8 @@ BEGIN
     LIMIT 1;
 
     IF existing_submission_review_id IS NULL THEN
-        INSERT INTO submission_reviews (total_score, released,tweak,class_id,submission_id,name,rubric_id)
-        VALUES (0, false, 0, this_assignment.class_id, this_active_submission_id, 'Self Review', this_assignment.self_review_rubric_id)
+        INSERT INTO submission_reviews (total_score, released,tweak,class_id,submission_id,name,rubric_id, released)
+        VALUES (0, false, 0, this_assignment.class_id, this_active_submission_id, 'Self Review', this_assignment.self_review_rubric_id, true)
         RETURNING id INTO existing_submission_review_id;
     END IF;
 
@@ -254,3 +274,4 @@ alter table "public"."review_assignments" add column "submission_review_id" bigi
 alter table "public"."review_assignments" add constraint "review_assignments_submission_review_id_fkey" FOREIGN KEY (submission_review_id) REFERENCES submission_reviews(id) not valid;
 
 alter table "public"."review_assignments" validate constraint "review_assignments_submission_review_id_fkey";
+
