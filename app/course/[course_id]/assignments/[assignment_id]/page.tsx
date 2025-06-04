@@ -1,7 +1,7 @@
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
-import { Repository } from "@/utils/supabase/DatabaseTypes";
+import { Repository, SelfReviewSettings, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
 import { Alert, Box, Flex, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
@@ -9,6 +9,7 @@ import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import FinishSubmissionEarly from "./finalizeSubmissionEarly";
 import ManageGroupWidget from "./manageGroupWidget";
+import SelfReviewNotice from "@/components/ui/self-review-notice";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {
@@ -141,6 +142,16 @@ export default async function AssignmentPage({
       )}
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
+      </Box>
+      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
+        <SelfReviewNotice
+          review_settings={review_settings ?? ({} as SelfReviewSettings)}
+          assignment={assignment}
+          enrollment={enrollment ?? ({} as UserRole)}
+          activeSubmission={submissions?.find((sm) => {
+            return sm.is_active;
+          })}
+        />
       </Box>
 
       <Heading size="md">Submission History</Heading>
