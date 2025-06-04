@@ -1185,7 +1185,6 @@ export type Database = {
           description: string | null;
           id: number;
           name: string;
-          source_yml: string | null;
           updated_at: string | null;
         };
         Insert: {
@@ -1196,7 +1195,6 @@ export type Database = {
           description?: string | null;
           id?: number;
           name: string;
-          source_yml?: string | null;
           updated_at?: string | null;
         };
         Update: {
@@ -1207,7 +1205,6 @@ export type Database = {
           description?: string | null;
           id?: number;
           name?: string;
-          source_yml?: string | null;
           updated_at?: string | null;
         };
         Relationships: [
@@ -4461,9 +4458,33 @@ export type Database = {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
       };
+      log_flashcard_interaction: {
+        Args: {
+          p_action: string;
+          p_class_id: number;
+          p_deck_id: number;
+          p_student_id: string;
+          p_card_id: number;
+          p_duration_on_card_ms: number;
+        };
+        Returns: undefined;
+      };
+      reset_all_flashcard_progress: {
+        Args: { p_class_id: number; p_student_id: string; p_card_ids: number[] };
+        Returns: undefined;
+      };
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
+      };
+      update_card_progress: {
+        Args: {
+          p_class_id: number;
+          p_student_id: string;
+          p_card_id: number;
+          p_is_mastered: boolean;
+        };
+        Returns: undefined;
       };
     };
     Enums: {

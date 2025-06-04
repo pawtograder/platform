@@ -9,11 +9,13 @@ import useAuthState from "@/hooks/useAuthState";
 import { useList, useOne } from "@refinedev/core";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import Link from "@/components/ui/link";
-import { toaster } from "@/components/ui/toaster";
+import { Toaster, toaster } from "@/components/ui/toaster";
 import { Alert } from "@/components/ui/alert";
 import { updateCardProgress, resetAllProgress, logFlashcardInteraction } from "./actions";
 import Flashcard from "./flashcard";
 import GotItPile from "./gotItPile";
+
+// TODO: Replace server actions with Database functions
 
 // Type definitions
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
@@ -44,6 +46,7 @@ export default function FlashcardsDeckPage() {
   const [gotItCardIds, setGotItCardIds] = useState<Set<number>>(new Set());
   const [sessionStarted, setSessionStarted] = useState<boolean>(false);
   const [progressLoaded, setProgressLoaded] = useState<boolean>(false);
+  const [cardQueue, setCardQueue] = useState<FlashcardRow[]>([]);
 
   // Fetch deck data
   const {
@@ -125,7 +128,7 @@ export default function FlashcardsDeckPage() {
     }
   }, [isProgressLoading, progressData?.data, masteredCardIds]);
 
-  // Create shuffled array of available cards (excluding those in "got it" pile)
+  // Create shuffled array of available cards, excluding those in "got it" pile (Fisher-Yates shuffle)
   const availableCards = useMemo(() => {
     const available = flashcards.filter((card) => !gotItCardIds.has(card.id));
     // Shuffle the array for random order
@@ -137,16 +140,30 @@ export default function FlashcardsDeckPage() {
     return shuffled;
   }, [flashcards, gotItCardIds]);
 
+  // Update card queue when available cards change
+  useEffect(() => {
+    if (availableCards.length > 0) {
+      setCardQueue(availableCards);
+      // Reset to first card if current index is out of bounds
+      if (currentCardIndex >= availableCards.length) {
+        setCurrentCardIndex(0);
+      }
+    } else {
+      setCardQueue([]);
+      setCurrentCardIndex(0);
+    }
+  }, [availableCards, currentCardIndex]);
+
   const gotItCards = useMemo(() => {
     return flashcards.filter((card) => gotItCardIds.has(card.id));
   }, [flashcards, gotItCardIds]);
 
-  const currentCard = availableCards[currentCardIndex] || null;
+  const currentCard = cardQueue[currentCardIndex] || null;
 
   // Display a new card and log the prompt view
   const displayCard = useCallback(
     (cardIndex: number) => {
-      const card = availableCards[cardIndex];
+      const card = cardQueue[cardIndex];
       if (!card || !user?.id) return;
 
       setCurrentCardIndex(cardIndex);
@@ -155,7 +172,7 @@ export default function FlashcardsDeckPage() {
       setAnswerViewTimestamp(0); // Reset answer timestamp for new card
       logFlashcardInteraction("card_prompt_viewed", courseIdNum, deckIdNum, user.id, card.id);
     },
-    [availableCards, user?.id, courseIdNum, deckIdNum]
+    [cardQueue, user?.id, courseIdNum, deckIdNum]
   );
 
   // Log deck viewed when session starts
@@ -168,16 +185,16 @@ export default function FlashcardsDeckPage() {
 
   // Initialize with first card when cards are loaded and properly set up timing
   useEffect(() => {
-    if (!sessionStarted || availableCards.length === 0) return;
+    if (!sessionStarted || cardQueue.length === 0) return;
 
     // If we have cards and current index is out of bounds, reset to 0
-    if (currentCardIndex >= availableCards.length) {
+    if (currentCardIndex >= cardQueue.length) {
       displayCard(0);
-    } else if (promptViewTimestamp === 0 && availableCards[currentCardIndex]) {
+    } else if (promptViewTimestamp === 0 && cardQueue[currentCardIndex]) {
       // If we have a current card but no timestamp set, initialize it properly
       displayCard(currentCardIndex);
     }
-  }, [availableCards, sessionStarted, currentCardIndex, promptViewTimestamp, displayCard]);
+  }, [cardQueue, sessionStarted, currentCardIndex, promptViewTimestamp, displayCard]);
 
   // Handle showing the answer
   const handleShowAnswer = useCallback(() => {
@@ -218,16 +235,15 @@ export default function FlashcardsDeckPage() {
     // Add card to "got it" pile locally
     setGotItCardIds((prev) => new Set([...prev, currentCard.id]));
 
-    // Show next card or handle completion
-    // After removing a card from available cards, we need to check the new array length
-    if (currentCardIndex < availableCards.length - 1) {
-      displayCard(currentCardIndex);
-    } else {
-      // No more cards at current index, reset to beginning or show completion
-      if (availableCards.length > 1) {
-        displayCard(0);
+    // Remove the card from the queue and adjust index if needed
+    setCardQueue((prevQueue) => {
+      const newQueue = prevQueue.filter((card) => card.id !== currentCard.id);
+      // If we're at the last card, go back to the beginning
+      if (currentCardIndex >= newQueue.length && newQueue.length > 0) {
+        setCurrentCardIndex(0);
       }
-    }
+      return newQueue;
+    });
 
     // Refetch progress to keep data in sync
     refetchProgress();
@@ -239,14 +255,14 @@ export default function FlashcardsDeckPage() {
     courseIdNum,
     deckIdNum,
     currentCardIndex,
-    availableCards.length,
-    displayCard,
     refetchProgress
   ]);
 
-  // Handle "Keep Trying" action
+  // Handle "Keep Trying" action - move current card to back of queue
   const handleKeepTrying = useCallback(() => {
-    if (!currentCard || !user?.id) return;
+    if (!currentCard || !user?.id) {
+      return;
+    }
 
     // Calculate duration since answer was shown (or prompt if answer not shown yet)
     const duration =
@@ -257,9 +273,33 @@ export default function FlashcardsDeckPage() {
           : 0;
     logFlashcardInteraction("card_marked_keep_trying", courseIdNum, deckIdNum, user.id, currentCard.id, duration);
 
-    // Show next card
-    const nextIndex = (currentCardIndex + 1) % availableCards.length;
-    displayCard(nextIndex);
+    if (cardQueue.length <= 1) {
+      toaster.create({
+        title: "No cards to keep trying",
+        description:
+          "There are no more cards to keep trying. You have mastered all remaining cards in this deck. You can reset your progress and start over.",
+        type: "info"
+      });
+      return;
+    }
+
+    // Move current card to the back of the queue
+    setCardQueue((prevQueue) => {
+      const newQueue = [...prevQueue];
+      const currentCardToMove = newQueue.splice(currentCardIndex, 1)[0];
+      newQueue.push(currentCardToMove);
+      return newQueue;
+    });
+
+    // Stay at the same index (which now shows the next card)
+    // But if we were at the last card, we need to go to index 0
+    if (currentCardIndex >= cardQueue.length - 1) {
+      setCurrentCardIndex(0);
+    }
+
+    // Display the new current card
+    const nextCardIndex = currentCardIndex >= cardQueue.length - 1 ? 0 : currentCardIndex;
+    displayCard(nextCardIndex);
   }, [
     currentCard,
     user?.id,
@@ -268,7 +308,7 @@ export default function FlashcardsDeckPage() {
     courseIdNum,
     deckIdNum,
     currentCardIndex,
-    availableCards.length,
+    cardQueue.length,
     displayCard
   ]);
 
@@ -398,7 +438,7 @@ export default function FlashcardsDeckPage() {
   }
 
   // All cards completed
-  if (availableCards.length === 0) {
+  if (cardQueue.length === 0) {
     return (
       <Container maxW="4xl" mt={2}>
         <VStack align="stretch" gap={6}>
@@ -454,7 +494,7 @@ export default function FlashcardsDeckPage() {
             <Text fontSize="sm">
               Progress: {gotItCards.length} / {flashcards.length} cards mastered
             </Text>
-            <Text fontSize="sm">Remaining: {availableCards.length}</Text>
+            <Text fontSize="sm">Remaining: {cardQueue.length}</Text>
           </HStack>
           <Progress.Root value={(gotItCards.length / flashcards.length) * 100} size="lg" colorPalette="green">
             <Progress.Track>
@@ -467,8 +507,7 @@ export default function FlashcardsDeckPage() {
         {currentCard && (
           <Flashcard
             currentCard={currentCard}
-            flashcards={flashcards}
-            availableCards={availableCards}
+            availableCards={cardQueue}
             showAnswer={showAnswer}
             onShowAnswer={handleShowAnswer}
             onGotIt={handleGotIt}
@@ -479,6 +518,7 @@ export default function FlashcardsDeckPage() {
         {/* "Got It" pile summary */}
         <GotItPile gotItCards={gotItCards} onReturnCard={handleReturnCard} />
       </VStack>
+      <Toaster />
     </Container>
   );
 }

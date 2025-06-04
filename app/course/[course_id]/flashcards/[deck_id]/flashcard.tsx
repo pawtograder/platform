@@ -11,9 +11,7 @@ type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 type FlashcardProps = {
   /** The current flashcard being displayed */
   currentCard: FlashcardRow;
-  /** All flashcards in the deck for numbering purposes */
-  flashcards: FlashcardRow[];
-  /** Available cards (not yet mastered) for numbering purposes */
+  /** Available cards (current queue) for numbering purposes */
   availableCards: FlashcardRow[];
   /** Whether the answer is currently shown */
   showAnswer: boolean;
@@ -31,8 +29,7 @@ type FlashcardProps = {
  * Styled to match the flashcard deck cards with compact design and consistent dimensions.
  * Features a flipping animation that transitions between question and answer sides.
  * @param currentCard - The current flashcard being displayed
- * @param flashcards - All flashcards in the deck for numbering purposes
- * @param availableCards - Available cards (not yet mastered) for numbering purposes
+ * @param availableCards - Available cards (current queue) for numbering purposes
  * @param showAnswer - Whether the answer is currently shown
  * @param onShowAnswer - Callback to show the answer
  * @param onGotIt - Callback when user marks card as "Got It"
@@ -41,13 +38,17 @@ type FlashcardProps = {
  */
 export default function Flashcard({
   currentCard,
-  flashcards,
   availableCards,
   showAnswer,
   onShowAnswer,
   onGotIt,
   onKeepTrying
 }: FlashcardProps) {
+  // Calculate current position in the queue
+  const currentCardIndex = availableCards.findIndex((card) => card.id === currentCard.id);
+  const currentPosition = currentCardIndex + 1;
+  const totalInQueue = availableCards.length;
+
   return (
     <Box height="49em" width="35em" mx="auto" position="relative" style={{ perspective: "1000px" }}>
       {/* Card Container with Flip Animation */}
@@ -83,7 +84,7 @@ export default function Flashcard({
           <Card.Header p={2}>
             <VStack gap={2}>
               <Badge variant="outline" fontSize="sm">
-                Card {flashcards.length - availableCards.length + 1} of {flashcards.length}
+                Card {currentPosition} of {totalInQueue} remaining
               </Badge>
               <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
                 {currentCard.title}
@@ -147,7 +148,7 @@ export default function Flashcard({
           <Card.Header p={2}>
             <VStack gap={2}>
               <Badge variant="outline" fontSize="sm">
-                Card {flashcards.length - availableCards.length + 1} of {flashcards.length}
+                Card {currentPosition} of {totalInQueue} remaining
               </Badge>
               <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
                 {currentCard.title}
