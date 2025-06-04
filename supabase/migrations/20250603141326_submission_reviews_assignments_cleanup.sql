@@ -221,13 +221,13 @@ BEGIN
     );
 END; 
 $$;
+
 create policy "insert for self"
 on "public"."submission_artifact_comments"
 as permissive
 for insert
 to public
 with check ((authorizeforprofile(author) AND (authorizeforclassgrader(class_id) OR ((submission_review_id IS NULL) AND authorize_for_submission(submission_id)) OR authorize_for_submission_review(submission_review_id))));
-
 
 create policy "students view own, instructors and graders view all"
 on "public"."submission_artifact_comments"

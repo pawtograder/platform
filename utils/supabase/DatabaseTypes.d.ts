@@ -8,7 +8,7 @@ export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
+  "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
 >;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
@@ -561,8 +561,8 @@ export type RubricCheckReference = GetResult<
 
 export type SelfReviewSettings = GetResult<
   Database["public"],
-  Database["public"]["Tables"]["self_review_settings"]["Row"],
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Row"],
   "self_review_settings",
-  Database["public"]["Tables"]["self_review_settings"]["Relationships"],
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Relationships"],
   "*"
 >;

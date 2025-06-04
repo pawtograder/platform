@@ -141,7 +141,7 @@ class SubmissionController {
       });
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => {},
+          unsubscribe: () => { },
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -229,7 +229,7 @@ class SubmissionController {
       );
     }
   }
-  constructor() {}
+  constructor() { }
 
   get isReady() {
     return this._submission !== undefined;
@@ -1075,7 +1075,8 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
 }
 
 export function useSubmissionReviewForRubric(rubricId?: number | null): SubmissionReview | undefined {
-  const controller = useSubmissionController();
+  const ctx = useContext(SubmissionContext);
+  const controller = ctx?.submissionController;
   const submission = controller?.submission;
   const { private_profile_id } = useClassProfiles();
 

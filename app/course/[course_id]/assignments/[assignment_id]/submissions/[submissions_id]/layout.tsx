@@ -2,9 +2,6 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
-  HydratedRubricCheck,
-  HydratedRubricCriteria,
-  HydratedRubricPart,
   Submission,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
@@ -20,7 +17,6 @@ import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { Toaster } from "@/components/ui/toaster";
-import { useMyReviewAssignments } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import {
@@ -35,11 +31,9 @@ import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
-import { OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -54,11 +48,6 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
-
-interface RubricOptionType extends OptionBase {
-  value: number;
-  label: string;
-}
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -355,57 +344,6 @@ function ReviewStats() {
   );
 }
 
-function incompleteRubricChecks(
-  rubric: Tables<"rubrics"> & { rubric_parts: Array<HydratedRubricPart> },
-  comments: { rubric_check_id: number | null; submission_review_id: number | null }[]
-): {
-  required_checks: HydratedRubricCheck[];
-  optional_checks: HydratedRubricCheck[];
-  required_criteria: {
-    criteria: HydratedRubricCriteria;
-    check_count_applied: number;
-  }[];
-  optional_criteria: {
-    criteria: HydratedRubricCriteria;
-    check_count_applied: number;
-  }[];
-} {
-  const allRubricCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria || []);
-
-  const required_checks = allRubricCriteria.flatMap((criteria) =>
-    criteria.rubric_checks.filter(
-      (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
-    )
-  ) as HydratedRubricCheck[];
-  const optional_checks = allRubricCriteria
-    .filter((criteria) => criteria.min_checks_per_submission === null)
-    .flatMap((criteria) =>
-      criteria.rubric_checks.filter(
-        (check) => !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
-      )
-    ) as HydratedRubricCheck[];
-  const criteriaEvaluation = allRubricCriteria.map((criteria) => ({
-    criteria: criteria as HydratedRubricCriteria,
-    check_count_applied: criteria.rubric_checks.filter((check) =>
-      comments.some((comment) => comment.rubric_check_id === check.id)
-    ).length
-  }));
-  const required_criteria = criteriaEvaluation.filter(
-    (item) =>
-      item.criteria.min_checks_per_submission !== null &&
-      item.check_count_applied < item.criteria.min_checks_per_submission
-  );
-  const optional_criteria = criteriaEvaluation.filter(
-    (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
-  );
-  return {
-    required_checks,
-    optional_checks,
-    required_criteria,
-    optional_criteria
-  };
-}
-
 function ReviewActions() {
   const review = useSubmissionReviewOrGradingReview();
   const { private_profile_id } = useClassProfiles();
@@ -498,7 +436,6 @@ function UnGradedGradingSummary() {
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const myAssignedReviews = useMyReviewAssignments(submission.id);
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const scrollRootRef = useRef<HTMLDivElement>(null);
 

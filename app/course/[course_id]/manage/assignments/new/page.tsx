@@ -27,7 +27,7 @@ export default function NewAssignmentPage() {
       const isEnabled = getValues("eval_config") === "use_eval";
       const settings = await mutateAsync(
         {
-          resource: "self_review_settings",
+          resource: "assignment_self_review_settings",
           values: {
             enabled: isEnabled,
             deadline_offset: isEnabled ? getValues("deadline_offset") : null,

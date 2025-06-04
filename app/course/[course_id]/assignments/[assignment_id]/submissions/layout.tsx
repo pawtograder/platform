@@ -15,7 +15,7 @@ export default async function SubmissionsLayout({
   const client = await createClient();
   const { data: assignment } = await client
     .from("assignments")
-    .select("*, self_review_settings(*)")
+    .select("*, assignment_self_review_settings(*)")
     .eq("id", Number(assignment_id))
     .single();
   const showGradingToolbar = await isInstructorOrGrader(Number(course_id));

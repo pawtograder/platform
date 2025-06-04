@@ -202,16 +202,35 @@ function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType
 }
 
 function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }) {
-  const [withEval, setWithEval] = useState<boolean>(() => {
-    const groupConfig = form.getValues("eval_config");
-    return groupConfig === "use_eval";
-  });
+  const [withEval, setWithEval] = useState<boolean>(false);
+  const [allowEarly, setAllowEarly] = useState<boolean>(form.getValues("allow_early") == true);
 
   const {
     register,
     getValues,
+    watch,
     formState: { errors }
   } = form;
+
+  // capture eval state changes with delayed loading
+  useEffect(() => {
+    const subscription = watch((value, { name }) => {
+      if (name === "eval_config" || !name) {
+        setWithEval(value.eval_config === "use_eval");
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
+  useEffect(() => {
+    const subscription = watch((value, { name }) => {
+      if (name === "allow_early" || !name) {
+        setAllowEarly(value.allow_early);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [watch]);
+
   return (
     <CardRoot>
       <CardHeader>
@@ -228,9 +247,8 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
             <NativeSelectRoot {...register("eval_config", { required: true })}>
               <NativeSelectField
                 name="eval_config"
-                defaultValue="base_only"
                 onChange={(e) => {
-                  setWithEval(e.target.value === "use_eval");
+                  setWithEval(e.target.value == "use_eval");
                 }}
               >
                 <option value="base_only">Programming assignment only</option>
@@ -265,7 +283,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
               helperText="Students can submit self evaluation before programming assignment deadline"
               required={withEval}
             >
-              <Checkbox.Root {...register("allow_early")}>
+              <Checkbox.Root {...register("allow_early")} checked={allowEarly}>
                 <Checkbox.HiddenInput />
                 <Checkbox.Control>
                   {" "}

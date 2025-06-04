@@ -615,7 +615,7 @@ export type Database = {
             foreignKeyName: "assignments_self_review_setting_fkey";
             columns: ["self_review_setting_id"];
             isOneToOne: false;
-            referencedRelation: "self_review_settings";
+            referencedRelation: "assignment_self_review_settings";
             referencedColumns: ["id"];
           }
         ];
@@ -2894,7 +2894,7 @@ export type Database = {
           }
         ];
       };
-      self_review_settings: {
+      assignment_self_review_settings: {
         Row: {
           allow_early: boolean | null;
           class_id: number;

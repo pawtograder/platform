@@ -3,7 +3,7 @@
 import { toaster } from "@/components/ui/toaster";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, SelfReviewSettings } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Skeleton } from "@chakra-ui/react";
 import { useOne, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
@@ -29,15 +29,29 @@ export default function EditAssignment() {
     }
   }, [queryData, reset]);
 
+  const { data: selfReviewSetting } = useOne<SelfReviewSettings>({
+    resource: "assignment_self_review_settings",
+    id: queryData?.self_review_setting_id
+  });
+  useEffect(() => {
+    if (queryData) {
+      console.log(selfReviewSetting?.data.enabled);
+      form.setValue("eval_config", selfReviewSetting?.data.enabled ? "use_eval" : "base_only");
+      form.setValue("deadline_offset", selfReviewSetting?.data.deadline_offset);
+      form.setValue("allow_early", selfReviewSetting?.data.allow_early);
+    }
+  }, [queryData, form]);
+
   const onFinish = useCallback(
     async (values: FieldValues) => {
       try {
         const supabase = createClient();
+        console.log(values.allow_early);
         if (values) {
           const isEnabled = values.eval_config == "use_eval";
           update(
             {
-              resource: "self_review_settings",
+              resource: "assignment_self_review_settings",
               id: data?.data.self_review_setting_id,
               values: {
                 enabled: isEnabled,

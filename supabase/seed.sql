@@ -4,7 +4,7 @@ DO $$
 DECLARE 
     alyssa_self_review_id int8;
 BEGIN
-INSERT INTO public.self_review_settings(id, enabled, deadline_offset, allow_early, class_id)
+INSERT INTO public.assignment_self_review_settings(id, enabled, deadline_offset, allow_early, class_id)
   VALUES (1, true, 2, true, 1) RETURNING id into alyssa_self_review_id;
     
 INSERT INTO public.assignments (
