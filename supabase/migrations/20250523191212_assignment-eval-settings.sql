@@ -62,7 +62,25 @@ ALTER TABLE ONLY "public"."self_review_settings"
 ALTER TABLE "public"."self_review_settings"
     ADD CONSTRAINT "self_review_settings_class_fkey" FOREIGN KEY ("class_id") REFERENCES "public"."classes"("id");
 
-ALTER TABLE "public"."assignments" ADD COLUMN "self_review_setting_id" bigint NOT NULL;
+ALTER TABLE "public"."assignments" ADD COLUMN "self_review_setting_id" bigint;
+
+DO $$
+DECLARE
+    rec RECORD;
+    new_setting_id bigint;
+BEGIN
+    FOR rec IN SELECT id, class_id FROM assignments LOOP
+        INSERT INTO self_review_settings (class_id, enabled)
+        VALUES (rec.class_id, false)
+        RETURNING id INTO new_setting_id;
+
+        UPDATE assignments
+        SET self_review_setting_id = new_setting_id
+        WHERE id = rec.id;
+    END LOOP;
+END $$;
+
+ALTER TABLE "public"."assignments" ALTER COLUMN "self_review_setting_id" SET NOT NULL;
 
 ALTER TABLE "public"."assignments"
     ADD CONSTRAINT "assignments_self_review_setting_fkey" FOREIGN KEY ("self_review_setting_id") REFERENCES "public"."self_review_settings"("id");
@@ -94,7 +112,7 @@ AS $function$
   INSERT INTO rubrics (name, class_id, assignment_id) VALUES ('Grading Rubric', NEW.class_id, NEW.id) RETURNING id into rubric_id;
   INSERT INTO rubrics (name, class_id, assignment_id) VALUES ('Self Rubric', NEW.class_id, NEW.id) RETURNING id into self_rubric_id;
   UPDATE assignments set grading_rubric_id=rubric_id WHERE id=NEW.id;
-UPDATE assignments set self_review_rubric_id=self_rubric_id WHERE id=NEW.id;
+  UPDATE assignments set self_review_rubric_id=self_rubric_id WHERE id=NEW.id;
   RETURN NULL;
 end;$function$
 ;
@@ -251,7 +269,7 @@ DECLARE
 BEGIN
     FOR assignment_record IN (
         SELECT * FROM assignments -- non archived assignment with passed deadline
-        WHERE archived_at IS NULL AND (due_date AT TIME ZONE 'UTC' <= NOW() AT TIME ZONE 'UTC');  
+        WHERE archived_at IS NULL AND (due_date AT TIME ZONE 'UTC' <= NOW() AT TIME ZONE 'UTC')  
     ) LOOP
         FOR profile_record IN (
             SELECT * FROM public.profiles prof
