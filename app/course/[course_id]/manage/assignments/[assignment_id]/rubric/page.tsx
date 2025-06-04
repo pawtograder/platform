@@ -405,9 +405,9 @@ export default function RubricPage() {
     ): HydratedRubric => {
       const roundNameProper = reviewRound
         ? reviewRound
-          .split("-")
-          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-          .join(" ")
+            .split("-")
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(" ")
         : "New";
       const name = `${roundNameProper} Rubric for ${assignmentDetails?.title || "Assignment"}`;
 
@@ -1184,9 +1184,9 @@ export default function RubricPage() {
                 {" "}
                 {rr
                   ? rr
-                    .split("-")
-                    .map((w) => w[0].toUpperCase() + w.slice(1))
-                    .join(" ")
+                      .split("-")
+                      .map((w) => w[0].toUpperCase() + w.slice(1))
+                      .join(" ")
                   : "Select Round"}
                 {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
               </Tabs.Trigger>
@@ -1340,9 +1340,7 @@ export default function RubricPage() {
 
               {!error && rubricForSidebar && (
                 <VStack gap={4} align="stretch">
-                  <RubricSidebar
-                    initialRubric={rubricForSidebar}
-                  />
+                  <RubricSidebar initialRubric={rubricForSidebar} />
                 </VStack>
               )}
               {error && (
