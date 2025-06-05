@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import type { Device } from "amazon-chime-sdk-js";
+import type { Device, VideoTransformDevice } from "amazon-chime-sdk-js";
 import React, { type ChangeEvent, useState, useEffect } from "react";
 import {
   useBackgroundBlur,
@@ -16,17 +16,22 @@ import { toaster } from "@/components/ui/toaster";
 
 /**
  * Checks if a device is a video transform device (blur/replacement) that has transform methods.
+ * Uses proper TypeScript type checking instead of runtime method checking.
  * @param device - The device to check
- * @returns True if the device has transform device methods, false otherwise
+ * @returns True if the device implements VideoTransformDevice interface, false otherwise
  */
-const isVideoTransformDevice = (
-  device: unknown
-): device is { intrinsicDevice: () => Promise<Device>; stop: () => Promise<void> } => {
+const isVideoTransformDevice = (device: unknown): device is VideoTransformDevice => {
   return !!(
     device &&
     typeof device === "object" &&
     "intrinsicDevice" in device &&
-    typeof (device as { intrinsicDevice: unknown }).intrinsicDevice === "function"
+    typeof (device as VideoTransformDevice).intrinsicDevice === "function" &&
+    "stop" in device &&
+    typeof (device as VideoTransformDevice).stop === "function" &&
+    "transformStream" in device &&
+    typeof (device as VideoTransformDevice).transformStream === "function" &&
+    "onOutputStreamDisconnect" in device &&
+    typeof (device as VideoTransformDevice).onOutputStreamDisconnect === "function"
   );
 };
 

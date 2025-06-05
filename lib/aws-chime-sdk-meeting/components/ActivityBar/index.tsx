@@ -22,7 +22,7 @@ const Progress = styled.div`
 `;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ActivityBar = React.forwardRef((ref: any) => (
+const ActivityBar = React.forwardRef((props: any, ref: any) => (
   <Track>
     <Progress ref={ref} />
   </Track>
