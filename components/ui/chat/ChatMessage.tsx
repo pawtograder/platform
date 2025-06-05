@@ -1,6 +1,6 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Avatar, Box, HStack, Stack, Text } from "@chakra-ui/react";
-import { ChatMessage as ChatMessageType } from "@/lib/chat";
+import type { ChatMessage as ChatMessageType } from "@/lib/chat";
 import Markdown from "react-markdown";
 interface Props {
   author: string;

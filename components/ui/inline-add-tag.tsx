@@ -96,7 +96,7 @@ export default function InlineAddTag({
     } else {
       newIndex = currentIndex >= allColors.length - 1 ? 0 : currentIndex + 1;
     }
-    handleColorChange(allColors[newIndex], false);
+    handleColorChange(allColors[newIndex] ?? "gray", false);
   };
 
   useEffect(() => {

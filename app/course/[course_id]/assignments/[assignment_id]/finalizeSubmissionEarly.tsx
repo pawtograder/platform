@@ -28,7 +28,7 @@ export default function FinalizeSubmissionEarly({
   });
 
   const group_id =
-    groupMember?.data && groupMember?.data.length > 0 ? groupMember.data[0].assignment_group_id : undefined;
+    groupMember?.data && groupMember?.data.length > 0 ? groupMember.data[0]?.assignment_group_id : undefined;
 
   const groupOrProfileFilter: CrudFilter = group_id
     ? {

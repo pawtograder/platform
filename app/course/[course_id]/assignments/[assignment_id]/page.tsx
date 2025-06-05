@@ -25,7 +25,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+        <Link href={`https://github.com/${repositories[0]?.repository}`}>{repositories[0]?.repository}</Link>
       </HStack>
     );
   }

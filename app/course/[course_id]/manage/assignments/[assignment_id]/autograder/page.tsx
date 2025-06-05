@@ -6,14 +6,14 @@ import { Radio } from "@/components/ui/radio";
 import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
-import { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import { Button, Fieldset, Heading, Input, NativeSelectField, NativeSelectRoot, RadioGroup } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { Controller, FieldValues } from "react-hook-form";
+import { Controller, type FieldValues } from "react-hook-form";
 
 export default function AutograderPage() {
   const { assignment_id } = useParams();
@@ -54,21 +54,20 @@ export default function AutograderPage() {
       await githubRepoConfigureWebhook(
         {
           assignment_id: Number.parseInt(assignment_id as string),
-          new_repo: values.grader_repo,
+          new_repo: values["grader_repo"],
           watch_type: "grader_solution"
         },
         supabase
       );
       mutateAssignment({
         values: {
-          has_autograder: values.assignments.has_autograder
+          has_autograder: values["assignments"].has_autograder
         }
       });
-      console.log(values.max_submissions_count, values.max_submissions_period_secs);
       refineCore.onFinish({
-        grader_repo: values.grader_repo,
-        max_submissions_count: values.max_submissions_count || null,
-        max_submissions_period_secs: values.max_submissions_period_secs || null
+        grader_repo: values["grader_repo"],
+        max_submissions_count: values["max_submissions_count"] || null,
+        max_submissions_period_secs: values["max_submissions_period_secs"] || null
       });
     },
     [refineCore, assignment_id, mutateAssignment]
@@ -97,9 +96,9 @@ export default function AutograderPage() {
             toaster.error({
               title: "Changes not saved",
               description:
-                "An error occurred while saving the autograder configuration. Please double-check that the repository exists and that the pawtograder.yml file is present."
+                "An error occurred while saving the autograder configuration. Please double-check that the repository exists and that the pawtograder.yml file is present. More details: " +
+                error
             });
-            console.error(error);
           } finally {
             setLoading(false);
           }
@@ -109,8 +108,8 @@ export default function AutograderPage() {
           <Fieldset.Content>
             <Field
               label="Autograder configuration for this assignment"
-              errorText={errors.enabled?.message?.toString()}
-              invalid={errors.enabled ? true : false}
+              errorText={errors["enabled"]?.message?.toString()}
+              invalid={!!errors["enabled"]}
             >
               <Controller
                 name="assignments.has_autograder"

@@ -6,7 +6,7 @@ import {
   VideoPriorityBasedPolicy
 } from "amazon-chime-sdk-js";
 import { Layout } from "../../types";
-import { AttendeeState, GridState, VideoSourceState } from "./state";
+import type { AttendeeState, GridState, VideoSourceState } from "./state";
 
 type VideoSourceWithType = { attendeeId: string; type: VideoSourceType };
 
@@ -31,7 +31,7 @@ export const calculateVideoSourcesToBeRendered = (
 
   // First, add content share
   for (const attendeeId of Object.keys(attendeeStates)) {
-    if (isContentShare(attendeeId) && attendeeStates[attendeeId].videoEnabled) {
+    if (isContentShare(attendeeId) && attendeeStates[attendeeId]?.videoEnabled) {
       videoSources.push({ attendeeId, type: VideoSourceType.CONTENT_SHARE });
     }
   }

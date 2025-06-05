@@ -2,7 +2,7 @@
 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
-import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useCreate, useList } from "@refinedev/core";
@@ -155,12 +155,11 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                     type: "success"
                   });
                 } catch (err) {
-                  console.error(err);
-                  toaster.create({
+                  toaster.error({
                     title: "Error consuming late token",
                     description:
-                      "An error occurred while consuming the late token. Please try again, and reach out to your instructor if the problem persists.",
-                    type: "error"
+                      "An error occurred while consuming the late token. Please try again, and reach out to your instructor if the problem persists. More details: " +
+                      (err instanceof Error ? err.message : "Unknown error")
                   });
                 }
               }}
@@ -186,7 +185,6 @@ export function AssignmentDueDate({
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  console.log(dueDate);
   return (
     <HStack gap={1}>
       <Text>{formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}</Text>

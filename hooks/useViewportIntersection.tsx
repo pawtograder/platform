@@ -14,7 +14,7 @@ export const useIntersection = (
     let timeoutId: NodeJS.Timeout | null = null;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
+        if (entry?.isIntersecting) {
           timeoutId = setTimeout(() => {
             setState(true);
           }, options.delay || 0);
@@ -28,10 +28,10 @@ export const useIntersection = (
       },
       { rootMargin: options.rootMargin || "0px" }
     );
-    current && observer?.observe(current);
+    if (current) observer.observe(current);
 
     return () => {
-      current && observer.unobserve(current);
+      if (current) observer.unobserve(current);
       if (timeoutId) {
         clearTimeout(timeoutId);
       }

@@ -1,6 +1,6 @@
 "use client";
 import React, { useContext } from "react";
-import { IGif } from "@giphy/js-types";
+import type { IGif } from "@giphy/js-types";
 import { Grid, SearchBar, SearchContext, SearchContextManager, SuggestionBar } from "@giphy/react-components";
 import { VStack, Container } from "@chakra-ui/react";
 

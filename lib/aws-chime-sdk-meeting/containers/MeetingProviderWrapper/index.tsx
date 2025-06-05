@@ -1,8 +1,13 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { PropsWithChildren } from "react";
-import { AudioInputDevice, Device, VoiceFocusModelName, VoiceFocusTransformDevice } from "amazon-chime-sdk-js";
+import React, { type PropsWithChildren } from "react";
+import {
+  type AudioInputDevice,
+  type Device,
+  type VoiceFocusModelName,
+  VoiceFocusTransformDevice
+} from "amazon-chime-sdk-js";
 import {
   BackgroundBlurProvider,
   BackgroundReplacementProvider,
@@ -16,6 +21,7 @@ import { Home } from "../../views";
 import MeetingEventObserver from "../MeetingEventObserver";
 import { useAppState } from "../../providers/AppStateProvider";
 import { VideoFiltersCpuUtilization } from "../../types";
+import { toaster } from "@/components/ui/toaster";
 
 const MeetingProviderWithDeviceReplacement: React.FC<PropsWithChildren> = ({ children }) => {
   const { addVoiceFocus } = useVoiceFocus();
@@ -79,7 +85,7 @@ const MeetingProviderWrapper: React.FC = () => {
   }
 
   function getVoiceFocusSpecName(): VoiceFocusModelName {
-    if (joinInfo && joinInfo.Meeting?.MeetingFeatures?.Audio?.EchoReduction === "AVAILABLE") {
+    if (joinInfo && joinInfo.Meeting?.MeetingFeatures?.Audio?.["EchoReduction"] === "AVAILABLE") {
       return voiceFocusName("ns_es");
     }
     return voiceFocusName("default");
@@ -100,7 +106,10 @@ const MeetingProviderWrapper: React.FC = () => {
     if (!filterCPUUtilization) {
       filterCPUUtilization = 40;
     }
-    console.log(`Using ${filterCPUUtilization} background blur and replacement`);
+    toaster.create({
+      title: `Using ${filterCPUUtilization} background blur and replacement`,
+      type: "info"
+    });
     return (
       <BackgroundBlurProvider options={{ filterCPUUtilization, logger }}>
         <BackgroundReplacementProvider options={{ imageBlob, filterCPUUtilization, logger }}>

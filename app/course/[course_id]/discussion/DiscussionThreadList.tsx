@@ -7,7 +7,7 @@ import Markdown from "@/components/ui/markdown";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
+import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import {
   Avatar,
   Badge,
@@ -175,7 +175,7 @@ export default function DiscussionThreadList() {
         (thread) => thread.author === public_profile_id || thread.author === private_profile_id
       );
     } else if (filterOption.startsWith("topic-")) {
-      const topicId = parseInt(filterOption.split("-")[1]);
+      const topicId = parseInt(filterOption.split("-")[1] || "0");
       filteredList = list.filter((thread) => thread.topic_id === topicId);
     }
 

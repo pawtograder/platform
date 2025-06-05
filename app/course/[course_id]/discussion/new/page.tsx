@@ -5,7 +5,7 @@ import { Field } from "@/components/ui/field";
 import MdEditor from "@/components/ui/md-editor";
 import { RadioCardItem, RadioCardLabel, RadioCardRoot } from "@/components/ui/radio-card";
 import { Toaster } from "@/components/ui/toaster";
-import { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
+import type { DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Box, Fieldset, Flex, Heading, Icon, Input } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
@@ -80,8 +80,8 @@ export default function NewDiscussionThread() {
                   getValues("topic_id") &&
                   topics?.data?.find((topic: DiscussionTopic) => topic.id === getValues("topic_id"))?.description
                 }
-                errorText={errors.topic_id?.message?.toString()}
-                invalid={errors.topic_id ? true : false}
+                errorText={errors["topic_id"]?.message?.toString()}
+                invalid={errors["topic_id"] ? true : false}
               >
                 <Controller
                   control={control}
@@ -271,8 +271,8 @@ export default function NewDiscussionThread() {
               <Field
                 label="Subject"
                 helperText="A short, descriptive subject for your post. Be specific."
-                errorText={errors.title?.message?.toString()}
-                invalid={errors.title ? true : false}
+                errorText={errors["title"]?.message?.toString()}
+                invalid={errors["title"] ? true : false}
               >
                 <Input variant="outline" type="text" {...register("subject", { required: "This is required" })} />
               </Field>
@@ -281,8 +281,8 @@ export default function NewDiscussionThread() {
               <Field
                 label="Description"
                 helperText="A detailed description of your post. Be specific."
-                errorText={errors.description?.message?.toString()}
-                invalid={errors.description ? true : false}
+                errorText={errors["description"]?.message?.toString()}
+                invalid={errors["description"] ? true : false}
               >
                 <Controller
                   name="body"

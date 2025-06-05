@@ -320,7 +320,7 @@ export default function RubricPage() {
   const [activeRubric, setActiveRubric] = useState<HydratedRubric | undefined>(undefined);
   const [initialActiveRubricSnapshot, setInitialActiveRubricSnapshot] = useState<HydratedRubric | undefined>(undefined);
   const [activeReviewRound, setActiveReviewRound] = useState<HydratedRubric["review_round"]>(
-    REVIEW_ROUNDS_AVAILABLE[1] // Default to 'grading-review'
+    REVIEW_ROUNDS_AVAILABLE[1]! // Default to 'grading-review'
   );
   const [isLoadingCurrentRubric, setIsLoadingCurrentRubric] = useState<boolean>(true);
 
@@ -436,7 +436,7 @@ export default function RubricPage() {
       if (assignmentDetails?.title) {
         newRubricBase.name = `${assignmentDetails.title} - ${reviewRound
           ?.split("-")
-          .map((w) => w[0].toUpperCase() + w.slice(1))
+          .map((w) => w[0]!.toUpperCase() + w.slice(1))
           .join(" ")} Rubric`;
       }
 
@@ -497,7 +497,7 @@ export default function RubricPage() {
       // hasUnsavedChanges will be updated by useEffect or stash restoration
 
       if (stashedEditorStates[newReviewRound!]) {
-        const stashed = stashedEditorStates[newReviewRound!];
+        const stashed = stashedEditorStates[newReviewRound!]!;
         setValue(stashed.value);
         setInitialActiveRubricSnapshot(stashed.initialSnapshot);
         setRubricForSidebar(stashed.activeRubricForSidebar);
@@ -1113,7 +1113,8 @@ export default function RubricPage() {
       updateCheckIfChanged,
       refetchCurrentRubric,
       createMinimalNewHydratedRubric,
-      initialActiveRubricSnapshot
+      initialActiveRubricSnapshot,
+      invalidate
     ]
   );
 
@@ -1185,7 +1186,8 @@ export default function RubricPage() {
                 {rr
                   ? rr
                       .split("-")
-                      .map((w) => w[0].toUpperCase() + w.slice(1))
+                      .filter((w) => w.length > 0)
+                      .map((w) => (w[0]?.toUpperCase() ?? "") + w.slice(1))
                       .join(" ")
                   : "Select Round"}
                 {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}

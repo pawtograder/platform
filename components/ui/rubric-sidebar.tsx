@@ -1,6 +1,6 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -401,12 +401,12 @@ function AddReferencingFeedbackPopover({
                     comment,
                     rubric_check_id: check.id,
                     class_id: check.class_id,
-                    submission_id: targetSubmissionReviewId[0].submission_id,
+                    submission_id: targetSubmissionReviewId[0]!.submission_id,
                     eventually_visible: false,
                     author: profile_id,
                     released: false,
                     points,
-                    submission_review_id: targetSubmissionReviewId[0].id
+                    submission_review_id: targetSubmissionReviewId[0]!.id
                   };
                   if (isLineComment(commentToReference)) {
                     await createComment({
@@ -502,7 +502,7 @@ function AddReferencingFeedbackMenu({
                   <Menu.ItemGroupLabel>
                     {rubrics.find((r) => r.id === Number(rubricId))?.review_round}
                   </Menu.ItemGroupLabel>
-                  {writableReferencingChecksByRubricId[rubricId].map((check) => (
+                  {writableReferencingChecksByRubricId[rubricId]?.map((check) => (
                     <Menu.Item key={check.check.id} value={check.check.id.toString()}>
                       {check.check.name}{" "}
                       {check.check.points && (
@@ -939,7 +939,7 @@ export function RubricCheckGlobal({
   const showOptions = isGrader && hasOptions;
   const _selectedOptionIndex =
     hasOptions && rubricCheckComments.length == 1 && isRubricCheckDataWithOptions(check.data)
-      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
+      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0]?.points)
       : undefined;
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
   const gradingIsRequired = reviewForThisRubric && check.is_required && rubricCheckComments.length == 0;
@@ -1278,7 +1278,7 @@ export function RubricCriteria({
   }
   const singleCheck =
     criteria.max_checks_per_submission === 1 && comments.length === 1
-      ? comments[0].rubric_check_id?.toString()
+      ? comments[0]?.rubric_check_id?.toString()
       : undefined;
   return (
     <Box

@@ -194,7 +194,7 @@ function EnrollmentsTable() {
         header: "Class ID",
         enableColumnFilter: true,
         enableHiding: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           return String(row.original.class_id) === String(filterValue);
         }
       },
@@ -210,7 +210,7 @@ function EnrollmentsTable() {
           }
           return "N/A";
         },
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const name = row.original.profiles?.name;
           if (!name) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -222,7 +222,7 @@ function EnrollmentsTable() {
         accessorKey: "users.email",
         header: "Email",
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const email = row.original.users?.email;
           if (!email) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -233,7 +233,7 @@ function EnrollmentsTable() {
         id: "role",
         header: "Role",
         accessorKey: "role",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const role = row.original.role;
           if (!role) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -244,7 +244,7 @@ function EnrollmentsTable() {
         id: "github_username",
         header: "Github Username",
         accessorKey: "users.github_username",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const username = row.original.users?.github_username;
           if (!username) return false;
           const filterString = String(filterValue).toLowerCase();
