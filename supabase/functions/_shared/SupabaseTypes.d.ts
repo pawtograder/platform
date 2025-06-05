@@ -497,6 +497,38 @@ export type Database = {
           }
         ];
       };
+      assignment_self_review_settings: {
+        Row: {
+          allow_early: boolean | null;
+          class_id: number;
+          deadline_offset: number | null;
+          enabled: boolean;
+          id: number;
+        };
+        Insert: {
+          allow_early?: boolean | null;
+          class_id: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Update: {
+          allow_early?: boolean | null;
+          class_id?: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "self_review_settings_class_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignments: {
         Row: {
           allow_student_formed_groups: boolean | null;
@@ -3058,6 +3090,61 @@ export type Database = {
           }
         ];
       };
+      student_flashcard_deck_progress: {
+        Row: {
+          card_id: number;
+          class_id: number;
+          created_at: string;
+          first_answered_correctly_at: string | null;
+          is_mastered: boolean;
+          last_answered_correctly_at: string | null;
+          student_id: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          card_id: number;
+          class_id: number;
+          created_at?: string;
+          first_answered_correctly_at?: string | null;
+          is_mastered?: boolean;
+          last_answered_correctly_at?: string | null;
+          student_id: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          card_id?: number;
+          class_id?: number;
+          created_at?: string;
+          first_answered_correctly_at?: string | null;
+          is_mastered?: boolean;
+          last_answered_correctly_at?: string | null;
+          student_id?: string;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "student_flashcard_deck_progress_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       submission_artifact_comments: {
         Row: {
           author: string;
@@ -4342,6 +4429,10 @@ export type Database = {
         Returns: boolean;
       };
       authorize_for_submission_review: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
+      authorize_for_submission_review_writable: {
         Args: { submission_review_id: number };
         Returns: boolean;
       };

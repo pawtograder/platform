@@ -497,6 +497,38 @@ export type Database = {
           }
         ];
       };
+      assignment_self_review_settings: {
+        Row: {
+          allow_early: boolean | null;
+          class_id: number;
+          deadline_offset: number | null;
+          enabled: boolean;
+          id: number;
+        };
+        Insert: {
+          allow_early?: boolean | null;
+          class_id: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Update: {
+          allow_early?: boolean | null;
+          class_id?: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "self_review_settings_class_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignments: {
         Row: {
           allow_student_formed_groups: boolean | null;
@@ -4397,6 +4429,10 @@ export type Database = {
         Returns: boolean;
       };
       authorize_for_submission_review: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
+      authorize_for_submission_review_writable: {
         Args: { submission_review_id: number };
         Returns: boolean;
       };
