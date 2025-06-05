@@ -119,28 +119,6 @@ function NotificationAndReadStatusUpdater({
 
   return <div ref={ref}>{threadIsUnread ? <Badge colorPalette="red">New</Badge> : ""}</div>;
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function print(value: any) {
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  } else {
-    if (!value) {
-      return "falsy";
-    }
-    return value.toString();
-  }
-}
-export function useLogIfChanged<T>(name: string, value: T) {
-  const previous = useRef(value);
-  if (!Object.is(previous.current, value)) {
-    toaster.create({
-      title: `${name} changed`,
-      description: `Old: ${print(previous.current)}, New: ${print(value)} `,
-      type: "info"
-    });
-    previous.current = value;
-  }
-}
 
 // Define the inner component that assumes thread and thread.root are valid
 const DiscussionThreadContent = memo(
