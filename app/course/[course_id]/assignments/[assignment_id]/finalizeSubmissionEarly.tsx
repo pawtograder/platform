@@ -1,6 +1,11 @@
 "use client";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { Assignment, AssignmentDueDateException, AssignmentGroupMember } from "@/utils/supabase/DatabaseTypes";
+import {
+  Assignment,
+  AssignmentDueDateException,
+  AssignmentGroupMember,
+  Submission
+} from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
 import { CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, addMinutes, differenceInMinutes } from "date-fns";
@@ -11,7 +16,7 @@ export default function FinalizeSubmissionEarly({
   private_profile_id
 }: {
   assignment: Assignment;
-  private_profile_id?: string;
+  private_profile_id: string;
 }) {
   const { course_id } = useParams();
   const { mutate: create } = useCreate();
@@ -30,7 +35,7 @@ export default function FinalizeSubmissionEarly({
   const group_id =
     groupMember?.data && groupMember?.data.length > 0 ? groupMember.data[0].assignment_group_id : undefined;
 
-  const groupOrProfileFilter: CrudFilter = group_id
+  const groupOrProfileFilterStudent: CrudFilter = group_id
     ? {
         field: "assignment_group_id",
         operator: "eq",
@@ -38,6 +43,17 @@ export default function FinalizeSubmissionEarly({
       }
     : {
         field: "student_id",
+        operator: "eq",
+        value: private_profile_id
+      };
+  const groupOrProfileFilter: CrudFilter = group_id
+    ? {
+        field: "assignment_group_id",
+        operator: "eq",
+        value: group_id
+      }
+    : {
+        field: "profile_id",
         operator: "eq",
         value: private_profile_id
       };
@@ -49,7 +65,19 @@ export default function FinalizeSubmissionEarly({
     meta: {
       select: "*"
     },
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }, groupOrProfileFilter]
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }, groupOrProfileFilterStudent]
+  });
+
+  const { data: activeSubmission } = useList<Submission>({
+    resource: "submissions",
+    meta: {
+      select: "*"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: assignment.id },
+      groupOrProfileFilter,
+      { field: "is_active", operator: "eq", value: true }
+    ]
   });
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
@@ -114,7 +142,8 @@ export default function FinalizeSubmissionEarly({
                 extensionRecordsForStudent.data.filter((record) => {
                   return record.hours < 0 || record.minutes < 0;
                 }).length > 0) ||
-              deadlinePassed() // to avoid clicking quickly twice while review processing
+              deadlinePassed() ||
+              (activeSubmission && activeSubmission.data.length === 0)
             }
           >
             Finalize Submission Early
