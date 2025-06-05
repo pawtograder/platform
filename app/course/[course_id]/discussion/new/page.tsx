@@ -269,6 +269,7 @@ export default function NewDiscussionThread() {
             </Fieldset.Content>
             <Fieldset.Content>
               <Field
+                maxWidth={"100%"}
                 label="Subject"
                 helperText="A short, descriptive subject for your post. Be specific."
                 errorText={errors.title?.message?.toString()}

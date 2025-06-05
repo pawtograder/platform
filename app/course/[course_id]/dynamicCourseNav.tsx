@@ -125,6 +125,7 @@ function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[
     </DrawerRoot>
   );
 }
+
 function TimeZoneWarning({ courseTz }: { courseTz: string }) {
   const [dismissed, setDismissed] = useState(false);
   const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -132,11 +133,18 @@ function TimeZoneWarning({ courseTz }: { courseTz: string }) {
     return <></>;
   }
   return (
-    <Alert status="warning" w="fit-content" closable onClose={() => setDismissed(true)}>
+    <Alert
+      status="warning"
+      w={{ base: "100%", md: "fit-content" }}
+      size="sm"
+      closable
+      onClose={() => setDismissed(true)}
+    >
       Warning: This course is in {courseTz} but your computer appears to be in {browserTz}
     </Alert>
   );
 }
+
 export default function DynamicCourseNav() {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
@@ -144,49 +152,163 @@ export default function DynamicCourseNav() {
   const { roles: courses } = useAuthState();
   const { colorMode } = useColorMode();
   const isInstructor = enrollment.role === "instructor" || enrollment.role === "grader";
+
   useEffect(() => {
     if (courseNavRef.current) {
       const height = courseNavRef.current.offsetHeight;
       document.documentElement.style.setProperty("--nav-height", `${height + 10}px`);
     }
   });
+
   if (!enrollment || !courses) {
     return <Skeleton height="40" width="100%" />;
   }
+
   const course = enrollment.classes as CourseWithFeatures;
+  const filteredLinks = LinkItems(enrollment.class_id)
+    .filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor))
+    .filter((link) => !link.feature_flag || course.features?.find((f) => f.name === link.feature_flag)?.enabled);
+
   return (
     <Box
-      px={{ base: 4, md: 4 }}
+      px={{ base: 2, md: 4 }}
+      py={{ base: 2, md: 2 }}
       ref={courseNavRef}
       id="course-nav"
-      alignItems="start"
       bg="bg.subtle"
-      gap="0"
       borderBottomWidth="1px"
       borderBottomColor="border.emphasized"
     >
-      <Flex width="100%" pt="2" alignItems="center" justifyContent={{ base: "space-between" }}>
-        <VStack gap="0" align="start">
-          <HStack>
-            <CoursePicker courses={courses} currentCourse={enrollment.classes} />
-            {colorMode === "dark" ? (
-              <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
-            ) : (
-              <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
-            )}
-            <Text fontSize="xl" fontWeight="medium">
-              <Link variant="plain" href={`/course/${enrollment.class_id}`}>
-                {enrollment.classes.name}
-              </Link>
-            </Text>
+      {/* Mobile Layout */}
+      <Box display={{ base: "block", md: "none" }}>
+        <VStack gap={2} align="stretch">
+          {/* Top row: Course picker, logo, course name, user menu */}
+          <HStack justifyContent="space-between" alignItems="center">
+            <HStack gap={2} flex={1} minWidth={0}>
+              <CoursePicker courses={courses} currentCourse={enrollment.classes} />
+              {colorMode === "dark" ? (
+                <Image src="/Logo-Dark.png" width={24} height={24} alt="Logo" />
+              ) : (
+                <Image src="/Logo-Light.png" width={24} height={24} alt="Logo" />
+              )}
+              <Text
+                fontSize="md"
+                fontWeight="medium"
+                overflow="hidden"
+                textOverflow="ellipsis"
+                whiteSpace="nowrap"
+                flex={1}
+              >
+                <Link variant="plain" href={`/course/${enrollment.class_id}`}>
+                  {enrollment.classes.name}
+                </Link>
+              </Text>
+            </HStack>
+            <UserMenu />
           </HStack>
-          <HStack width="100%">
-            {LinkItems(enrollment.class_id)
-              .filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor))
-              .filter(
-                (link) => !link.feature_flag || course.features?.find((f) => f.name === link.feature_flag)?.enabled
-              )
-              .map((link) => {
+
+          {/* Navigation links - horizontal scroll on mobile */}
+          <Box overflowX="auto" overflowY="hidden" pb={1}>
+            <HStack gap={1} minWidth="max-content">
+              {filteredLinks.map((link) => {
+                if (link.submenu) {
+                  return (
+                    <Box
+                      key={link.name}
+                      borderBottom={pathname.startsWith(link.target || "#") ? "2px solid" : "none"}
+                      borderColor="orange.600"
+                      flexShrink={0}
+                    >
+                      <Menu.Root>
+                        <Menu.Trigger asChild>
+                          <Button
+                            colorPalette="gray"
+                            size="xs"
+                            fontSize="xs"
+                            px={2}
+                            py={1}
+                            variant="ghost"
+                            whiteSpace="nowrap"
+                          >
+                            <HStack gap={1}>
+                              {React.createElement(link.icon, { size: 14 })}
+                              <Text>{link.name}</Text>
+                            </HStack>
+                          </Button>
+                        </Menu.Trigger>
+                        <Portal>
+                          <Menu.Positioner>
+                            <Menu.Content>
+                              {link.submenu.map((submenu) => (
+                                <Menu.Item key={submenu.name} value={submenu.name} asChild>
+                                  <NextLink prefetch={true} href={submenu.target || "#"}>
+                                    {React.createElement(submenu.icon)}
+                                    {submenu.name}
+                                  </NextLink>
+                                </Menu.Item>
+                              ))}
+                            </Menu.Content>
+                          </Menu.Positioner>
+                        </Portal>
+                      </Menu.Root>
+                    </Box>
+                  );
+                } else {
+                  return (
+                    <Box
+                      key={link.name}
+                      borderBottom={pathname.startsWith(link.target || "#") ? "2px solid" : "none"}
+                      borderColor="orange.600"
+                      flexShrink={0}
+                    >
+                      <Button
+                        colorPalette="gray"
+                        size="xs"
+                        fontSize="xs"
+                        px={2}
+                        py={1}
+                        variant="ghost"
+                        whiteSpace="nowrap"
+                        asChild
+                      >
+                        <NextLink prefetch={true} href={link.target || "#"}>
+                          <HStack gap={1}>
+                            {React.createElement(link.icon, { size: 14 })}
+                            <Text>{link.name}</Text>
+                          </HStack>
+                        </NextLink>
+                      </Button>
+                    </Box>
+                  );
+                }
+              })}
+            </HStack>
+          </Box>
+
+          {/* Timezone warning */}
+          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+        </VStack>
+      </Box>
+
+      {/* Desktop Layout - unchanged */}
+      <Box display={{ base: "none", md: "block" }}>
+        <Flex width="100%" pt="2" alignItems="center" justifyContent="space-between">
+          <VStack gap="0" align="start">
+            <HStack>
+              <CoursePicker courses={courses} currentCourse={enrollment.classes} />
+              {colorMode === "dark" ? (
+                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
+              ) : (
+                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
+              )}
+              <Text fontSize="xl" fontWeight="medium">
+                <Link variant="plain" href={`/course/${enrollment.class_id}`}>
+                  {enrollment.classes.name}
+                </Link>
+              </Text>
+            </HStack>
+            <HStack width="100%">
+              {filteredLinks.map((link) => {
                 if (link.submenu) {
                   return (
                     <Box
@@ -202,8 +324,6 @@ export default function DynamicCourseNav() {
                             size="xs"
                             fontSize="sm"
                             pt="0"
-                            // href={link.target || '#'}
-                            // style={{ textDecoration: 'none' }}
                             variant="ghost"
                             asChild
                           >
@@ -253,11 +373,12 @@ export default function DynamicCourseNav() {
                   );
                 }
               })}
-          </HStack>
-        </VStack>
-        <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
-        <UserMenu />
-      </Flex>
+            </HStack>
+          </VStack>
+          <TimeZoneWarning courseTz={enrollment.classes.time_zone || "America/New_York"} />
+          <UserMenu />
+        </Flex>
+      </Box>
     </Box>
   );
 }

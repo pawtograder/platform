@@ -1,10 +1,17 @@
 import { Box, Flex } from "@chakra-ui/react";
 import DiscussionThreadList from "./DiscussionThreadList";
+
 const DiscussionLayout = async ({ children }: Readonly<{ children: React.ReactNode }>) => {
   return (
     <Box>
-      <Flex flex="1">
-        <Box w="314px" borderRight="1px solid" borderColor="border.emphasized" pt="4">
+      <Flex flex="1" wrap={{ base: "wrap", md: "nowrap" }}>
+        <Box
+          width={{ base: "100%", md: "314px" }}
+          borderRight={{ base: "none", md: "1px solid" }}
+          borderBottom={{ base: "1px solid", md: "none" }}
+          borderColor="border.emphasized"
+          pt="4"
+        >
           <DiscussionThreadList />
         </Box>
         <Box p="8" width="100%">

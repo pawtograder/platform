@@ -3,7 +3,7 @@
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
-import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
+import { Dialog, Flex, Heading, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useCreate, useList } from "@refinedev/core";
 import { addHours, isAfter } from "date-fns";
@@ -145,11 +145,13 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 export function AssignmentDueDate({
   assignment,
   showLateTokenButton = false,
-  showTimeZone = false
+  showTimeZone = false,
+  showDue = false
 }: {
   assignment: Assignment;
   showLateTokenButton?: boolean;
   showTimeZone?: boolean;
+  showDue?: boolean;
 }) {
   const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment);
   if (!dueDate || !originalDueDate) {
@@ -157,15 +159,18 @@ export function AssignmentDueDate({
   }
   console.log(dueDate);
   return (
-    <HStack gap={1}>
-      <Text>{formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}</Text>
-      {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
+    <Flex gap={1} wrap="wrap">
+      <Flex alignItems={"center"} gap={1}>
+        {showDue && <Text>Due: </Text>}
+        <Text>{formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}</Text>
+        {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
+      </Flex>
       {hoursExtended > 0 && (
         <Text>
           ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
         </Text>
       )}
       {showLateTokenButton && <LateTokenButton assignment={assignment} />}
-    </HStack>
+    </Flex>
   );
 }
