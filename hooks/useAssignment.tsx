@@ -7,8 +7,13 @@ import {
 import { Text } from "@chakra-ui/react";
 import { useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
+
+export function useSelfReviewSettings() {
+  const controller = useAssignmentController();
+  return controller.assignment.assignment_self_review_settings;
+}
 
 export function useRubricCheck(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
@@ -47,13 +52,27 @@ export function useRubrics() {
   return controller.rubrics;
 }
 
+export function useReviewAssignment(review_assignment_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  if (!review_assignment_id) {
+    return undefined;
+  }
+  //TODO need live subscription
+  return controller.assignment.review_assignments.find((ra) => ra.id === review_assignment_id);
+}
+
 export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();
   const { private_profile_id } = useClassProfiles();
   const assignment = controller.assignment;
   const reviewAssignments = assignment.review_assignments;
-  const myReviewAssignments = reviewAssignments.filter(
-    (ra) => ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
+  const myReviewAssignments = useMemo(
+    () =>
+      reviewAssignments.filter(
+        (ra) =>
+          ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
+      ),
+    [reviewAssignments, private_profile_id, submission_id]
   );
   return myReviewAssignments;
 }
@@ -197,7 +216,7 @@ function AssignmentControllerCreator({
     queryOptions: { enabled: !!assignment_id },
     meta: {
       select:
-        "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
+        "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
     }
   });
 
