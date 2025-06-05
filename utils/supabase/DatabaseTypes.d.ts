@@ -8,7 +8,7 @@ export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
+  "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
 >;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
@@ -168,7 +168,7 @@ export type SubmissionReviewWithRubric = GetResult<
   Database["public"]["Tables"]["submission_reviews"]["Row"],
   "submission_reviews",
   Database["public"]["Tables"]["submission_reviews"]["Relationships"],
-  "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
+  "*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
 >;
 export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"],
@@ -599,5 +599,13 @@ export type FlashcardInteractionLog = GetResult<
   Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"],
   "flashcard_interaction_logs",
   Database["public"]["Tables"]["flashcard_interaction_logs"]["Relationships"],
+  "*"
+>;
+
+export type SelfReviewSettings = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Row"],
+  "self_review_settings",
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Relationships"],
   "*"
 >;

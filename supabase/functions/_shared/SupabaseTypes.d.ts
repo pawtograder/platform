@@ -52,6 +52,7 @@ export type Database = {
           creator_id: string;
           hours: number;
           id: number;
+          minutes: number;
           note: string | null;
           student_id: string | null;
           tokens_consumed: number;
@@ -64,6 +65,7 @@ export type Database = {
           creator_id: string;
           hours: number;
           id?: number;
+          minutes?: number;
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
@@ -76,6 +78,7 @@ export type Database = {
           creator_id?: string;
           hours?: number;
           id?: number;
+          minutes?: number;
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
@@ -516,6 +519,7 @@ export type Database = {
           min_group_size: number | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
+          self_review_setting_id: number;
           slug: string | null;
           student_repo_prefix: string | null;
           template_repo: string | null;
@@ -543,6 +547,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
+          self_review_setting_id: number;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -570,6 +575,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
+          self_review_setting_id?: number;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -603,6 +609,13 @@ export type Database = {
             columns: ["self_review_rubric_id"];
             isOneToOne: false;
             referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_self_review_setting_fkey";
+            columns: ["self_review_setting_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_self_review_settings";
             referencedColumns: ["id"];
           }
         ];
@@ -2636,6 +2649,7 @@ export type Database = {
           release_date: string | null;
           rubric_id: number;
           submission_id: number;
+          submission_review_id: number;
         };
         Insert: {
           assignee_profile_id: string;
@@ -2648,6 +2662,7 @@ export type Database = {
           release_date?: string | null;
           rubric_id: number;
           submission_id: number;
+          submission_review_id: number;
         };
         Update: {
           assignee_profile_id?: string;
@@ -2660,6 +2675,7 @@ export type Database = {
           release_date?: string | null;
           rubric_id?: number;
           submission_id?: number;
+          submission_review_id?: number;
         };
         Relationships: [
           {
@@ -2731,6 +2747,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "review_assignments_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "submission_reviews";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -3032,61 +3055,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
-          }
-        ];
-      };
-      student_flashcard_deck_progress: {
-        Row: {
-          card_id: number;
-          class_id: number;
-          created_at: string;
-          first_answered_correctly_at: string | null;
-          is_mastered: boolean;
-          last_answered_correctly_at: string | null;
-          student_id: string;
-          updated_at: string | null;
-        };
-        Insert: {
-          card_id: number;
-          class_id: number;
-          created_at?: string;
-          first_answered_correctly_at?: string | null;
-          is_mastered?: boolean;
-          last_answered_correctly_at?: string | null;
-          student_id: string;
-          updated_at?: string | null;
-        };
-        Update: {
-          card_id?: number;
-          class_id?: number;
-          created_at?: string;
-          first_answered_correctly_at?: string | null;
-          is_mastered?: boolean;
-          last_answered_correctly_at?: string | null;
-          student_id?: string;
-          updated_at?: string | null;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "student_flashcard_deck_progress_card_id_fkey";
-            columns: ["card_id"];
-            isOneToOne: false;
-            referencedRelation: "flashcards";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "student_flashcard_deck_progress_student_id_fkey";
-            columns: ["student_id"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
           }
         ];
       };
@@ -4373,6 +4341,10 @@ export type Database = {
         Args: { requested_submission_id: number };
         Returns: boolean;
       };
+      authorize_for_submission_review: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
       authorize_for_submission_reviewable: {
         Args: {
           requested_submission_id: number;
@@ -4423,6 +4395,14 @@ export type Database = {
       authorizeforprofile: {
         Args: { profile_id: string };
         Returns: boolean;
+      };
+      auto_assign_self_reviews: {
+        Args: { this_assignment_id: number; this_profile_id: string };
+        Returns: undefined;
+      };
+      check_assignment_deadlines_passed: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       custom_access_token_hook: {
         Args: { event: Json };
