@@ -12,7 +12,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
-import { addHours } from "date-fns";
+import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
@@ -859,8 +859,9 @@ export function useAssignmentDueDate(assignment: Assignment) {
     };
   }
   const hoursExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.hours, 0);
+  const minutesExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.minutes, 0);
   const originalDueDate = new TZDate(assignment.due_date);
-  const dueDate = addHours(originalDueDate, hoursExtended);
+  const dueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
   const lateTokensConsumed = dueDateExceptions.reduce((acc, curr) => acc + curr.tokens_consumed, 0);
   return {
     originalDueDate,

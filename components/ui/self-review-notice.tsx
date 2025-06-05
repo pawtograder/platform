@@ -10,7 +10,48 @@ import { formatInTimeZone } from "date-fns-tz";
 import { useParams, useRouter } from "next/navigation";
 import { FaExclamationTriangle } from "react-icons/fa";
 
-// Inner component that uses the assignment context
+function CompleteReviewButton({
+  assignment,
+  enrollment,
+  activeSubmission
+}: {
+  assignment: Assignment;
+  enrollment: UserRole;
+  activeSubmission: Submission;
+}) {
+  const router = useRouter();
+  const { course_id, assignment_id } = useParams();
+  const { data: reviewSubmissions } = useList<SubmissionReview>({
+    resource: "submission_reviews",
+    filters: [
+      { field: "class_id", operator: "eq", value: assignment.class_id },
+      { field: "completed_by", operator: "eq", value: enrollment.private_profile_id },
+      { field: "submission_id", operator: "eq", value: activeSubmission?.id }
+    ]
+  });
+  const reviewassignments = useMyReviewAssignments();
+  const selfReviewRubric = useRubric("self-review");
+  const selfReviewAssignment = reviewassignments.find((a) => a.rubric_id === selfReviewRubric?.id);
+
+  return (
+    <>
+      {!reviewSubmissions || reviewSubmissions?.data.length == 0 ? (
+        <Button
+          onClick={() => {
+            router.push(
+              `/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`
+            );
+          }}
+        >
+          Complete Now
+        </Button>
+      ) : (
+        <Flex>You have already submitted your review for this assignment.</Flex>
+      )}
+    </>
+  );
+}
+
 function SelfReviewNoticeInner({
   review_settings,
   assignment,
@@ -20,26 +61,8 @@ function SelfReviewNoticeInner({
   review_settings: SelfReviewSettings;
   assignment: Assignment;
   enrollment: UserRole;
-  activeSubmission: Submission | undefined;
+  activeSubmission?: Submission;
 }) {
-  const router = useRouter();
-  const { course_id, assignment_id } = useParams();
-
-  const { data: reviewSubmissions } = useList<SubmissionReview>({
-    resource: "submission_reviews",
-    filters: [
-      { field: "class_id", operator: "eq", value: assignment.class_id },
-      { field: "completed_by", operator: "eq", value: enrollment?.private_profile_id },
-      { field: "submission_id", operator: "eq", value: activeSubmission?.id }
-    ]
-  });
-
-  // These hooks now work because they're inside AssignmentProvider
-  const reviewassignments = useMyReviewAssignments();
-  console.log(reviewassignments);
-  const selfReviewRubric = useRubric("self-review");
-  const selfReviewAssignment = reviewassignments.find((a) => a.rubric_id === selfReviewRubric?.id);
-
   const { dueDate, time_zone } = useAssignmentDueDate(assignment);
 
   if (!dueDate || !review_settings) {
@@ -62,19 +85,8 @@ function SelfReviewNoticeInner({
             To complete your self review assignment, press the button below and answer a few short questions about your
             implementation.
           </Text>
-
-          {!reviewSubmissions || reviewSubmissions?.data.length == 0 ? (
-            <Button
-              onClick={() => {
-                router.push(
-                  `/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`
-                );
-              }}
-            >
-              Complete Now
-            </Button>
-          ) : (
-            <Flex>You have already submitted your review for this assignment.</Flex>
+          {activeSubmission && (
+            <CompleteReviewButton assignment={assignment} enrollment={enrollment} activeSubmission={activeSubmission} />
           )}
         </Box>
       ) : review_settings?.enabled ? (
@@ -95,12 +107,11 @@ function SelfReviewNoticeInner({
   );
 }
 
-// Main component that provides the AssignmentProvider context
 export default function SelfReviewNotice(props: {
   review_settings: SelfReviewSettings;
   assignment: Assignment;
   enrollment: UserRole;
-  activeSubmission: Submission | undefined;
+  activeSubmission?: Submission;
 }) {
   return (
     <AssignmentProvider>
