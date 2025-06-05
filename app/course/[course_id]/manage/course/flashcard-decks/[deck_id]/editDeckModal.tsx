@@ -323,24 +323,29 @@ export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: Ed
         )
       );
 
-      // Create new flashcards
-      for (const [index, card] of flashcardChanges.toCreate.entries()) {
+      // Create new flashcards with temporary order values
+      const createdCardIds: number[] = [];
+      for (const card of flashcardChanges.toCreate) {
         const flashcardData: FlashcardInsert = {
           deck_id: deck.id,
           class_id: Number(course_id),
           title: card.title.trim(),
           prompt: card.prompt.trim(),
           answer: card.answer.trim(),
-          order: index + 1 + flashcardChanges.toUpdate.length // Place new cards after existing ones
+          order: Number.MAX_SAFE_INTEGER // Temporary order to avoid conflicts during creation
         };
 
-        await createFlashcard({
+        const result = await createFlashcard({
           resource: "flashcards",
           values: flashcardData
         });
+
+        if (result.data?.id) {
+          createdCardIds.push(result.data.id);
+        }
       }
 
-      // Update existing flashcards
+      // Update existing flashcards content (not order yet)
       await Promise.all(
         flashcardChanges.toUpdate.map((card) => {
           const updateData: FlashcardUpdate = {
@@ -358,14 +363,27 @@ export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: Ed
         })
       );
 
-      // Update order for all remaining cards to ensure proper sequencing
+      // Now update order for all cards based on their position in the parsed YAML
+      // This ensures consistent ordering for both new and existing cards
+      let createdCardIndex = 0;
       for (const [index, card] of parsedCards.entries()) {
         if (card.id && card.id > 0) {
+          // Existing card - update its order
           await updateFlashcard({
             resource: "flashcards",
             id: card.id,
             values: { order: index + 1 }
           });
+        } else {
+          // New card - update its order using the created card ID
+          if (createdCardIndex < createdCardIds.length) {
+            await updateFlashcard({
+              resource: "flashcards",
+              id: createdCardIds[createdCardIndex],
+              values: { order: index + 1 }
+            });
+            createdCardIndex++;
+          }
         }
       }
 

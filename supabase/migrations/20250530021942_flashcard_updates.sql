@@ -41,7 +41,7 @@ for insert
 to authenticated
 with check (((student_id = auth.uid()) AND authorizeforclass(class_id) AND (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcard_interaction_logs.deck_id) AND (fd.class_id = fd.class_id)))) AND ((card_id IS NULL) OR (EXISTS ( SELECT 1
+  WHERE ((fd.id = flashcard_interaction_logs.deck_id) AND (fd.class_id = flashcard_interaction_logs.class_id)))) AND ((card_id IS NULL) OR (EXISTS ( SELECT 1
    FROM flashcards fc
   WHERE ((fc.id = flashcard_interaction_logs.card_id) AND (fc.deck_id = flashcard_interaction_logs.deck_id) AND (fc.class_id = flashcard_interaction_logs.class_id)))))));
 
@@ -53,9 +53,9 @@ for select
 to authenticated
 using ((((student_id = auth.uid()) OR authorizeforclassgrader(class_id)) AND (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcard_interaction_logs.deck_id) AND (fd.class_id = fd.class_id)))) AND ((card_id IS NULL) OR (EXISTS ( SELECT 1
+  WHERE ((fd.id = flashcard_interaction_logs.deck_id) AND (fd.class_id = flashcard_interaction_logs.class_id)))) AND ((card_id IS NULL) OR (EXISTS ( SELECT 1
    FROM flashcards fc
-  WHERE ((fc.id = flashcard_interaction_logs.card_id) AND (fc.class_id = fc.class_id)))))));
+  WHERE ((fc.id = flashcard_interaction_logs.card_id) AND (fc.class_id = flashcard_interaction_logs.class_id)))))));
 
 
 create policy "Allow deck managers to create cards"
@@ -65,9 +65,9 @@ for insert
 to authenticated
 with check (((authorizeforclassgrader(class_id) OR (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = fd.class_id))))) AND (EXISTS ( SELECT 1
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = flashcards.class_id))))) AND (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = fd.class_id))))));
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = flashcards.class_id))))));
 
 
 create policy "Allow deck managers to delete cards"
@@ -77,9 +77,9 @@ for delete
 to authenticated
 using (((authorizeforclassgrader(class_id) OR (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = fd.class_id))))) AND (EXISTS ( SELECT 1
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = flashcards.class_id))))) AND (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = fd.class_id))))));
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = flashcards.class_id))))));
 
 
 create policy "Allow deck managers to update cards"
@@ -89,14 +89,14 @@ for update
 to authenticated
 using (((authorizeforclassgrader(class_id) OR (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = fd.class_id))))) AND (EXISTS ( SELECT 1
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = flashcards.class_id))))) AND (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = fd.class_id))))))
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = flashcards.class_id))))))
 with check (((authorizeforclassgrader(class_id) OR (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = fd.class_id))))) AND (EXISTS ( SELECT 1
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.creator_id = auth.uid()) AND (fd.class_id = flashcards.class_id))))) AND (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = fd.class_id))))));
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = flashcards.class_id))))));
 
 
 create policy "Allow users to view cards in accessible decks"
@@ -106,7 +106,7 @@ for select
 to authenticated
 using ((authorizeforclass(class_id) AND (EXISTS ( SELECT 1
    FROM flashcard_decks fd
-  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = fd.class_id))))));
+  WHERE ((fd.id = flashcards.deck_id) AND (fd.class_id = flashcards.class_id))))));
 
 
 create policy "Allow students to insert own progress"
@@ -116,7 +116,7 @@ for insert
 to authenticated
 with check (((student_id = auth.uid()) AND authorizeforclass(class_id) AND (EXISTS ( SELECT 1
    FROM flashcards fc
-  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = fc.class_id))))));
+  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = student_flashcard_deck_progress.class_id))))));
 
 
 create policy "Allow students to see own progress, instructors/graders to see "
@@ -126,7 +126,7 @@ for select
 to authenticated
 using ((((student_id = auth.uid()) OR authorizeforclassgrader(class_id)) AND (EXISTS ( SELECT 1
    FROM flashcards fc
-  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = fc.class_id))))));
+  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = student_flashcard_deck_progress.class_id))))));
 
 
 create policy "Allow students to update own progress"
@@ -136,10 +136,10 @@ for update
 to authenticated
 using (((student_id = auth.uid()) AND authorizeforclass(class_id) AND (EXISTS ( SELECT 1
    FROM flashcards fc
-  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = fc.class_id))))))
+  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = student_flashcard_deck_progress.class_id))))))
 with check (((student_id = auth.uid()) AND authorizeforclass(class_id) AND (EXISTS ( SELECT 1
    FROM flashcards fc
-  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = fc.class_id))))));
+  WHERE ((fc.id = student_flashcard_deck_progress.card_id) AND (fc.class_id = student_flashcard_deck_progress.class_id))))));
 
 
 
