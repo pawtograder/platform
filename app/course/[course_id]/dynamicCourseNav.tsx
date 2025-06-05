@@ -44,7 +44,6 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/assignments`
   },
   { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion` },
-  // { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
   {
     name: "Get Help Now",
     student_only: true,
@@ -59,9 +58,6 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/help`,
     feature_flag: "office-hours"
   },
-  // {name: 'Trending', icon: FiTrendingUp },
-  // {name: 'Explore', icon: FiCompass },
-  // {name: 'Favourites', icon: FiStar },
   {
     name: "Course Settings",
     icon: FiSettings,
@@ -184,21 +180,14 @@ export default function DynamicCourseNav() {
         <VStack gap={2} align="stretch">
           {/* Top row: Course picker, logo, course name, user menu */}
           <HStack justifyContent="space-between" alignItems="center">
-            <HStack gap={2} flex={1} minWidth={0}>
+            <HStack>
               <CoursePicker courses={courses} currentCourse={enrollment.classes} />
               {colorMode === "dark" ? (
-                <Image src="/Logo-Dark.png" width={24} height={24} alt="Logo" />
+                <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
               ) : (
-                <Image src="/Logo-Light.png" width={24} height={24} alt="Logo" />
+                <Image src="/Logo-Light.png" width={30} height={30} alt="Logo" />
               )}
-              <Text
-                fontSize="md"
-                fontWeight="medium"
-                overflow="hidden"
-                textOverflow="ellipsis"
-                whiteSpace="nowrap"
-                flex={1}
-              >
+              <Text fontSize="md" fontWeight="medium">
                 <Link variant="plain" href={`/course/${enrollment.class_id}`}>
                   {enrollment.classes.name}
                 </Link>

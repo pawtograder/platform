@@ -7,8 +7,9 @@ const DiscussionLayout = async ({ children }: Readonly<{ children: React.ReactNo
       <Flex flex="1" wrap={{ base: "wrap", md: "nowrap" }}>
         <Box
           width={{ base: "100%", md: "314px" }}
-          borderRight={{ base: "none", md: "1px solid" }}
-          borderBottom={{ base: "1px solid", md: "none" }}
+          borderRightWidth={{ base: "0", md: "1px" }}
+          borderBottomWidth={{ base: "1px", md: "0" }}
+          borderStyle="solid"
           borderColor="border.emphasized"
           pt="4"
         >
