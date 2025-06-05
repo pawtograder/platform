@@ -96,6 +96,6 @@ export default function NewAssignmentPage() {
       }
     }
     await create();
-  }, [course_id, getValues, router, timezone]);
+  }, [course_id, getValues, router, timezone, mutateAsync]);
   return <CreateAssignment form={form} onSubmit={onSubmit} />;
 }

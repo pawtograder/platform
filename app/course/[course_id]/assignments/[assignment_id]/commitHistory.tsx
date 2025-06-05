@@ -90,21 +90,21 @@ function CommitHistory({
         </Table.Header>
         <Table.Body>
           {commits?.data.map((commit) => {
-            const relatedSubmission = data?.data.find((submission) => submission.sha === commit.sha);
+            const relatedSubmission = data?.data.find((submission) => submission.sha === commit["sha"]);
             const commitDate = new TZDate(
               commit.status.commit_date || new Date().toUTCString(),
               time_zone || "America/New_York"
             );
             return (
-              <Table.Row key={commit.sha}>
+              <Table.Row key={commit["sha"]}>
                 <Table.Cell>
-                  <Link href={`https://github.com/${repository_full_name}/commit/${commit.sha}`}>
-                    {commit.sha.slice(0, 7)}
+                  <Link href={`https://github.com/${repository_full_name}/commit/${commit["sha"]}`}>
+                    {commit["sha"].slice(0, 7)}
                   </Link>
                 </Table.Cell>
                 <Table.Cell>{formatRelative(commitDate, TZDate.tz(time_zone || "America/New_York"))}</Table.Cell>
                 <Table.Cell>{commit.status.commit_author}</Table.Cell>
-                <Table.Cell>{commit.commit_message}</Table.Cell>
+                <Table.Cell>{commit["commit_message"]}</Table.Cell>
                 <Table.Cell>
                   {relatedSubmission ? (
                     <Link
@@ -118,7 +118,7 @@ function CommitHistory({
                       <Text fontSize="sm" color="text.muted">
                         Not submitted
                       </Text>
-                      <TriggerWorkflowButton repository={repository_full_name} sha={commit.sha} />
+                      <TriggerWorkflowButton repository={repository_full_name} sha={commit["sha"]} />
                     </Box>
                   )}
                 </Table.Cell>

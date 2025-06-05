@@ -216,7 +216,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
   useEffect(() => {
     const subscription = watch((value, { name }) => {
       if (name === "eval_config" || !name) {
-        setWithEval(value.eval_config === "use_eval");
+        setWithEval(value["eval_config"] === "use_eval");
       }
     });
     return () => subscription.unsubscribe();
@@ -225,7 +225,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
   useEffect(() => {
     const subscription = watch((value, { name }) => {
       if (name === "allow_early" || !name) {
-        setAllowEarly(value.allow_early);
+        setAllowEarly(value["allow_early"]);
       }
     });
     return () => subscription.unsubscribe();
@@ -240,8 +240,8 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
         <Fieldset.Content>
           <Field
             label="Assignment setting"
-            errorText={errors.group_config?.message?.toString()}
-            invalid={errors.group_config ? true : false}
+            errorText={errors["group_config"]?.message?.toString()}
+            invalid={errors["group_config"] ? true : false}
             required={true}
           >
             <NativeSelectRoot {...register("eval_config", { required: true })}>
@@ -263,8 +263,8 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
               <Field
                 label="Hours due after programming assignment"
                 helperText="The number of hours between the deadline of the programming assignment and when the self evaluation is due"
-                errorText={errors.min_group_size?.message?.toString()}
-                invalid={errors.min_group_size ? true : false}
+                errorText={errors["min_group_size"]?.message?.toString()}
+                invalid={errors["min_group_size"] ? true : false}
                 required={withEval}
               >
                 <Input

@@ -36,7 +36,6 @@ function SelfReviewNoticeInner({
 
   // These hooks now work because they're inside AssignmentProvider
   const reviewassignments = useMyReviewAssignments();
-  console.log(reviewassignments);
   const selfReviewRubric = useRubric("self-review");
   const selfReviewAssignment = reviewassignments.find((a) => a.rubric_id === selfReviewRubric?.id);
 

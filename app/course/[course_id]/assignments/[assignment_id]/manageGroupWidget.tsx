@@ -17,6 +17,7 @@ import type {
   Assignment,
   AssignmentGroupInvitation,
   AssignmentGroupJoinRequest,
+  AssignmentGroupMember,
   AssignmentGroupWithMembersInvitationsAndJoinRequests
 } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -157,7 +158,9 @@ export function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitatio
       return [];
     }
     return profiles.filter(
-      (p) => p.is_private_profile && !groups.some((g) => g.assignment_groups_members.some((m) => m.profile_id === p.id))
+      (p) =>
+        p.is_private_profile &&
+        !groups.some((g) => g.assignment_groups_members.some((m: AssignmentGroupMember) => m.profile_id === p.id))
     );
   }, [profiles, groups]);
   return ungroupedProfiles;
@@ -177,7 +180,9 @@ function InviteButton({
   const [selectedInvitees, setSelectedInvitees] = useState<MultiValue<{ label: string | null; value: string }>>([]);
   const ungroupedProfiles = useUngroupedProfiles(allGroups);
   const ungroupedProfilesWithoutInvitations = useMemo(() => {
-    return ungroupedProfiles.filter((p) => !group.assignment_group_invitations.some((i) => i.invitee === p.id));
+    return ungroupedProfiles.filter(
+      (p) => !group.assignment_group_invitations.some((i: AssignmentGroupInvitation) => i.invitee === p.id)
+    );
   }, [ungroupedProfiles, group]);
   const invalidateInvites = useCallback(() => {
     invalidate({ resource: "assignment_group_invitations", invalidates: ["all"] });
@@ -205,7 +210,7 @@ function InviteButton({
             <Dialog.Body>
               <Field.Root>
                 <Field.Label>Outstanding invitations</Field.Label>
-                {group.assignment_group_invitations.map((i) => (
+                {group.assignment_group_invitations.map((i: AssignmentGroupInvitation) => (
                   <AssignmentGroupInvitationView invitation={i} key={i.id} invalidateInvites={invalidateInvites} />
                 ))}
               </Field.Root>
@@ -291,14 +296,19 @@ function JoinGroupButton({
   const supabase = createClient();
   const [groupToJoin, setGroupToJoin] = useState<AssignmentGroupWithMembersInvitationsAndJoinRequests | null>(null);
   const myInvitations = useMemo(() => {
-    const invitations = groups.map((g) => g.assignment_group_invitations.map((i) => ({ ...i, group: g }))).flat();
+    const invitations = groups
+      .map((g) => g.assignment_group_invitations.map((i: AssignmentGroupInvitation) => ({ ...i, group: g })))
+      .flat();
     return invitations.filter((i) => i.invitee === private_profile_id);
   }, [groups, private_profile_id]);
   const myRequests = useMemo(() => {
     const requests = groups
-      .map((g) => g.assignment_group_join_request.map((i) => ({ ...i, group: g })))
+      .map((g) => g.assignment_group_join_request.map((i: AssignmentGroupJoinRequest) => ({ ...i, group: g })))
       .flat()
-      .filter((j) => j.profile_id === private_profile_id);
+      .filter(
+        (j: AssignmentGroupJoinRequest & { group: AssignmentGroupWithMembersInvitationsAndJoinRequests }) =>
+          j.profile_id === private_profile_id
+      );
     return requests.sort((a, b) => {
       return b.created_at.localeCompare(a.created_at);
     });
@@ -306,8 +316,10 @@ function JoinGroupButton({
   const myGroupsWithoutInvitationsOrRequests = useMemo(() => {
     return groups.filter(
       (g) =>
-        !g.assignment_group_invitations.some((i) => i.invitee === private_profile_id) &&
-        !g.assignment_group_join_request.some((j) => j.profile_id === private_profile_id && j.status === "pending")
+        !g.assignment_group_invitations.some((i: AssignmentGroupInvitation) => i.invitee === private_profile_id) &&
+        !g.assignment_group_join_request.some(
+          (j: AssignmentGroupJoinRequest) => j.profile_id === private_profile_id && j.status === "pending"
+        )
     );
   }, [groups, private_profile_id]);
   const invalidateInvites = useCallback(() => {
