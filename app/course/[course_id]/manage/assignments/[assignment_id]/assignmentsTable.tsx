@@ -387,6 +387,7 @@ export default function AssignmentsTable() {
 
 type ExportRow = {
   student_name?: string;
+  canvas_user_id?: number | null;
   student_email?: string;
   group_name?: string;
   autograder_score?: number | null;
@@ -539,6 +540,7 @@ async function exportGrades({
 
     const row: ExportRow = {
       student_name: submission.name || "",
+      canvas_user_id: rosterRow?.canvas_id,
       student_email: rosterRow?.users.email || "",
       autograder_score: submission.autograder_score,
       total_score: submission.total_score,
@@ -572,6 +574,7 @@ async function exportGrades({
     const preparedRows = exportRows.map((row) => {
       const record: Record<string, unknown> = {};
       record.student_name = row.student_name;
+      record.canvas_user_id = row.canvas_user_id;
       record.student_email = row.student_email;
       record.group_name = row.group_name;
       record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
@@ -615,6 +618,7 @@ async function exportGrades({
       const record: Record<string, unknown> = {};
       record.student_name = row.student_name;
       record.student_email = row.student_email;
+      record.canvas_user_id = row.canvas_user_id;
       record.group_name = row.group_name;
       record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
       if (include_repo_metadata) {

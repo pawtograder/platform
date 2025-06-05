@@ -432,7 +432,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
           borderColor="border.info"
           borderRadius="md"
         >
-          <Box bg="bg.info" pl={1} pr={1} borderRadius="md">
+          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
               <HStack>
                 {!comment.eventually_visible && (
@@ -460,7 +460,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
               </HStack>
               <HStack gap={0} flexWrap="wrap">
                 <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                  {`${commentAuthor?.name} ${submissionReview?.name}`}
+                  {`${commentAuthor?.name} ${submissionReview ? submissionReview?.name : ""}`}
                 </Text>
                 {comment.submission_review_id && <ReviewRoundTag submission_review_id={comment.submission_review_id} />}
               </HStack>
