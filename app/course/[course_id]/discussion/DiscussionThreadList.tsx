@@ -237,7 +237,7 @@ export default function DiscussionThreadList() {
   }, []);
 
   return (
-    <Flex width="314px" height="100vh" bottom={0} direction="column" top={0} justify="space-between" align="center">
+    <Flex width={"100%"} height={"100vh"} bottom={0} direction="column" top={0} justify="space-between" align="center">
       <Box p="4" w="100%">
         <Heading size="md" mb="2">
           Discussion Feed

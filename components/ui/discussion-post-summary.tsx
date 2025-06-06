@@ -62,7 +62,7 @@ export function DiscussionPostSummary({
     </HStack>
   );
   return (
-    <Box>
+    <Box minWidth={"fit-content"} width="auto">
       <Flex borderWidth="1px" divideX="1px" borderRadius="l3" bg="bg" _hover={{ bg: "bg.subtle" }}>
         <Stack p="6" flex="1">
           <Badge variant="surface" alignSelf="flex-start" colorPalette={topic.color}>
@@ -97,20 +97,22 @@ export function DiscussionPostSummary({
             ) : (
               <Skeleton width="100px" />
             )}
-            <Text textStyle="sm" color="fg.muted" ms="3">
-              {formatRelative(thread.created_at, new Date())}
-            </Text>
-            <Spacer />
+            <Flex wrap={{ base: "wrap", sm: "nowrap" }}>
+              <Text textStyle="sm" color="fg.muted" ms="3">
+                {formatRelative(thread.created_at, new Date())}
+              </Text>
+              <Spacer />
 
-            <HStack gap="4">
-              <HStack gap="1">
-                <Button variant="ghost">{comments}</Button>
+              <HStack gap="4">
+                <HStack gap="1">
+                  <Button variant="ghost">{comments}</Button>
+                </HStack>
+                <Status.Root hideBelow="sm">
+                  <Status.Indicator />
+                  {/* {thread.topic} */}
+                </Status.Root>
               </HStack>
-              <Status.Root hideBelow="sm">
-                <Status.Indicator />
-                {/* {thread.topic} */}
-              </Status.Root>
-            </HStack>
+            </Flex>
           </HStack>
         </Stack>
         <VStack px="4" justify="center" flexShrink="0">

@@ -9,7 +9,7 @@ import useDiscussionThreadChildren, {
 import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
-import { Avatar, Badge, Box, Button, Heading, HStack, Link, Text, VStack } from "@chakra-ui/react";
+import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, Text, VStack } from "@chakra-ui/react";
 import { useList, useOne, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
@@ -35,7 +35,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
           )}
           <VStack gap="0" alignSelf="flex-start" align="start">
             {thread.instructors_only && <Badge colorPalette="blue">Viewable by poster and staff only</Badge>}
-            <HStack>
+            <Flex wrap="wrap">
               {userProfile ? (
                 <Heading size="sm">
                   {userProfile?.name}
@@ -52,7 +52,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
               ) : (
                 <Skeleton width="100px" height="20px" />
               )}
-            </HStack>
+            </Flex>
             <Text fontSize="sm" color="text.muted">
               {formatRelative(new Date(thread.created_at), new Date())}
             </Text>

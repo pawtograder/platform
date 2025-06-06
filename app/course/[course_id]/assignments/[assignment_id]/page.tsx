@@ -106,8 +106,7 @@ export default async function AssignmentPage({
     <Box p={4}>
       <Heading size="lg">{assignment.title}</Heading>
       <HStack>
-        <Text>Due: </Text>
-        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
+        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} showDue={true} />
       </HStack>
       <Markdown>{assignment.description}</Markdown>
       {!assignment.template_repo || !assignment.template_repo.includes("/") ? (

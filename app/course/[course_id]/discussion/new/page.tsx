@@ -67,10 +67,10 @@ export default function NewDiscussionThread() {
     [handleSubmit, refineCore.onFinish, private_profile_id, public_profile_id, course_id, getValues, setValue]
   );
   return (
-    <Box>
+    <Box p={{ base: "4", md: "0" }}>
       <Heading as="h1">New Discussion Thread</Heading>
       <Toaster />
-      <Box maxW="4xl">
+      <Box maxW="4xl" w="100%">
         <form onSubmit={onSubmit}>
           <Fieldset.Root bg="surface">
             <Fieldset.Content w="100%">
@@ -92,15 +92,16 @@ export default function NewDiscussionThread() {
                         orientation="vertical"
                         align="center"
                         justify="start"
-                        maxW="4xl"
+                        w="100%"
                         name={field.name}
                         value={field.value}
                         onChange={field.onChange}
                       >
-                        <Flex flexWrap="wrap" gap="2">
+                        <Flex flexWrap="wrap" gap="2" w="100%">
                           {topics?.data?.map((topic: DiscussionTopic) => (
-                            <Box key={topic.id} w="sm">
+                            <Box key={topic.id} flex="1" minW={{ base: "100%", lg: "40%" }}>
                               <RadioCardItem
+                                w="100%"
                                 p="0"
                                 m="0"
                                 indicator={false}
@@ -128,15 +129,16 @@ export default function NewDiscussionThread() {
                       orientation="horizontal"
                       align="center"
                       justify="center"
-                      maxW="4xl"
+                      w="100%"
                       name={field.name}
                       value={field.value}
                       onChange={field.onChange}
                     >
                       <RadioCardLabel>Post Type</RadioCardLabel>
-                      <Flex flexWrap="wrap" gap="2">
-                        <Box w="sm">
+                      <Flex flexWrap="wrap" gap="2" w="100%">
+                        <Box flex="1" minW={{ base: "100%", lg: "40%" }}>
                           <RadioCardItem
+                            w="100%"
                             value="true"
                             indicator={false}
                             icon={
@@ -148,8 +150,9 @@ export default function NewDiscussionThread() {
                             label="Question"
                           />
                         </Box>
-                        <Box w="sm">
+                        <Box flex="1" minW={{ base: "100%", lg: "40%" }}>
                           <RadioCardItem
+                            w="100%"
                             value="false"
                             label="Note"
                             indicator={false}
@@ -177,15 +180,16 @@ export default function NewDiscussionThread() {
                       orientation="horizontal"
                       align="center"
                       justify="center"
-                      maxW="4xl"
+                      w="100%"
                       name={field.name}
                       value={field.value}
                       onChange={field.onChange}
                     >
                       <RadioCardLabel>Post Visibility</RadioCardLabel>
-                      <Flex flexWrap="wrap" gap="2">
-                        <Box w="sm">
+                      <Flex flexWrap="wrap" gap="2" w="100%">
+                        <Box flex="1" minW={{ base: "100%", lg: "40%" }}>
                           <RadioCardItem
+                            w="100%"
                             value="false"
                             label="Entire Class"
                             indicator={false}
@@ -198,8 +202,9 @@ export default function NewDiscussionThread() {
                           />
                         </Box>
 
-                        <Box w="sm">
+                        <Box flex="1" minW={{ base: "100%", lg: "40%" }}>
                           <RadioCardItem
+                            w="100%"
                             value="true"
                             indicator={false}
                             icon={
@@ -227,15 +232,16 @@ export default function NewDiscussionThread() {
                       orientation="horizontal"
                       align="center"
                       justify="center"
-                      maxW="4xl"
+                      w="100%"
                       name={field.name}
                       value={field.value}
                       onChange={field.onChange}
                     >
                       <RadioCardLabel>Post Anonymity</RadioCardLabel>
-                      <Flex flexWrap="wrap" gap="2">
-                        <Box w="sm">
+                      <Flex flexWrap="wrap" gap="2" w="100%">
+                        <Box flex="1" minW={{ base: "100%", lg: "40%" }}>
                           <RadioCardItem
+                            w="100%"
                             value="false"
                             label={`Post with your name`}
                             indicator={false}
@@ -248,8 +254,9 @@ export default function NewDiscussionThread() {
                           />
                         </Box>
 
-                        <Box w="sm">
+                        <Box flex="1" minW={{ base: "100%", lg: "40%" }}>
                           <RadioCardItem
+                            w="100%"
                             value="true"
                             indicator={false}
                             icon={
@@ -269,6 +276,7 @@ export default function NewDiscussionThread() {
             </Fieldset.Content>
             <Fieldset.Content>
               <Field
+                maxWidth={"100%"}
                 label="Subject"
                 helperText="A short, descriptive subject for your post. Be specific."
                 errorText={errors.title?.message?.toString()}
@@ -290,7 +298,7 @@ export default function NewDiscussionThread() {
                   render={({ field }) => {
                     return (
                       <MdEditor
-                        style={{ minWidth: "400px", width: "100%" }}
+                        style={{ minWidth: "100%", width: "100%" }}
                         onChange={field.onChange}
                         value={field.value}
                       />
@@ -299,7 +307,7 @@ export default function NewDiscussionThread() {
                 />
               </Field>
             </Fieldset.Content>
-            <Button type="submit" loading={isSubmitting} disabled={isSubmitting}>
+            <Button type="submit" loading={isSubmitting} disabled={isSubmitting} w="100%">
               Submit
             </Button>
           </Fieldset.Root>
