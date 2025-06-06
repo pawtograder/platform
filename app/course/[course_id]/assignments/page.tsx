@@ -128,8 +128,8 @@ export default async function StudentPage({ params }: { params: Promise<{ course
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
             <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
-            <Table.ColumnHeader>GitHub Repository</Table.ColumnHeader>
-            <Table.ColumnHeader>Group</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>GitHub Repository</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Group</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -172,12 +172,12 @@ export default async function StudentPage({ params }: { params: Promise<{ course
                     "-"
                   )}
                 </Table.Cell>
-                <Table.Cell>
+                <Table.Cell display={{ base: "none", sm: "table-cell" }}>
                   <Link target="_blank" href={`https://github.com/${repo}`}>
                     {repo}
                   </Link>{" "}
                 </Table.Cell>
-                <Table.Cell>
+                <Table.Cell display={{ base: "none", sm: "table-cell" }}>
                   {assignment.group_config === "individual"
                     ? "Individual"
                     : group?.assignment_groups?.name || "No Group"}
