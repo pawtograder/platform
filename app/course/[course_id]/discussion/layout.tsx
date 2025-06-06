@@ -15,7 +15,7 @@ const DiscussionLayout = async ({ children }: Readonly<{ children: React.ReactNo
         >
           <DiscussionThreadList />
         </Box>
-        <Box p="8" width="100%">
+        <Box p={{ base: "4", md: "8" }} width="100%">
           {children}
         </Box>
       </Flex>
