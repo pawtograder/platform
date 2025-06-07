@@ -378,8 +378,8 @@ export default function FlashcardsDeckPage() {
     newQueue.push(movedCard);
     setCardQueue(newQueue);
 
-    // The next card to show is at the same index, unless we were at the end
-    const nextIndex = currentCardIndex >= newQueue.length ? 0 : currentCardIndex;
+    // The next card to show is at the same index, unless we were at the end of the queue, in which case we wrap around.
+    const nextIndex = currentCardIndex === newQueue.length - 1 ? 0 : currentCardIndex;
     displayCard(nextIndex, newQueue);
   }, [
     currentCard,
