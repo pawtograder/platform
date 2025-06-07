@@ -7,7 +7,7 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
-import useTags, { useTagsForProfile } from "@/hooks/useTags";
+import useTags from "@/hooks/useTags";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
@@ -57,11 +57,6 @@ type RemoveStudentModalData = {
   userName: string | null | undefined;
   role: UserRoleWithPrivateProfileAndUser["role"];
 };
-
-function RetrieveTagsForProfile(profile_id: string) {
-  const forProf = useTagsForProfile(profile_id);
-  return forProf;
-}
 
 function EnrollmentsTable() {
   const { course_id } = useParams();
