@@ -1,6 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
 import InlineAddTag from "@/components/ui/inline-add-tag";
+import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 import PersonTags from "@/components/ui/person-tags";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -38,13 +39,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaEdit, FaFileImport, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
+import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import AddSingleStudent from "./addSingleStudent";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import RemoveStudentModal from "./removeStudentModal";
-import { PiArrowBendLeftUpBold } from "react-icons/pi";
-import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -279,25 +279,10 @@ function EnrollmentsTable() {
           return profileTagNames.includes(filterValue);
         },
         cell: ({ row }) => {
-          const tagsFor = RetrieveTagsForProfile(row.original.private_profile_id);
           return (
             <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
               <PersonTags profile_id={row.original.private_profile_id} showRemove />
-              <InlineAddTag
-                addTag={async (name: string, color?: string) => {
-                  await addTag({
-                    values: {
-                      name: name.startsWith("~") ? name.slice(1) : name,
-                      color: color || "gray",
-                      visible: !name.startsWith("~"),
-                      profile_id: row.original.private_profile_id,
-                      class_id: course_id as string
-                    }
-                  });
-                }}
-                currentTags={tagsFor.tags}
-                allowExpand={false}
-              />
+              <InlineAddTag profile_id={row.original.private_profile_id} allowExpand={false} />
             </Flex>
           );
         }
@@ -390,8 +375,6 @@ function EnrollmentsTable() {
       openEditUserRoleModal,
       openRemoveStudentModal,
       tagData,
-      addTag,
-      course_id,
       handleSingleCheckboxChange
     ]
   );
