@@ -1,6 +1,6 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import InlineAddTag from "@/components/ui/inline-add-tag";
+import InlineAddTag, { TagAddForm } from "@/components/ui/inline-add-tag";
 import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 import PersonTags from "@/components/ui/person-tags";
 import { toaster, Toaster } from "@/components/ui/toaster";
@@ -571,7 +571,7 @@ function EnrollmentsTable() {
                   </NativeSelectField>
                 </NativeSelect.Root>
                 {strategy === "add" && (
-                  <InlineAddTag
+                  <TagAddForm
                     addTag={async (name: string, color?: string) => {
                       checkedBoxes.forEach(async (profile) => {
                         await addTag({

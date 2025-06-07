@@ -51,37 +51,15 @@ function KeyboardAwareSegmentGroup({
   );
 }
 
-export default function InlineAddTag({ profile_id, allowExpand }: { profile_id: string; allowExpand: boolean }) {
-  const currentTags = useTagsForProfile(profile_id).tags;
-  const { course_id } = useParams();
-  const invalidate = useInvalidate();
-  const mutationOptions = useMemo(
-    () => ({
-      onSuccess: () => {
-        invalidate({ resource: "tags", invalidates: ["list"] });
-      }
-    }),
-    [invalidate]
-  );
-  const { mutateAsync } = useCreate<Tag>({
-    resource: "tags",
-    mutationOptions
-  });
-  const addTag = useCallback(
-    async (name: string, color: string) => {
-      await mutateAsync({
-        values: {
-          name,
-          color,
-          visible: !name.startsWith("~"),
-          profile_id,
-          class_id: course_id as string
-        }
-      });
-    },
-    [mutateAsync, profile_id, course_id]
-  );
-
+export function TagAddForm({
+  addTag,
+  currentTags,
+  allowExpand
+}: {
+  addTag: (name: string, color: string) => void;
+  currentTags: Tag[];
+  allowExpand: boolean;
+}) {
   const [isEditing, setIsEditing] = useState(false);
   const [inputValue, setInputValue] = useState("");
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -282,4 +260,37 @@ export default function InlineAddTag({ profile_id, allowExpand }: { profile_id: 
       )}
     </Flex>
   );
+}
+
+export default function InlineAddTag({ profile_id, allowExpand }: { profile_id: string; allowExpand: boolean }) {
+  const currentTags = useTagsForProfile(profile_id).tags;
+  const { course_id } = useParams();
+  const invalidate = useInvalidate();
+  const mutationOptions = useMemo(
+    () => ({
+      onSuccess: () => {
+        invalidate({ resource: "tags", invalidates: ["list"] });
+      }
+    }),
+    [invalidate]
+  );
+  const { mutateAsync } = useCreate<Tag>({
+    resource: "tags",
+    mutationOptions
+  });
+  const addTag = useCallback(
+    async (name: string, color: string) => {
+      await mutateAsync({
+        values: {
+          name,
+          color,
+          visible: !name.startsWith("~"),
+          profile_id,
+          class_id: course_id as string
+        }
+      });
+    },
+    [mutateAsync, profile_id, course_id]
+  );
+  return <TagAddForm addTag={addTag} currentTags={currentTags} allowExpand={allowExpand} />;
 }
