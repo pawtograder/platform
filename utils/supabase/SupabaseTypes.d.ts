@@ -1,31 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never;
-    };
-    Views: {
-      [_ in never]: never;
-    };
-    Functions: {
-      graphql: {
-        Args: {
-          operationName?: string;
-          query?: string;
-          variables?: Json;
-          extensions?: Json;
-        };
-        Returns: Json;
-      };
-    };
-    Enums: {
-      [_ in never]: never;
-    };
-    CompositeTypes: {
-      [_ in never]: never;
-    };
-  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -77,6 +52,7 @@ export type Database = {
           creator_id: string;
           hours: number;
           id: number;
+          minutes: number;
           note: string | null;
           student_id: string | null;
           tokens_consumed: number;
@@ -89,6 +65,7 @@ export type Database = {
           creator_id: string;
           hours: number;
           id?: number;
+          minutes?: number;
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
@@ -101,6 +78,7 @@ export type Database = {
           creator_id?: string;
           hours?: number;
           id?: number;
+          minutes?: number;
           note?: string | null;
           student_id?: string | null;
           tokens_consumed?: number;
@@ -541,6 +519,7 @@ export type Database = {
           min_group_size: number | null;
           release_date: string | null;
           self_review_rubric_id: number | null;
+          self_review_setting_id: number;
           slug: string | null;
           student_repo_prefix: string | null;
           template_repo: string | null;
@@ -568,6 +547,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
+          self_review_setting_id: number;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -595,6 +575,7 @@ export type Database = {
           min_group_size?: number | null;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
+          self_review_setting_id?: number;
           slug?: string | null;
           student_repo_prefix?: string | null;
           template_repo?: string | null;
@@ -628,6 +609,13 @@ export type Database = {
             columns: ["self_review_rubric_id"];
             isOneToOne: false;
             referencedRelation: "rubrics";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assignments_self_review_setting_fkey";
+            columns: ["self_review_setting_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_self_review_settings";
             referencedColumns: ["id"];
           }
         ];
@@ -2497,6 +2485,7 @@ export type Database = {
           release_date: string | null;
           rubric_id: number;
           submission_id: number;
+          submission_review_id: number;
         };
         Insert: {
           assignee_profile_id: string;
@@ -2509,6 +2498,7 @@ export type Database = {
           release_date?: string | null;
           rubric_id: number;
           submission_id: number;
+          submission_review_id: number;
         };
         Update: {
           assignee_profile_id?: string;
@@ -2521,6 +2511,7 @@ export type Database = {
           release_date?: string | null;
           rubric_id?: number;
           submission_id?: number;
+          submission_review_id?: number;
         };
         Relationships: [
           {
@@ -2592,6 +2583,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "review_assignments_submission_review_id_fkey";
+            columns: ["submission_review_id"];
+            isOneToOne: false;
+            referencedRelation: "submission_reviews";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -2893,6 +2891,38 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
+          }
+        ];
+      };
+      assignment_self_review_settings: {
+        Row: {
+          allow_early: boolean | null;
+          class_id: number;
+          deadline_offset: number | null;
+          enabled: boolean;
+          id: number;
+        };
+        Insert: {
+          allow_early?: boolean | null;
+          class_id: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Update: {
+          allow_early?: boolean | null;
+          class_id?: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "self_review_settings_class_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -4179,6 +4209,10 @@ export type Database = {
         Args: { requested_submission_id: number };
         Returns: boolean;
       };
+      authorize_for_submission_review: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
       authorize_for_submission_reviewable: {
         Args: {
           requested_submission_id: number;
@@ -4229,6 +4263,14 @@ export type Database = {
       authorizeforprofile: {
         Args: { profile_id: string };
         Returns: boolean;
+      };
+      auto_assign_self_reviews: {
+        Args: { this_assignment_id: number; this_profile_id: string };
+        Returns: undefined;
+      };
+      check_assignment_deadlines_passed: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       custom_access_token_hook: {
         Args: { event: Json };
@@ -4379,9 +4421,6 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
-  graphql_public: {
-    Enums: {}
-  },
   pgmq_public: {
     Enums: {}
   },
