@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, Text, IconButton, SimpleGrid, Box, HStack, Badge } from "@chakra-ui/react";
+import { Card, Text, IconButton, Flex, Box, HStack, Badge } from "@chakra-ui/react";
 import { FaUndo } from "react-icons/fa";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
@@ -42,7 +42,7 @@ export default function GotItPile({ gotItCards, onReturnCard }: GotItPileProps) 
         </HStack>
       </Card.Header>
       <Card.Body>
-        <SimpleGrid columns={{ base: 2, sm: 3, md: 4, lg: 6 }} gap={32}>
+        <Flex gap={4} flexWrap="wrap">
           {gotItCards.map((card) => (
             <Card.Root
               key={card.id}
@@ -59,8 +59,8 @@ export default function GotItPile({ gotItCards, onReturnCard }: GotItPileProps) 
               }}
               borderRadius="lg"
               overflow="hidden"
-              height="160px"
-              width="140px"
+              height="140px"
+              width="100px"
               borderWidth="1px"
               position="relative"
               role="group"
@@ -147,7 +147,7 @@ export default function GotItPile({ gotItCards, onReturnCard }: GotItPileProps) 
               />
             </Card.Root>
           ))}
-        </SimpleGrid>
+        </Flex>
       </Card.Body>
     </Card.Root>
   );

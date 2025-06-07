@@ -85,11 +85,7 @@ export default function FlashcardsDeckPage() {
   });
 
   // Fetch student's progress for this deck
-  const {
-    data: progressData,
-    isLoading: isProgressLoading,
-    refetch: refetchProgress
-  } = useList<StudentFlashcardProgressRow>({
+  const { data: progressData, isLoading: isProgressLoading } = useList<StudentFlashcardProgressRow>({
     resource: "student_flashcard_deck_progress",
     filters: [
       {
@@ -119,37 +115,23 @@ export default function FlashcardsDeckPage() {
     return new Set((progressData?.data || []).map((progress) => progress.card_id));
   }, [progressData?.data]);
 
-  // Update local state when progress data changes
+  // Update local state and initialize queue when progress data is first loaded
   useEffect(() => {
-    if (!isProgressLoading && progressData?.data) {
-      setGotItCardIds(masteredCardIds);
+    if (!isProgressLoading && progressData?.data && !progressLoaded) {
+      const initialMasteredIds = new Set((progressData?.data || []).map((p) => p.card_id));
+      setGotItCardIds(initialMasteredIds);
+
+      const available = flashcards.filter((card) => !initialMasteredIds.has(card.id));
+      const shuffled = [...available];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      setCardQueue(shuffled);
+      setCurrentCardIndex(0);
       setProgressLoaded(true);
     }
-  }, [isProgressLoading, progressData?.data, masteredCardIds]);
-
-  // Create shuffled array of available cards, excluding those in "got it" pile (Fisher-Yates shuffle)
-  const availableCards = useMemo(() => {
-    const available = flashcards.filter((card) => !gotItCardIds.has(card.id));
-    // Shuffle the array for random order
-    const shuffled = [...available];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    return shuffled;
-  }, [flashcards, gotItCardIds]);
-
-  // Update card queue when available cards change
-  useEffect(() => {
-    setCardQueue(availableCards);
-    setCurrentCardIndex((prevIndex) => {
-      // If the index is now out of bounds (which can happen when the last card is moved), reset to the first card.
-      if (prevIndex >= availableCards.length) {
-        return 0;
-      }
-      return prevIndex;
-    });
-  }, [availableCards]);
+  }, [isProgressLoading, progressData, flashcards, progressLoaded, masteredCardIds]);
 
   const gotItCards = useMemo(() => {
     return flashcards.filter((card) => gotItCardIds.has(card.id));
@@ -311,9 +293,6 @@ export default function FlashcardsDeckPage() {
       setShowAnswer(false);
       setPromptViewTimestamp(0);
     }
-
-    // Refetch progress to keep data in sync
-    refetchProgress();
   }, [
     currentCard,
     user?.id,
@@ -322,7 +301,6 @@ export default function FlashcardsDeckPage() {
     courseIdNum,
     deckIdNum,
     currentCardIndex,
-    refetchProgress,
     supabase,
     cardQueue,
     displayCard
@@ -433,17 +411,20 @@ export default function FlashcardsDeckPage() {
         return;
       }
 
+      // Add the card back to the practice pile and remove it from the "got it" pile
+      const cardToReturn = flashcards.find((c) => c.id === cardId);
+      if (cardToReturn) {
+        setCardQueue((prev) => [...prev, cardToReturn]);
+      }
+
       // Remove from "got it" pile locally
       setGotItCardIds((prev) => {
         const updated = new Set(prev);
         updated.delete(cardId);
         return updated;
       });
-
-      // Refetch progress to keep data in sync
-      refetchProgress();
     },
-    [user?.id, courseIdNum, deckIdNum, refetchProgress, supabase]
+    [user?.id, courseIdNum, deckIdNum, supabase, flashcards]
   );
 
   // Handle resetting all progress
@@ -485,18 +466,23 @@ export default function FlashcardsDeckPage() {
 
     // Reset local state
     setGotItCardIds(new Set());
+    // Fisher-Yates shuffle
+    const shuffled = [...flashcards];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    setCardQueue(shuffled);
     setCurrentCardIndex(0);
     setShowAnswer(false);
-
-    // Refetch progress to keep data in sync
-    refetchProgress();
+    setPromptViewTimestamp(0);
 
     toaster.create({
       title: "Progress Reset",
       description: "All cards have been returned to the practice pile.",
       type: "info"
     });
-  }, [user?.id, courseIdNum, deckIdNum, flashcards, refetchProgress, supabase]);
+  }, [user?.id, courseIdNum, deckIdNum, flashcards, supabase]);
 
   // Loading states
   if (isDeckLoading || isFlashcardsLoading || isProgressLoading || !progressLoaded) {
