@@ -497,6 +497,38 @@ export type Database = {
           }
         ];
       };
+      assignment_self_review_settings: {
+        Row: {
+          allow_early: boolean | null;
+          class_id: number;
+          deadline_offset: number | null;
+          enabled: boolean;
+          id: number;
+        };
+        Insert: {
+          allow_early?: boolean | null;
+          class_id: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Update: {
+          allow_early?: boolean | null;
+          class_id?: number;
+          deadline_offset?: number | null;
+          enabled?: boolean;
+          id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "self_review_settings_class_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       assignments: {
         Row: {
           allow_student_formed_groups: boolean | null;
@@ -2658,6 +2690,7 @@ export type Database = {
           ordinal: number;
           points: number;
           rubric_criteria_id: number;
+          student_visibility: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Insert: {
           annotation_target?: string | null;
@@ -2677,6 +2710,7 @@ export type Database = {
           ordinal: number;
           points: number;
           rubric_criteria_id: number;
+          student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Update: {
           annotation_target?: string | null;
@@ -2696,6 +2730,7 @@ export type Database = {
           ordinal?: number;
           points?: number;
           rubric_criteria_id?: number;
+          student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Relationships: [
           {
@@ -2891,38 +2926,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
-          }
-        ];
-      };
-      assignment_self_review_settings: {
-        Row: {
-          allow_early: boolean | null;
-          class_id: number;
-          deadline_offset: number | null;
-          enabled: boolean;
-          id: number;
-        };
-        Insert: {
-          allow_early?: boolean | null;
-          class_id: number;
-          deadline_offset?: number | null;
-          enabled?: boolean;
-          id?: number;
-        };
-        Update: {
-          allow_early?: boolean | null;
-          class_id?: number;
-          deadline_offset?: number | null;
-          enabled?: boolean;
-          id?: number;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "self_review_settings_class_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
           }
         ];
       };
@@ -4213,6 +4216,10 @@ export type Database = {
         Args: { submission_review_id: number };
         Returns: boolean;
       };
+      authorize_for_submission_review_writable: {
+        Args: { submission_review_id: number };
+        Returns: boolean;
+      };
       authorize_for_submission_reviewable: {
         Args: {
           requested_submission_id: number;
@@ -4318,6 +4325,7 @@ export type Database = {
       assignment_group_mode: "individual" | "groups" | "both";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
+      rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -4431,7 +4439,8 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
-      review_round: ["self-review", "grading-review", "meta-grading-review"]
+      review_round: ["self-review", "grading-review", "meta-grading-review"],
+      rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"]
     }
   }
 } as const;
