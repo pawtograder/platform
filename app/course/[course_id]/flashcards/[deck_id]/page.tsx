@@ -21,6 +21,22 @@ type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
 type StudentFlashcardProgressRow = Database["public"]["Tables"]["student_flashcard_deck_progress"]["Row"];
 
 /**
+ * Shuffles an array of flashcards using the Fisher-Yates shuffle algorithm.
+ * This function creates a shallow copy of the input array and shuffles it, leaving the original array unmodified.
+ *
+ * @param cards The array of flashcards to be shuffled.
+ * @returns A new array containing the same flashcards as the input array, but in a random order.
+ */
+const shuffleCards = (cards: FlashcardRow[]): FlashcardRow[] => {
+  const shuffled = [...cards];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
+
+/**
  * Page component for students to practice flashcards.
  * Includes comprehensive interaction logging for analytics and persistent progress tracking.
  * @returns A React component that displays the flashcard deck and allows the user to practice the flashcards.
@@ -122,12 +138,7 @@ export default function FlashcardsDeckPage() {
       setGotItCardIds(initialMasteredIds);
 
       const available = flashcards.filter((card) => !initialMasteredIds.has(card.id));
-      const shuffled = [...available];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      setCardQueue(shuffled);
+      setCardQueue(shuffleCards(available));
       setCurrentCardIndex(0);
       setProgressLoaded(true);
     }
@@ -466,13 +477,7 @@ export default function FlashcardsDeckPage() {
 
     // Reset local state
     setGotItCardIds(new Set());
-    // Fisher-Yates shuffle
-    const shuffled = [...flashcards];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    setCardQueue(shuffled);
+    setCardQueue(shuffleCards(flashcards));
     setCurrentCardIndex(0);
     setShowAnswer(false);
     setPromptViewTimestamp(0);
