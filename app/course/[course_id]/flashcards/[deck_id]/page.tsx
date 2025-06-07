@@ -11,13 +11,11 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import Link from "@/components/ui/link";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Alert } from "@/components/ui/alert";
-import { updateCardProgress, resetAllProgress, logFlashcardInteraction } from "./actions";
+import { createClient } from "@/utils/supabase/client";
 import Flashcard from "./flashcard";
 import GotItPile from "./gotItPile";
 
-// TODO: Replace server actions with Database functions
-
-// Type definitions
+// Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
 type StudentFlashcardProgressRow = Database["public"]["Tables"]["student_flashcard_deck_progress"]["Row"];
@@ -30,6 +28,7 @@ type StudentFlashcardProgressRow = Database["public"]["Tables"]["student_flashca
 export default function FlashcardsDeckPage() {
   const params = useParams();
   const { user } = useAuthState();
+  const supabase = createClient();
 
   const courseId = params.course_id as string;
   const deckId = params.deck_id as string;
@@ -162,26 +161,57 @@ export default function FlashcardsDeckPage() {
 
   // Display a new card and log the prompt view
   const displayCard = useCallback(
-    (cardIndex: number) => {
-      const card = cardQueue[cardIndex];
+    (cardIndex: number, queue: FlashcardRow[]) => {
+      const card = queue[cardIndex];
       if (!card || !user?.id) return;
 
       setCurrentCardIndex(cardIndex);
       setShowAnswer(false);
       setPromptViewTimestamp(Date.now());
       setAnswerViewTimestamp(0); // Reset answer timestamp for new card
-      logFlashcardInteraction("card_prompt_viewed", courseIdNum, deckIdNum, user.id, card.id);
+      supabase
+        .rpc("log_flashcard_interaction", {
+          p_action: "card_prompt_viewed",
+          p_class_id: courseIdNum,
+          p_deck_id: deckIdNum,
+          p_student_id: user.id,
+          p_card_id: card.id,
+          p_duration_on_card_ms: 0
+        })
+        .then(({ error }) => {
+          if (error) {
+            toaster.error({
+              title: "Failed to log flashcard interaction",
+              description: "Error: " + error.message
+            });
+          }
+        });
     },
-    [cardQueue, user?.id, courseIdNum, deckIdNum]
+    [user?.id, courseIdNum, deckIdNum, supabase]
   );
 
   // Log deck viewed when session starts
   useEffect(() => {
     if (user?.id && !sessionStarted && !isNaN(courseIdNum) && !isNaN(deckIdNum) && progressLoaded) {
-      logFlashcardInteraction("deck_viewed", courseIdNum, deckIdNum, user.id);
+      supabase
+        .rpc("log_flashcard_interaction", {
+          p_action: "deck_viewed",
+          p_class_id: courseIdNum,
+          p_deck_id: deckIdNum,
+          p_student_id: user.id,
+          p_duration_on_card_ms: 0
+        })
+        .then(({ error }) => {
+          if (error) {
+            toaster.error({
+              title: "Failed to log flashcard interaction",
+              description: "Error: " + error.message
+            });
+          }
+        });
       setSessionStarted(true);
     }
-  }, [user?.id, sessionStarted, courseIdNum, deckIdNum, progressLoaded]);
+  }, [user?.id, sessionStarted, courseIdNum, deckIdNum, progressLoaded, supabase]);
 
   // Initialize with first card when cards are loaded and properly set up timing
   useEffect(() => {
@@ -189,10 +219,10 @@ export default function FlashcardsDeckPage() {
 
     // If we have cards and current index is out of bounds, reset to 0
     if (currentCardIndex >= cardQueue.length) {
-      displayCard(0);
+      displayCard(0, cardQueue);
     } else if (promptViewTimestamp === 0 && cardQueue[currentCardIndex]) {
       // If we have a current card but no timestamp set, initialize it properly
-      displayCard(currentCardIndex);
+      displayCard(currentCardIndex, cardQueue);
     }
   }, [cardQueue, sessionStarted, currentCardIndex, promptViewTimestamp, displayCard]);
 
@@ -203,10 +233,26 @@ export default function FlashcardsDeckPage() {
     // Only calculate duration if we have a valid timestamp (not 0)
     const duration = promptViewTimestamp > 0 ? Date.now() - promptViewTimestamp : 0;
     const now = Date.now();
-    logFlashcardInteraction("card_answer_viewed", courseIdNum, deckIdNum, user.id, currentCard.id, duration);
+    supabase
+      .rpc("log_flashcard_interaction", {
+        p_action: "card_answer_viewed",
+        p_class_id: courseIdNum,
+        p_deck_id: deckIdNum,
+        p_student_id: user.id,
+        p_card_id: currentCard.id,
+        p_duration_on_card_ms: duration
+      })
+      .then(({ error }) => {
+        if (error) {
+          toaster.error({
+            title: "Failed to log flashcard interaction",
+            description: "Error: " + error.message
+          });
+        }
+      });
     setShowAnswer(true);
     setAnswerViewTimestamp(now); // Track when answer was shown
-  }, [currentCard, user?.id, promptViewTimestamp, courseIdNum, deckIdNum]);
+  }, [currentCard, user?.id, promptViewTimestamp, courseIdNum, deckIdNum, supabase]);
 
   // Handle "Got It" action
   const handleGotIt = useCallback(async () => {
@@ -219,15 +265,36 @@ export default function FlashcardsDeckPage() {
         : promptViewTimestamp > 0
           ? Date.now() - promptViewTimestamp
           : 0;
-    logFlashcardInteraction("card_marked_got_it", courseIdNum, deckIdNum, user.id, currentCard.id, duration);
+    supabase
+      .rpc("log_flashcard_interaction", {
+        p_action: "card_marked_got_it",
+        p_class_id: courseIdNum,
+        p_deck_id: deckIdNum,
+        p_student_id: user.id,
+        p_card_id: currentCard.id,
+        p_duration_on_card_ms: duration
+      })
+      .then(({ error }) => {
+        if (error) {
+          toaster.error({
+            title: "Failed to log flashcard interaction",
+            description: "Error: " + error.message
+          });
+        }
+      });
 
-    // Update database progress using server action
-    const result = await updateCardProgress(courseIdNum, user.id, currentCard.id, true);
+    // Update database progress using database function
+    const { error } = await supabase.rpc("update_card_progress", {
+      p_class_id: courseIdNum,
+      p_student_id: user.id,
+      p_card_id: currentCard.id,
+      p_is_mastered: true
+    });
 
-    if (!result.success) {
+    if (error) {
       toaster.error({
         title: "Failed to save progress",
-        description: "Error: " + result.error
+        description: "Error: " + error.message
       });
       return;
     }
@@ -235,15 +302,17 @@ export default function FlashcardsDeckPage() {
     // Add card to "got it" pile locally
     setGotItCardIds((prev) => new Set([...prev, currentCard.id]));
 
-    // Remove the card from the queue and adjust index if needed
-    setCardQueue((prevQueue) => {
-      const newQueue = prevQueue.filter((card) => card.id !== currentCard.id);
-      // If we're at the last card, go back to the beginning
-      if (currentCardIndex >= newQueue.length && newQueue.length > 0) {
-        setCurrentCardIndex(0);
-      }
-      return newQueue;
-    });
+    // Remove the card from the queue and display the next one
+    const newQueue = cardQueue.filter((card) => card.id !== currentCard.id);
+    setCardQueue(newQueue);
+
+    if (newQueue.length > 0) {
+      const nextIndex = currentCardIndex >= newQueue.length ? 0 : currentCardIndex;
+      displayCard(nextIndex, newQueue);
+    } else {
+      setShowAnswer(false);
+      setPromptViewTimestamp(0);
+    }
 
     // Refetch progress to keep data in sync
     refetchProgress();
@@ -255,7 +324,10 @@ export default function FlashcardsDeckPage() {
     courseIdNum,
     deckIdNum,
     currentCardIndex,
-    refetchProgress
+    refetchProgress,
+    supabase,
+    cardQueue,
+    displayCard
   ]);
 
   // Handle "Keep Trying" action - move current card to back of queue
@@ -271,35 +343,46 @@ export default function FlashcardsDeckPage() {
         : promptViewTimestamp > 0
           ? Date.now() - promptViewTimestamp
           : 0;
-    logFlashcardInteraction("card_marked_keep_trying", courseIdNum, deckIdNum, user.id, currentCard.id, duration);
+    supabase
+      .rpc("log_flashcard_interaction", {
+        p_action: "card_marked_keep_trying",
+        p_class_id: courseIdNum,
+        p_deck_id: deckIdNum,
+        p_student_id: user.id,
+        p_card_id: currentCard.id,
+        p_duration_on_card_ms: duration
+      })
+      .then(({ error }) => {
+        if (error) {
+          toaster.error({
+            title: "Failed to log flashcard interaction",
+            description: "Error: " + error.message
+          });
+        }
+      });
 
     if (cardQueue.length <= 1) {
+      // Even if only one card, flip it back to the question side
+      if (cardQueue.length === 1) {
+        setShowAnswer(false);
+      }
       toaster.create({
-        title: "No cards to keep trying",
-        description:
-          "There are no more cards to keep trying. You have mastered all remaining cards in this deck. You can reset your progress and start over.",
+        title: "No more cards to move",
+        description: "This is the last card in the pile.",
         type: "info"
       });
       return;
     }
 
-    // Move current card to the back of the queue
-    setCardQueue((prevQueue) => {
-      const newQueue = [...prevQueue];
-      const currentCardToMove = newQueue.splice(currentCardIndex, 1)[0];
-      newQueue.push(currentCardToMove);
-      return newQueue;
-    });
+    // Move current card to the back of the queue and display the next card
+    const newQueue = [...cardQueue];
+    const movedCard = newQueue.splice(currentCardIndex, 1)[0];
+    newQueue.push(movedCard);
+    setCardQueue(newQueue);
 
-    // Stay at the same index (which now shows the next card)
-    // But if we were at the last card, we need to go to index 0
-    if (currentCardIndex >= cardQueue.length - 1) {
-      setCurrentCardIndex(0);
-    }
-
-    // Display the new current card
-    const nextCardIndex = currentCardIndex >= cardQueue.length - 1 ? 0 : currentCardIndex;
-    displayCard(nextCardIndex);
+    // The next card to show is at the same index, unless we were at the end
+    const nextIndex = currentCardIndex >= newQueue.length ? 0 : currentCardIndex;
+    displayCard(nextIndex, newQueue);
   }, [
     currentCard,
     user?.id,
@@ -308,8 +391,9 @@ export default function FlashcardsDeckPage() {
     courseIdNum,
     deckIdNum,
     currentCardIndex,
-    cardQueue.length,
-    displayCard
+    cardQueue,
+    displayCard,
+    supabase
   ]);
 
   // Handle returning a card from "got it" pile to practice pile
@@ -317,15 +401,36 @@ export default function FlashcardsDeckPage() {
     async (cardId: number) => {
       if (!user?.id) return;
 
-      logFlashcardInteraction("card_returned_to_deck", courseIdNum, deckIdNum, user.id, cardId);
+      supabase
+        .rpc("log_flashcard_interaction", {
+          p_action: "card_returned_to_deck",
+          p_class_id: courseIdNum,
+          p_deck_id: deckIdNum,
+          p_student_id: user.id,
+          p_card_id: cardId,
+          p_duration_on_card_ms: 0
+        })
+        .then(({ error }) => {
+          if (error) {
+            toaster.error({
+              title: "Failed to log flashcard interaction",
+              description: "Error: " + error.message
+            });
+          }
+        });
 
       // Update database progress using server action
-      const result = await updateCardProgress(courseIdNum, user.id, cardId, false);
+      const { error } = await supabase.rpc("update_card_progress", {
+        p_class_id: courseIdNum,
+        p_student_id: user.id,
+        p_card_id: cardId,
+        p_is_mastered: false
+      });
 
-      if (!result.success) {
+      if (error) {
         toaster.error({
           title: "Failed to update card progress",
-          description: "Error: " + result.error
+          description: "Error: " + error.message
         });
         return;
       }
@@ -340,23 +445,42 @@ export default function FlashcardsDeckPage() {
       // Refetch progress to keep data in sync
       refetchProgress();
     },
-    [user?.id, courseIdNum, deckIdNum, refetchProgress]
+    [user?.id, courseIdNum, deckIdNum, refetchProgress, supabase]
   );
 
   // Handle resetting all progress
   const handleResetAllProgress = useCallback(async () => {
     if (!user?.id) return;
 
-    logFlashcardInteraction("deck_progress_reset_all", courseIdNum, deckIdNum, user.id);
+    supabase
+      .rpc("log_flashcard_interaction", {
+        p_action: "deck_progress_reset_all",
+        p_class_id: courseIdNum,
+        p_deck_id: deckIdNum,
+        p_student_id: user.id,
+        p_duration_on_card_ms: 0
+      })
+      .then(({ error }) => {
+        if (error) {
+          toaster.error({
+            title: "Failed to log flashcard interaction",
+            description: "Error: " + error.message
+          });
+        }
+      });
 
     // Reset database progress using server action
     const cardIds = flashcards.map((card) => card.id);
-    const result = await resetAllProgress(courseIdNum, user.id, cardIds);
+    const { error } = await supabase.rpc("reset_all_flashcard_progress", {
+      p_class_id: courseIdNum,
+      p_student_id: user.id,
+      p_card_ids: cardIds
+    });
 
-    if (!result.success) {
+    if (error) {
       toaster.error({
         title: "Failed to reset progress",
-        description: "Error: " + result.error
+        description: "Error: " + error.message
       });
       return;
     }
@@ -374,7 +498,7 @@ export default function FlashcardsDeckPage() {
       description: "All cards have been returned to the practice pile.",
       type: "info"
     });
-  }, [user?.id, courseIdNum, deckIdNum, flashcards, refetchProgress]);
+  }, [user?.id, courseIdNum, deckIdNum, flashcards, refetchProgress, supabase]);
 
   // Loading states
   if (isDeckLoading || isFlashcardsLoading || isProgressLoading || !progressLoaded) {

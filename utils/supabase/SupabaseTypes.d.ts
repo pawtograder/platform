@@ -4535,8 +4535,8 @@ export type Database = {
           p_class_id: number;
           p_deck_id: number;
           p_student_id: string;
-          p_card_id: number;
           p_duration_on_card_ms: number;
+          p_card_id?: number;
         };
         Returns: undefined;
       };

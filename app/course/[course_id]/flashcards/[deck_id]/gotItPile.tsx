@@ -4,8 +4,14 @@ import { Card, Text, IconButton, SimpleGrid, Box, HStack, Badge } from "@chakra-
 import { FaUndo } from "react-icons/fa";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
+// Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 
+/**
+ * This type defines the props for the GotItPile component.
+ * @param gotItCards - Array of flashcards that have been mastered
+ * @param onReturnCard - Callback to return a card back to the practice pile
+ */
 type GotItPileProps = {
   /** Array of flashcards that have been mastered */
   gotItCards: FlashcardRow[];

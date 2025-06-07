@@ -16,11 +16,18 @@ import { FaArrowLeft, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import AddFlashCardModal from "./addFlashCardModal";
 import EditDeckModal from "./editDeckModal";
 import EditFlashCardModal from "./editFlashCardModal";
+import CardAnalytics from "./cardAnalytics";
 
-// Type definitions
+// Supabase types
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 
+/**
+ * This component displays the flashcard deck page.
+ * It allows the user to add, edit, and delete flashcards in a deck.
+ * It also displays the analytics for a flashcard deck.
+ * @returns The flashcard deck page
+ */
 export default function FlashcardDeckPage() {
   const params = useParams();
   const router = useRouter();
@@ -299,6 +306,12 @@ export default function FlashcardDeckPage() {
             ))}
           </VStack>
         )}
+      </VStack>
+
+      {/* Analytics Section */}
+      <VStack align="stretch" gap={6}>
+        <Heading size="lg">Analytics</Heading>
+        <CardAnalytics deckId={deck_id} />
       </VStack>
 
       {/* Add Flashcard Modal */}

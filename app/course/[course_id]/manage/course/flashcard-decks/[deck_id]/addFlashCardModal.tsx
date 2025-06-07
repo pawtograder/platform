@@ -11,22 +11,44 @@ import { toaster } from "@/components/ui/toaster";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import useAuthState from "@/hooks/useAuthState";
 
-// Type definitions
+// Supabase types
 type FlashcardInsert = Database["public"]["Tables"]["flashcards"]["Insert"];
 
-interface AddFlashCardModalProps {
+/**
+ * This type defines the props for the AddFlashCardModal component.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param deckId - The ID of the deck to add a flashcard to
+ * @param onSuccess - The function to call when the flashcard is added successfully
+ */
+type AddFlashCardModalProps = {
   isOpen: boolean;
   onClose: () => void;
   deckId: string;
   onSuccess?: () => void;
-}
+};
 
-interface FlashcardFormData {
+/**
+ * This type defines the form data for the AddFlashCardModal component.
+ * @param title - The title of the flashcard
+ * @param prompt - The prompt of the flashcard
+ * @param answer - The answer of the flashcard
+ */
+type FlashcardFormData = {
   title: string;
   prompt: string;
   answer: string;
-}
+};
 
+/**
+ * This component displays a modal for adding a new flashcard to a deck.
+ * It allows the user to enter a title, prompt, and answer for the flashcard.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param deckId - The ID of the deck to add a flashcard to
+ * @param onSuccess - The function to call when the flashcard is added successfully
+ * @returns The AddFlashCardModal component
+ */
 export default function AddFlashCardModal({ isOpen, onClose, deckId, onSuccess }: AddFlashCardModalProps) {
   const params = useParams();
   const course_id = params.course_id as string;

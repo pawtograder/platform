@@ -4,7 +4,8 @@ import FlashcardDeckCard from "@/app/course/[course_id]/flashcards/flashcard-dec
 import type { FlashcardDeck } from "@/utils/supabase/DatabaseTypes";
 
 /**
- * Props for the FlashcardsPage component
+ * This type defines the props for the FlashcardsPage component.
+ * @param params - The route parameters containing course_id
  */
 type FlashcardsPageProps = {
   params: Promise<{ course_id: string }>;
@@ -13,8 +14,8 @@ type FlashcardsPageProps = {
 /**
  * Page component for displaying all flashcard decks in a course.
  * Students can view and access available flashcard decks for practice.
- *
  * @param params - The route parameters containing course_id
+ * @returns The FlashcardsPage component
  */
 export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
   const { course_id } = await params;

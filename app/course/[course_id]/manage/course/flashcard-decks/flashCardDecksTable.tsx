@@ -15,19 +15,34 @@ import { format } from "date-fns";
 import { useCallback, useMemo } from "react";
 import { FaTrash } from "react-icons/fa";
 
-// Type definitions
+// Supabase types
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
 
-interface FlashcardDecksTableProps {
+/**
+ * This type defines the props for the FlashcardDecksTable component.
+ * @param courseId - The course ID
+ * @param onDeckDeleted - The function to call when a deck is deleted
+ */
+type FlashcardDecksTableProps = {
   courseId: string | number;
   onDeckDeleted?: () => void;
-}
+};
 
-interface UserNameProps {
+/**
+ * This type defines the props for the UserName component.
+ * @param userId - The user ID
+ * @param courseId - The course ID
+ */
+type UserNameProps = {
   userId: string;
   courseId: string | number;
-}
+};
 
+/**
+ * This component displays the name of the user who created the deck.
+ * @param userId - The user ID
+ * @param courseId - The course ID
+ */
 function UserName({ userId, courseId }: UserNameProps) {
   // First, get the user's basic info
   const { data: userData } = useList<{ name: string }>({

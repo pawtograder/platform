@@ -25,44 +25,79 @@ import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";
 
-// Type definitions
+// Supabase types
 type FlashcardDeckUpdate = Database["public"]["Tables"]["flashcard_decks"]["Update"];
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 type FlashcardInsert = Database["public"]["Tables"]["flashcards"]["Insert"];
 type FlashcardUpdate = Database["public"]["Tables"]["flashcards"]["Update"];
 
-interface EditDeckModalProps {
+/**
+ * This type defines the props for the EditDeckModal component.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param deckId - The ID of the deck to edit
+ * @param onSuccess - The function to call when the deck is updated successfully
+ */
+type EditDeckModalProps = {
   isOpen: boolean;
   onClose: () => void;
   deckId: string;
   onSuccess?: () => void;
-}
+};
 
-interface FlashcardDeckFormData {
+/**
+ * This type defines the form data for the EditDeckModal component.
+ * @param name - The name of the deck
+ * @param description - The description of the deck
+ * @param yamlContent - The YAML content of the deck
+ */
+type FlashcardDeckFormData = {
   name: string;
   description?: string;
   yamlContent?: string;
-}
+};
 
-interface YamlCard {
+/**
+ * This type defines the YAML card for the EditDeckModal component.
+ * @param id - The ID of the card
+ * @param title - The title of the card
+ * @param prompt - The prompt of the card
+ * @param answer - The answer of the card
+ */
+type YamlCard = {
   id?: number;
   title: string;
   prompt: string;
   answer: string;
-}
+};
 
-interface ParsedFlashcardYaml {
+/**
+ * This type defines the parsed flashcard YAML for the EditDeckModal component.
+ * @param cards - The cards of the deck
+ */
+type ParsedFlashcardYaml = {
   cards?: YamlCard[];
-}
+};
 
-interface FlashcardChanges {
+/**
+ * This type defines the flashcard changes for the EditDeckModal component.
+ * @param toCreate - The cards to create
+ * @param toUpdate - The cards to update
+ * @param toDelete - The cards to delete
+ * @param numItemsWithBadIDs - The number of items with bad IDs
+ */
+type FlashcardChanges = {
   toCreate: YamlCard[];
   toUpdate: YamlCard[];
   toDelete: number[];
   numItemsWithBadIDs: number;
-}
+};
 
+/**
+ * This function validates the YAML cards for the EditDeckModal component.
+ * @param cards - The cards to validate
+ */
 function validateYamlCards(cards: YamlCard[]): void {
   for (const [index, card] of cards.entries()) {
     if (!card.title || !card.prompt || !card.answer) {
@@ -83,6 +118,12 @@ function validateYamlCards(cards: YamlCard[]): void {
   }
 }
 
+/**
+ * This function finds the flashcard changes for the EditDeckModal component.
+ * @param newCards - The new cards
+ * @param existingCards - The existing cards
+ * @returns The flashcard changes
+ */
 function findFlashcardChanges(newCards: YamlCard[], existingCards: FlashcardRow[]): FlashcardChanges {
   const existingCardMap = new Map(existingCards.map((card) => [card.id, card]));
 
@@ -117,6 +158,11 @@ function findFlashcardChanges(newCards: YamlCard[], existingCards: FlashcardRow[
   return { toCreate, toUpdate, toDelete, numItemsWithBadIDs };
 }
 
+/**
+ * This function converts the flashcards to YAML for the EditDeckModal component.
+ * @param flashcards - The flashcards to convert
+ * @returns The YAML content
+ */
 function flashcardsToYaml(flashcards: FlashcardRow[]): string {
   if (flashcards.length === 0) {
     return `# Flashcard Deck Configuration
@@ -140,6 +186,15 @@ cards: []`;
   });
 }
 
+/**
+ * This component displays a modal for editing a flashcard deck.
+ * It allows the user to edit the name, description, and YAML content of the deck.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param deckId - The ID of the deck to edit
+ * @param onSuccess - The function to call when the deck is updated successfully
+ * @returns The EditDeckModal component
+ */
 export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: EditDeckModalProps) {
   const params = useParams();
   const course_id = params.course_id as string;

@@ -1,6 +1,6 @@
 set check_function_bodies = off;
 
-CREATE OR REPLACE FUNCTION public.log_flashcard_interaction(p_action text, p_class_id bigint, p_deck_id bigint, p_student_id uuid, p_card_id bigint, p_duration_on_card_ms bigint)
+CREATE OR REPLACE FUNCTION public.log_flashcard_interaction(p_action text, p_class_id bigint, p_deck_id bigint, p_student_id uuid, p_duration_on_card_ms bigint, p_card_id bigint DEFAULT NULL)
  RETURNS void
  LANGUAGE plpgsql
  SET search_path TO ''

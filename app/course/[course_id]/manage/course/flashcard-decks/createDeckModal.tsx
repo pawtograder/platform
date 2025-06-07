@@ -25,32 +25,58 @@ import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
 import * as YAML from "yaml";
 
-// Type definitions
+// Supabase types
 type FlashcardDeckInsert = Database["public"]["Tables"]["flashcard_decks"]["Insert"];
 type FlashcardInsert = Database["public"]["Tables"]["flashcards"]["Insert"];
 
-interface CreateDeckModalProps {
+/**
+ * This type defines the props for the CreateDeckModal component.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param onSuccess - The function to call when the deck is created successfully
+ */
+type CreateDeckModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
-}
+};
 
-interface FlashcardDeckFormData {
+/**
+ * This type defines the form data for the CreateDeckModal component.
+ * @param name - The name of the deck
+ * @param description - The description of the deck
+ * @param yamlContent - The YAML content of the deck
+ */
+type FlashcardDeckFormData = {
   name: string;
   description?: string;
   yamlContent?: string;
-}
+};
 
-interface YamlCard {
+/**
+ * This type defines the YAML card for the CreateDeckModal component.
+ * @param title - The title of the card
+ * @param prompt - The prompt of the card
+ * @param answer - The answer of the card
+ */
+type YamlCard = {
   title: string;
   prompt: string;
   answer: string;
-}
+};
 
-interface ParsedFlashcardYaml {
+/**
+ * This type defines the parsed flashcard YAML for the CreateDeckModal component.
+ * @param cards - The cards of the deck
+ */
+type ParsedFlashcardYaml = {
   cards?: YamlCard[];
-}
+};
 
+/**
+ * This function validates the YAML cards for the CreateDeckModal component.
+ * @param cards - The cards to validate
+ */
 function validateYamlCards(cards: YamlCard[]): void {
   for (const [index, card] of cards.entries()) {
     if (!card.title || !card.prompt || !card.answer) {
@@ -71,6 +97,13 @@ function validateYamlCards(cards: YamlCard[]): void {
   }
 }
 
+/**
+ * This component displays a modal for creating a new flashcard deck.
+ * It allows the user to enter a name, description, and YAML content for the deck.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param onSuccess - The function to call when the deck is created successfully
+ */
 export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDeckModalProps) {
   const params = useParams();
   const course_id = params.course_id as string;

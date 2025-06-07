@@ -1,12 +1,14 @@
 "use client";
 
-import { Text, Card, Icon, Skeleton, Box } from "@chakra-ui/react";
+import { Card, Icon, Skeleton, Box } from "@chakra-ui/react";
 import { GiCardRandom } from "react-icons/gi";
 import Link from "next/link";
 import type { FlashcardDeck } from "@/utils/supabase/DatabaseTypes";
 
 /**
- * Props for the FlashcardDeckCard component
+ * This type defines the props for the FlashcardDeckCard component.
+ * @param deck - The flashcard deck data
+ * @param courseId - The course ID for navigation
  */
 type FlashcardDeckCardProps = {
   /** The flashcard deck data */
@@ -16,7 +18,7 @@ type FlashcardDeckCardProps = {
 };
 
 /**
- * Skeleton for the FlashcardDeckCard component
+ * This component displays a skeleton for the FlashcardDeckCard component.
  * @returns A skeleton component for the FlashcardDeckCard
  */
 export const FlashcardDeckCardSkeleton = () => {
@@ -27,7 +29,7 @@ export const FlashcardDeckCardSkeleton = () => {
       transition="all 0.3s ease-in-out"
       borderRadius="xl"
       overflow="hidden"
-      height="280px"
+      height="336px"
       width="240px"
     >
       <Card.Body p={8}>
@@ -44,9 +46,9 @@ export const FlashcardDeckCardSkeleton = () => {
 /**
  * Component for displaying a single flashcard deck as a clickable card
  * with an icon and deck name. Features hover effects and navigation.
- *
  * @param deck - The flashcard deck data
  * @param courseId - The course ID for navigation
+ * @returns The FlashcardDeckCard component
  */
 export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardProps) {
   return (
@@ -64,25 +66,20 @@ export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardP
         }}
         borderRadius="xl"
         overflow="hidden"
-        height="280px"
+        height="336px"
         width="240px"
         borderWidth="1px"
         position="relative"
         role="group"
       >
-        {/* Subtle gradient overlay */}
-        <Box
-          position="absolute"
-          top={0}
-          left={0}
-          right={0}
-          bottom={0}
-          opacity={0}
-          transition="opacity 0.3s ease-in-out"
-          _groupHover={{ opacity: 1 }}
-          pointerEvents="none"
-        />
-
+        <Card.Header>
+          <Card.Title fontWeight="semibold" fontSize="lg" textAlign="center" lineHeight="1.4">
+            {deck.name}
+          </Card.Title>
+          <Card.Description fontSize="sm" textAlign="center">
+            {deck.description}
+          </Card.Description>
+        </Card.Header>
         <Card.Body p={8} position="relative" zIndex={1}>
           {/* Icon container with background */}
           <Box mb={6} display="flex" justifyContent="center" alignItems="center" position="relative">
@@ -105,43 +102,10 @@ export default function FlashcardDeckCard({ deck, courseId }: FlashcardDeckCardP
               position="relative"
               zIndex={1}
             >
-              <GiCardRandom size={48} />
+              <GiCardRandom size={128} />
             </Icon>
           </Box>
-
-          {/* Deck name */}
-          <Box
-            overflow="hidden"
-            minHeight="3.6em"
-            css={{
-              display: "-webkit-box",
-              WebkitLineClamp: 3,
-              WebkitBoxOrient: "vertical"
-            }}
-          >
-            <Text
-              fontWeight="semibold"
-              fontSize="lg"
-              textAlign="center"
-              lineHeight="1.4"
-              transition="color 0.3s ease-in-out"
-            >
-              {deck.name}
-            </Text>
-          </Box>
         </Card.Body>
-
-        {/* Subtle bottom accent */}
-        <Box
-          position="absolute"
-          bottom={0}
-          left={0}
-          right={0}
-          height="3px"
-          opacity={0}
-          transition="opacity 0.3s ease-in-out"
-          _groupHover={{ opacity: 1 }}
-        />
       </Card.Root>
     </Link>
   );

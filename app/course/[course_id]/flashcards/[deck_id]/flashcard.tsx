@@ -6,8 +6,18 @@ import { FaCheckCircle, FaTimes } from "react-icons/fa";
 import Markdown from "@/components/ui/markdown";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
+// Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 
+/**
+ * This type defines the props for the Flashcard component.
+ * @param currentCard - The current flashcard being displayed
+ * @param availableCards - Available cards (current queue) for numbering purposes
+ * @param showAnswer - Whether the answer is currently shown
+ * @param onShowAnswer - Callback to show the answer
+ * @param onGotIt - Callback when user marks card as "Got It"
+ * @param onKeepTrying - Callback when user marks card as "Keep Trying"
+ */
 type FlashcardProps = {
   /** The current flashcard being displayed */
   currentCard: FlashcardRow;

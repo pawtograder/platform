@@ -3,13 +3,19 @@
 import { useState } from "react";
 import { VStack, HStack, Heading, Text } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { FaPlus } from "react-icons/fa";
+import { FaChartBar, FaPlus } from "react-icons/fa";
 import { useParams } from "next/navigation";
 import useModalManager from "@/hooks/useModalManager";
 import FlashCardDecksTable from "./flashCardDecksTable";
 import CreateDeckModal from "./createDeckModal";
 import { Toaster } from "@/components/ui/toaster";
+import Link from "@/components/ui/link";
 
+/**
+ * This component displays the flashcard decks page.
+ * It allows the user to create a new flashcard deck and view the analytics for a flashcard deck.
+ * @returns The flashcard decks page
+ */
 export default function FlashcardDecksPage() {
   const params = useParams();
   const course_id = params.course_id as string;
@@ -47,10 +53,18 @@ export default function FlashcardDecksPage() {
               </Text>
             </VStack>
 
-            <Button onClick={handleCreateDeck}>
-              <FaPlus style={{ marginRight: "8px" }} />
-              Create New Deck
-            </Button>
+            <HStack>
+              <Button onClick={handleCreateDeck}>
+                <FaPlus style={{ marginRight: "8px" }} />
+                Create New Deck
+              </Button>
+              <Link href={`/course/${course_id}/manage/course/flashcard-decks/analytics`}>
+                <Button variant="outline">
+                  <FaChartBar style={{ marginRight: "8px" }} />
+                  View Analytics
+                </Button>
+              </Link>
+            </HStack>
           </HStack>
         </VStack>
 

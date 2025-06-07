@@ -10,23 +10,45 @@ import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, Dialo
 import { toaster } from "@/components/ui/toaster";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
-// Type definitions
+// Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 type FlashcardUpdate = Database["public"]["Tables"]["flashcards"]["Update"];
 
-interface EditFlashCardModalProps {
+/**
+ * This type defines the props for the EditFlashCardModal component.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param flashcardId - The ID of the flashcard to edit
+ * @param onSuccess - The function to call when the flashcard is updated successfully
+ */
+type EditFlashCardModalProps = {
   isOpen: boolean;
   onClose: () => void;
   flashcardId: number;
   onSuccess?: () => void;
-}
+};
 
-interface FlashcardFormData {
+/**
+ * This type defines the form data for the EditFlashCardModal component.
+ * @param title - The title of the flashcard
+ * @param prompt - The prompt of the flashcard
+ * @param answer - The answer of the flashcard
+ */
+type FlashcardFormData = {
   title: string;
   prompt: string;
   answer: string;
-}
+};
 
+/**
+ * This component displays a modal for editing a flashcard.
+ * It allows the user to edit the title, prompt, and answer of a flashcard.
+ * @param isOpen - Whether the modal is open
+ * @param onClose - The function to call when the modal is closed
+ * @param flashcardId - The ID of the flashcard to edit
+ * @param onSuccess - The function to call when the flashcard is updated successfully
+ * @returns The EditFlashCardModal component
+ */
 export default function EditFlashCardModal({ isOpen, onClose, flashcardId, onSuccess }: EditFlashCardModalProps) {
   const {
     register,
