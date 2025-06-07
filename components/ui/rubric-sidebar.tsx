@@ -67,6 +67,7 @@ import { formatPoints, isRubricCheckDataWithOptions, RubricCheckSubOption, Rubri
 import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
 import { Badge } from "@/components/ui/badge";
+import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 
 interface CheckOptionType extends OptionBase {
   value: number;
@@ -255,6 +256,7 @@ function InlineReferenceManager({
             value={selectedCheckOption}
             onChange={(option) => setSelectedCheckOption(option || undefined)}
             placeholder="Select check to reference..."
+            aria-label="Select check to reference"
             isLoading={false}
             formatOptionLabel={(option) => (
               <VStack alignItems="flex-start" gap={0}>
@@ -326,6 +328,7 @@ function AddReferencingFeedbackPopover({
               <Markdown>{check?.description}</Markdown>
               {isRubricCheckDataWithOptions(check) && (
                 <Select
+                  aria-label="Select an option for this check"
                   options={check.options.map(
                     (option: RubricCheckSubOption, index: number) =>
                       ({
@@ -899,27 +902,13 @@ export function RubricCheckAnnotation({
       activeAssignmentReview.submission_review_id === reviewForThisRubric.id);
 
   // Check if this check should be visible to the current user
-  const shouldShowCheck = useMemo(() => {
-    if (isGrader || isPreviewMode) {
-      return true; // Graders and preview mode can see all checks
-    }
-
-    // For students, check visibility rules
-    const isApplied = rubricCheckComments.length > 0;
-    const isReleased = reviewForThisRubric?.released || false;
-
-    switch (check.student_visibility) {
-      case "never":
-        return false;
-      case "if_applied":
-        return isApplied && isReleased;
-      case "if_released":
-        return isReleased;
-      case "always":
-      default:
-        return true;
-    }
-  }, [isGrader, isPreviewMode, check.student_visibility, rubricCheckComments.length, reviewForThisRubric?.released]);
+  const shouldShowCheck = useShouldShowRubricCheck({
+    check,
+    rubricCheckComments,
+    reviewForThisRubric,
+    isGrader,
+    isPreviewMode
+  });
 
   if (!shouldShowCheck) {
     return null;
@@ -1025,27 +1014,13 @@ export function RubricCheckGlobal({
   const activeAssignmentReview = useActiveReviewAssignment();
 
   // Check if this check should be visible to the current user
-  const shouldShowCheck = useMemo(() => {
-    if (isGrader || isPreviewMode) {
-      return true; // Graders and preview mode can see all checks
-    }
-
-    // For students, check visibility rules
-    const isApplied = rubricCheckComments.length > 0;
-    const isReleased = reviewForThisRubric?.released || false;
-
-    switch (check.student_visibility) {
-      case "never":
-        return false;
-      case "if_applied":
-        return isApplied && isReleased;
-      case "if_released":
-        return isReleased;
-      case "always":
-      default:
-        return true;
-    }
-  }, [isGrader, isPreviewMode, check.student_visibility, rubricCheckComments.length, reviewForThisRubric?.released]);
+  const shouldShowCheck = useShouldShowRubricCheck({
+    check,
+    rubricCheckComments,
+    reviewForThisRubric,
+    isGrader,
+    isPreviewMode
+  });
 
   useEffect(() => {
     setSelected(rubricCheckComments.length > 0);
@@ -1513,6 +1488,7 @@ function RubricMenu() {
       <NativeSelectRoot>
         <NativeSelectField
           aria-label="Select active rubric"
+          title="Select active rubric"
           value={activeRubricId}
           onChange={(e) => {
             setScrollToRubricId(Number(e.target.value));
