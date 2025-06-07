@@ -16,7 +16,6 @@ import { FaArrowLeft, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import AddFlashCardModal from "./addFlashCardModal";
 import EditDeckModal from "./editDeckModal";
 import EditFlashCardModal from "./editFlashCardModal";
-import CardAnalytics from "./cardAnalytics";
 
 // Supabase types
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
@@ -163,7 +162,7 @@ export default function FlashcardDeckPage() {
   }
 
   return (
-    <VStack align="stretch" w="100%" gap={8} p={6} maxW="6xl" mx="auto">
+    <VStack align="stretch" w="100%" gap={8} p={6} mx="auto">
       {/* Header Section */}
       <HStack justifyContent="space-between" alignItems="flex-start">
         <HStack gap={4} align="flex-start">
@@ -214,7 +213,12 @@ export default function FlashcardDeckPage() {
       {/* Flashcards Section */}
       <VStack align="stretch" gap={6}>
         <HStack justifyContent="space-between" alignItems="center">
-          <Heading size="lg">Flashcards</Heading>
+          <HStack alignItems="center">
+            <Heading size="lg">Flashcards</Heading>
+            <Badge variant="subtle" px={2} py={1}>
+              {flashcards.length} {flashcards.length === 1 ? "card" : "cards"}
+            </Badge>
+          </HStack>
           <Button onClick={() => openAddCardModal()} size="sm">
             <FaPlus />
             Add Flashcard
@@ -306,12 +310,6 @@ export default function FlashcardDeckPage() {
             ))}
           </VStack>
         )}
-      </VStack>
-
-      {/* Analytics Section */}
-      <VStack align="stretch" gap={6}>
-        <Heading size="lg">Analytics</Heading>
-        <CardAnalytics deckId={deck_id} />
       </VStack>
 
       {/* Add Flashcard Modal */}

@@ -32,7 +32,7 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
 
   if (error) {
     return (
-      <Container maxW="6xl" py={8}>
+      <Container py={8}>
         <VStack align="stretch" gap={6}>
           <Heading size="xl" textAlign="center">
             Flashcard Decks
@@ -48,14 +48,14 @@ export default async function FlashcardsPage({ params }: FlashcardsPageProps) {
   }
 
   return (
-    <Container maxW="7xl" py={8}>
+    <Container py={8}>
       <VStack align="stretch" gap={8}>
         {/* Header Section */}
         <Box textAlign="center" mb={4}>
           <Heading size="2xl" mb={4}>
             Flashcard Decks
           </Heading>
-          <Text fontSize="lg" maxW="2xl" mx="auto">
+          <Text fontSize="lg" mx="auto">
             Practice and reinforce your learning with interactive flashcard decks
           </Text>
         </Box>

@@ -141,17 +141,15 @@ export default function FlashcardsDeckPage() {
 
   // Update card queue when available cards change
   useEffect(() => {
-    if (availableCards.length > 0) {
-      setCardQueue(availableCards);
-      // Reset to first card if current index is out of bounds
-      if (currentCardIndex >= availableCards.length) {
-        setCurrentCardIndex(0);
+    setCardQueue(availableCards);
+    setCurrentCardIndex((prevIndex) => {
+      // If the index is now out of bounds (which can happen when the last card is moved), reset to the first card.
+      if (prevIndex >= availableCards.length) {
+        return 0;
       }
-    } else {
-      setCardQueue([]);
-      setCurrentCardIndex(0);
-    }
-  }, [availableCards, currentCardIndex]);
+      return prevIndex;
+    });
+  }, [availableCards]);
 
   const gotItCards = useMemo(() => {
     return flashcards.filter((card) => gotItCardIds.has(card.id));
@@ -503,7 +501,7 @@ export default function FlashcardsDeckPage() {
   // Loading states
   if (isDeckLoading || isFlashcardsLoading || isProgressLoading || !progressLoaded) {
     return (
-      <Container maxW="4xl" mt={2}>
+      <Container mt={2}>
         <VStack align="center" justify="center" minH="400px" gap={4}>
           <Spinner size="lg" />
           <Text>Loading flashcard deck...</Text>
@@ -515,7 +513,7 @@ export default function FlashcardsDeckPage() {
   // Error states
   if (deckError || flashcardsError) {
     return (
-      <Container maxW="4xl" mt={2}>
+      <Container mt={2}>
         <Alert status="error" title="Error Loading Deck">
           Failed to load the flashcard deck. Please try again later.
         </Alert>
@@ -526,7 +524,7 @@ export default function FlashcardsDeckPage() {
   // No deck found
   if (!deck) {
     return (
-      <Container maxW="4xl" mt={2}>
+      <Container mt={2}>
         <Alert status="warning" title="Deck Not Found">
           The requested flashcard deck could not be found.
         </Alert>
@@ -548,7 +546,7 @@ export default function FlashcardsDeckPage() {
   // No cards in deck
   if (flashcards.length === 0) {
     return (
-      <Container maxW="4xl" mt={2}>
+      <Container mt={2}>
         <VStack align="stretch" gap={6}>
           {backToDecks}
           <Heading size="lg">{deck.name}</Heading>
@@ -564,7 +562,7 @@ export default function FlashcardsDeckPage() {
   // All cards completed
   if (cardQueue.length === 0) {
     return (
-      <Container maxW="4xl" mt={2}>
+      <Container mt={2}>
         <VStack align="stretch" gap={6}>
           {backToDecks}
 
@@ -596,7 +594,7 @@ export default function FlashcardsDeckPage() {
 
   // Normal practice view
   return (
-    <Container maxW="4xl" mt={2}>
+    <Container mt={2}>
       <VStack align="stretch" gap={6}>
         {/* Header */}
         <HStack justifyContent="space-between" alignItems="center">
