@@ -70,6 +70,10 @@
         },
         "points": {
           "type": "number"
+        },
+        "student_visibility": {
+          "enum": ["always", "if_applied", "if_released", "never"],
+          "type": "string"
         }
       },
       "required": ["is_annotation", "is_comment_required", "is_required", "name", "points"],

@@ -27,8 +27,8 @@ function ActiveReviewPicker() {
   const writableSubmissionReviews = useWritableSubmissionReviews();
   const setActiveSubmissionReviewId = useSetActiveSubmissionReviewId();
   return (
-    <HStack>
-      <Text>Select a review to work on</Text>
+    <HStack gap={2}>
+      <Text>Select a review to work on:</Text>
       <SegmentGroup.Root
         value={`${activeSubmissionReviewId}`}
         onValueChange={(value) => {

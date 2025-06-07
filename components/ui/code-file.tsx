@@ -394,20 +394,31 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
   const hasPoints = comment.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
 
+  // Determine if this comment will be visible to students
+  const getStudentVisibilityInfo = () => {
+    if (!rubricCheck.student_visibility || rubricCheck.student_visibility === "always") {
+      return { isVisible: true, reason: "Always visible to students" };
+    }
+    if (rubricCheck.student_visibility === "never") {
+      return { isVisible: false, reason: "Never visible to students" };
+    }
+    if (rubricCheck.student_visibility === "if_applied") {
+      return { isVisible: true, reason: "Visible to students when grades are released (check was applied)" };
+    }
+    if (rubricCheck.student_visibility === "if_released") {
+      return { isVisible: true, reason: "Visible to students when grades are released" };
+    }
+    return { isVisible: true, reason: "Visible to students" };
+  };
+
+  const { isVisible: willBeVisibleToStudents } = getStudentVisibilityInfo();
+
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
         <PersonAvatar size="2xs" uid={comment.author} />
-        <VStack
-          alignItems="flex-start"
-          spaceY={0}
-          gap={0}
-          w="100%"
-          border="1px solid"
-          borderColor="border.info"
-          borderRadius="md"
-        >
-          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
+        <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
+          <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
               <HStack flexGrow={10}>
                 {!comment.eventually_visible && (
@@ -854,7 +865,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
             ) : (
               <></>
             )}
-            {isGraderOrInstructor && (
+            {isGraderOrInstructor && selectedCheckOption.check?.student_visibility !== "never" && (
               <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>
                 <Checkbox
                   checked={eventuallyVisible}

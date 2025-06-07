@@ -450,8 +450,12 @@ export type HydratedRubricCriteria = Omit<Database["public"]["Tables"]["rubric_c
   data?: RubricCriteriaDataType;
 };
 export type RubricCriteriaDataType = Json;
-export type HydratedRubricCheck = Omit<Database["public"]["Tables"]["rubric_checks"]["Row"], "data"> & {
+export type HydratedRubricCheck = Omit<
+  Database["public"]["Tables"]["rubric_checks"]["Row"],
+  "data" | "student_visibility"
+> & {
   data?: Json;
+  student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
 };
 export type RubricChecksDataType = {
   options: {
