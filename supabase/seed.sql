@@ -143,3 +143,43 @@ public class Entrypoint {
  **wow**', 'markdown', 1, alyssa_profile_id, alyssa_submission_id, TRUE);
   
 END $$;
+
+-- Flashcard seed data
+DO $$
+DECLARE
+  cs101_deck_id int8;
+  java_deck_id int8;
+  eva_user_id uuid := '11111111-1111-1111-1111-111111111111';
+  demo_class_id int8 := 1;
+BEGIN
+
+INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+VALUES (
+  demo_class_id,
+  eva_user_id,
+  'Demo CS 101 Deck',
+  'Flashcards for introductory computer science concepts.'
+) RETURNING id INTO cs101_deck_id;
+
+INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer)
+VALUES
+(demo_class_id, cs101_deck_id, 'Algorithm', 'What is an algorithm?', 'A step-by-step procedure for solving a problem or accomplishing some end.'),
+(demo_class_id, cs101_deck_id, 'Data Structure', 'What is a data structure?', 'A particular way of organizing data in a computer so that it can be used effectively.'),
+(demo_class_id, cs101_deck_id, 'Variable', 'What is a variable in programming?', 'A storage location, with an associated symbolic name, which contains some known or unknown quantity of information referred to as a value.');
+
+
+INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+VALUES (
+  demo_class_id,
+  eva_user_id,
+  'Java Fundamentals',
+  'Basic concepts in Java programming.'
+) RETURNING id INTO java_deck_id;
+
+INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer)
+VALUES
+(demo_class_id, java_deck_id, 'Java Variables', 'What keyword is used to declare a variable that cannot be changed?', '`final`'),
+(demo_class_id, java_deck_id, 'Java Methods', 'What is the entry point for a Java application?', 'The `main` method: `public static void main(String[] args)`'),
+(demo_class_id, java_deck_id, 'Object-Oriented Programming', 'What are the four main principles of OOP?', 'Encapsulation, Abstraction, Inheritance, and Polymorphism');
+
+END $$;

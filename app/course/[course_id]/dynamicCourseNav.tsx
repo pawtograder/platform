@@ -33,6 +33,7 @@ import {
   FiStar,
   FiUsers
 } from "react-icons/fi";
+import { TbCards } from "react-icons/tb";
 import UserMenu from "../UserMenu";
 
 const LinkItems = (courseID: number) => [
@@ -44,7 +45,7 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/assignments`
   },
   { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion` },
-  // { name: 'Flashcards', icon: FiBook, target: `/course/${courseID}/flashcards` },
+  { name: "Flashcards", icon: TbCards, student_only: true, target: `/course/${courseID}/flashcards` },
   {
     name: "Get Help Now",
     student_only: true,
@@ -69,6 +70,7 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/course/`,
     submenu: [
       { name: "Enrollments", icon: FiUsers, target: `/course/${courseID}/manage/course/enrollments` },
+      { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` }
     ]
@@ -154,6 +156,7 @@ export default function DynamicCourseNav() {
     return <Skeleton height="40" width="100%" />;
   }
   const course = enrollment.classes as CourseWithFeatures;
+
   return (
     <Box
       px={{ base: 4, md: 4 }}
@@ -180,7 +183,7 @@ export default function DynamicCourseNav() {
               </Link>
             </Text>
           </HStack>
-          <HStack width="100%">
+          <HStack width="100%" mt={2}>
             {LinkItems(enrollment.class_id)
               .filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor))
               .filter(
