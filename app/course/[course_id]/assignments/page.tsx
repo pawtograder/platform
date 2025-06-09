@@ -25,7 +25,7 @@ type AssignmentUnit = {
   key: string;
   name: string;
   type: "assignment" | "self review";
-  due_date: string;
+  due_date: TZDate;
   due_date_component: JSX.Element;
   due_date_link?: string;
   repo: string;
@@ -180,11 +180,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
         key: assignment.id.toString(),
         name: assignment.title,
         type: "assignment",
-        due_date: formatInTimeZone(
-          new TZDate(modifiedDueDate),
-          course?.time_zone || "America/New_York",
-          "MMM d h:mm aaa"
-        ),
+        due_date: new TZDate(modifiedDueDate),
         due_date_component: <AssignmentDueDate assignment={assignment} />,
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
@@ -202,11 +198,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
           key: assignment.id.toString() + "selfReview",
           name: "Self Review for " + assignment.title,
           type: "self review",
-          due_date: formatInTimeZone(
-            new TZDate(evalDueDate),
-            course?.time_zone || "America/New_York",
-            "MMM d h:mm aaa"
-          ),
+          due_date: new TZDate(evalDueDate),
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
           name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0].submission_id}/files?review_assignment_id=${assignment.review_assignments[0].id}`,
@@ -224,46 +216,43 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     });
   };
 
-  const upcomingDeadlineDisplay = () => {
-    const upcoming = allAssignedWork().filter((work) => {
-      return work.due_date > new Date().toString();
-    });
-    if (upcoming.length === 0) {
-      return <Text>You&apos;re all caught up! No upcoming deadlines at this time.</Text>;
-    }
-    return upcoming.map((work) => {
-      return (
-        <Card.Root width={"sm"} key={work.key}>
-          <Card.Header>
-            <Heading size="md">
-              <Link prefetch={true} href={work.name_link}>
-                {work.name}
-              </Link>
-            </Heading>
-          </Card.Header>
-          <Card.Body fontSize="sm">
-            <Text>
-              <strong>Type:</strong> {work.type}
-            </Text>
-            <Text>
-              <strong>Due:</strong> {work.due_date}
-            </Text>
-            <Text>
-              <strong>Status:</strong> {work.type == "assignment" ? "using submission " : ""}
-              {work.submission_text}
-            </Text>
-          </Card.Body>
-        </Card.Root>
-      );
-    });
-  };
-
   return (
     <Container>
       {actions}
       <Flex mb="4" gap="4" flexDir={"column"}>
         <Heading size="lg">Upcoming Deadlines</Heading>
-        <Flex>{upcomingDeadlineDisplay()}</Flex>
+        <Flex>
+          {allAssignedWork()
+            .filter((work) => {
+              return work.due_date > new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+            })
+            .map((work) => {
+              return (
+                <Card.Root width={"sm"} key={work.key}>
+                  <Card.Header>
+                    <Heading size="md">
+                      <Link prefetch={true} href={work.name_link}>
+                        {work.name}
+                      </Link>
+                    </Heading>
+                  </Card.Header>
+                  <Card.Body fontSize="sm">
+                    <Text>
+                      <strong>Type:</strong> {work.type}
+                    </Text>
+                    <Text>
+                      <strong>Due:</strong>{" "}
+                      {formatInTimeZone(work.due_date, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}
+                    </Text>
+                    <Text>
+                      <strong>Status:</strong> {work.type == "assignment" ? "using submission " : ""}
+                      {work.submission_text}
+                    </Text>
+                  </Card.Body>
+                </Card.Root>
+              );
+            })}
+        </Flex>
       </Flex>
       <Heading size="lg" mb={4}>
         Assignments
