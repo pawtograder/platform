@@ -1,9 +1,8 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Card, HStack, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Card, HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
 import { FaCheckCircle, FaTimes } from "react-icons/fa";
 import { MdReplay } from "react-icons/md";
 
@@ -69,68 +68,75 @@ export default function Flashcard({
         style={{ transformStyle: "preserve-3d" }}
       >
         {/* Question Side (Front) */}
-        <Card.Root
-          variant="outline"
-          p={6}
-          borderRadius="lg"
-          textAlign="center"
-          height="100%"
-          width="100%"
-          position="absolute"
-          top={0}
-          left={0}
-          transition="all 0.2s"
-          _hover={{
-            shadow: "md",
-            transform: "translateY(-2px)"
-          }}
-          style={{
-            backfaceVisibility: "hidden",
-            transform: "rotateY(0deg)",
-            zIndex: showAnswer ? 1 : 2,
-            pointerEvents: showAnswer ? "none" : "auto"
-          }}
-        >
-          <Card.Header p={0}>
-            <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
-              Question: {currentCard.title}
-            </Text>
-          </Card.Header>
+        <Tooltip.Root disabled={showAnswer}>
+          <Tooltip.Trigger asChild>
+            <Card.Root
+              variant="outline"
+              p={{ base: 4, md: 6 }}
+              borderRadius="2xl"
+              textAlign="center"
+              height="100%"
+              width="100%"
+              position="absolute"
+              top={0}
+              left={0}
+              transition="all 0.3s ease-in-out"
+              _hover={{
+                shadow: "2xl",
+                transform: "translateY(-8px) scale(1.1)"
+              }}
+              _active={{
+                transform: "translateY(-2px) scale(1.1)"
+              }}
+              style={{
+                backfaceVisibility: "hidden",
+                transform: "rotateY(0deg)",
+                zIndex: showAnswer ? 1 : 2,
+                pointerEvents: showAnswer ? "none" : "auto"
+              }}
+              onClick={onShowAnswer}
+              cursor={showAnswer ? "default" : "pointer"}
+            >
+              <Card.Header p={0}>
+                <Text fontWeight="semibold" fontSize={{ base: "xl", md: "4xl" }} lineHeight="1.2" textAlign="center">
+                  Question: {currentCard.title}
+                </Text>
+              </Card.Header>
 
-          <Card.Body p={3} flex={1} display="flex" flexDirection="column" minHeight={0}>
-            <VStack align="stretch" gap={4} height="100%">
-              <Box
-                flex={1}
-                fontSize="lg"
-                lineHeight="1.4"
-                textAlign="left"
-                display="flex"
-                alignItems="flex-start"
-                p={4}
-                overflowWrap="break-word"
-                wordBreak="break-word"
-                overflowY="auto"
-                maxHeight="100%"
-              >
-                <Box width="100%" fontSize="md">
-                  <Markdown>{currentCard.prompt}</Markdown>
-                </Box>
-              </Box>
-            </VStack>
-          </Card.Body>
-
-          <Card.Footer p={3}>
-            <Button onClick={onShowAnswer} size="sm" width="100%" fontSize="md">
-              Show Answer
-            </Button>
-          </Card.Footer>
-        </Card.Root>
+              <Card.Body p={3} flex={1} display="flex" flexDirection="column" minHeight={0}>
+                <VStack align="stretch" gap={4} height="100%">
+                  <Box
+                    flex={1}
+                    fontSize={{ base: "md", md: "2xl" }}
+                    lineHeight="1.4"
+                    textAlign="left"
+                    display="flex"
+                    alignItems="flex-start"
+                    p={4}
+                    overflowWrap="break-word"
+                    wordBreak="break-word"
+                    overflowY="auto"
+                    maxHeight="100%"
+                  >
+                    <Box width="100%" fontSize={{ base: "md", md: "2xl" }}>
+                      <Markdown>{currentCard.prompt}</Markdown>
+                    </Box>
+                  </Box>
+                </VStack>
+              </Card.Body>
+            </Card.Root>
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            <Tooltip.Arrow />
+            Click to show answer
+          </Tooltip.Content>
+        </Tooltip.Root>
 
         {/* Answer Side (Back) */}
         <Card.Root
           variant="outline"
-          p={6}
-          borderRadius="lg"
+          p={{ base: 4, md: 6 }}
+          borderRadius="2xl"
           textAlign="center"
           height="100%"
           width="100%"
@@ -151,8 +157,22 @@ export default function Flashcard({
             pointerEvents: showAnswer ? "auto" : "none"
           }}
         >
+          <Button
+            onClick={onBackToQuestion}
+            size={{ base: "sm", md: "md" }}
+            position="absolute"
+            variant="outline"
+            top={{ base: "1rem", md: "1.5rem" }}
+            right={{ base: "1rem", md: "1.5rem" }}
+            aria-label="Back to question"
+          >
+            <MdReplay />
+            <Box as="span" display={{ base: "none", md: "inline" }} ml={2}>
+              Back to Question
+            </Box>
+          </Button>
           <Card.Header p={0}>
-            <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
+            <Text fontWeight="semibold" fontSize={{ base: "xl", md: "4xl" }} lineHeight="1.2" textAlign="center">
               Answer: {currentCard.title}
             </Text>
           </Card.Header>
@@ -161,7 +181,7 @@ export default function Flashcard({
             <VStack align="stretch" gap={4} height="100%">
               <Box
                 flex={1}
-                fontSize="lg"
+                fontSize={{ base: "md", md: "2xl" }}
                 lineHeight="1.4"
                 textAlign="left"
                 display="flex"
@@ -172,7 +192,7 @@ export default function Flashcard({
                 overflowY="auto"
                 maxHeight="100%"
               >
-                <Box width="100%" fontSize="md">
+                <Box width="100%" fontSize={{ base: "md", md: "2xl" }}>
                   <Markdown>{currentCard.answer}</Markdown>
                 </Box>
               </Box>
@@ -180,17 +200,14 @@ export default function Flashcard({
           </Card.Body>
 
           <Card.Footer p={3}>
-            <HStack gap={1} width="100%" display="flex">
-              <Button onClick={onGotIt} size="sm" colorPalette="green" fontSize="md" flex={1}>
-                <FaCheckCircle />
-                Got It!
-              </Button>
-              <Button onClick={onBackToQuestion} size="sm" colorPalette="blue" variant="outline" fontSize="md" flex={0}>
-                <MdReplay />
-              </Button>
-              <Button onClick={onKeepTrying} size="sm" colorPalette="red" variant="outline" fontSize="md" flex={1}>
+            <HStack gap={{ base: 2, md: 4 }} width="100%" display="flex">
+              <Button onClick={onKeepTrying} size={{ base: "sm", md: "lg" }} colorPalette="red" flex={1}>
                 <FaTimes />
                 Keep Trying
+              </Button>
+              <Button onClick={onGotIt} size={{ base: "sm", md: "lg" }} colorPalette="green" flex={1}>
+                <FaCheckCircle />
+                Got It!
               </Button>
             </HStack>
           </Card.Footer>
