@@ -229,7 +229,7 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       return work.due_date > new Date().toString();
     });
     if (upcoming.length === 0) {
-      return <Text>You`&apos;`e all caught up! No upcoming deadlines at this time.</Text>;
+      return <Text>You&apos;re all caught up! No upcoming deadlines at this time.</Text>;
     }
     return upcoming.map((work) => {
       return (
