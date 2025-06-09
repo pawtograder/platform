@@ -133,6 +133,4 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
   );
 }
 
-export function UpcomingAssignmentPreview({} : {}) {
-  
-}
+export function UpcomingAssignmentPreview({}: {}) {}

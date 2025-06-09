@@ -2,7 +2,6 @@ import LinkAccount from "@/components/github/link-account";
 import { Alert } from "@/components/ui/alert";
 import { AssignmentDueDate, SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
-import { useAssignmentDueDate } from "@/hooks/useCourseController";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import {
   AssignmentGroup,
@@ -11,8 +10,7 @@ import {
   Repo
 } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Card, CardBody, CardHeader, CardRoot, Container, DataListItem, DataListItemLabel, DataListItemValue, DataListRoot, Flex, Heading, JsxElement, Stack, Table, Text } from "@chakra-ui/react";
+import { Card, Container, Flex, Heading, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { PostgrestError } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
@@ -21,6 +19,20 @@ import { formatInTimeZone } from "date-fns-tz";
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
   assignment_groups: (AssignmentGroup & { repositories: Repo[] }) | null;
+};
+
+type AssignmentUnit = {
+  key: string;
+  name: string;
+  type: "assignment" | "self review";
+  due_date: string;
+  due_date_component: JSX.Element;
+  due_date_link?: string;
+  repo: string;
+  name_link: string;
+  submission_text: string;
+  submission_link?: string;
+  group: string;
 };
 
 export default async function StudentPage({ params }: { params: Promise<{ course_id: string }> }) {
@@ -52,8 +64,9 @@ export default async function StudentPage({ params }: { params: Promise<{ course
 
   //TODO need to get the group assignments, too!
   let assignments = await client
-        .from("assignments")
-        .select(`
+    .from("assignments")
+    .select(
+      `
             *, 
             submissions(*, grader_results(*)), 
             repositories(*, user_roles(user_id)), 
@@ -61,15 +74,12 @@ export default async function StudentPage({ params }: { params: Promise<{ course
             review_assignments(*, submission_reviews(completed_at)),
             assignment_due_date_exceptions!assignment_late_exception_assignment_id_fkey(*)
   `
-        )
-        .eq("class_id", Number(course_id))
-        .eq("repositories.user_roles.user_id", user!.id)
-        .eq("review_assignments.assignee_profile_id", private_profile_id?.private_profile_id ?? "")
-        .eq("assignment_due_date_exceptions.student_id", private_profile_id?.private_profile_id ?? "")
-        .order("due_date", { ascending: false });
-
-
-  
+    )
+    .eq("class_id", Number(course_id))
+    .eq("repositories.user_roles.user_id", user!.id)
+    .eq("review_assignments.assignee_profile_id", private_profile_id?.private_profile_id ?? "")
+    .eq("assignment_due_date_exceptions.student_id", private_profile_id?.private_profile_id ?? "")
+    .order("due_date", { ascending: false });
 
   //list identities
   const identities = await client.auth.getUserIdentities();
@@ -100,7 +110,8 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       await autograderCreateReposForStudent(client);
       assignments = await client
         .from("assignments")
-        .select(`
+        .select(
+          `
             *, 
             submissions(*, grader_results(*)), 
             repositories(*, user_roles(user_id)), 
@@ -142,23 +153,8 @@ export default async function StudentPage({ params }: { params: Promise<{ course
     )[0];
   };
 
-   type AssignmentUnit = {
-    key:string,
-    name:string,
-    type: "assignment" | "self review",
-    due_date:string,
-    due_date_component:JSX.Element,
-    due_date_link?: string,
-    repo: string,
-    name_link: string,
-    submission_text: string,
-    submission_link?: string,
-    group: string,
-   }
-
   const allAssignedWork = () => {
-    const result : AssignmentUnit[] = [];
-    // map assignments into assigned work 
+    const result: AssignmentUnit[] = [];
     assignments?.data?.forEach(async (assignment) => {
       const mostRecentSubmission = getLatestSubmission(assignment);
       const group = groups?.data?.find((group) => group.assignment_id === assignment.id);
@@ -175,58 +171,69 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       }
       const hoursExtended = assignment.assignment_due_date_exceptions.reduce((acc, curr) => acc + curr.hours, 0);
       const minutesExtended = assignment.assignment_due_date_exceptions.reduce((acc, curr) => acc + curr.minutes, 0);
-
       const originalDueDate = new TZDate(assignment.due_date);
-      const modifiedDueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
-
+      const modifiedDueDate = new TZDate(
+        addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended),
+        course?.time_zone ?? "America/New_York"
+      );
       result.push({
         key: assignment.id.toString(),
         name: assignment.title,
         type: "assignment",
-        due_date: modifiedDueDate.toString(),
+        due_date: formatInTimeZone(
+          new TZDate(modifiedDueDate),
+          course?.time_zone || "America/New_York",
+          "MMM d h:mm aaa"
+        ),
         due_date_component: <AssignmentDueDate assignment={assignment} />,
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
         submission_text: `#${mostRecentSubmission.ordinal} (${mostRecentSubmission.grader_results?.score || 0}/${mostRecentSubmission.grader_results?.max_score || 0})`,
-        submission_link: mostRecentSubmission ? `/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}` : undefined,
-        group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"})
+        submission_link: mostRecentSubmission
+          ? `/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`
+          : undefined,
+        group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
+      });
 
-      if(assignment.assignment_self_review_settings.enabled) {
-        const due_date = addHours(modifiedDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0);
-
+      if (assignment.assignment_self_review_settings.enabled) {
+        const evalDueDate = addHours(modifiedDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0);
         result.push({
-          key:assignment.id.toString()+"selfReview",
-          name:"Self Review for " + assignment.title,
-          type:"self review",
-          due_date:due_date.toString(),
-          due_date_component:<SelfReviewDueDate assignment={assignment} />,
-          repo:repo,
-          name_link:`/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0].submission_id}/files?review_assignment_id=${assignment.review_assignments[0].id}`,
-          submission_text:assignment.review_assignments[0].submission_reviews.completed_at ? "Submitted" : "Not Submitted",
-          group:assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"})
+          key: assignment.id.toString() + "selfReview",
+          name: "Self Review for " + assignment.title,
+          type: "self review",
+          due_date: formatInTimeZone(
+            new TZDate(evalDueDate),
+            course?.time_zone || "America/New_York",
+            "MMM d h:mm aaa"
+          ),
+          due_date_component: <SelfReviewDueDate assignment={assignment} />,
+          repo: repo,
+          name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0].submission_id}/files?review_assignment_id=${assignment.review_assignments[0].id}`,
+          submission_text: assignment.review_assignments[0].submission_reviews.completed_at
+            ? "Submitted"
+            : "Not Submitted",
+          group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
+        });
       }
-    })
-    return result.sort((a, b) => {
-        const dateA = new Date(a.due_date);
-        const dateB = new Date(b.due_date);
-        
-        // Sort in descending order (most recent first)
-        return dateB.getTime() - dateA.getTime();
     });
-;
-  }
+    return result.sort((a, b) => {
+      const dateA = new TZDate(a.due_date);
+      const dateB = new TZDate(b.due_date);
+      return dateB.getTime() - dateA.getTime();
+    });
+  };
 
-  return (
-    <Container>
-      {actions}
-      <Flex mb="4" gap="4" flexDir={"column"}>
-      <Heading size="lg">
-        Upcoming Deadlines
-      </Heading>
-      <Flex>
-        {allAssignedWork().filter((work) => {return work.due_date > new Date().toString()}).map((work) => {return (
-           <Card.Root width={"sm"}>
+  const upcomingDeadlineDisplay = () => {
+    const upcoming = allAssignedWork().filter((work) => {
+      return work.due_date > new Date().toString();
+    });
+    if (upcoming.length === 0) {
+      return <Text>You`&apos;`e all caught up! No upcoming deadlines at this time.</Text>;
+    }
+    return upcoming.map((work) => {
+      return (
+        <Card.Root width={"sm"} key={work.key}>
           <Card.Header>
             <Heading size="md">
               <Link prefetch={true} href={work.name_link}>
@@ -235,14 +242,28 @@ export default async function StudentPage({ params }: { params: Promise<{ course
             </Heading>
           </Card.Header>
           <Card.Body fontSize="sm">
-            <Text><strong>Type:</strong> {work.type}</Text>
-            <Text><strong>Due:</strong> {work.due_date}</Text>
-            <Text><strong>Status:</strong> {work.type == 'assignment' ? "using submission " : ""}{work.submission_text}</Text>
+            <Text>
+              <strong>Type:</strong> {work.type}
+            </Text>
+            <Text>
+              <strong>Due:</strong> {work.due_date}
+            </Text>
+            <Text>
+              <strong>Status:</strong> {work.type == "assignment" ? "using submission " : ""}
+              {work.submission_text}
+            </Text>
           </Card.Body>
-          </Card.Root>)
-        })}
-      </Flex>
+        </Card.Root>
+      );
+    });
+  };
 
+  return (
+    <Container>
+      {actions}
+      <Flex mb="4" gap="4" flexDir={"column"}>
+        <Heading size="lg">Upcoming Deadlines</Heading>
+        <Flex>{upcomingDeadlineDisplay()}</Flex>
       </Flex>
       <Heading size="lg" mb={4}>
         Assignments
@@ -263,44 +284,40 @@ export default async function StudentPage({ params }: { params: Promise<{ course
             <Table.ColumnHeader>Group</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
-        <Table.Body>{
-          allAssignedWork().map((work) => {
-            return <Table.Row key={work.key}>
-              <Table.Cell>
-                <Link prefetch={true} href={work.due_date_link ?? ""}>
-                 {work.due_date_component}
-                </Link>
-              </Table.Cell>
-              <Table.Cell>
-                <Link prefetch={true} href={work.name_link}>
-                  {work.name}
-                </Link>
-              </Table.Cell>
-              <Table.Cell>
-                {work.submission_link ? (
-                  <Link
-                    prefetch={true}
-                    href={work.submission_link}
-                  >
-                   {work.submission_text}
+        <Table.Body>
+          {allAssignedWork().map((work) => {
+            return (
+              <Table.Row key={work.key}>
+                <Table.Cell>
+                  <Link prefetch={true} href={work.due_date_link ?? ""}>
+                    {work.due_date_component}
                   </Link>
-                ) : (
-                  <Text>{work.submission_text}</Text>
-                )}
-              </Table.Cell>
-              <Table.Cell>
-                <Link target="_blank" href={`https://github.com/${work.repo}`}>
-                  {work.repo}
-                </Link>{" "}
-              </Table.Cell>
-              <Table.Cell>
-                {work.group}
-              </Table.Cell>
-            </Table.Row>
-          })
-          }</Table.Body>
+                </Table.Cell>
+                <Table.Cell>
+                  <Link prefetch={true} href={work.name_link}>
+                    {work.name}
+                  </Link>
+                </Table.Cell>
+                <Table.Cell>
+                  {work.submission_link ? (
+                    <Link prefetch={true} href={work.submission_link}>
+                      {work.submission_text}
+                    </Link>
+                  ) : (
+                    <Text>{work.submission_text}</Text>
+                  )}
+                </Table.Cell>
+                <Table.Cell>
+                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                    {work.repo}
+                  </Link>{" "}
+                </Table.Cell>
+                <Table.Cell>{work.group}</Table.Cell>
+              </Table.Row>
+            );
+          })}
+        </Table.Body>
       </Table.Root>
     </Container>
   );
 }
-
