@@ -408,6 +408,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
           borderRadius="md"
         >
           <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
+          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
               <HStack flexGrow={10}>
                 {!comment.eventually_visible && (

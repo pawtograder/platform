@@ -766,6 +766,9 @@ export function ReviewRoundTag({ submission_review_id }: { submission_review_id:
   if (!submissionReview) {
     return null;
   }
+  if (!submissionReview.rubrics) {
+    return null;
+  }
   return (
     <Tag.Root minW="fit-content" flexShrink={0} size="sm" colorPalette="blue" variant="outline">
       <Tag.Label>{submissionReview.rubrics.review_round}</Tag.Label>
