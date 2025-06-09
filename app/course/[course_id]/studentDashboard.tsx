@@ -132,3 +132,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     </VStack>
   );
 }
+
+export function UpcomingAssignmentPreview({} : {}) {
+  
+}
