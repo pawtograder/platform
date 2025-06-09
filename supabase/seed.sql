@@ -288,3 +288,221 @@ VALUES
 (demo_class_id, java_deck_id, 'HashMap remove', 'How do you remove a value from a HashMap?', '`map.remove(key);`');
 
 END $$;
+
+-- More seed data for analytics testing
+
+DO $$
+DECLARE
+    -- User IDs
+    student_1_id uuid;
+    student_2_id uuid;
+    student_3_id uuid;
+    student_4_id uuid;
+    student_5_id uuid;
+    student_6_id uuid;
+    student_7_id uuid;
+    student_8_id uuid;
+    student_9_id uuid;
+    student_10_id uuid;
+    student_11_id uuid;
+    student_12_id uuid;
+    student_13_id uuid;
+    student_14_id uuid;
+    student_15_id uuid;
+    student_16_id uuid;
+    student_17_id uuid;
+    student_18_id uuid;
+    student_19_id uuid;
+    student_20_id uuid;
+    
+    -- Deck IDs
+    python_deck_id int8;
+    sql_deck_id int8;
+    web_dev_deck_id int8;
+
+    -- Class ID
+    demo_class_id int8 := 1;
+
+    -- User counter for profile creation
+    i int;
+BEGIN
+    -- Insert 20 new student users
+    FOR i IN 1..20 LOOP
+        EXECUTE format('
+            INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, is_super_admin)
+            VALUES (''00000000-0000-0000-0000-000000000000'', ''33333333-3333-3333-3333-%s'', ''authenticated'', ''authenticated'', ''student%s@pawtograder.com'', ''dummyhash'', NOW(), ''{}'', ''{}'', FALSE);
+        ', lpad(i::text, 12, '0'), i);
+    END LOOP;
+
+    -- Update profiles for the new users. Assumes a trigger creates profiles and user_roles on user creation.
+    FOR i IN 1..20 LOOP
+        EXECUTE format('
+            WITH user_and_profiles AS (
+                SELECT
+                    ur.private_profile_id,
+                    ur.public_profile_id
+                FROM
+                    auth.users u
+                JOIN
+                    public.user_roles ur ON u.id = ur.user_id
+                WHERE
+                    u.email = ''student%s@pawtograder.com''
+            )
+            UPDATE public.profiles
+            SET
+                name = ''Student %s'',
+                sortable_name = ''Student, %s'',
+                short_name = ''Student %s''
+            WHERE
+                id IN (
+                    (SELECT private_profile_id FROM user_and_profiles),
+                    (SELECT public_profile_id FROM user_and_profiles)
+                );
+        ', i, i, i, i);
+    END LOOP;
+    
+    -- Get student IDs
+    SELECT id INTO student_1_id FROM auth.users WHERE email = 'student1@pawtograder.com';
+    SELECT id INTO student_2_id FROM auth.users WHERE email = 'student2@pawtograder.com';
+    SELECT id INTO student_3_id FROM auth.users WHERE email = 'student3@pawtograder.com';
+    SELECT id INTO student_4_id FROM auth.users WHERE email = 'student4@pawtograder.com';
+    SELECT id INTO student_5_id FROM auth.users WHERE email = 'student5@pawtograder.com';
+    SELECT id INTO student_6_id FROM auth.users WHERE email = 'student6@pawtograder.com';
+    SELECT id INTO student_7_id FROM auth.users WHERE email = 'student7@pawtograder.com';
+    SELECT id INTO student_8_id FROM auth.users WHERE email = 'student8@pawtograder.com';
+    SELECT id INTO student_9_id FROM auth.users WHERE email = 'student9@pawtograder.com';
+    SELECT id INTO student_10_id FROM auth.users WHERE email = 'student10@pawtograder.com';
+    SELECT id INTO student_11_id FROM auth.users WHERE email = 'student11@pawtograder.com';
+    SELECT id INTO student_12_id FROM auth.users WHERE email = 'student12@pawtograder.com';
+    SELECT id INTO student_13_id FROM auth.users WHERE email = 'student13@pawtograder.com';
+    SELECT id INTO student_14_id FROM auth.users WHERE email = 'student14@pawtograder.com';
+    SELECT id INTO student_15_id FROM auth.users WHERE email = 'student15@pawtograder.com';
+    SELECT id INTO student_16_id FROM auth.users WHERE email = 'student16@pawtograder.com';
+    SELECT id INTO student_17_id FROM auth.users WHERE email = 'student17@pawtograder.com';
+    SELECT id INTO student_18_id FROM auth.users WHERE email = 'student18@pawtograder.com';
+    SELECT id INTO student_19_id FROM auth.users WHERE email = 'student19@pawtograder.com';
+    SELECT id INTO student_20_id FROM auth.users WHERE email = 'student20@pawtograder.com';
+
+    -- Create Python Deck
+    INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+    VALUES (demo_class_id, student_1_id, 'Python Basics', 'Core concepts of Python programming.')
+    RETURNING id INTO python_deck_id;
+
+    -- Add cards to Python Deck
+    INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer, "order")
+    VALUES
+        (demo_class_id, python_deck_id, 'Python Variable', 'How do you create a variable in Python?', '`x = 5`', 1),
+        (demo_class_id, python_deck_id, 'Python Function', 'How do you define a function in Python?', '`def my_function():`', 2),
+        (demo_class_id, python_deck_id, 'Python List', 'How do you create a list in Python?', '`my_list = [1, 2, 3]`', 3),
+        (demo_class_id, python_deck_id, 'Python For Loop', 'How do you write a for loop in Python?', '`for x in my_list:`', 4),
+        (demo_class_id, python_deck_id, 'Python Dictionary', 'How do you create a dictionary?', '`my_dict = {"key": "value"}`', 5),
+        (demo_class_id, python_deck_id, 'Python If Statement', 'How do you write an if statement?', '`if condition:`', 6),
+        (demo_class_id, python_deck_id, 'Python Comment', 'How do you write a single-line comment?', '`# This is a comment`', 7),
+        (demo_class_id, python_deck_id, 'Python String Length', 'How do you get the length of a string `s`?', '`len(s)`', 8),
+        (demo_class_id, python_deck_id, 'Python Import', 'How do you import a module named `math`?', '`import math`', 9),
+        (demo_class_id, python_deck_id, 'Python Class', 'How do you define a class?', '`class MyClass:`', 10);
+
+    -- Create SQL Deck
+    INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+    VALUES (demo_class_id, student_2_id, 'SQL Fundamentals', 'Learn the basics of SQL.')
+    RETURNING id INTO sql_deck_id;
+
+    -- Add cards to SQL Deck
+    INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer, "order")
+    VALUES
+        (demo_class_id, sql_deck_id, 'SQL SELECT', 'What is the `SELECT` statement used for?', 'To query data from a database.', 1),
+        (demo_class_id, sql_deck_id, 'SQL INSERT', 'What is the `INSERT INTO` statement used for?', 'To insert new records in a table.', 2),
+        (demo_class_id, sql_deck_id, 'SQL UPDATE', 'What is the `UPDATE` statement used for?', 'To modify records in a table.', 3),
+        (demo_class_id, sql_deck_id, 'SQL DELETE', 'What is the `DELETE` statement used for?', 'To delete records from a table.', 4),
+        (demo_class_id, sql_deck_id, 'SQL WHERE', 'What is the `WHERE` clause used for?', 'To filter records.', 5),
+        (demo_class_id, sql_deck_id, 'SQL JOIN', 'What is a `JOIN` clause used for?', 'To combine rows from two or more tables.', 6),
+        (demo_class_id, sql_deck_id, 'SQL PRIMARY KEY', 'What is a `PRIMARY KEY`?', 'A constraint that uniquely identifies each record in a table.', 7),
+        (demo_class_id, sql_deck_id, 'SQL FOREIGN KEY', 'What is a `FOREIGN KEY`?', 'A key used to link two tables together.', 8),
+        (demo_class_id, sql_deck_id, 'SQL COUNT', 'What does `COUNT()` function do?', 'Returns the number of rows that matches a specified criteria.', 9),
+        (demo_class_id, sql_deck_id, 'SQL ORDER BY', 'What is the `ORDER BY` keyword used for?', 'To sort the result-set in ascending or descending order.', 10);
+
+    -- Create Web Dev Deck
+    INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+    VALUES (demo_class_id, student_3_id, 'Web Development Basics', 'HTML, CSS, and JavaScript fundamentals.')
+    RETURNING id INTO web_dev_deck_id;
+
+    -- Add cards to Web Dev Deck
+    INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer, "order")
+    VALUES
+        (demo_class_id, web_dev_deck_id, 'HTML', 'What does HTML stand for?', 'HyperText Markup Language', 1),
+        (demo_class_id, web_dev_deck_id, 'CSS', 'What does CSS stand for?', 'Cascading Style Sheets', 2),
+        (demo_class_id, web_dev_deck_id, 'JavaScript', 'What is JavaScript primarily used for?', 'To create dynamic and interactive web content.', 3),
+        (demo_class_id, web_dev_deck_id, 'HTML Tag', 'What is an HTML tag?', 'The hidden keywords within a web page that define how your web browser must format and display the content.', 4),
+        (demo_class_id, web_dev_deck_id, 'CSS Selector', 'What is a CSS selector?', 'A pattern to select the element(s) you want to style.', 5),
+        (demo_class_id, web_dev_deck_id, 'JS Variable', 'How do you declare a variable in JavaScript?', 'Using `var`, `let`, or `const` keywords.', 6),
+        (demo_class_id, web_dev_deck_id, 'HTML Link', 'How do you create a hyperlink in HTML?', '`<a href="url">link text</a>`', 7),
+        (demo_class_id, web_dev_deck_id, 'CSS Color', 'How do you set the text color in CSS?', '`color: blue;`', 8),
+        (demo_class_id, web_dev_deck_id, 'JS Function', 'How do you define a function in JavaScript?', '`function myFunction() {}`', 9),
+        (demo_class_id, web_dev_deck_id, 'HTML Image', 'How do you insert an image in HTML?', '`<img src="image.jpg" alt="description">`', 10);
+
+    -- Generate a large amount of interaction logs
+    DECLARE
+        student_ids uuid[] := ARRAY[student_1_id, student_2_id, student_3_id, student_4_id, student_5_id, student_6_id, student_7_id, student_8_id, student_9_id, student_10_id, student_11_id, student_12_id, student_13_id, student_14_id, student_15_id, student_16_id, student_17_id, student_18_id, student_19_id, student_20_id];
+        deck_ids int8[] := ARRAY(SELECT id FROM public.flashcard_decks WHERE class_id = demo_class_id);
+        card_ids int[];
+        s_id uuid;
+        d_id int8;
+        c_id int;
+        action public.flashcard_actions;
+        duration int;
+        r int;
+    BEGIN
+        FOREACH d_id IN ARRAY deck_ids
+        LOOP
+            -- Get card IDs for the current deck
+            card_ids := ARRAY(SELECT id FROM public.flashcards WHERE deck_id = d_id);
+            
+            -- Each student interacts with each deck
+            FOREACH s_id IN ARRAY student_ids
+            LOOP
+                -- Log deck_viewed action
+                INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, student_id, action, duration_on_card_ms)
+                VALUES (demo_class_id, d_id, s_id, 'deck_viewed', (random() * 1000 + 500)::int);
+
+                -- Each student interacts with some cards in the deck
+                FOR r IN 1..((random() * (array_length(card_ids, 1) - 1) + 1)::int)
+                LOOP
+                    c_id := card_ids[(random() * (array_length(card_ids, 1) - 1) + 1)::int];
+                    
+                    -- card_prompt_viewed
+                    duration := (random() * 5000 + 1000)::int;
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, c_id, s_id, 'card_prompt_viewed', duration);
+                    
+                    -- card_answer_viewed
+                    duration := (random() * 8000 + 2000)::int;
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, c_id, s_id, 'card_answer_viewed', duration);
+
+                    -- card_marked_got_it or card_marked_keep_trying
+                    duration := (random() * 3000 + 1000)::int;
+                    IF random() > 0.3 THEN
+                        action := 'card_marked_got_it';
+                    ELSE
+                        action := 'card_marked_keep_trying';
+                    END IF;
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, c_id, s_id, action, duration);
+                    
+                    -- card_returned_to_deck (less frequent)
+                    IF random() > 0.8 THEN
+                         INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                         VALUES (demo_class_id, d_id, c_id, s_id, 'card_returned_to_deck', 0);
+                    END IF;
+                END LOOP;
+                
+                -- deck_progress_reset_all (occasional)
+                IF random() > 0.9 THEN
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, s_id, 'deck_progress_reset_all', 0);
+                END IF;
+
+            END LOOP;
+        END LOOP;
+    END;
+END $$;

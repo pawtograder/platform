@@ -27,6 +27,8 @@ type CardAnalyticsProps = {
  * @param answer_viewed_count - The number of times a card has been viewed
  * @param got_it_duration - The average time spent for "Got It"
  * @param got_it_count - The number of times a card has been marked as "Got It"
+ * @param keep_trying_duration - The average time spent for "Keep Trying"
+ * @param keep_trying_count - The number of times a card has been marked as "Keep Trying"
  */
 type CardMetrics = {
   prompt_viewed: number;
@@ -40,6 +42,37 @@ type CardMetrics = {
 };
 
 /**
+ * This type defines the data for a flashcard analytics.
+ * @param name - The name of the card
+ * @param "Prompt Views" - The number of times a card has been viewed
+ * @param "Returned to Deck" - The number of times a card has been returned to the deck
+ * @param "Avg. Time on Answer (s)" - The average time spent on the answer
+ * @param 'Avg. Time for "Got It" (s)' - The average time spent for "Got It"
+ * @param 'Avg. Time for "Keep Trying" (s)' - The average time spent for "Keep Trying"
+ * @param "% Got It" - The percentage of times a card has been marked as "Got It"
+ */
+type CardAnalyticsData = {
+  name: string;
+  "Prompt Views": number;
+  "Returned to Deck": number;
+  "Avg. Time on Answer (s)": number;
+  'Avg. Time for "Got It" (s)': number;
+  'Avg. Time for "Keep Trying" (s)': number;
+  "% Got It": number;
+};
+
+/**
+ * This type defines the numeric keys for a flashcard analytics.
+ * @param "Prompt Views" - The number of times a card has been viewed
+ * @param "Returned to Deck" - The number of times a card has been returned to the deck
+ * @param "Avg. Time on Answer (s)" - The average time spent on the answer
+ * @param 'Avg. Time for "Got It" (s)' - The average time spent for "Got It"
+ * @param 'Avg. Time for "Keep Trying" (s)' - The average time spent for "Keep Trying"
+ * @param "% Got It" - The percentage of times a card has been marked as "Got It"
+ */
+type NumericCardAnalyticsDataKey = Exclude<keyof CardAnalyticsData, "name">;
+
+/**
  * This component displays analytics for a flashcard deck.
  * It shows the number of times a card has been viewed, the number of times a card has been returned to the deck,
  * the average time spent on the answer, the average time spent for "Got It", and the average time spent for "Keep Trying".
@@ -50,6 +83,7 @@ export default function CardAnalytics({ deckId }: CardAnalyticsProps) {
   const { data: cardsData, isLoading: isLoadingCards } = useList<FlashcardRow>({
     resource: "flashcards",
     filters: [{ field: "deck_id", operator: "eq", value: deckId }],
+    pagination: { pageSize: 1000 },
     queryOptions: { enabled: !!deckId }
   });
 
@@ -140,7 +174,13 @@ export default function CardAnalytics({ deckId }: CardAnalyticsProps) {
     return <Spinner />;
   }
 
-  const charts = [
+  interface ChartConfig {
+    dataKey: NumericCardAnalyticsDataKey;
+    color: string;
+    yAxisId?: string;
+  }
+
+  const charts: ChartConfig[] = [
     { dataKey: "Prompt Views", color: "#8884d8" },
     { dataKey: "Returned to Deck", color: "#82ca9d" },
     { dataKey: "Avg. Time on Answer (s)", color: "#ffc658" },
@@ -151,41 +191,52 @@ export default function CardAnalytics({ deckId }: CardAnalyticsProps) {
 
   return (
     <VStack align="stretch" gap={8}>
-      {charts.map((chart) => (
-        <Box key={chart.dataKey}>
-          <Heading size="md" mb={4}>
-            {chart.dataKey}
-          </Heading>
-          {analyticsData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={400}>
-              <BarChart data={analyticsData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="name"
-                  tick={{ fill: tickColor, fontSize: 12 }}
-                  interval={0}
-                  angle={-45}
-                  textAnchor="end"
-                  height={100}
-                />
-                <YAxis yAxisId="left" tick={{ fill: tickColor }} />
-                {chart.yAxisId === "percent" && (
-                  <YAxis yAxisId="percent" orientation="right" tick={{ fill: tickColor }} domain={[0, 100]} unit="%" />
-                )}
-                <Tooltip contentStyle={{ backgroundColor: tooltipBg }} />
-                <Legend />
-                <Bar
-                  dataKey={chart.dataKey}
-                  fill={chart.color}
-                  yAxisId={chart.yAxisId === "percent" ? "percent" : "left"}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <Text>No data available for this metric.</Text>
-          )}
-        </Box>
-      ))}
+      {charts.map((chart) => {
+        const top10Data = [...(analyticsData as CardAnalyticsData[])]
+          .sort((a, b) => b[chart.dataKey] - a[chart.dataKey])
+          .slice(0, 10);
+        return (
+          <Box key={chart.dataKey}>
+            <Heading size="md" mb={4}>
+              Top 10 Cards by {chart.dataKey}
+            </Heading>
+            {top10Data.length > 0 ? (
+              <ResponsiveContainer width="100%" height={400}>
+                <BarChart data={top10Data}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fill: tickColor, fontSize: 12 }}
+                    interval={0}
+                    angle={-45}
+                    textAnchor="end"
+                    height={100}
+                  />
+                  <YAxis yAxisId="left" tick={{ fill: tickColor }} />
+                  {chart.yAxisId === "percent" && (
+                    <YAxis
+                      yAxisId="percent"
+                      orientation="right"
+                      tick={{ fill: tickColor }}
+                      domain={[0, 100]}
+                      unit="%"
+                    />
+                  )}
+                  <Tooltip contentStyle={{ backgroundColor: tooltipBg }} />
+                  <Legend />
+                  <Bar
+                    dataKey={chart.dataKey}
+                    fill={chart.color}
+                    yAxisId={chart.yAxisId === "percent" ? "percent" : "left"}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <Text>No data available for this metric.</Text>
+            )}
+          </Box>
+        );
+      })}
     </VStack>
   );
 }

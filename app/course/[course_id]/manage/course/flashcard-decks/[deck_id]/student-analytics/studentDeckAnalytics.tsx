@@ -24,48 +24,40 @@ type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 type FlashcardInteractionLogRow = Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"];
 type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
+type StudentFlashcardDeckProgressRow = Database["public"]["Tables"]["student_flashcard_deck_progress"]["Row"];
 
 /**
  * @property deckId - The ID of the flashcard deck.
  * @property courseId - The ID of the course.
  */
-type StudentCardAnalyticsProps = {
+type StudentDeckAnalyticsProps = {
   deckId: string;
   courseId: string;
 };
 
 /**
  * @property studentName - The name of the student.
- * @property cardTitle - The title of the flashcard.
- * @property promptViews - Number of times the card prompt was viewed.
- * @property answerViews - Number of times the card answer was viewed.
- * @property gotIt - Number of times the card was marked as "Got It".
- * @property keepTrying - Number of times the card was marked as "Keep Trying".
- * @property returnedToDeck - Number of times the card was returned to the deck.
- * @property avgAnswerTime - Average time from prompt to answer view in seconds.
- * @property avgGotItTime - Average time from answer view to "Got It" in seconds.
- * @property avgKeepTryingTime - Average time from answer view to "Keep Trying" in seconds.
+ * @property masteredCount - Number of cards mastered by the student.
+ * @property notMasteredCount - Number of cards not yet mastered by the student.
+ * @property promptViews - Total number of times card prompts were viewed by the student across the deck.
+ * @property answerViews - Total number of times card answers were viewed by the student across the deck.
+ * @property returnedToDeck - Total number of times cards were returned to the deck by the student.
  */
-type StudentCardMetrics = {
+type StudentDeckMetrics = {
   studentName: string;
-  cardTitle: string;
+  masteredCount: number;
+  notMasteredCount: number;
   promptViews: number;
   answerViews: number;
-  gotIt: number;
-  keepTrying: number;
   returnedToDeck: number;
-  avgAnswerTime: number | string;
-  avgGotItTime: number | string;
-  avgKeepTryingTime: number | string;
 };
 
 /**
- * This component displays detailed analytics for each student's interaction with flashcards in a deck.
- * It shows metrics like view counts, action counts (e.g., "Got It", "Keep Trying"), and average time spent on cards.
+ * This component displays aggregated analytics for each student's interaction with a flashcard deck.
  * @param props - The component props.
- * @returns The rendered student card analytics table.
+ * @returns The rendered student deck analytics table.
  */
-export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAnalyticsProps) {
+export default function StudentDeckAnalytics({ deckId, courseId }: StudentDeckAnalyticsProps) {
   const { data: cardsData, isLoading: isLoadingCards } = useList<FlashcardRow>({
     resource: "flashcards",
     filters: [{ field: "deck_id", operator: "eq", value: deckId }],
@@ -98,102 +90,80 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
     queryOptions: { enabled: profileIds.length > 0 }
   });
 
-  const analyticsData = useMemo<StudentCardMetrics[]>(() => {
-    if (!interactionsData?.data || !cardsData?.data || !profilesData?.data || !userRolesData?.data) {
+  const cardIds = useMemo(() => cardsData?.data.map((card) => card.id) ?? [], [cardsData]);
+
+  const { data: progressData, isLoading: isLoadingProgress } = useList<StudentFlashcardDeckProgressRow>({
+    resource: "student_flashcard_deck_progress",
+    filters: [
+      { field: "card_id", operator: "in", value: cardIds },
+      { field: "class_id", operator: "eq", value: courseId }
+    ],
+    pagination: { pageSize: 10000 },
+    queryOptions: { enabled: cardIds.length > 0 }
+  });
+
+  const analyticsData = useMemo<StudentDeckMetrics[]>(() => {
+    if (
+      !interactionsData?.data ||
+      !cardsData?.data ||
+      !profilesData?.data ||
+      !userRolesData?.data ||
+      !progressData?.data
+    ) {
       return [];
     }
 
-    const cardMap = new Map(cardsData.data.map((card) => [card.id, card.title]));
     const profileMap = new Map(profilesData.data.map((profile) => [profile.id, profile.name]));
-    const userRoleMap = new Map(userRolesData.data.map((role) => [role.user_id, role.private_profile_id]));
+    const allCardsInDeckCount = cardsData.data.length;
 
-    const studentMetrics: {
-      [key: string]: {
-        studentId: string;
-        cardId: number;
-        promptViews: number;
-        answerViews: number;
-        gotIt: number;
-        keepTrying: number;
-        returnedToDeck: number;
-        answerTimeTotal: number;
-        gotItTimeTotal: number;
-        keepTryingTimeTotal: number;
-      };
-    } = {};
-
-    for (const log of interactionsData.data) {
-      if (!log.student_id || !log.card_id) continue;
-
-      const profileId = userRoleMap.get(log.student_id);
-      if (!profileId) continue; // Only include users with a profile in this course
-
-      const key = `${log.student_id}-${log.card_id}`;
-      if (!studentMetrics[key]) {
-        studentMetrics[key] = {
-          studentId: log.student_id,
-          cardId: log.card_id,
-          promptViews: 0,
-          answerViews: 0,
-          gotIt: 0,
-          keepTrying: 0,
-          returnedToDeck: 0,
-          answerTimeTotal: 0,
-          gotItTimeTotal: 0,
-          keepTryingTimeTotal: 0
-        };
+    const studentProgressMap = new Map<string, StudentFlashcardDeckProgressRow[]>();
+    progressData.data.forEach((p) => {
+      if (!studentProgressMap.has(p.student_id)) {
+        studentProgressMap.set(p.student_id, []);
       }
+      studentProgressMap.get(p.student_id)!.push(p);
+    });
 
-      const metrics = studentMetrics[key];
-      const duration = log.duration_on_card_ms || 0;
-
-      switch (log.action) {
-        case "card_prompt_viewed":
-          metrics.promptViews++;
-          break;
-        case "card_answer_viewed":
-          metrics.answerViews++;
-          metrics.answerTimeTotal += duration;
-          break;
-        case "card_marked_got_it":
-          metrics.gotIt++;
-          metrics.gotItTimeTotal += duration;
-          break;
-        case "card_marked_keep_trying":
-          metrics.keepTrying++;
-          metrics.keepTryingTimeTotal += duration;
-          break;
-        case "card_returned_to_deck":
-          metrics.returnedToDeck++;
-          break;
+    const studentInteractionsMap = new Map<string, FlashcardInteractionLogRow[]>();
+    interactionsData.data.forEach((log) => {
+      if (!log.student_id) return;
+      if (!studentInteractionsMap.has(log.student_id)) {
+        studentInteractionsMap.set(log.student_id, []);
       }
-    }
+      studentInteractionsMap.get(log.student_id)!.push(log);
+    });
 
-    return Object.values(studentMetrics).map((metrics) => {
-      const profileId = userRoleMap.get(metrics.studentId);
-      const studentName = (profileId ? profileMap.get(profileId) : `User ${metrics.studentId}`) || "Unknown";
-      const cardTitle = cardMap.get(metrics.cardId) || `Card ${metrics.cardId}`;
+    const studentsInClass = userRolesData.data.filter((role) => role.role === "student");
+
+    return studentsInClass.map((userRole) => {
+      const studentId = userRole.user_id;
+      const profileId = userRole.private_profile_id;
+      const studentName = profileMap.get(profileId) || `User ${studentId}`;
+
+      const studentProgress = studentProgressMap.get(studentId) || [];
+      const masteredCount = studentProgress.filter((p) => p.is_mastered).length;
+      const notMasteredCount = allCardsInDeckCount - masteredCount;
+
+      const studentInteractions = studentInteractionsMap.get(studentId) || [];
+      const promptViews = studentInteractions.filter((log) => log.action === "card_prompt_viewed").length;
+      const answerViews = studentInteractions.filter((log) => log.action === "card_answer_viewed").length;
+      const returnedToDeck = studentInteractions.filter((log) => log.action === "card_returned_to_deck").length;
 
       return {
         studentName,
-        cardTitle,
-        promptViews: metrics.promptViews,
-        answerViews: metrics.answerViews,
-        gotIt: metrics.gotIt,
-        keepTrying: metrics.keepTrying,
-        returnedToDeck: metrics.returnedToDeck,
-        avgAnswerTime: metrics.answerViews > 0 ? (metrics.answerTimeTotal / metrics.answerViews / 1000).toFixed(2) : 0,
-        avgGotItTime: metrics.gotIt > 0 ? (metrics.gotItTimeTotal / metrics.gotIt / 1000).toFixed(2) : 0,
-        avgKeepTryingTime:
-          metrics.keepTrying > 0 ? (metrics.keepTryingTimeTotal / metrics.keepTrying / 1000).toFixed(2) : 0
+        masteredCount,
+        notMasteredCount,
+        promptViews,
+        answerViews,
+        returnedToDeck
       };
     });
-  }, [interactionsData, cardsData, profilesData, userRolesData]);
+  }, [interactionsData, cardsData, profilesData, userRolesData, progressData]);
 
   const [sorting, setSorting] = useState<SortingState>([{ id: "studentName", desc: false }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
-  const columns = useMemo<ColumnDef<StudentCardMetrics>[]>(
+  const columns = useMemo<ColumnDef<StudentDeckMetrics>[]>(
     () => [
       {
         header: "Student",
@@ -203,75 +173,54 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
         size: 250
       },
       {
-        header: "Card",
-        accessorKey: "cardTitle",
+        header: "Cards Mastered",
+        accessorKey: "masteredCount",
+        size: 100,
+        cell: (info) => <Text textAlign="right">{info.getValue<number>()}</Text>,
         enableColumnFilter: true,
-        filterFn: "includesString",
-        size: 200
+        filterFn: (row, id, filterValue) => {
+          return String(row.getValue(id)).includes(String(filterValue));
+        }
       },
       {
-        header: "Prompt Views",
+        header: "Cards Not Mastered",
+        accessorKey: "notMasteredCount",
+        size: 100,
+        cell: (info) => <Text textAlign="right">{info.getValue<number>()}</Text>,
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          return String(row.getValue(id)).includes(String(filterValue));
+        }
+      },
+      {
+        header: "Total Prompt Views",
         accessorKey: "promptViews",
-        size: 80,
+        size: 120,
         cell: (info) => <Text textAlign="right">{info.getValue<number>()}</Text>,
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
+        filterFn: (row, id, filterValue) => {
+          return String(row.getValue(id)).includes(String(filterValue));
+        }
       },
       {
-        header: "Answer Views",
+        header: "Total Answer Views",
         accessorKey: "answerViews",
-        size: 80,
+        size: 120,
         cell: (info) => <Text textAlign="right">{info.getValue<number>()}</Text>,
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
+        filterFn: (row, id, filterValue) => {
+          return String(row.getValue(id)).includes(String(filterValue));
+        }
       },
       {
-        header: "'Got It' Count",
-        accessorKey: "gotIt",
-        size: 80,
-        cell: (info) => <Text textAlign="right">{info.getValue<number>()}</Text>,
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
-      },
-      {
-        header: "'Keep Trying' Count",
-        accessorKey: "keepTrying",
-        size: 80,
-        cell: (info) => <Text textAlign="right">{info.getValue<number>()}</Text>,
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
-      },
-      {
-        header: "Returned to Deck",
+        header: "Total 'Returned to Deck'",
         accessorKey: "returnedToDeck",
-        size: 80,
+        size: 120,
         cell: (info) => <Text textAlign="right">{info.getValue<number>()}</Text>,
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
-      },
-      {
-        header: "Avg. Answer Time (s)",
-        accessorKey: "avgAnswerTime",
-        size: 100,
-        cell: (info) => <Text textAlign="right">{info.getValue<string>()}</Text>,
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
-      },
-      {
-        header: "Avg. 'Got It' Time (s)",
-        accessorKey: "avgGotItTime",
-        size: 100,
-        cell: (info) => <Text textAlign="right">{info.getValue<string>()}</Text>,
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
-      },
-      {
-        header: "Avg. 'Keep Trying' Time (s)",
-        accessorKey: "avgKeepTryingTime",
-        size: 110,
-        cell: (info) => <Text textAlign="right">{info.getValue<string>()}</Text>,
-        enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => String(row.getValue(id)).includes(String(filterValue))
+        filterFn: (row, id, filterValue) => {
+          return String(row.getValue(id)).includes(String(filterValue));
+        }
       }
     ],
     []
@@ -309,13 +258,13 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
     getPageCount
   } = table;
 
-  if (isLoadingCards || isLoadingInteractions || isLoadingUserRoles || isLoadingProfiles) {
+  if (isLoadingCards || isLoadingInteractions || isLoadingUserRoles || isLoadingProfiles || isLoadingProgress) {
     return <Spinner />;
   }
 
   const currentRows = getRowModel().rows;
 
-  if (currentRows.length === 0) {
+  if (analyticsData.length === 0) {
     return <Text>No student interaction data available for this deck.</Text>;
   }
 
@@ -369,7 +318,7 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
             ))}
           </Table.Header>
           <Table.Body>
-            {currentRows.map((row: Row<StudentCardMetrics>) => (
+            {currentRows.map((row: Row<StudentDeckMetrics>) => (
               <Table.Row key={row.id}>
                 {row.getVisibleCells().map((cell) => (
                   <Table.Cell key={cell.id} verticalAlign="top">
