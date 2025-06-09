@@ -29,6 +29,7 @@ import {
 } from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
@@ -37,6 +38,7 @@ import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useRubricCheck, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
   useRubricCheckInstances,
@@ -66,8 +68,6 @@ import { FaCheckCircle, FaGraduationCap, FaLink, FaTimes, FaTimesCircle } from "
 import { formatPoints, isRubricCheckDataWithOptions, RubricCheckSubOption, RubricCheckSubOptions } from "./code-file";
 import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
-import { Badge } from "@/components/ui/badge";
-import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 
 interface CheckOptionType extends OptionBase {
   value: number;
@@ -835,40 +835,42 @@ function StudentVisibilityIndicator({
     switch (check.student_visibility) {
       case "never":
         return {
-          text: "Never visible to students",
+          text: "This will never be visible to students",
           color: "red",
-          icon: "🚫"
+          icon: "🔴"
         };
       case "if_applied":
         return {
-          text: isApplied ? "Visible when released" : "Only visible if applied",
-          color: isApplied ? "orange" : "gray",
-          icon: isApplied ? "👁️" : "👁️‍🗨️"
+          text: isApplied
+            ? "This will be visible to the student when released their submission is released"
+            : "This will only be visible to the student after it has been applied to their submission and the review is released",
+          color: isApplied && isReleased ? "green" : "orange",
+          icon: isApplied && isReleased ? "🟢" : isApplied && !isReleased ? "⏳" : "🟠"
         };
       case "if_released":
         return {
-          text: isReleased ? "Visible to students" : "Visible when released",
+          text: isReleased
+            ? "This will be visible to the student now that their review is released"
+            : "This will only be visible to the student after the review is released",
           color: isReleased ? "green" : "orange",
-          icon: isReleased ? "✅" : "⏳"
+          icon: isReleased ? "🟢" : "⏳"
         };
       case "always":
       default:
         return {
-          text: "Always visible to students",
+          text: "This will be visible to all students with this assignment",
           color: "green",
-          icon: "👁️"
+          icon: "🟢"
         };
     }
   };
 
-  const { text, color, icon } = getVisibilityInfo();
+  const { text, icon } = getVisibilityInfo();
 
   return (
     <Tooltip content={text}>
       <Badge variant="outline" style={{ fontSize: "10px", padding: "2px 4px" }}>
-        <Text fontSize="xs" color={`${color}.600`}>
-          {icon} {check.student_visibility || "always"}
-        </Text>
+        {icon}
       </Badge>
     </Tooltip>
   );
