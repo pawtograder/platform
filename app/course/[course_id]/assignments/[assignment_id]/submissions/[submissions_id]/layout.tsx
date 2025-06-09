@@ -172,7 +172,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
           {hasNewSubmission && <Icon as={FaBell} />}
         </Button>
       </PopoverTrigger>
-      <PopoverContent width="lg">
+      <PopoverContent minWidth={{ base: "none", md: "lg" }}>
         <PopoverArrow />
         <PopoverBody>
           <Text>Submission History</Text>
@@ -778,11 +778,10 @@ function RubricView() {
     <Box
       position="sticky"
       top="0"
-      borderLeftWidth="1px"
+      borderTopWidth={{ base: "1px", lg: "0" }}
+      borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
-      py={2}
-      px={1}
-      ml={0}
+      padding="2"
       height="100vh"
       overflowX="hidden"
       overflowY="auto"
@@ -871,7 +870,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submitter = useUserProfile(submission.profile_id);
   return (
     <Flex direction="column" minW="0px">
-      <HStack pl={4} pr={4} pt={2} alignItems="center" justify="space-between" align="center">
+      <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
           <VStack align="flex-start">
             <HStack gap={1}>
@@ -912,7 +911,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
         </HStack>
-      </HStack>
+      </Flex>
       <Box
         p={0}
         m={0}
@@ -934,16 +933,14 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           </Button>
         </NextLink>
       </Box>
-      <Box flex={1}>
-        <Flex>
-          <Box flex={10} pr={4} minW="0">
-            {children}
-          </Box>
-          <Box flex={1} minW="md" maxW="lg">
-            <RubricView />
-          </Box>
-        </Flex>
-      </Box>
+      <Flex flexDirection={"row"} wrap="wrap">
+        <Box flex={10} pr={4}>
+          {children}
+        </Box>
+        <Box flex={1} minWidth={{ base: "100%", lg: "md" }}>
+          <RubricView />
+        </Box>
+      </Flex>
     </Flex>
   );
 }
