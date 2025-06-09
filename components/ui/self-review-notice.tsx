@@ -29,9 +29,9 @@ function CompleteReviewButton({
       { field: "submission_id", operator: "eq", value: activeSubmission?.id }
     ]
   });
-  const reviewassignments = useMyReviewAssignments();
+  const reviewAssignments = useMyReviewAssignments();
   const selfReviewRubric = useRubric("self-review");
-  const selfReviewAssignment = reviewassignments.find((a) => a.rubric_id === selfReviewRubric?.id);
+  const selfReviewAssignment = reviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
 
   return (
     <>
