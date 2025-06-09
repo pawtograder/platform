@@ -1,10 +1,11 @@
 "use client";
 
-import { Box, Card, VStack, Text, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { FaCheckCircle, FaTimes } from "react-icons/fa";
 import Markdown from "@/components/ui/markdown";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Card, HStack, Text, VStack } from "@chakra-ui/react";
+import { FaCheckCircle, FaTimes } from "react-icons/fa";
+import { MdReplay } from "react-icons/md";
 
 // Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
@@ -31,6 +32,8 @@ type FlashcardProps = {
   onGotIt: () => void;
   /** Callback when user marks card as "Keep Trying" */
   onKeepTrying: () => void;
+  /** Callback when user wants to go back to the question */
+  onBackToQuestion: () => void;
 };
 
 /**
@@ -48,19 +51,14 @@ type FlashcardProps = {
  */
 export default function Flashcard({
   currentCard,
-  availableCards,
   showAnswer,
   onShowAnswer,
   onGotIt,
+  onBackToQuestion,
   onKeepTrying
 }: FlashcardProps) {
-  // Calculate current position in the queue
-  const currentCardIndex = availableCards.findIndex((card) => card.id === currentCard.id);
-  const currentPosition = currentCardIndex + 1;
-  const totalInQueue = availableCards.length;
-
   return (
-    <Box height="49em" width="35em" mx="auto" position="relative" style={{ perspective: "1000px" }}>
+    <Box height="100%" maxW="4xl" mx="auto" style={{ perspective: "1000px" }}>
       {/* Card Container with Flip Animation */}
       <Box
         position="relative"
@@ -88,25 +86,19 @@ export default function Flashcard({
           }}
           style={{
             backfaceVisibility: "hidden",
-            transform: "rotateY(0deg)"
+            transform: "rotateY(0deg)",
+            zIndex: showAnswer ? 1 : 2,
+            pointerEvents: showAnswer ? "none" : "auto"
           }}
         >
-          <Card.Header p={2}>
-            <VStack gap={2}>
-              <Badge variant="outline" fontSize="sm">
-                Card {currentPosition} of {totalInQueue} remaining
-              </Badge>
-              <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
-                {currentCard.title}
-              </Text>
-            </VStack>
+          <Card.Header p={0}>
+            <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
+              Question: {currentCard.title}
+            </Text>
           </Card.Header>
 
           <Card.Body p={3} flex={1} display="flex" flexDirection="column" minHeight={0}>
             <VStack align="stretch" gap={4} height="100%">
-              <Text fontSize="md" fontWeight="medium">
-                Question:
-              </Text>
               <Box
                 flex={1}
                 fontSize="lg"
@@ -120,7 +112,7 @@ export default function Flashcard({
                 overflowY="auto"
                 maxHeight="100%"
               >
-                <Box width="100%">
+                <Box width="100%" fontSize="md">
                   <Markdown>{currentCard.prompt}</Markdown>
                 </Box>
               </Box>
@@ -143,6 +135,8 @@ export default function Flashcard({
           height="100%"
           width="100%"
           position="absolute"
+          borderColor="border.emphasized"
+          bg="bg.subtle"
           top={0}
           left={0}
           transition="all 0.2s"
@@ -152,25 +146,19 @@ export default function Flashcard({
           }}
           style={{
             backfaceVisibility: "hidden",
-            transform: "rotateY(180deg)"
+            transform: "rotateY(180deg)",
+            zIndex: showAnswer ? 2 : 1,
+            pointerEvents: showAnswer ? "auto" : "none"
           }}
         >
-          <Card.Header p={2}>
-            <VStack gap={2}>
-              <Badge variant="outline" fontSize="sm">
-                Card {currentPosition} of {totalInQueue} remaining
-              </Badge>
-              <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
-                {currentCard.title}
-              </Text>
-            </VStack>
+          <Card.Header p={0}>
+            <Text fontWeight="semibold" fontSize="md" lineHeight="1.2" textAlign="center">
+              Answer: {currentCard.title}
+            </Text>
           </Card.Header>
 
           <Card.Body p={3} flex={1} display="flex" flexDirection="column" minHeight={0}>
             <VStack align="stretch" gap={4} height="100%">
-              <Text fontSize="md" fontWeight="medium">
-                Answer:
-              </Text>
               <Box
                 flex={1}
                 fontSize="lg"
@@ -184,7 +172,7 @@ export default function Flashcard({
                 overflowY="auto"
                 maxHeight="100%"
               >
-                <Box width="100%">
+                <Box width="100%" fontSize="md">
                   <Markdown>{currentCard.answer}</Markdown>
                 </Box>
               </Box>
@@ -192,16 +180,19 @@ export default function Flashcard({
           </Card.Body>
 
           <Card.Footer p={3}>
-            <VStack gap={2} width="100%">
-              <Button onClick={onGotIt} size="sm" colorPalette="green" width="100%" fontSize="md">
+            <HStack gap={1} width="100%" display="flex">
+              <Button onClick={onGotIt} size="sm" colorPalette="green" fontSize="md" flex={1}>
                 <FaCheckCircle />
                 Got It!
               </Button>
-              <Button onClick={onKeepTrying} size="sm" colorPalette="red" variant="outline" width="100%" fontSize="md">
+              <Button onClick={onBackToQuestion} size="sm" colorPalette="blue" variant="outline" fontSize="md" flex={0}>
+                <MdReplay />
+              </Button>
+              <Button onClick={onKeepTrying} size="sm" colorPalette="red" variant="outline" fontSize="md" flex={1}>
                 <FaTimes />
                 Keep Trying
               </Button>
-            </VStack>
+            </HStack>
           </Card.Footer>
         </Card.Root>
       </Box>

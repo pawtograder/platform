@@ -93,6 +93,9 @@ export default function FlashcardDeckPage() {
         order: "asc"
       }
     ],
+    pagination: {
+      pageSize: 1000
+    },
     queryOptions: {
       enabled: !!deck_id
     }

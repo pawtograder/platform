@@ -1,17 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { useParams } from "next/navigation";
-import { Container, Heading, HStack, VStack, Text, Spinner, Progress, Card } from "@chakra-ui/react";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { FaArrowLeft, FaRedo, FaCheckCircle } from "react-icons/fa";
-import useAuthState from "@/hooks/useAuthState";
-import { useList, useOne } from "@refinedev/core";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 import Link from "@/components/ui/link";
 import { Toaster, toaster } from "@/components/ui/toaster";
-import { Alert } from "@/components/ui/alert";
+import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Card, Container, Heading, HStack, Progress, Spinner, Text, VStack } from "@chakra-ui/react";
+import { useList, useOne } from "@refinedev/core";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FaArrowLeft, FaCheckCircle, FaRedo } from "react-icons/fa";
 import Flashcard from "./flashcard";
 import GotItPile from "./gotItPile";
 
@@ -79,6 +79,9 @@ export default function FlashcardsDeckPage() {
         value: null
       }
     ],
+    pagination: {
+      pageSize: 1000
+    },
     queryOptions: {
       enabled: !!deckId
     }
@@ -327,6 +330,10 @@ export default function FlashcardsDeckPage() {
     cardQueue,
     displayCard
   ]);
+
+  const handleBackToQuestion = useCallback(() => {
+    setShowAnswer(false);
+  }, []);
 
   // Handle "Keep Trying" action - move current card to back of queue
   const handleKeepTrying = useCallback(() => {
@@ -611,31 +618,35 @@ export default function FlashcardsDeckPage() {
         </HStack>
 
         {/* Progress bar */}
-        <VStack align="stretch" gap={2}>
-          <HStack justifyContent="space-between">
-            <Text fontSize="sm">
-              Progress: {gotItCards.length} / {flashcards.length} cards mastered
-            </Text>
-            <Text fontSize="sm">Remaining: {cardQueue.length}</Text>
-          </HStack>
-          <Progress.Root value={(gotItCards.length / flashcards.length) * 100} size="lg" colorPalette="green">
-            <Progress.Track>
-              <Progress.Range />
-            </Progress.Track>
-          </Progress.Root>
+        <VStack align="stretch" gap={2} height="100vh">
+          <Box>
+            <HStack justifyContent="space-between">
+              <Text fontSize="sm">
+                Progress: {gotItCards.length} / {flashcards.length} cards mastered
+              </Text>
+              <Text fontSize="sm">Remaining: {cardQueue.length}</Text>
+            </HStack>
+            <Progress.Root value={(gotItCards.length / flashcards.length) * 100} size="lg" colorPalette="green">
+              <Progress.Track>
+                <Progress.Range />
+              </Progress.Track>
+            </Progress.Root>
+          </Box>
+          <Box flexShrink={10} flexGrow={10} overflowY="auto" minH="0">
+            {/* Current flashcard */}
+            {currentCard && (
+              <Flashcard
+                currentCard={currentCard}
+                availableCards={cardQueue}
+                showAnswer={showAnswer}
+                onShowAnswer={handleShowAnswer}
+                onGotIt={handleGotIt}
+                onKeepTrying={handleKeepTrying}
+                onBackToQuestion={handleBackToQuestion}
+              />
+            )}
+          </Box>
         </VStack>
-
-        {/* Current flashcard */}
-        {currentCard && (
-          <Flashcard
-            currentCard={currentCard}
-            availableCards={cardQueue}
-            showAnswer={showAnswer}
-            onShowAnswer={handleShowAnswer}
-            onGotIt={handleGotIt}
-            onKeepTrying={handleKeepTrying}
-          />
-        )}
 
         {/* "Got It" pile summary */}
         <GotItPile gotItCards={gotItCards} onReturnCard={handleReturnCard} />
