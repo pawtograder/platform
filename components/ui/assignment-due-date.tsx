@@ -5,7 +5,7 @@ import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useCreate, useList } from "@refinedev/core";
+import { CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, isAfter } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";
@@ -28,7 +28,31 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { mutateAsync: createAssignmentDueDateException } = useCreate<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions"
   });
-  if (!lateTokens || !dueDate) {
+  const groupOrProfileFilter: CrudFilter = assignment_group_id
+    ? {
+        field: "assignment_group_id",
+        operator: "eq",
+        value: assignment_group_id
+      }
+    : {
+        field: "student_id",
+        operator: "eq",
+        value: private_profile_id
+      };
+
+  const { data: exceptionsForProfile } = useList<AssignmentDueDateException>({
+    resource: "assignment_due_date_exceptions",
+    filters: [
+      {
+        field: "assignment_id",
+        operator: "eq",
+        value: assignment.id
+      },
+      groupOrProfileFilter
+    ]
+  });
+
+  if (!lateTokens || !dueDate || !exceptionsForProfile) {
     return <Skeleton height="20px" width="80px" />;
   }
   const lateTokensUsedByStudent = lateTokens.filter((e) => e.tokens_consumed > 0).length;
@@ -38,6 +62,13 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
     .reduce((a, b) => a + b, 0);
   if (course.late_tokens_per_student === 0) {
     return <Text>(No late submissions allowed)</Text>;
+  }
+  if (
+    exceptionsForProfile.data.filter((exception) => {
+      return exception.hours * 60 + exception.minutes < 0;
+    }).length > 0
+  ) {
+    return <Text>(You may not extend the due date for this assignment as you finalized early)</Text>;
   }
   if (lateTokensUsedByStudent >= course.late_tokens_per_student) {
     return <Text>(You have no remaining late tokens)</Text>;

@@ -5,10 +5,15 @@ import {
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { useList, useShow } from "@refinedev/core";
+import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
+
+export function useSelfReviewSettings() {
+  const controller = useAssignmentController();
+  return controller.assignment.assignment_self_review_settings;
+}
 
 export function useRubricCheck(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
@@ -47,13 +52,33 @@ export function useRubrics() {
   return controller.rubrics;
 }
 
+export function useReviewAssignment(review_assignment_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  if (!review_assignment_id) {
+    return undefined;
+  }
+  const assignments = controller.getReviewAssignments().data;
+  return assignments.find((ra) => ra.id === review_assignment_id);
+}
+
 export function useMyReviewAssignments(submission_id?: number) {
   const controller = useAssignmentController();
   const { private_profile_id } = useClassProfiles();
-  const assignment = controller.assignment;
-  const reviewAssignments = assignment.review_assignments;
-  const myReviewAssignments = reviewAssignments.filter(
-    (ra) => ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
+  const [reviewAssignments, setReviewAssignments] = useState<AssignmentWithRubricsAndReferences["review_assignments"]>(
+    []
+  );
+  useEffect(() => {
+    const { unsubscribe, data } = controller.getReviewAssignments(setReviewAssignments);
+    setReviewAssignments(data);
+    return () => unsubscribe();
+  }, [controller]);
+  const myReviewAssignments = useMemo(
+    () =>
+      reviewAssignments.filter(
+        (ra) =>
+          ra.assignee_profile_id === private_profile_id && (submission_id ? ra.submission_id === submission_id : true)
+      ),
+    [reviewAssignments, private_profile_id, submission_id]
   );
   return myReviewAssignments;
 }
@@ -77,6 +102,12 @@ class AssignmentController {
   private _assignment?: AssignmentWithRubricsAndReferences;
   private _rubrics: AssignmentWithRubricsAndReferences["rubrics"] = [];
   private _submissions: ActiveSubmissionsWithGradesForAssignment[] = [];
+
+  private _reviewAssignments: AssignmentWithRubricsAndReferences["review_assignments"] = [];
+  private _reviewAssignmentListSubscribers: ((
+    reviewAssignments: AssignmentWithRubricsAndReferences["review_assignments"]
+  ) => void)[] = [];
+
   rubricCheckById: Map<number, OurRubricCheck> = new Map();
   rubricCriteriaById: Map<
     number,
@@ -87,10 +118,39 @@ class AssignmentController {
   // Assignment
   set assignment(assignment: AssignmentWithRubricsAndReferences) {
     this._assignment = assignment;
+    this._reviewAssignments = assignment.review_assignments;
   }
   get assignment() {
     if (!this._assignment) throw new Error("Assignment not set");
     return this._assignment;
+  }
+  getReviewAssignments(
+    callback?: (reviewAssignments: AssignmentWithRubricsAndReferences["review_assignments"]) => void
+  ) {
+    if (callback) {
+      this._reviewAssignmentListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this._reviewAssignmentListSubscribers = this._reviewAssignmentListSubscribers.filter((cb) => cb !== callback);
+      },
+      data: this._reviewAssignments
+    };
+  }
+
+  handleReviewAssignmentEvent(event: LiveEvent) {
+    const body = event.payload as AssignmentWithRubricsAndReferences["review_assignments"][number]; // Assertion for event.payload
+    const id = body.id;
+    if (event.type === "created") {
+      this._reviewAssignments = [...this._reviewAssignments, body];
+      this._reviewAssignmentListSubscribers.forEach((cb) => cb(this._reviewAssignments));
+    } else if (event.type === "updated") {
+      const index = this._reviewAssignments.findIndex((ra) => ra.id === id);
+      if (index !== -1) {
+        this._reviewAssignments = this._reviewAssignments.map((ra) => (ra.id === id ? body : ra));
+        this._reviewAssignmentListSubscribers.forEach((cb) => cb(this._reviewAssignments));
+      }
+    }
   }
   // Rubrics
   set rubrics(rubrics: AssignmentWithRubricsAndReferences["rubrics"]) {
@@ -197,7 +257,7 @@ function AssignmentControllerCreator({
     queryOptions: { enabled: !!assignment_id },
     meta: {
       select:
-        "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
+        "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_check_references!referencing_rubric_check_id(*)))))"
     }
   });
 
@@ -207,6 +267,18 @@ function AssignmentControllerCreator({
     filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
     pagination: { pageSize: 1000 },
     queryOptions: { enabled: !!assignment_id }
+  });
+
+  // Review Assignments
+  useList<AssignmentWithRubricsAndReferences["review_assignments"][number]>({
+    resource: "review_assignments",
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
+    pagination: { pageSize: 1000 },
+    queryOptions: { enabled: !!assignment_id },
+    liveMode: "manual",
+    onLiveEvent: (event) => {
+      controller.handleReviewAssignmentEvent(event);
+    }
   });
 
   // Set data in controller
