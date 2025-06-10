@@ -16,6 +16,7 @@ import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useEffect, useState } from "react";
+import { useIdentity } from "@/hooks/useIdentities";
 
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
@@ -23,6 +24,7 @@ type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
 };
 
 export default function StudentPage() {
+  const { identities } = useIdentity();
   const { course_id } = useParams();
   const { user } = useAuthState();
   const supabase = createClient();
@@ -59,7 +61,7 @@ export default function StudentPage() {
     private_profile_id_data && private_profile_id_data.data.length > 0
       ? private_profile_id_data.data[0].private_profile_id
       : null;
-  const { data: groupsData } = useList({
+  const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
     meta: {
       select: "*, assignment_groups(*, repositories(*))"
@@ -72,7 +74,7 @@ export default function StudentPage() {
       enabled: !!private_profile_id
     }
   });
-  let groups = groupsData?.data ?? null;
+  const groups = groupsData?.data ?? null;
   const { data: assignmentsData } = useList<AssignmentWithRepositoryAndSubmissionsAndGraderResults>({
     resource: "assignments",
     meta: {
@@ -87,10 +89,10 @@ export default function StudentPage() {
     },
     sorters: [{ field: "due_date", order: "desc" }]
   });
-  let assignments = assignmentsData?.data ?? null;
+  const assignments = assignmentsData?.data ?? null;
 
   //list identities
-  const isgitlinked = false;
+  const githubIdentity = identities?.find((identity) => identity.provider === "github");
 
   const assignmentsWithoutRepos = assignments?.filter((assignment) => {
     if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
@@ -114,7 +116,9 @@ export default function StudentPage() {
     const createRepos = async () => {
       try {
         setLoading(true);
-        await autograderCreateReposForStudent(supabase);
+        if (githubIdentity) {
+          await autograderCreateReposForStudent(supabase);
+        }
       } finally {
         setLoading(false);
       }
@@ -122,7 +126,7 @@ export default function StudentPage() {
     createRepos();
   }, []);
 
-  const actions = isgitlinked ? (
+  const actions = githubIdentity ? (
     <></>
   ) : assignmentsWithoutRepos?.length ? (
     <LinkAccount />

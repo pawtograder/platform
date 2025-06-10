@@ -2,7 +2,14 @@
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
-import { Assignment, Repository, SelfReviewSettings, UserRole } from "@/utils/supabase/DatabaseTypes";
+import {
+  Assignment,
+  Repository,
+  SelfReviewSettings,
+  SubmissionWithGraderResultsAndReview,
+  UserRole,
+  UserRoleWithCourse
+} from "@/utils/supabase/DatabaseTypes";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
@@ -53,10 +60,11 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
     </VStack>
   );
 }
+
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
   const { user } = useAuthState();
-  const { data: enrollmentData } = useList({
+  const { data: enrollmentData } = useList<UserRoleWithCourse>({
     resource: "user_roles",
     meta: {
       select: "*, classes(time_zone)",
@@ -85,7 +93,7 @@ export default function AssignmentPage() {
       }
     ]
   });
-  const { data: submissionsData } = useList({
+  const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
     resource: "submissions",
     meta: {
       select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)",
@@ -133,24 +141,30 @@ export default function AssignmentPage() {
   }
   const { data: repositoriesData } = useList<Repository>({ resource: "repositories", filters });
 
+  const { data: reviewSettingsData } = useList<SelfReviewSettings>({
+    resource: "assignment_self_review_settings",
+    meta: {
+      select: "*",
+      limit: 1
+    },
+    filters: [{ field: "id", operator: "eq", value: assignmentData?.data[0].self_review_setting_id }],
+    queryOptions: {
+      enabled: !!assignmentData && assignmentData.data.length !== 0
+    }
+  });
+
   if (!assignmentData || assignmentData.data.length === 0) {
     return <div>Assignment not found</div>;
   }
   const assignment = assignmentData.data[0];
   const repositories = repositoriesData?.data;
   const submissions = submissionsData?.data;
-  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
-
-
-  const { data: review_settings } = await client
-    .from("assignment_self_review_settings")
-    .select("*")
-    .eq("id", assignment.self_review_setting_id)
-    .single();
+  const review_settings = reviewSettingsData && reviewSettingsData.data.length > 0 ? reviewSettingsData.data[0] : null;
 
   if (!enrollment) {
     return <Skeleton height="40" width="100%" />;
   }
+  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
   return (
     <Box p={4}>
       <Flex width="100%" alignItems={"center"}>
