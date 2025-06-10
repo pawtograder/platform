@@ -1,5 +1,12 @@
 INSERT into public.classes(name, semester, slug, is_demo, github_org, time_zone) VALUES ('Demo Class', 20281, 'demo-class', true, 'autograder-dev', 'America/New_York');
 
+DO $$
+DECLARE 
+    alyssa_self_review_id int8;
+BEGIN
+INSERT INTO public.assignment_self_review_settings(id, enabled, deadline_offset, allow_early, class_id)
+  VALUES (1, true, 2, true, 1) RETURNING id into alyssa_self_review_id;
+    
 INSERT INTO public.assignments (
   id,
   class_id,
@@ -13,7 +20,8 @@ INSERT INTO public.assignments (
   slug,
   release_date,
   total_points,
-  template_repo
+  template_repo,
+  self_review_setting_id
 ) VALUES (1,
   1,
   '2028-12-31T23:59:59Z',
@@ -26,9 +34,11 @@ INSERT INTO public.assignments (
   'demo-assignment',
   '2024-12-01T00:00:00Z',
   100,
-  'not-actually/a-template-repo'
+  'not-actually/a-template-repo',
+  alyssa_self_review_id
 );
 
+END $$;
 
 insert into help_queues (name, description, class_id, available, depth)
   VALUES ('demo','demo description', 1, TRUE, 0);
@@ -80,7 +90,8 @@ BEGIN
 
   update public.user_roles set role='instructor' where private_profile_id=eva_profile_id;
 
-INSERT into public.repositories(assignment_id, repository, class_id, profile_id, synced_handout_sha,synced_repo_sha)
+
+INSERT into public.repositories(assignment_id, repository, class_id, profile_id, synced_handout_sha, synced_repo_sha)
   VALUES (1, 'not-actually/repository', 1, alyssa_profile_id, 'none', 'none') RETURNING id into alyssa_repo_id;
 
 INSERT INTO public.repository_check_runs (class_id, repository_id, check_run_id, status, sha, commit_message)

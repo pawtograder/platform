@@ -1,13 +1,15 @@
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
-import { Repository } from "@/utils/supabase/DatabaseTypes";
+import { Repository, SelfReviewSettings, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Alert, Box, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
+import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
+import FinishSubmissionEarly from "./finalizeSubmissionEarly";
 import ManageGroupWidget from "./manageGroupWidget";
+import SelfReviewNotice from "@/components/ui/self-review-notice";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {
@@ -102,13 +104,31 @@ export default async function AssignmentPage({
         ? `assignment_group_id.eq.${assignment_group_id},profile_id.eq.${enrollment?.private_profile_id}`
         : `profile_id.eq.${enrollment?.private_profile_id}`
     );
+
+  const { data: review_settings } = await client
+    .from("assignment_self_review_settings")
+    .select("*")
+    .eq("id", assignment.self_review_setting_id)
+    .single();
+
+  if (!enrollment) {
+    return <Skeleton height="40" width="100%" />;
+  }
   return (
     <Box p={4}>
-      <Heading size="lg">{assignment.title}</Heading>
-      <HStack>
-        <Text>Due: </Text>
-        <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
-      </HStack>
+      <Flex width="100%" alignItems={"center"}>
+        <Box width="50%">
+          <Heading size="lg">{assignment.title}</Heading>
+          <HStack>
+            <Text>Due: </Text>
+            <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
+          </HStack>
+        </Box>
+        {review_settings && review_settings.allow_early && (
+          <FinishSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} />
+        )}
+      </Flex>
+
       <Markdown>{assignment.description}</Markdown>
       {!assignment.template_repo || !assignment.template_repo.includes("/") ? (
         <Alert.Root status="error" flexDirection="column">
@@ -126,6 +146,17 @@ export default async function AssignmentPage({
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
       </Box>
+      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
+        <SelfReviewNotice
+          review_settings={review_settings ?? ({} as SelfReviewSettings)}
+          assignment={assignment}
+          enrollment={enrollment ?? ({} as UserRole)}
+          activeSubmission={submissions?.find((sm) => {
+            return sm.is_active;
+          })}
+        />
+      </Box>
+
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog
         assignment={assignment}
