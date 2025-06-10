@@ -3,7 +3,7 @@ import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import { Repository, SelfReviewSettings, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
-import { Alert, Box, Flex, Heading, HStack, Link, Table, Text, VStack } from "@chakra-ui/react";
+import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
@@ -111,6 +111,9 @@ export default async function AssignmentPage({
     .eq("id", assignment.self_review_setting_id)
     .single();
 
+  if (!enrollment) {
+    return <Skeleton height="40" width="100%" />;
+  }
   return (
     <Box p={4}>
       <Flex width="100%" alignItems={"center"}>
