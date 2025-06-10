@@ -17,6 +17,7 @@ import { useParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useEffect, useState } from "react";
 import { useIdentity } from "@/hooks/useIdentities";
+import { UserIdentity } from "@supabase/supabase-js";
 
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
@@ -34,7 +35,7 @@ export default function StudentPage() {
       select: "time_zone",
       limit: 1
     },
-    filters: [{ field: "id", operator: "eq", value: course_id }],
+    filters: [{ field: "id", operator: "eq", value: Number(course_id) }],
     queryOptions: {
       enabled: !!course_id
     }
@@ -49,18 +50,19 @@ export default function StudentPage() {
       limit: 1
     },
     filters: [
-      { field: "user_id", operator: "eq", value: user!.id },
-      { field: "class_id", operator: "eq", value: course_id }
+      { field: "user_id", operator: "eq", value: user?.id },
+      { field: "class_id", operator: "eq", value: Number(course_id) }
     ],
     queryOptions: {
-      enabled: !!course_id
+      enabled: !!course_id && !!user
     }
   });
 
-  const private_profile_id =
+  const private_profile_id: string | null =
     private_profile_id_data && private_profile_id_data.data.length > 0
       ? private_profile_id_data.data[0].private_profile_id
       : null;
+
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
     meta: {
@@ -74,7 +76,7 @@ export default function StudentPage() {
       enabled: !!private_profile_id
     }
   });
-  const groups = groupsData?.data ?? null;
+  const groups: AssignmentGroupMemberWithGroupAndRepo[] | null = groupsData?.data ?? null;
   const { data: assignmentsData } = useList<AssignmentWithRepositoryAndSubmissionsAndGraderResults>({
     resource: "assignments",
     meta: {
@@ -89,10 +91,9 @@ export default function StudentPage() {
     },
     sorters: [{ field: "due_date", order: "desc" }]
   });
-  const assignments = assignmentsData?.data ?? null;
+  const assignments: AssignmentWithRepositoryAndSubmissionsAndGraderResults[] | null = assignmentsData?.data ?? null;
 
-  //list identities
-  const githubIdentity = identities?.find((identity) => identity.provider === "github");
+  const githubIdentity: UserIdentity | null = identities?.find((identity) => identity.provider === "github") ?? null;
 
   const assignmentsWithoutRepos = assignments?.filter((assignment) => {
     if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
@@ -111,6 +112,20 @@ export default function StudentPage() {
     return !hasIndividualRepo;
   });
 
+  const actions = !githubIdentity ? (
+    <LinkAccount />
+  ) : assignmentsWithoutRepos?.length ? (
+    <>
+      <Alert status="info">
+        GitHub repos created for you. You have been *invited* to join them. You will need to accept the invitation
+        within the next 7 days. You will find the invitation in your email (whichever you use for GitHub), and also in
+        your <Link href="https://github.com/notifications">GitHub notifications</Link>.
+      </Alert>
+    </>
+  ) : (
+    <></>
+  );
+
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     const createRepos = async () => {
@@ -126,24 +141,12 @@ export default function StudentPage() {
     createRepos();
   }, []);
 
-  const actions = githubIdentity ? (
-    <></>
-  ) : assignmentsWithoutRepos?.length ? (
-    <LinkAccount />
-  ) : (
-    <>
-      <Alert status="info">
-        GitHub repos created for you. You have been *invited* to join them. You will need to accept the invitation
-        within the next 7 days. You will find the invitation in your email (whichever you use for GitHub), and also in
-        your <Link href="https://github.com/notifications">GitHub notifications</Link>.
-      </Alert>
-    </>
-  );
   const getLatestSubmission = (assignment: AssignmentWithRepositoryAndSubmissionsAndGraderResults) => {
     return assignment.submissions.sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     )[0];
   };
+
   return (
     <Container>
       {actions}
