@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import { AssignmentDueDate, SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
+import { dueDateAdvice } from "@/lib/utils";
 import {
   AssignmentGroup,
   AssignmentGroupMember,
@@ -13,7 +14,7 @@ import { createClient } from "@/utils/supabase/server";
 import { Card, Container, Flex, Heading, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { PostgrestError } from "@supabase/supabase-js";
-import { addHours, addMinutes } from "date-fns";
+import { addHours, addMinutes, differenceInHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 
 // Define the type for the groups query result
@@ -185,14 +186,16 @@ export default async function StudentPage({ params }: { params: Promise<{ course
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
-        submission_text: `#${mostRecentSubmission.ordinal} (${mostRecentSubmission.grader_results?.score || 0}/${mostRecentSubmission.grader_results?.max_score || 0})`,
+        submission_text: !mostRecentSubmission
+          ? "Have not submitted yet"
+          : `#${mostRecentSubmission.ordinal} (${mostRecentSubmission.grader_results?.score || 0}/${mostRecentSubmission.grader_results?.max_score || 0})`,
         submission_link: mostRecentSubmission
           ? `/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`
           : undefined,
         group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
       });
 
-      if (assignment.assignment_self_review_settings.enabled) {
+      if (assignment.assignment_self_review_settings.enabled && assignment.review_assignments.length > 0) {
         const evalDueDate = addHours(modifiedDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0);
         result.push({
           key: assignment.id.toString() + "selfReview",
@@ -242,7 +245,13 @@ export default async function StudentPage({ params }: { params: Promise<{ course
                     </Text>
                     <Text>
                       <strong>Due:</strong>{" "}
-                      {formatInTimeZone(work.due_date, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}
+                      {formatInTimeZone(work.due_date, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}{" "}
+                      {differenceInHours(
+                        new TZDate(work.due_date),
+                        TZDate.tz(course?.time_zone || "America/New_York")
+                      ) <= 48
+                        ? dueDateAdvice(work.due_date.toString(), course?.time_zone ?? undefined)
+                        : ""}
                     </Text>
                     <Text>
                       <strong>Status:</strong> {work.type == "assignment" ? "using submission " : ""}
