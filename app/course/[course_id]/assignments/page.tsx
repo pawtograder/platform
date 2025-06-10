@@ -1,110 +1,143 @@
+"use client";
 import LinkAccount from "@/components/github/link-account";
 import { Alert } from "@/components/ui/alert";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
+import useAuthState from "@/hooks/useAuthState";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import {
+  Assignment,
   AssignmentGroup,
   AssignmentGroupMember,
   AssignmentWithRepositoryAndSubmissionsAndGraderResults,
   Repo
 } from "@/utils/supabase/DatabaseTypes";
-import { createClient } from "@/utils/supabase/server";
-import { Container, Heading, Table, Text } from "@chakra-ui/react";
-import { PostgrestError } from "@supabase/supabase-js";
+import { Container, Heading, Spinner, Table, Text } from "@chakra-ui/react";
+import { useCreate, useList } from "@refinedev/core";
+import { SupabaseClient } from "@supabase/supabase-js";
+import { useParams } from "next/navigation";
+import { createClient } from "@/utils/supabase/client";
+import { useEffect, useState } from "react";
+import { UUID } from "node:crypto";
 
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
   assignment_groups: (AssignmentGroup & { repositories: Repo[] }) | null;
 };
 
-export default async function StudentPage({ params }: { params: Promise<{ course_id: string }> }) {
-  const { course_id } = await params;
+export default function StudentPage() {
+  const { course_id } = useParams();
+  const { user } = useAuthState();
+  const supabase = createClient();
+  const { data: courseData } = useList({
+    resource: "classes",
+    meta: {
+      select: "time_zone",
+      limit: 1
+    },
+    filters: [{ field: "id", operator: "eq", value: course_id }],
+    queryOptions: {
+      enabled: !!course_id
+    }
+  });
 
-  const client = await createClient();
-  const user = (await client.auth.getUser()).data.user;
-  const { data: course } = await client.from("classes").select("time_zone").eq("id", Number(course_id)).single();
+  const course = courseData && courseData.data.length > 0 ? courseData.data[0] : null;
 
-  const { data: private_profile_id } = await client
-    .from("user_roles")
-    .select("private_profile_id")
-    .eq("user_id", user!.id)
-    .eq("class_id", Number(course_id))
-    .single();
+  const { data: private_profile_id_data } = useList({
+    resource: "user_roles",
+    meta: {
+      select: "private_profile_id",
+      limit: 1
+    },
+    filters: [
+      { field: "user_id", operator: "eq", value: user!.id },
+      { field: "class_id", operator: "eq", value: course_id }
+    ],
+    queryOptions: {
+      enabled: !!course_id
+    }
+  });
 
-  let groups: { data: AssignmentGroupMemberWithGroupAndRepo[] | null; error: PostgrestError | null } = {
-    data: [],
-    error: null
-  };
-
-  if (private_profile_id?.private_profile_id) {
-    groups = await client
-      .from("assignment_groups_members")
-      .select("*, assignment_groups(*, repositories(*))")
-      .eq("assignment_groups.class_id", Number(course_id))
-      .eq("profile_id", private_profile_id.private_profile_id);
-  }
-
-  //TODO need to get the group assignments, too!
-  let assignments = await client
-    .from("assignments")
-    .select("*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))")
-    .eq("class_id", Number(course_id))
-    .eq("repositories.user_roles.user_id", user!.id)
-    .order("due_date", { ascending: false });
+  const private_profile_id =
+    private_profile_id_data && private_profile_id_data.data.length > 0
+      ? private_profile_id_data.data[0].private_profile_id
+      : null;
+  const { data: groupsData } = useList({
+    resource: "assignment_groups_members",
+    meta: {
+      select: "*, assignment_groups(*, repositories(*))"
+    },
+    filters: [
+      { field: "assignment_groups.class_id", operator: "eq", value: Number(course_id) },
+      { field: "profile_id", operator: "eq", value: private_profile_id }
+    ],
+    queryOptions: {
+      enabled: !!private_profile_id
+    }
+  });
+  let groups = groupsData?.data ?? null;
+  const { data: assignmentsData } = useList<AssignmentWithRepositoryAndSubmissionsAndGraderResults>({
+    resource: "assignments",
+    meta: {
+      select: "*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))"
+    },
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "repositories.user_roles.user_id", operator: "eq", value: user?.id }
+    ],
+    queryOptions: {
+      enabled: !!user
+    },
+    sorters: [{ field: "due_date", order: "desc" }]
+  });
+  let assignments = assignmentsData?.data ?? null;
 
   //list identities
-  const identities = await client.auth.getUserIdentities();
-  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
+  const isgitlinked = false;
 
-  let actions = <></>;
-  if (!githubIdentity) {
-    actions = <LinkAccount />;
-  } else {
-    const assignmentsWithoutRepos = assignments.data?.filter((assignment) => {
-      if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
-        return false;
-      }
-      const hasIndividualRepo = assignment.repositories.length > 0;
-      const assignmentGroup = groups?.data?.find((group) => group.assignment_id === assignment.id);
-      const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
-      if (assignmentGroup) {
-        return !hasGroupRepo;
-      }
-      //Don't try to create a repo for a group assignment if we don't have a group
-      if (assignment.group_config === "groups") {
-        return false;
-      }
-      return !hasIndividualRepo;
-    });
-    if (assignmentsWithoutRepos?.length) {
-      console.log(`Creating repos for ${assignmentsWithoutRepos.map((a) => a.title).join(", ")}`);
-      await autograderCreateReposForStudent(client);
-      assignments = await client
-        .from("assignments")
-        .select("*, submissions(*, grader_results(*)), repositories(*, user_roles(user_id))")
-        .eq("class_id", Number(course_id))
-        .eq("repositories.user_roles.user_id", user!.id)
-        .order("due_date", { ascending: false });
-      // Refetch groups only if profile_id is available
-      if (private_profile_id?.private_profile_id) {
-        groups = await client
-          .from("assignment_groups_members")
-          .select("*, assignment_groups(*, repositories(*))")
-          .eq("assignment_groups.class_id", Number(course_id))
-          .eq("profile_id", private_profile_id.private_profile_id);
-      }
-      actions = (
-        <>
-          <Alert status="info">
-            GitHub repos created for you. You have been *invited* to join them. You will need to accept the invitation
-            within the next 7 days. You will find the invitation in your email (whichever you use for GitHub), and also
-            in your <Link href="https://github.com/notifications">GitHub notifications</Link>.
-          </Alert>
-        </>
-      );
+  const assignmentsWithoutRepos = assignments?.filter((assignment) => {
+    if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
+      return false;
     }
-  }
+    const hasIndividualRepo = assignment.repositories.length > 0;
+    const assignmentGroup = groups?.find((group) => group.assignment_id === assignment.id);
+    const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
+    if (assignmentGroup) {
+      return !hasGroupRepo;
+    }
+    //Don't try to create a repo for a group assignment if we don't have a group
+    if (assignment.group_config === "groups") {
+      return false;
+    }
+    return !hasIndividualRepo;
+  });
+
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const createRepos = async () => {
+      try {
+        setLoading(true);
+        await autograderCreateReposForStudent(supabase);
+      } finally {
+        setLoading(false);
+      }
+    };
+    createRepos();
+  }, []);
+
+  const actions = isgitlinked ? (
+    <></>
+  ) : assignmentsWithoutRepos?.length ? (
+    <LinkAccount />
+  ) : (
+    <>
+      <Alert status="info">
+        GitHub repos created for you. You have been *invited* to join them. You will need to accept the invitation
+        within the next 7 days. You will find the invitation in your email (whichever you use for GitHub), and also in
+        your <Link href="https://github.com/notifications">GitHub notifications</Link>.
+      </Alert>
+    </>
+  );
   const getLatestSubmission = (assignment: AssignmentWithRepositoryAndSubmissionsAndGraderResults) => {
     return assignment.submissions.sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -133,13 +166,13 @@ export default async function StudentPage({ params }: { params: Promise<{ course
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {assignments.data?.map((assignment) => {
+          {assignments?.map((assignment) => {
             const mostRecentSubmission = getLatestSubmission(assignment);
             let repo = "-";
             if (assignment.repositories.length) {
               repo = assignment.repositories[0].repository;
             }
-            const group = groups?.data?.find((group) => group.assignment_id === assignment.id);
+            const group = groups?.find((group) => group.assignment_id === assignment.id);
             if (group && group.assignment_groups) {
               if (group.assignment_groups.repositories.length) {
                 repo = group.assignment_groups.repositories[0].repository;
@@ -173,9 +206,13 @@ export default async function StudentPage({ params }: { params: Promise<{ course
                   )}
                 </Table.Cell>
                 <Table.Cell>
-                  <Link target="_blank" href={`https://github.com/${repo}`}>
-                    {repo}
-                  </Link>{" "}
+                  {loading ? (
+                    <Spinner />
+                  ) : (
+                    <Link target="_blank" href={`https://github.com/${repo}`}>
+                      {repo}
+                    </Link>
+                  )}
                 </Table.Cell>
                 <Table.Cell>
                   {assignment.group_config === "individual"
