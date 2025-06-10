@@ -7,7 +7,6 @@ import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack 
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
-import FinishSubmissionEarly from "./finalizeSubmissionEarly";
 import ManageGroupWidget from "./manageGroupWidget";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
 
@@ -124,9 +123,6 @@ export default async function AssignmentPage({
             <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
           </HStack>
         </Box>
-        {review_settings && review_settings.allow_early && (
-          <FinishSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} />
-        )}
       </Flex>
 
       <Markdown>{assignment.description}</Markdown>
