@@ -7,10 +7,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatDueDate(date: string | null, courseTimezone?: string) {
-  if (!date) {
-    return "N/A";
-  }
+export function dueDateAdvice(date: string | null, courseTimezone?: string) {
   let advice = "";
   if (courseTimezone && date) {
     const hoursUntilDue = differenceInHours(new TZDate(date), TZDate.tz(courseTimezone));
@@ -18,7 +15,19 @@ export function formatDueDate(date: string | null, courseTimezone?: string) {
       advice = ` (${formatDistance(new TZDate(date), TZDate.tz(courseTimezone))})`;
     }
   }
-  return new Date(date).toLocaleDateString() + " " + new Date(date).toLocaleTimeString() + advice;
+  return advice;
+}
+
+export function formatDueDate(date: string | null, courseTimezone?: string) {
+  if (!date) {
+    return "N/A";
+  }
+  return (
+    new Date(date).toLocaleDateString() +
+    " " +
+    new Date(date).toLocaleTimeString() +
+    dueDateAdvice(date, courseTimezone)
+  );
 }
 
 export function appendTimezoneOffset(date: string | null, timezone: string) {

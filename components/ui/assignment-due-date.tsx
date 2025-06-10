@@ -198,3 +198,42 @@ export function AssignmentDueDate({
     </HStack>
   );
 }
+
+export function SelfReviewDueDate({
+  assignment,
+  showTimeZone = false
+}: {
+  assignment: Assignment;
+  showTimeZone?: boolean;
+}) {
+  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment);
+  const { data: reviewAssignment } = useList<{ deadline_offset: number }>({
+    resource: "assignment_self_review_settings",
+    meta: {
+      select: "deadline_offset"
+    },
+    filters: [
+      {
+        field: "id",
+        operator: "eq",
+        value: assignment.self_review_setting_id
+      }
+    ]
+  });
+
+  if (!dueDate || !originalDueDate || !reviewAssignment?.data[0]) {
+    return <Skeleton height="20px" width="80px" />;
+  }
+  return (
+    <HStack gap={1}>
+      <Text>
+        {formatInTimeZone(
+          new TZDate(addHours(dueDate, reviewAssignment.data[0].deadline_offset)),
+          time_zone || "America/New_York",
+          "MMM d h:mm aaa"
+        )}
+      </Text>
+      {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
+    </HStack>
+  );
+}

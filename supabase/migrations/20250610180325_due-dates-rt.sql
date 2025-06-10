@@ -1,0 +1,1 @@
+ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."assignment_due_date_exceptions";
