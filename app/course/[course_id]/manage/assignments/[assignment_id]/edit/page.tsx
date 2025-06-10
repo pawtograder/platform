@@ -46,7 +46,6 @@ export default function EditAssignment() {
     async (values: FieldValues) => {
       try {
         const supabase = createClient();
-        console.log(values.allow_early);
         if (values) {
           const isEnabled = values.eval_config == "use_eval";
           update(
