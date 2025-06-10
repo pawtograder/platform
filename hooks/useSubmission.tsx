@@ -226,7 +226,7 @@ class SubmissionController {
       this.genericData[typeName].set(id, updated);
       this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(updated));
       this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [updated] })
+        cb(Array.from(this.genericData[typeName]!.values()), { entered: [], left: [], updated: [updated] })
       );
     } else if (event.type === "deleted") {
       this.genericData[typeName].delete(id);
