@@ -166,11 +166,14 @@ export default async function StudentPage({ params }: { params: Promise<{ course
       const group = groups?.data?.find((group) => group.assignment_id === assignment.id);
       let repo = "-";
       if (assignment.repositories.length) {
-        repo = assignment.repositories[0].repository;
+        // With `noUncheckedIndexedAccess`, direct index access returns possibly undefined
+        // but our length check guarantees at least one element. Assert non-null.
+        repo = assignment.repositories[0]!.repository;
       }
       if (group && group.assignment_groups) {
         if (group.assignment_groups.repositories.length) {
-          repo = group.assignment_groups.repositories[0].repository;
+          // Same reasoning as above – safe after length check.
+          repo = group.assignment_groups.repositories[0]!.repository;
         } else {
           repo = "-";
         }
@@ -209,8 +212,8 @@ export default async function StudentPage({ params }: { params: Promise<{ course
           due_date: new TZDate(evalDueDate),
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
-          name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0].submission_id}/files?review_assignment_id=${assignment.review_assignments[0].id}`,
-          submission_text: assignment.review_assignments[0].submission_reviews.completed_at
+          name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0]!.submission_id}/files?review_assignment_id=${assignment.review_assignments[0]!.id}`,
+          submission_text: assignment.review_assignments[0]!.submission_reviews?.completed_at
             ? "Submitted"
             : "Not Submitted",
           group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
