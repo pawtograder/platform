@@ -1,13 +1,14 @@
 "use client";
+import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
 import { AssignmentProvider, useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
 import { useAssignmentDueDate } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, Skeleton, Text } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
+import { Box, Button, Flex, Heading, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { addHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { FaExclamationTriangle } from "react-icons/fa";
 
 function CompleteReviewButton({
@@ -19,7 +20,6 @@ function CompleteReviewButton({
   enrollment: UserRole;
   activeSubmission: Submission;
 }) {
-  const router = useRouter();
   const { course_id, assignment_id } = useParams();
   const { data: reviewSubmissions } = useList<SubmissionReview>({
     resource: "submission_reviews",
@@ -36,15 +36,14 @@ function CompleteReviewButton({
   return (
     <>
       {!reviewSubmissions || reviewSubmissions?.data.length == 0 ? (
-        <Button
-          onClick={() => {
-            router.push(
-              `/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`
-            );
-          }}
+        <Link
+          prefetch={true}
+          href={`/course/${course_id}/assignments/${assignment_id}/submissions/${selfReviewAssignment?.submission_id}/files?review_assignment_id=${selfReviewAssignment?.id}`}
         >
-          Complete Now
-        </Button>
+          <Button colorPalette="green" variant="surface">
+            Complete Self Review
+          </Button>
+        </Link>
       ) : (
         <Flex>You have already submitted your review for this assignment.</Flex>
       )}
@@ -64,6 +63,9 @@ function SelfReviewNoticeInner({
   activeSubmission?: Submission;
 }) {
   const { dueDate, time_zone } = useAssignmentDueDate(assignment);
+  const myReviewAssignments = useMyReviewAssignments();
+  const selfReviewRubric = useRubric("self-review");
+  const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
 
   if (!dueDate || !review_settings) {
     return <Skeleton height="20px" width="80px" />;
@@ -73,7 +75,7 @@ function SelfReviewNoticeInner({
 
   return (
     <>
-      {new TZDate(dueDate, time_zone) < new TZDate(new Date(), time_zone) ? ( // less than now
+      {selfReviewAssignment ? (
         <Box>
           <Flex alignItems={"baseline"} gap="2">
             <Heading size="md">Complete Self Review</Heading>
@@ -90,7 +92,7 @@ function SelfReviewNoticeInner({
           )}
         </Box>
       ) : review_settings?.enabled ? (
-        <>
+        <VStack gap="1" alignItems="flex-start" w="100%">
           <Flex alignItems="center" gap="2">
             <FaExclamationTriangle />
             <Heading size="md">Self Review Notice</Heading>
@@ -99,7 +101,16 @@ function SelfReviewNoticeInner({
             There is a self review scheduled on this assignment which will release immediately after your deadline
             passes and will be <strong>due {review_settings?.deadline_offset} hours later.</strong>
           </Text>
-        </>
+          {review_settings && review_settings.allow_early && (
+            <HStack mt="2" w="100%">
+              <Text fontSize="sm" color="fg.muted">
+                If you are done with your submission, you can finalize it early to be able to submit your self-review
+                early.
+              </Text>
+              <FinalizeSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} />
+            </HStack>
+          )}
+        </VStack>
       ) : (
         <></>
       )}
