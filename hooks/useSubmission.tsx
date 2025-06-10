@@ -27,7 +27,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { LiveEvent, useInvalidate, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
@@ -183,6 +183,7 @@ class SubmissionController {
       throw new Error(`Invalid id type ${typeof id}`);
     }
   }
+
   handleGenericDataEvent(typeName: string, event: LiveEvent) {
     const body = event.payload as unknown; // Assertion for event.payload
     const idGetter = this.genericDataTypeToId[typeName];
@@ -216,10 +217,12 @@ class SubmissionController {
         cb(allData, { entered: [body], left: [], updated: [] });
       });
     } else if (event.type === "updated") {
-      this.genericData[typeName].set(id, body);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
+      const existing = this.genericData[typeName]?.get(id);
+      const updated = existing ? { ...existing, ...(body as object) } : body;
+      this.genericData[typeName].set(id, updated);
+      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(updated));
       this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [body] })
+        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [updated] })
       );
     } else if (event.type === "deleted") {
       this.genericData[typeName].delete(id);
@@ -490,6 +493,8 @@ function SubmissionControllerCreator({
   // We need these enabled to receive live events, but we'll ignore the initial data since we already loaded it
   const [liveSubscriptionsReady, setLiveSubscriptionsReady] = useState(false);
 
+  const assignmentController = useAssignmentController();
+
   useList<SubmissionFileComment>({
     resource: "submission_file_comments",
     filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
@@ -572,6 +577,7 @@ function SubmissionControllerCreator({
       submissionController.handleGenericDataEvent("submission_artifact_comments", event);
     }
   });
+  const invalidate = useInvalidate();
 
   // Process the main query data once it's loaded
   useEffect(() => {
@@ -603,9 +609,27 @@ function SubmissionControllerCreator({
         submissionController.setGeneric("submission_artifact_comments", submission_artifact_comments);
       }
 
+      const unsubscribeFromReviewAssignmentsChanges = assignmentController.getReviewAssignments((reviewAssignments) => {
+        //Make sure that we have a submission review fetched for this: it might exist but not be in the list due to RLS
+        const { data: submissionReviews } =
+          submissionController.listGenericData<SubmissionReviewWithRubric>("submission_reviews");
+        const reviewAssignmentsWithSubmissionReviews = reviewAssignments.filter((reviewAssignment) => {
+          return !submissionReviews.some((review) => review.id === reviewAssignment.submission_review_id);
+        });
+        if (reviewAssignmentsWithSubmissionReviews.length > 0) {
+          invalidate({
+            resource: "submission_reviews",
+            invalidates: ["all"]
+          });
+        }
+      });
+
       setLiveSubscriptionsReady(true);
+      return () => {
+        unsubscribeFromReviewAssignmentsChanges.unsubscribe();
+      };
     }
-  }, [query.data, query.isLoading, submissionController]);
+  }, [query.data, query.isLoading, submissionController, assignmentController, invalidate]);
 
   // Set ready when everything is loaded
   useEffect(() => {
