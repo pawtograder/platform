@@ -155,7 +155,6 @@ export function AssignmentDueDate({
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  console.log(dueDate);
   return (
     <HStack gap={1}>
       <Text>{formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}</Text>

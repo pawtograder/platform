@@ -138,7 +138,7 @@ export function CommitHistoryDialog({
   const filters: CrudFilter[] = [{ field: "assignment_id", operator: "eq", value: assignment.id }];
   if (assignment_group_id) {
     filters.push({ field: "assignment_group_id", operator: "eq", value: assignment_group_id });
-  } else {
+  } else if (profile_id) {
     filters.push({ field: "profile_id", operator: "eq", value: profile_id });
   }
   const { data: repository } = useList<Repository>({ resource: "repositories", filters });
