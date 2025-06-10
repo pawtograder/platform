@@ -13,7 +13,7 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
@@ -773,6 +773,10 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       staleTime: Infinity,
       cacheTime: Infinity
     },
+    liveMode: "manual",
+    onLiveEvent: (event) => {
+      controller.handleGenericDataEvent("assignment_due_date_exceptions", event);
+    },
     filters: [{ field: "class_id", operator: "eq", value: course_id }],
     pagination: {
       pageSize: 1000
@@ -851,25 +855,29 @@ export function useAssignmentDueDate(assignment: Assignment) {
       return () => unsubscribe();
     }
   }, [assignment, controller]);
-  if (!dueDateExceptions) {
+
+  const ret = useMemo(() => {
+    if (!dueDateExceptions) {
+      return {
+        originalDueDate: undefined,
+        dueDate: undefined,
+        hoursExtended: undefined
+      };
+    }
+    const hoursExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.hours, 0);
+    const minutesExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.minutes, 0);
+    const originalDueDate = new TZDate(assignment.due_date);
+    const dueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
+    const lateTokensConsumed = dueDateExceptions.reduce((acc, curr) => acc + curr.tokens_consumed, 0);
     return {
-      originalDueDate: undefined,
-      dueDate: undefined,
-      hoursExtended: undefined
+      originalDueDate,
+      dueDate,
+      hoursExtended,
+      lateTokensConsumed,
+      time_zone
     };
-  }
-  const hoursExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.hours, 0);
-  const minutesExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.minutes, 0);
-  const originalDueDate = new TZDate(assignment.due_date);
-  const dueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
-  const lateTokensConsumed = dueDateExceptions.reduce((acc, curr) => acc + curr.tokens_consumed, 0);
-  return {
-    originalDueDate,
-    dueDate,
-    hoursExtended,
-    lateTokensConsumed,
-    time_zone
-  };
+  }, [dueDateExceptions, assignment.due_date]);
+  return ret;
 }
 
 export function useLateTokens() {
