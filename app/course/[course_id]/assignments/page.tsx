@@ -6,19 +6,16 @@ import Link from "@/components/ui/link";
 import useAuthState from "@/hooks/useAuthState";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import {
-  Assignment,
   AssignmentGroup,
   AssignmentGroupMember,
   AssignmentWithRepositoryAndSubmissionsAndGraderResults,
   Repo
 } from "@/utils/supabase/DatabaseTypes";
 import { Container, Heading, Spinner, Table, Text } from "@chakra-ui/react";
-import { useCreate, useList } from "@refinedev/core";
-import { SupabaseClient } from "@supabase/supabase-js";
+import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
 import { useEffect, useState } from "react";
-import { UUID } from "node:crypto";
 
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
