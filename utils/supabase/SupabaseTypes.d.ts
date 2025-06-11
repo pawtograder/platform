@@ -1,31 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never;
-    };
-    Views: {
-      [_ in never]: never;
-    };
-    Functions: {
-      graphql: {
-        Args: {
-          operationName?: string;
-          query?: string;
-          variables?: Json;
-          extensions?: Json;
-        };
-        Returns: Json;
-      };
-    };
-    Enums: {
-      [_ in never]: never;
-    };
-    CompositeTypes: {
-      [_ in never]: never;
-    };
-  };
   pgmq_public: {
     Tables: {
       [_ in never]: never;
@@ -1201,27 +1176,60 @@ export type Database = {
           }
         ];
       };
+      email_distribution_exception: {
+        Row: {
+          assignment_id: number | null;
+          class_id: number;
+          created_at: string;
+          id: number;
+          include: boolean;
+          profile_id: string;
+          tag_id: number | null;
+        };
+        Insert: {
+          assignment_id?: number | null;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          include: boolean;
+          profile_id: string;
+          tag_id?: number | null;
+        };
+        Update: {
+          assignment_id?: number | null;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          include?: boolean;
+          profile_id?: string;
+          tag_id?: number | null;
+        };
+        Relationships: [];
+      };
       email_distribution_item: {
         Row: {
           class_id: number;
           created_at: string;
-          email_distribution_list_id: number | null;
+          email: string;
+          email_distribution_list_id: number;
           id: number;
-          profile_id: string | null;
+          profile_id: string;
         };
         Insert: {
           class_id: number;
           created_at?: string;
-          email_distribution_list_id?: number | null;
+          email: string;
+          email_distribution_list_id: number;
           id?: number;
-          profile_id?: string | null;
+          profile_id: string;
         };
         Update: {
           class_id?: number;
           created_at?: string;
-          email_distribution_list_id?: number | null;
+          email?: string;
+          email_distribution_list_id?: number;
           id?: number;
-          profile_id?: string | null;
+          profile_id?: string;
         };
         Relationships: [
           {
@@ -1249,66 +1257,29 @@ export type Database = {
       };
       email_distribution_list: {
         Row: {
-          assignment_id: number | null;
           class_id: number;
           created_at: string;
           id: number;
           name: string;
-          tag_id: string | null;
-          type: Database["public"]["Enums"]["distribution_list_type"];
         };
         Insert: {
-          assignment_id?: number | null;
           class_id: number;
           created_at?: string;
           id?: number;
           name: string;
-          tag_id?: string | null;
-          type: Database["public"]["Enums"]["distribution_list_type"];
         };
         Update: {
-          assignment_id?: number | null;
           class_id?: number;
           created_at?: string;
           id?: number;
           name?: string;
-          tag_id?: string | null;
-          type?: Database["public"]["Enums"]["distribution_list_type"];
         };
         Relationships: [
-          {
-            foreignKeyName: "email_distribution_list_keys_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "email_distribution_list_keys_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "email_distribution_list_keys_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
-            referencedColumns: ["assignment_id"];
-          },
           {
             foreignKeyName: "email_distribution_list_keys_class_id_fkey";
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "email_distribution_list_keys_tag_id_fkey";
-            columns: ["tag_id"];
-            isOneToOne: false;
-            referencedRelation: "tags";
             referencedColumns: ["id"];
           }
         ];
@@ -4386,7 +4357,6 @@ export type Database = {
       app_role: "admin" | "instructor" | "grader" | "student";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
-      distribution_list_type: "have_submitted" | "have_not_submitted" | "tag" | "custom";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
     };
@@ -4492,9 +4462,6 @@ export type CompositeTypes<
     : never;
 
 export const Constants = {
-  graphql_public: {
-    Enums: {}
-  },
   pgmq_public: {
     Enums: {}
   },
@@ -4504,7 +4471,6 @@ export const Constants = {
       app_role: ["admin", "instructor", "grader", "student"],
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
-      distribution_list_type: ["have_submitted", "have_not_submitted", "tag", "custom"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       review_round: ["self-review", "grading-review", "meta-grading-review"]
     }
