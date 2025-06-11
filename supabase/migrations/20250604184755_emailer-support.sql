@@ -1,6 +1,7 @@
 CREATE TYPE "public"."distribution_list_type" AS ENUM (
     'have_submitted',
     'have_not_submitted',
+    'class',
     'tag',
     'custom'
 );
@@ -148,8 +149,10 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$     
 DECLARE      
-    unsubmitted_list RECORD;    
+    unsubmitted_list RECORD;
+    class_list_id bigint;
 BEGIN
+    -- enroll in all unsubmitted assignments lists
     IF NEW.role = 'student' THEN
         FOR unsubmitted_list IN 
             SELECT id FROM public.email_distribution_list 
@@ -159,6 +162,11 @@ BEGIN
             VALUES (NEW.private_profile_id, unsubmitted_list.id, NEW.class_id);     
         END LOOP; 
     END IF;
+    SELECT id FROM public.email_distribution_list WHERE class_id = NEW.class_id AND "type" = 'class' INTO class_list_id LIMIT 1;
+
+    -- enroll in whole class email list 
+    INSERT INTO public.email_distribution_item (profile_id, email_distribution_list_id, class_id) 
+            VALUES (NEW.private_profile_id, class_list_id, NEW.class_id);     
 
     RETURN NEW; 
 END;
@@ -173,3 +181,67 @@ CREATE OR REPLACE TRIGGER "auto_enroll_new_students_in_mailing_lists"
     AFTER INSERT ON "public"."user_roles" 
     FOR EACH ROW 
     EXECUTE FUNCTION "public"."auto_enroll_new_students_in_mailing_lists"();
+
+-- when a student submits, make they (+ group members) are moved from have not submitted to have submitted mailing list
+CREATE OR REPLACE FUNCTION public.move_student_to_submitted_list() 
+RETURNS trigger 
+LANGUAGE plpgsql 
+SECURITY DEFINER
+AS $$     
+DECLARE  
+    student uuid;
+    group_id bigint;  
+    have_not_list bigint;
+    have_list bigint;
+BEGIN
+    SELECT assignment_group_id FROM public.assignment_groups_members WHERE profile_id = NEW.profile_id INTO group_id;
+
+    SELECT id FROM public.email_distribution_list WHERE assignment_id = NEW.assignment_id AND class_id = NEW.class_id AND 
+        "type" = 'have_not_submitted' INTO have_not_list LIMIT 1;
+
+    SELECT id FROM public.email_distribution_list WHERE assignment_id = NEW.assignment_id AND class_id = NEW.class_id AND 
+        "type" = 'have_submitted' INTO have_list LIMIT 1;
+
+    IF group_id IS NULL THEN 
+        UPDATE public.email_distribution_item edi 
+        SET email_distribution_list_id = have_list
+        WHERE edi.email_distribution_list_id = have_not_list AND edi.profile_id = NEW.profile_id;
+    ELSE 
+        FOR student IN (SELECT profile_id FROM public.assignment_groups_members WHERE assignment_group_id = group_id) LOOP
+            UPDATE public.email_distribution_item edi 
+            SET email_distribution_list_id = have_list
+            WHERE edi.email_distribution_list_id = have_not_list AND edi.profile_id = student;
+        END LOOP;
+    END IF;
+    RETURN NEW; 
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER "auto_enroll_new_students_in_mailing_lists" 
+    AFTER INSERT ON "public"."submissions" 
+    FOR EACH ROW 
+    EXECUTE FUNCTION "public"."move_student_to_submitted_list"();
+
+CREATE OR REPLACE FUNCTION public.create_mailing_list_for_class() 
+RETURNS trigger 
+LANGUAGE plpgsql 
+SECURITY DEFINER
+AS $$     
+DECLARE  
+    student uuid;
+    group_id bigint;  
+    have_not_list bigint;
+    have_list bigint;
+BEGIN
+    INSERT INTO public.email_distribution_list ("type", "name", class_id) 
+    VALUES ('class', 'All students in ' || NEW.name || ' ' || NEW.semester, NEW.id);   
+    RETURN NEW; 
+END;
+$$;
+
+
+CREATE OR REPLACE TRIGGER "create_mailing_list_for_class" 
+    AFTER INSERT ON "public"."classes"
+    FOR EACH ROW
+    EXECUTE FUNCTION "public"."create_mailing_list_for_class"();
+

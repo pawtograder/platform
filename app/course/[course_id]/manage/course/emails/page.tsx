@@ -47,7 +47,7 @@ export default function EmailPage() {
             <Field.Label>Body</Field.Label>
             <Textarea onChange={(e) => setBody(e.target.value)} />
           </Field.Root>
-          <Button onClick={() => sendEmails()}>Send emails</Button>
+          <Button onClick={() => sendEmails()}>Send email</Button>
         </Fieldset.Content>
       </Fieldset.Root>
     </Box>
