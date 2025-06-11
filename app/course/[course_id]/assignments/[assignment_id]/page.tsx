@@ -119,8 +119,7 @@ export default async function AssignmentPage({
         <Box width="50%">
           <Heading size="lg">{assignment.title}</Heading>
           <HStack>
-            <Text>Due: </Text>
-            <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} />
+            <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} showDue={true} />
           </HStack>
         </Box>
       </Flex>
