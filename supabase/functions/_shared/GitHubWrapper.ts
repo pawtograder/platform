@@ -535,6 +535,7 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
   }
 }
 const staffTeamCache = new Map<string, string[]>();
+const orgMembershipCache = new Map<string, string[]>();
 export async function syncRepoPermissions(org: string, repo: string, courseSlug: string, githubUsernames: string[]) {
   console.log("syncing repo permissions", org, repo, courseSlug, githubUsernames);
   if (repo.includes("/")) {
@@ -557,6 +558,44 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
     console.log("staff team", staffGithubUsernames);
   }
   const staffTeamUsernames = staffTeamCache.get(courseSlug) || [];
+  if (!orgMembershipCache.has(org)) {
+    const orgMembers = await octokit.request("GET /orgs/{org}/members", {
+      org,
+      per_page: 100
+    });
+    orgMembershipCache.set(
+      org,
+      orgMembers.data.map((m) => m.login)
+    );
+  }
+  const orgMembers = orgMembershipCache.get(org) || [];
+  console.log(`${org} org members: ${orgMembers.join(", ")}`);
+
+  const existingInvitations = await octokit.request("GET /repos/{owner}/{repo}/invitations", {
+    owner: org,
+    repo,
+    per_page: 100
+  });
+  //Find expired invitations and re-send
+  const expiredInvitations = existingInvitations.data.filter((i) => i.expired);
+  for (const invitation of expiredInvitations) {
+    const invitee = invitation.invitee?.login;
+    if (invitee) {
+      console.log(`re-sending invitation for ${invitee}`);
+      await octokit.request("DELETE /repos/{owner}/{repo}/invitations/{invitation_id}", {
+        owner: org,
+        repo,
+        invitation_id: invitation.id
+      });
+      await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
+        owner: org,
+        repo,
+        username: invitee,
+        permission: "write"
+      });
+    }
+  }
+
   const existingAccess = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
     owner: org,
     repo,
@@ -574,8 +613,12 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
       permission: "maintain"
     });
   }
-  const newAccess = githubUsernames.filter((u) => !existingUsernames.includes(u));
-  const removeAccess = existingUsernames.filter((u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u));
+  const newAccess = githubUsernames.filter(
+    (u) => !existingUsernames.includes(u) && !existingInvitations.data.some((i) => i.invitee?.login === u)
+  );
+  const removeAccess = existingUsernames.filter(
+    (u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u) && !orgMembers.includes(u)
+  );
   for (const username of newAccess) {
     console.log(`adding collaborator ${username} to ${org}/${repo}`);
     await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
@@ -593,6 +636,7 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
       username
     });
   }
+  console.log(`${org}/${repo} updated`);
 }
 
 export async function listCommits(
