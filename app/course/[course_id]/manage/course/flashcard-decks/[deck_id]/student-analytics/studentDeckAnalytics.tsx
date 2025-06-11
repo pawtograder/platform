@@ -1,11 +1,13 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { useStudentRoster } from "@/hooks/useClassProfiles";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, HStack, Input, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import {
   ColumnDef,
+  ColumnFiltersState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
@@ -13,8 +15,7 @@ import {
   getSortedRowModel,
   Row,
   SortingState,
-  useReactTable,
-  ColumnFiltersState
+  useReactTable
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { useMemo, useState } from "react";
@@ -61,34 +62,18 @@ export default function StudentDeckAnalytics({ deckId, courseId }: StudentDeckAn
   const { data: cardsData, isLoading: isLoadingCards } = useList<FlashcardRow>({
     resource: "flashcards",
     filters: [{ field: "deck_id", operator: "eq", value: deckId }],
+    pagination: { pageSize: 1000 }, //TODO: handle loading all pages
     queryOptions: { enabled: !!deckId }
   });
 
   const { data: interactionsData, isLoading: isLoadingInteractions } = useList<FlashcardInteractionLogRow>({
     resource: "flashcard_interaction_logs",
     filters: [{ field: "deck_id", operator: "eq", value: deckId }],
-    pagination: { pageSize: 10000 },
+    pagination: { pageSize: 1000 }, //TODO: handle loading all pages
     queryOptions: { enabled: !!deckId }
   });
 
-  const { data: userRolesData, isLoading: isLoadingUserRoles } = useList<UserRoleRow>({
-    resource: "user_roles",
-    filters: [{ field: "class_id", operator: "eq", value: courseId }],
-    pagination: { pageSize: 5000 },
-    queryOptions: { enabled: !!courseId }
-  });
-
-  const profileIds = useMemo(
-    () => userRolesData?.data.map((role) => role.private_profile_id).filter(Boolean) ?? [],
-    [userRolesData]
-  );
-
-  const { data: profilesData, isLoading: isLoadingProfiles } = useList<ProfileRow>({
-    resource: "profiles",
-    filters: [{ field: "id", operator: "in", value: profileIds }],
-    pagination: { pageSize: 5000 },
-    queryOptions: { enabled: profileIds.length > 0 }
-  });
+  const students = useStudentRoster();
 
   const cardIds = useMemo(() => cardsData?.data.map((card) => card.id) ?? [], [cardsData]);
 
@@ -98,22 +83,15 @@ export default function StudentDeckAnalytics({ deckId, courseId }: StudentDeckAn
       { field: "card_id", operator: "in", value: cardIds },
       { field: "class_id", operator: "eq", value: courseId }
     ],
-    pagination: { pageSize: 10000 },
+    pagination: { pageSize: 1000 }, //TODO: handle loading all pages
     queryOptions: { enabled: cardIds.length > 0 }
   });
 
   const analyticsData = useMemo<StudentDeckMetrics[]>(() => {
-    if (
-      !interactionsData?.data ||
-      !cardsData?.data ||
-      !profilesData?.data ||
-      !userRolesData?.data ||
-      !progressData?.data
-    ) {
+    if (!interactionsData?.data || !cardsData?.data || !students || !progressData?.data) {
       return [];
     }
 
-    const profileMap = new Map(profilesData.data.map((profile) => [profile.id, profile.name]));
     const allCardsInDeckCount = cardsData.data.length;
 
     const studentProgressMap = new Map<string, StudentFlashcardDeckProgressRow[]>();
@@ -133,12 +111,9 @@ export default function StudentDeckAnalytics({ deckId, courseId }: StudentDeckAn
       studentInteractionsMap.get(log.student_id)!.push(log);
     });
 
-    const studentsInClass = userRolesData.data.filter((role) => role.role === "student");
-
-    return studentsInClass.map((userRole) => {
-      const studentId = userRole.user_id;
-      const profileId = userRole.private_profile_id;
-      const studentName = profileMap.get(profileId) || `User ${studentId}`;
+    return students.map((studentProfile) => {
+      const studentId = studentProfile.id;
+      const studentName = studentProfile.name || `User ${studentId}`;
 
       const studentProgress = studentProgressMap.get(studentId) || [];
       const masteredCount = studentProgress.filter((p) => p.is_mastered).length;
@@ -158,7 +133,7 @@ export default function StudentDeckAnalytics({ deckId, courseId }: StudentDeckAn
         returnedToDeck
       };
     });
-  }, [interactionsData, cardsData, profilesData, userRolesData, progressData]);
+  }, [interactionsData, cardsData, students, progressData]);
 
   const [sorting, setSorting] = useState<SortingState>([{ id: "studentName", desc: false }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -258,7 +233,7 @@ export default function StudentDeckAnalytics({ deckId, courseId }: StudentDeckAn
     getPageCount
   } = table;
 
-  if (isLoadingCards || isLoadingInteractions || isLoadingUserRoles || isLoadingProfiles || isLoadingProgress) {
+  if (isLoadingCards || isLoadingInteractions || isLoadingProgress || !students) {
     return <Spinner />;
   }
 
