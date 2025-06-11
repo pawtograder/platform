@@ -27,10 +27,11 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { LiveEvent, useInvalidate, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Unsubscribe } from "./useCourseController";
+import { SubmissionReviewProvider } from "./useSubmissionReview";
 
 type ListUpdateCallback<T> = (
   data: T[],
@@ -182,6 +183,7 @@ class SubmissionController {
       throw new Error(`Invalid id type ${typeof id}`);
     }
   }
+
   handleGenericDataEvent(typeName: string, event: LiveEvent) {
     const body = event.payload as unknown; // Assertion for event.payload
     const idGetter = this.genericDataTypeToId[typeName];
@@ -215,10 +217,12 @@ class SubmissionController {
         cb(allData, { entered: [body], left: [], updated: [] });
       });
     } else if (event.type === "updated") {
-      this.genericData[typeName].set(id, body);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
+      const existing = this.genericData[typeName]?.get(id);
+      const updated = existing ? { ...existing, ...(body as object) } : body;
+      this.genericData[typeName].set(id, updated);
+      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(updated));
       this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [body] })
+        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [updated] })
       );
     } else if (event.type === "deleted") {
       this.genericData[typeName].delete(id);
@@ -288,7 +292,7 @@ export function SubmissionProvider({
   return (
     <SubmissionContext.Provider value={{ submissionController: controller.current }}>
       <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
-      {ready && children}
+      {ready && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
     </SubmissionContext.Provider>
   );
 }
@@ -479,7 +483,7 @@ function SubmissionControllerCreator({
         submission_artifacts(*),
         submission_file_comments(*),
         submission_comments(*),
-        submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_criteria(*, rubric_checks(*)))),
+        submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))),
         submission_artifact_comments!submission_artifact_comments_submission_id_fkey(*)
       `.trim()
     }
@@ -488,6 +492,8 @@ function SubmissionControllerCreator({
   // Set up live subscriptions with proper event handling
   // We need these enabled to receive live events, but we'll ignore the initial data since we already loaded it
   const [liveSubscriptionsReady, setLiveSubscriptionsReady] = useState(false);
+
+  const assignmentController = useAssignmentController();
 
   useList<SubmissionFileComment>({
     resource: "submission_file_comments",
@@ -571,6 +577,7 @@ function SubmissionControllerCreator({
       submissionController.handleGenericDataEvent("submission_artifact_comments", event);
     }
   });
+  const invalidate = useInvalidate();
 
   // Process the main query data once it's loaded
   useEffect(() => {
@@ -602,9 +609,27 @@ function SubmissionControllerCreator({
         submissionController.setGeneric("submission_artifact_comments", submission_artifact_comments);
       }
 
+      const unsubscribeFromReviewAssignmentsChanges = assignmentController.getReviewAssignments((reviewAssignments) => {
+        //Make sure that we have a submission review fetched for this: it might exist but not be in the list due to RLS
+        const { data: submissionReviews } =
+          submissionController.listGenericData<SubmissionReviewWithRubric>("submission_reviews");
+        const reviewAssignmentsWithSubmissionReviews = reviewAssignments.filter((reviewAssignment) => {
+          return !submissionReviews.some((review) => review.id === reviewAssignment.submission_review_id);
+        });
+        if (reviewAssignmentsWithSubmissionReviews.length > 0) {
+          invalidate({
+            resource: "submission_reviews",
+            invalidates: ["all"]
+          });
+        }
+      });
+
       setLiveSubscriptionsReady(true);
+      return () => {
+        unsubscribeFromReviewAssignmentsChanges.unsubscribe();
+      };
     }
-  }, [query.data, query.isLoading, submissionController]);
+  }, [query.data, query.isLoading, submissionController, assignmentController, invalidate]);
 
   // Set ready when everything is loaded
   useEffect(() => {
@@ -663,6 +688,24 @@ export function useAllRubricCheckInstances(review_id: number | undefined) {
     return comments.filter((c) => c.submission_review_id === review_id);
   }, [ctx, fileComments, submissionComments, review_id]);
 
+  return filteredComments;
+}
+export function useAllCommentsForReview(review_id: number | undefined) {
+  const ctx = useContext(SubmissionContext);
+  const fileComments = useSubmissionFileComments({});
+  const submissionComments = useSubmissionComments({});
+  const artifactComments = useSubmissionArtifactComments({});
+
+  // Use useMemo to ensure the filtered result updates when comments change
+  const filteredComments = useMemo(() => {
+    if (!ctx || !review_id) {
+      return [];
+    }
+    const comments = [...fileComments, ...submissionComments, ...artifactComments];
+    const filtered = comments.filter((c) => c.submission_review_id === review_id);
+
+    return filtered;
+  }, [ctx, fileComments, submissionComments, artifactComments, review_id]);
   return filteredComments;
 }
 export function useRubricCheckInstances(check: RubricChecks, review_id: number | undefined) {
@@ -801,40 +844,35 @@ export function useSubmissionReviews() {
   }, [ctx, controller]);
   return reviews;
 }
-export function useSubmissionReview(reviewId?: number | null) {
+
+export function useSubmissionReviewOrGradingReview(reviewId?: number | null) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
   const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
 
-  let effectiveReviewId = reviewId;
-  if (effectiveReviewId === undefined || effectiveReviewId === null) {
-    if (controller?.submission?.grading_review_id) {
-      effectiveReviewId = controller.submission.grading_review_id;
-    }
-  }
-
   useEffect(() => {
-    if (!ctx || !controller || effectiveReviewId === undefined || effectiveReviewId === null) {
+    if (!ctx || !controller || (!reviewId && !ctx.submissionController.submission.grading_review_id)) {
       setReview(undefined);
       return;
     }
+    const effectiveReviewId = reviewId || ctx.submissionController.submission.grading_review_id;
 
     const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReviewWithRubric>(
       "submission_reviews",
-      effectiveReviewId,
+      effectiveReviewId ?? -1,
       (data) => {
         setReview(data);
       }
     );
     setReview(data);
     return () => unsubscribe();
-  }, [ctx, controller, effectiveReviewId]);
+  }, [ctx, controller, reviewId]);
 
-  if (!ctx) {
+  if (!ctx || !reviewId) {
     return undefined;
   }
 
-  if (effectiveReviewId === undefined || (effectiveReviewId === null && reviewId === undefined)) {
+  if (!reviewId && !ctx.submissionController.submission.grading_review_id) {
     toaster.create({
       title: "No review ID available",
       description:
@@ -1060,32 +1098,19 @@ export function useReferencedRubricCheckInstances(referencing_check_id: number |
   return allRelevantComments;
 }
 
-export function useSubmissionReviewForRubric(
-  rubricId?: number | null,
-  enabled: boolean = true
-): {
-  submissionReview: SubmissionReview | undefined;
-  isLoading: boolean;
-  error: Error | undefined;
-} {
-  const controller = useSubmissionController();
+export function useSubmissionReviewForRubric(rubricId?: number | null): SubmissionReview | undefined {
+  const ctx = useContext(SubmissionContext);
+  const controller = ctx?.submissionController;
   const submission = controller?.submission;
   const { private_profile_id } = useClassProfiles();
 
   const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState<boolean>(enabled);
-  const [error, setError] = useState<Error | undefined>(undefined);
 
   useEffect(() => {
-    if (!enabled || !rubricId || !submission || !controller || !private_profile_id) {
+    if (!rubricId || !submission || !controller || !private_profile_id) {
       setSubmissionReview(undefined);
-      setIsLoading(false);
-      setError(undefined);
       return;
     }
-
-    setIsLoading(true);
-    setError(undefined);
 
     // Try to find an existing submission review for this rubric
     const { unsubscribe, data: existingReview } = controller.getValueWithSubscription<SubmissionReview>(
@@ -1098,29 +1123,14 @@ export function useSubmissionReviewForRubric(
 
     if (existingReview) {
       setSubmissionReview(existingReview);
-      setIsLoading(false);
     } else {
-      // No existing review found - create a placeholder that will be properly created when first comment is made
-      const newReviewPlaceholder: Partial<SubmissionReview> = {
-        submission_id: submission.id,
-        rubric_id: rubricId,
-        grader: private_profile_id,
-        class_id: submission.class_id,
-        name: `Review for submission ${submission.id}`,
-        total_score: 0,
-        total_autograde_score: 0,
-        tweak: 0,
-        released: false
-        // id will be undefined until saved to database
-      };
-      setSubmissionReview(newReviewPlaceholder as SubmissionReview);
-      setIsLoading(false);
+      setSubmissionReview(undefined);
     }
 
     return () => unsubscribe();
-  }, [enabled, rubricId, submission, controller, private_profile_id]);
+  }, [rubricId, submission, controller, private_profile_id]);
 
-  return { submissionReview, isLoading, error };
+  return submissionReview;
 }
 export function useWritableReferencingRubricChecks(rubric_check_id: number | null | undefined) {
   const assignmentController = useAssignmentController();
@@ -1161,7 +1171,9 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
     }
     return submissionReviews?.filter(
       (sr) =>
-        writableRubrics.some((r) => r.id === sr.rubric_id) && (rubric_id === undefined || sr.rubric_id === rubric_id)
+        writableRubrics.some((r) => r.id === sr.rubric_id) &&
+        (rubric_id === undefined || sr.rubric_id === rubric_id) &&
+        (role.role === "instructor" || role.role == "grader" || !sr.completed_at)
     );
   }, [role, rubrics, submissionReviews, assignments, rubric_id]);
   return memoizedReviews;
