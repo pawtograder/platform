@@ -40,7 +40,7 @@ import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
-import { CommentActions, ReviewRoundTag } from "./rubric-sidebar";
+import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 
@@ -802,21 +802,30 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
           Annotate line {lineNumber} with a check:
         </Text>
 
-        <Select
-          ref={selectRef}
-          options={criteria}
-          defaultMenuIsOpen={selectedCheckOption === null}
-          escapeClearsValue={true}
-          components={components}
-          value={selectedCheckOption}
-          onChange={(e: RubricCheckSelectOption | null) => {
-            if (e) {
-              setSelectedCheckOption(e);
-            }
-          }}
-          placeholder="Select a rubric check or leave a comment..."
-          size="sm"
-        />
+        <HStack>
+          <Select
+            ref={selectRef}
+            options={criteria}
+            defaultMenuIsOpen={selectedCheckOption === null}
+            escapeClearsValue={true}
+            components={components}
+            value={selectedCheckOption}
+            onChange={(e: RubricCheckSelectOption | null) => {
+              if (e) {
+                setSelectedCheckOption(e);
+              }
+            }}
+            placeholder="Select a rubric check or leave a comment..."
+            size="sm"
+          />
+          {selectedCheckOption && selectedCheckOption.check && (
+            <StudentVisibilityIndicator
+              check={selectedCheckOption.check}
+              isApplied={true}
+              isReleased={review?.released ?? true}
+            />
+          )}
+        </HStack>
         {selectedCheckOption && (
           <>
             {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (

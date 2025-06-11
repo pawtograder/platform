@@ -582,7 +582,7 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
   );
 }
 
-function StudentVisibilityIndicator({
+export function StudentVisibilityIndicator({
   check,
   isApplied,
   isReleased
