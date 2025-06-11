@@ -21,7 +21,7 @@ import {
   PopoverTitle,
   PopoverTrigger
 } from "@/components/ui/popover";
-import { CommentActions } from "@/components/ui/rubric-sidebar";
+import { CommentActions, StudentVisibilityIndicator } from "@/components/ui/rubric-sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -259,6 +259,7 @@ function ArtifactAnnotation({
                   {commentAuthor?.name} ({reviewName})
                 </Text>
                 <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                <StudentVisibilityIndicator check={rubricCheck} isApplied={true} isReleased={comment.released} />
               </HStack>
             </Flex>
           </Box>

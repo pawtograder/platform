@@ -35,13 +35,12 @@ import {
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-import { Checkbox } from "./checkbox";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
-import { CommentActions, ReviewRoundTag } from "./rubric-sidebar";
+import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 
@@ -394,20 +393,31 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
   const hasPoints = comment.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
 
+  // Determine if this comment will be visible to students
+  const getStudentVisibilityInfo = () => {
+    if (!rubricCheck.student_visibility || rubricCheck.student_visibility === "always") {
+      return { isVisible: true, reason: "Always visible to students" };
+    }
+    if (rubricCheck.student_visibility === "never") {
+      return { isVisible: false, reason: "Never visible to students" };
+    }
+    if (rubricCheck.student_visibility === "if_applied") {
+      return { isVisible: true, reason: "Visible to students when grades are released (check was applied)" };
+    }
+    if (rubricCheck.student_visibility === "if_released") {
+      return { isVisible: true, reason: "Visible to students when grades are released" };
+    }
+    return { isVisible: true, reason: "Visible to students" };
+  };
+
+  const { isVisible: willBeVisibleToStudents } = getStudentVisibilityInfo();
+
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
         <PersonAvatar size="2xs" uid={comment.author} />
-        <VStack
-          alignItems="flex-start"
-          spaceY={0}
-          gap={0}
-          w="100%"
-          border="1px solid"
-          borderColor="border.info"
-          borderRadius="md"
-        >
-          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
+        <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
+          <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
               <HStack flexGrow={10}>
                 {!comment.eventually_visible && (
@@ -598,8 +608,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const [eventuallyVisible, setEventuallyVisible] = useState(true);
 
   const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
     resource: "submission_file_comments"
@@ -794,21 +802,30 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
           Annotate line {lineNumber} with a check:
         </Text>
 
-        <Select
-          ref={selectRef}
-          options={criteria}
-          defaultMenuIsOpen={selectedCheckOption === null}
-          escapeClearsValue={true}
-          components={components}
-          value={selectedCheckOption}
-          onChange={(e: RubricCheckSelectOption | null) => {
-            if (e) {
-              setSelectedCheckOption(e);
-            }
-          }}
-          placeholder="Select a rubric check or leave a comment..."
-          size="sm"
-        />
+        <HStack>
+          <Select
+            ref={selectRef}
+            options={criteria}
+            defaultMenuIsOpen={selectedCheckOption === null}
+            escapeClearsValue={true}
+            components={components}
+            value={selectedCheckOption}
+            onChange={(e: RubricCheckSelectOption | null) => {
+              if (e) {
+                setSelectedCheckOption(e);
+              }
+            }}
+            placeholder="Select a rubric check or leave a comment..."
+            size="sm"
+          />
+          {selectedCheckOption && selectedCheckOption.check && (
+            <StudentVisibilityIndicator
+              check={selectedCheckOption.check}
+              isApplied={true}
+              isReleased={review?.released ?? true}
+            />
+          )}
+        </HStack>
         {selectedCheckOption && (
           <>
             {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
@@ -854,17 +871,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
             ) : (
               <></>
             )}
-            {isGraderOrInstructor && (
-              <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>
-                <Checkbox
-                  checked={eventuallyVisible}
-                  onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
-                  size="sm"
-                >
-                  Visible to student when submission is released
-                </Checkbox>
-              </HStack>
-            )}
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
@@ -905,7 +911,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   released: review ? review.released : true,
                   points,
                   submission_review_id: submissionReviewId,
-                  eventually_visible: eventuallyVisible
+                  eventually_visible: selectedCheckOption.check
+                    ? selectedCheckOption.check.student_visibility !== "never"
+                    : true
                 };
                 try {
                   await createComment({ values });

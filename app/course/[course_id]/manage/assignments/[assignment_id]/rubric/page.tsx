@@ -117,7 +117,8 @@ function hydratedRubricChecksToYamlRubric(checks: HydratedRubricCheck[]): YmlRub
         artifact: valOrUndefined(check.artifact),
         max_annotations: valOrUndefined(check.max_annotations),
         points: check.points,
-        annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined
+        annotation_target: valOrUndefined(check.annotation_target) as "file" | "artifact" | undefined,
+        student_visibility: valOrUndefined(check.student_visibility)
       };
       if (check.data !== null && check.data !== undefined) {
         yamlCheck.data = check.data;
@@ -190,7 +191,8 @@ function YamlChecksToHydratedChecks(checks: YmlRubricChecksType[]): HydratedRubr
     max_annotations: valOrNull(check.max_annotations),
     points: check.points,
     is_required: check.is_required,
-    annotation_target: valOrNull(check.annotation_target)
+    annotation_target: valOrNull(check.annotation_target),
+    student_visibility: check.student_visibility || "always"
   }));
 }
 
@@ -1036,7 +1038,8 @@ function InnerRubricPage() {
           is_required: checkData.is_required,
           annotation_target: checkData.annotation_target,
           class_id: assignmentDetails.class_id,
-          rubric_criteria_id: checkData.rubric_criteria_id
+          rubric_criteria_id: checkData.rubric_criteria_id,
+          student_visibility: checkData.student_visibility || "always"
         };
         const createdCheck = await createResource({ resource: "rubric_checks", values: checkCopy });
         if (!createdCheck.data.id) throw new Error("Failed to create check");
@@ -1077,7 +1080,8 @@ function InnerRubricPage() {
       updateCheckIfChanged,
       refetchCurrentRubric,
       createMinimalNewHydratedRubric,
-      initialActiveRubricSnapshot
+      initialActiveRubricSnapshot,
+      invalidate
     ]
   );
 
@@ -1244,12 +1248,8 @@ function InnerRubricPage() {
                   <Spinner size="xl" />
                 </Center>
               )}
-              {isSaving && (
-                <Center height="calc(100vh - 150px)" width="100%">
-                  <Spinner size="xl" />
-                </Center>
-              )}
-              {!isSaving && (!isLoadingCurrentRubric || activeRubric) && (
+              {/* keep the editor mounted at all times when it is doing work, otherwise there will be a runtime error */}
+              <Box position="relative" w="100%" h="calc(100vh - 150px)">
                 <Editor
                   height="calc(100vh - 150px)"
                   width="100%"
@@ -1277,7 +1277,37 @@ function InnerRubricPage() {
                   }}
                   onChange={handleEditorChange}
                 />
-              )}
+
+                {isLoadingCurrentRubric && !activeRubric && (
+                  <Center
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    width="100%"
+                    height="100%"
+                    bg="bg.surface"
+                    opacity={0.7}
+                    zIndex={1}
+                  >
+                    <Spinner size="xl" />
+                  </Center>
+                )}
+
+                {isSaving && (
+                  <Center
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    width="100%"
+                    height="100%"
+                    bg="bg.surface"
+                    opacity={0.7}
+                    zIndex={2}
+                  >
+                    <Spinner size="xl" />
+                  </Center>
+                )}
+              </Box>
             </VStack>
           </Box>
           <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
@@ -1371,6 +1401,7 @@ parts:
             is_comment_required: true
             max_annotations: 6
             points: 2
+            student_visibility: if_applied
           - name: Missing documentation
             description: Max 10 annotations per-submission. Comment optional.
             is_annotation: true
@@ -1378,6 +1409,15 @@ parts:
             is_comment_required: false
             max_annotations: 10
             points: 2
+            student_visibility: if_released
+          - name: Internal grader note
+            description: Flag for meta-grader review - never visible to students
+            is_annotation: true
+            is_required: false
+            is_comment_required: true
+            max_annotations: 1
+            points: 0
+            student_visibility: never
       - description: This is an example of a criteria that has multiple checks, and only
           one can be selected.
         is_additive: true
@@ -1394,6 +1434,7 @@ parts:
             is_comment_required: false
             max_annotations: 1
             points: 10
+            student_visibility: always
           - name: It's mediocre
             description: Something's not quite right, the grader has added comments to
               explain
@@ -1402,6 +1443,7 @@ parts:
             is_comment_required: true
             max_annotations: 1
             points: 5
+            student_visibility: always
       - description: This is additive scoring with multiple checks. Each check has
           multiple options. Graders must select one option for each check.
         is_additive: true
@@ -1416,6 +1458,7 @@ parts:
             is_required: true
             is_comment_required: false
             points: 4
+            student_visibility: if_applied
             data:
               options:
                 - label: Satisfactory
@@ -1433,6 +1476,7 @@ parts:
             is_comment_required: false
             max_annotations: 1
             points: 4
+            student_visibility: if_applied
             data:
               options:
                 - label: Satisfactory
@@ -1460,31 +1504,37 @@ parts:
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: always
           - name: Some option 2
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: always
           - name: Some option 3
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: if_released
           - name: Some option 4
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: if_applied
           - name: Some option 5
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: if_applied
           - name: Some option 6
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: never
       - description: Some use-cases might call for having graders tick boxes to deduct
           points. This will require at least 2 and at most 4 boxes to be ticked.
         is_additive: false
@@ -1500,30 +1550,36 @@ parts:
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: always
           - name: Some option 2
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: if_released
           - name: Some option 3
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: if_applied
           - name: Some option 4
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: if_applied
           - name: Some option 5
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: never
           - name: Some option 6
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
+            student_visibility: never
 is_private: false
 `;
