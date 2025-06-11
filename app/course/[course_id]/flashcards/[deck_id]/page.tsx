@@ -123,6 +123,9 @@ export default function FlashcardsDeckPage() {
         value: true
       }
     ],
+    pagination: {
+      pageSize: 1000
+    },
     queryOptions: {
       enabled: !!user?.id && !isNaN(courseIdNum)
     }
@@ -136,7 +139,7 @@ export default function FlashcardsDeckPage() {
 
   // Update local state and initialize queue when progress data is first loaded
   useEffect(() => {
-    if (!isProgressLoading && progressData?.data && !progressLoaded) {
+    if (!isProgressLoading && progressData?.data && !progressLoaded && !isFlashcardsLoading) {
       const initialMasteredIds = new Set((progressData?.data || []).map((p) => p.card_id));
       setGotItCardIds(initialMasteredIds);
 
@@ -145,7 +148,7 @@ export default function FlashcardsDeckPage() {
       setCurrentCardIndex(0);
       setProgressLoaded(true);
     }
-  }, [isProgressLoading, progressData, flashcards, progressLoaded, masteredCardIds]);
+  }, [isProgressLoading, progressData, flashcards, progressLoaded, masteredCardIds, isFlashcardsLoading]);
 
   const gotItCards = useMemo(() => {
     return flashcards.filter((card) => gotItCardIds.has(card.id));

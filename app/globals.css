@@ -2,7 +2,8 @@
   --nav-height: 140px;
 }
 
-a, button {
+a,
+button {
   cursor: pointer;
 }
 
