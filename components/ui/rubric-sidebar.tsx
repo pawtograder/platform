@@ -996,6 +996,7 @@ export function RubricCheckGlobal({
       {isEditing && (
         <SubmissionCommentForm
           check={check}
+          submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
         />
@@ -1027,7 +1028,7 @@ function SubmissionCommentForm({
   linkedArtifactId
 }: {
   check: HydratedRubricCheck;
-  submissionReview: SubmissionReview;
+  submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
 }) {

@@ -1080,7 +1080,8 @@ function InnerRubricPage() {
       updateCheckIfChanged,
       refetchCurrentRubric,
       createMinimalNewHydratedRubric,
-      initialActiveRubricSnapshot
+      initialActiveRubricSnapshot,
+      invalidate
     ]
   );
 
@@ -1247,12 +1248,8 @@ function InnerRubricPage() {
                   <Spinner size="xl" />
                 </Center>
               )}
-              {isSaving && (
-                <Center height="calc(100vh - 150px)" width="100%">
-                  <Spinner size="xl" />
-                </Center>
-              )}
-              {!isSaving && (!isLoadingCurrentRubric || activeRubric) && (
+              {/* keep the editor mounted at all times when it is doing work, otherwise there will be a runtime error */}
+              <Box position="relative" w="100%" h="calc(100vh - 150px)">
                 <Editor
                   height="calc(100vh - 150px)"
                   width="100%"
@@ -1280,7 +1277,37 @@ function InnerRubricPage() {
                   }}
                   onChange={handleEditorChange}
                 />
-              )}
+
+                {isLoadingCurrentRubric && !activeRubric && (
+                  <Center
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    width="100%"
+                    height="100%"
+                    bg="bg.surface"
+                    opacity={0.7}
+                    zIndex={1}
+                  >
+                    <Spinner size="xl" />
+                  </Center>
+                )}
+
+                {isSaving && (
+                  <Center
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    width="100%"
+                    height="100%"
+                    bg="bg.surface"
+                    opacity={0.7}
+                    zIndex={2}
+                  >
+                    <Spinner size="xl" />
+                  </Center>
+                )}
+              </Box>
             </VStack>
           </Box>
           <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">

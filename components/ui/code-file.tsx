@@ -35,7 +35,6 @@ import {
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-import { Checkbox } from "./checkbox";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
@@ -609,8 +608,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const [eventuallyVisible, setEventuallyVisible] = useState(true);
 
   const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
     resource: "submission_file_comments"
@@ -865,17 +862,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
             ) : (
               <></>
             )}
-            {isGraderOrInstructor && selectedCheckOption.check?.student_visibility !== "never" && (
-              <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>
-                <Checkbox
-                  checked={eventuallyVisible}
-                  onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
-                  size="sm"
-                >
-                  Visible to student when submission is released
-                </Checkbox>
-              </HStack>
-            )}
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
@@ -916,7 +902,9 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   released: review ? review.released : true,
                   points,
                   submission_review_id: submissionReviewId,
-                  eventually_visible: eventuallyVisible
+                  eventually_visible: selectedCheckOption.check
+                    ? selectedCheckOption.check.student_visibility !== "never"
+                    : true
                 };
                 try {
                   await createComment({ values });
