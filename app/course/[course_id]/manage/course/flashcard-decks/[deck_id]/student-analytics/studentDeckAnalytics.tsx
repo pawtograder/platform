@@ -23,8 +23,6 @@ import { useMemo, useState } from "react";
 // Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 type FlashcardInteractionLogRow = Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"];
-type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"];
-type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type StudentFlashcardDeckProgressRow = Database["public"]["Tables"]["student_flashcard_deck_progress"]["Row"];
 
 /**

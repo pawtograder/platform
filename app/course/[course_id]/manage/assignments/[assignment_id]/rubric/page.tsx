@@ -1077,7 +1077,8 @@ function InnerRubricPage() {
       updateCheckIfChanged,
       refetchCurrentRubric,
       createMinimalNewHydratedRubric,
-      initialActiveRubricSnapshot
+      initialActiveRubricSnapshot,
+      invalidate
     ]
   );
 
