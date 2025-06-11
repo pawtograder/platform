@@ -3036,6 +3036,7 @@ export type Database = {
           ordinal: number;
           points: number;
           rubric_criteria_id: number;
+          student_visibility: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Insert: {
           annotation_target?: string | null;
@@ -3055,6 +3056,7 @@ export type Database = {
           ordinal: number;
           points: number;
           rubric_criteria_id: number;
+          student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Update: {
           annotation_target?: string | null;
@@ -3074,6 +3076,7 @@ export type Database = {
           ordinal?: number;
           points?: number;
           rubric_criteria_id?: number;
+          student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
         };
         Relationships: [
           {
@@ -4883,6 +4886,7 @@ export type Database = {
         | "deck_progress_reset_all"
         | "deck_progress_reset_card";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
+      rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -5006,7 +5010,8 @@ export const Constants = {
         "deck_progress_reset_all",
         "deck_progress_reset_card"
       ],
-      review_round: ["self-review", "grading-review", "meta-grading-review"]
+      review_round: ["self-review", "grading-review", "meta-grading-review"],
+      rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"]
     }
   }
 } as const;
