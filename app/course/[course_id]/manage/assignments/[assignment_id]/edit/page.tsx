@@ -42,9 +42,9 @@ export default function EditAssignment() {
   }, [
     queryData,
     form,
-    selfReviewSetting?.data.enabled,
+    selfReviewSetting?.data.allow_early,
     selfReviewSetting?.data.deadline_offset,
-    selfReviewSetting?.data.allow_early
+    selfReviewSetting?.data.enabled
   ]);
 
   const onFinish = useCallback(
