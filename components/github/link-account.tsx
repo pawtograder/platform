@@ -13,10 +13,11 @@ export default function LinkAccount() {
   );
 
   return (
-    <Alert w="lg" m="5" status="error">
+    <Alert width="lg" mt="5" mb="5" status="error" maxWidth="100%">
       <VStack>
         In order to use this application, you need to link your GitHub account.
         <Button
+          mr="0"
           colorPalette="gray"
           onClick={async () => {
             const { error } = await supabase.auth.linkIdentity({ provider: "github" });

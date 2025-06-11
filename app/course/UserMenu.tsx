@@ -473,28 +473,33 @@ function UserSettingsMenu() {
         <Drawer.Backdrop />
         <Drawer.Positioner>
           <Drawer.Content pt={2} pl={2} borderTopLeftRadius="md" borderWidth={1} borderColor="border.emphasized">
-            <Drawer.CloseTrigger asChild>
-              <CloseButton size="sm" position="absolute" right={4} top={4} />
-            </Drawer.CloseTrigger>
             <Drawer.Body p={2}>
               <VStack alignItems="flex-start" gap={0}>
-                <HStack pb={2}>
-                  <Avatar.Root size="sm" colorPalette="gray">
-                    <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                    <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
-                  </Avatar.Root>{" "}
-                  <VStack alignItems="flex-start" gap={0}>
-                    <Text fontWeight="bold">{privateProfile?.data.name}</Text>
-                    {gitHubUsername && (
-                      <Text fontSize="sm">
-                        GitHub:{" "}
-                        <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
-                          {gitHubUsername}
-                        </Link>
+                <HStack justifyContent="space-between" alignItems="flex-start" width="100%" pb={2}>
+                  <HStack flex={1} minWidth={0}>
+                    <Avatar.Root size="sm" colorPalette="gray">
+                      <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
+                    </Avatar.Root>
+                    <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
+                      <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
+                        {privateProfile?.data.name}
                       </Text>
-                    )}
-                  </VStack>
+                      {gitHubUsername && (
+                        <Text fontSize="sm">
+                          GitHub:{" "}
+                          <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
+                            {gitHubUsername}
+                          </Link>
+                        </Text>
+                      )}
+                    </VStack>
+                  </HStack>
+                  <Drawer.CloseTrigger asChild>
+                    <CloseButton size="sm" />
+                  </Drawer.CloseTrigger>
                 </HStack>
+
                 {!gitHubUsername && (
                   <Button
                     onClick={linkGitHub}

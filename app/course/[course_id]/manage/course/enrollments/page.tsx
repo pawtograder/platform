@@ -1,12 +1,13 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import InlineAddTag from "@/components/ui/inline-add-tag";
+import InlineAddTag, { TagAddForm } from "@/components/ui/inline-add-tag";
+import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 import PersonTags from "@/components/ui/person-tags";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
-import useTags, { useTagsForProfile } from "@/hooks/useTags";
+import useTags from "@/hooks/useTags";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
@@ -38,13 +39,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaEdit, FaFileImport, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
+import { PiArrowBendLeftUpBold } from "react-icons/pi";
 import AddSingleStudent from "./addSingleStudent";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import RemoveStudentModal from "./removeStudentModal";
-import { PiArrowBendLeftUpBold } from "react-icons/pi";
-import InlineRemoveTag from "@/components/ui/inline-remove-tag";
 
 type EditProfileModalData = string; // userId
 type EditUserRoleModalData = {
@@ -57,11 +57,6 @@ type RemoveStudentModalData = {
   userName: string | null | undefined;
   role: UserRoleWithPrivateProfileAndUser["role"];
 };
-
-function RetrieveTagsForProfile(profile_id: string) {
-  const forProf = useTagsForProfile(profile_id);
-  return forProf;
-}
 
 function EnrollmentsTable() {
   const { course_id } = useParams();
@@ -279,25 +274,10 @@ function EnrollmentsTable() {
           return profileTagNames.includes(filterValue);
         },
         cell: ({ row }) => {
-          const tagsFor = RetrieveTagsForProfile(row.original.private_profile_id);
           return (
             <Flex flexDirection={"row"} width="100%" gap="5px" wrap="wrap">
               <PersonTags profile_id={row.original.private_profile_id} showRemove />
-              <InlineAddTag
-                addTag={async (name: string, color?: string) => {
-                  await addTag({
-                    values: {
-                      name: name.startsWith("~") ? name.slice(1) : name,
-                      color: color || "gray",
-                      visible: !name.startsWith("~"),
-                      profile_id: row.original.private_profile_id,
-                      class_id: course_id as string
-                    }
-                  });
-                }}
-                currentTags={tagsFor.tags}
-                allowExpand={false}
-              />
+              <InlineAddTag profile_id={row.original.private_profile_id} allowExpand={false} />
             </Flex>
           );
         }
@@ -390,8 +370,6 @@ function EnrollmentsTable() {
       openEditUserRoleModal,
       openRemoveStudentModal,
       tagData,
-      addTag,
-      course_id,
       handleSingleCheckboxChange
     ]
   );
@@ -593,7 +571,7 @@ function EnrollmentsTable() {
                   </NativeSelectField>
                 </NativeSelect.Root>
                 {strategy === "add" && (
-                  <InlineAddTag
+                  <TagAddForm
                     addTag={async (name: string, color?: string) => {
                       checkedBoxes.forEach(async (profile) => {
                         await addTag({

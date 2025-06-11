@@ -1,13 +1,20 @@
 "use client";
+import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
-import { ActiveSubmissionsWithGradesForAssignment } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, HStack, Icon, Input, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
+import {
+  ActiveSubmissionsWithGradesForAssignment,
+  GraderResultTest,
+  RubricCheck
+} from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Button, HStack, Icon, Input, NativeSelect, Popover, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
+import { SupabaseClient } from "@supabase/supabase-js";
 import {
   type ColumnDef,
   flexRender,
@@ -16,6 +23,7 @@ import {
   getPaginationRowModel
 } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
+import Papa from "papaparse";
 import { useEffect, useMemo, useState } from "react";
 import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 
@@ -227,6 +235,7 @@ export default function AssignmentsTable() {
             >
               Unrelease All Submission Reviews
             </Button>
+            <ExportGradesButton assignment_id={Number(assignment_id)} class_id={Number(course_id)} />
           </HStack>
         )}
         <Table.Root striped>
@@ -373,5 +382,386 @@ export default function AssignmentsTable() {
         <HStack></HStack>
       </Box>
     </VStack>
+  );
+}
+
+type ExportRow = {
+  student_name?: string;
+  canvas_user_id?: number | null;
+  student_email?: string;
+  group_name?: string;
+  autograder_score?: number | null;
+  total_score?: number | null;
+  total_score_tweak?: number | null;
+  extra: {
+    github_username?: string;
+    pawtograder_link?: string;
+    github_link?: string;
+    submission_id?: string;
+    submission_date?: string;
+    grader_name?: string;
+    checker_name?: string;
+    sha?: string;
+    late_due_date?: string | null;
+    grader_sha?: string;
+    grader_action_sha?: string;
+  };
+  rubricCheckIdToScore?: Map<number, number>;
+  autograder_test_results?: GraderResultTest[];
+};
+
+async function exportGrades({
+  assignment_id,
+  supabase,
+  class_id,
+  include_rubric_checks,
+  include_repo_metadata,
+  include_score_breakdown,
+  include_submission_metadata,
+  include_autograder_test_results,
+  mode
+}: {
+  assignment_id: number;
+  class_id: number;
+  supabase: SupabaseClient<Database>;
+  include_score_breakdown: boolean;
+  include_rubric_checks: boolean;
+  include_repo_metadata: boolean;
+  include_submission_metadata: boolean;
+  include_autograder_test_results: boolean;
+  mode: "csv" | "json";
+}) {
+  const { data: latestSubmissionsWithGrades } = await supabase
+    .from("submissions_with_grades_for_assignment")
+    .select("*")
+    .eq("assignment_id", assignment_id)
+    .order("created_at", { ascending: false });
+
+  const { data: autograder_test_results, error: autograder_test_results_error } = await supabase
+    .from("grader_result_tests")
+    .select("*, submissions!inner(id, assignment_id, is_active)")
+    .eq("submissions.is_active", true)
+    .eq("submissions.assignment_id", assignment_id);
+  if (autograder_test_results_error) {
+    console.error(autograder_test_results_error);
+    throw new Error("Error fetching autograder test results");
+  }
+  const { data: roster } = await supabase
+    .from("user_roles")
+    .select("*, profiles!user_roles_private_profile_id_fkey(*), users(*)")
+    .eq("class_id", class_id)
+    .eq("role", "student");
+  if (!latestSubmissionsWithGrades || !roster) {
+    throw new Error("No submissions found");
+  }
+  const RubricCheckIDToScoreBySubmissionID = new Map<number, Map<number, number>>();
+  const allRubricChecks: RubricCheck[] = [];
+  if (include_rubric_checks) {
+    const { data: assignment } = await supabase
+      .from("assignments")
+      .select(
+        "*, rubrics!assignments_rubric_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, submission_file_comments(*), submission_comments(*), submission_artifact_comments!submission_artifact_comments_rubric_check_id_fkey(*)))))"
+      )
+      .eq("id", assignment_id)
+      .single();
+    if (!assignment) {
+      throw new Error("Assignment not found");
+    }
+    for (const rubricPart of assignment.rubrics?.rubric_parts || []) {
+      for (const rubricCriteria of rubricPart.rubric_criteria || []) {
+        for (const rubricCheck of rubricCriteria.rubric_checks) {
+          allRubricChecks.push(rubricCheck);
+          for (const submissionFileComment of rubricCheck.submission_file_comments || []) {
+            const { submission_id, points } = submissionFileComment;
+            if (points === null) {
+              continue;
+            }
+            if (!RubricCheckIDToScoreBySubmissionID.has(submission_id)) {
+              RubricCheckIDToScoreBySubmissionID.set(submission_id, new Map());
+            }
+            const mapForSubmission = RubricCheckIDToScoreBySubmissionID.get(submission_id);
+            if (mapForSubmission?.get(rubricCheck.id) === undefined) {
+              mapForSubmission?.set(rubricCheck.id, points);
+            } else {
+              mapForSubmission?.set(rubricCheck.id, mapForSubmission.get(rubricCheck.id)! + points);
+            }
+          }
+          for (const submissionArtifactComment of rubricCheck.submission_artifact_comments || []) {
+            const { submission_id, points } = submissionArtifactComment;
+            if (points === null) {
+              continue;
+            }
+            if (!RubricCheckIDToScoreBySubmissionID.has(submission_id)) {
+              RubricCheckIDToScoreBySubmissionID.set(submission_id, new Map());
+            }
+            const mapForSubmission = RubricCheckIDToScoreBySubmissionID.get(submission_id);
+            if (mapForSubmission?.get(rubricCheck.id) === undefined) {
+              mapForSubmission?.set(rubricCheck.id, points);
+            } else {
+              mapForSubmission?.set(rubricCheck.id, mapForSubmission.get(rubricCheck.id)! + points);
+            }
+          }
+          for (const submissionComment of rubricCheck.submission_comments || []) {
+            const { submission_id, points } = submissionComment;
+            if (points === null) {
+              continue;
+            }
+            if (!RubricCheckIDToScoreBySubmissionID.has(submission_id)) {
+              RubricCheckIDToScoreBySubmissionID.set(submission_id, new Map());
+            }
+            const mapForSubmission = RubricCheckIDToScoreBySubmissionID.get(submission_id);
+            if (mapForSubmission?.get(rubricCheck.id) === undefined) {
+              mapForSubmission?.set(rubricCheck.id, points);
+            } else {
+              mapForSubmission?.set(rubricCheck.id, mapForSubmission.get(rubricCheck.id)! + points);
+            }
+          }
+        }
+      }
+    }
+  }
+  const autograderTestResultsBySubmissionID = new Map<number, GraderResultTest[]>();
+  if (include_autograder_test_results) {
+    for (const autograderTestResult of autograder_test_results) {
+      if (autograderTestResult.submission_id === null) {
+        continue;
+      }
+      if (!autograderTestResultsBySubmissionID.has(autograderTestResult.submission_id)) {
+        autograderTestResultsBySubmissionID.set(autograderTestResult.submission_id, []);
+      } else {
+        autograderTestResultsBySubmissionID.get(autograderTestResult.submission_id)!.push(autograderTestResult);
+      }
+    }
+  }
+
+  const exportRows: ExportRow[] = [];
+  for (const submission of latestSubmissionsWithGrades) {
+    const rosterRow = roster.find((r) => r.private_profile_id === submission.student_private_profile_id);
+
+    const row: ExportRow = {
+      student_name: submission.name || "",
+      canvas_user_id: rosterRow?.canvas_id,
+      student_email: rosterRow?.users.email || "",
+      autograder_score: submission.autograder_score,
+      total_score: submission.total_score,
+      total_score_tweak: submission.tweak,
+      extra: {
+        github_username: rosterRow?.users.github_username || "",
+        pawtograder_link: `https://app.pawtograder.com/course/${class_id}/assignments/${assignment_id}/submissions/${submission.activesubmissionid}`,
+        submission_id: submission.activesubmissionid?.toString() || "",
+        submission_date: submission.created_at?.toString() || "",
+        grader_name: submission.gradername || "",
+        checker_name: submission.checkername || "",
+        sha: submission.sha || "",
+        late_due_date: submission.late_due_date?.toString() || "",
+        grader_sha: submission.grader_sha || "",
+        grader_action_sha: submission.grader_action_sha || "",
+        github_link: submission.repository
+          ? `https://github.com/${submission.repository}/commit/${submission.sha}`
+          : undefined
+      },
+      rubricCheckIdToScore: submission.activesubmissionid
+        ? RubricCheckIDToScoreBySubmissionID.get(submission.activesubmissionid)
+        : new Map(),
+      autograder_test_results: submission.activesubmissionid
+        ? autograderTestResultsBySubmissionID.get(submission.activesubmissionid)
+        : []
+    };
+    exportRows.push(row);
+  }
+
+  if (mode === "csv") {
+    const preparedRows = exportRows.map((row) => {
+      const record: Record<string, unknown> = {};
+      record.student_name = row.student_name;
+      record.canvas_user_id = row.canvas_user_id;
+      record.student_email = row.student_email;
+      record.group_name = row.group_name;
+      record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
+      if (include_repo_metadata) {
+        record.github_username = row.extra.github_username;
+        record.github_link = row.extra.github_link;
+        record.sha = row.extra.sha;
+      }
+      if (include_submission_metadata) {
+        record.submission_id = row.extra.submission_id;
+        record.submission_date = row.extra.submission_date;
+        record.grader_name = row.extra.grader_name;
+        record.checker_name = row.extra.checker_name;
+      }
+      if (include_score_breakdown) {
+        record.total_score_tweak_amount = row.total_score_tweak;
+        record.autograder_score = row.autograder_score;
+      }
+      if (include_autograder_test_results) {
+        for (const test of row.autograder_test_results || []) {
+          record[test.name] = test.score;
+        }
+      }
+      if (include_rubric_checks) {
+        for (const rubricCheck of allRubricChecks) {
+          record[rubricCheck.name] = row.rubricCheckIdToScore?.get(rubricCheck.id) ?? 0;
+        }
+      }
+      return record;
+    });
+    const csv = Papa.unparse(preparedRows);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `grades_${assignment_id}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } else if (mode === "json") {
+    const jsonData = exportRows.map((row) => {
+      const record: Record<string, unknown> = {};
+      record.student_name = row.student_name;
+      record.student_email = row.student_email;
+      record.canvas_user_id = row.canvas_user_id;
+      record.group_name = row.group_name;
+      record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
+      if (include_repo_metadata) {
+        record.github_username = row.extra.github_username;
+        record.github_link = row.extra.github_link;
+        record.sha = row.extra.sha;
+      }
+      if (include_submission_metadata) {
+        record.submission_id = row.extra.submission_id;
+        record.submission_date = row.extra.submission_date;
+        record.grader_name = row.extra.grader_name;
+        record.checker_name = row.extra.checker_name;
+      }
+      if (include_score_breakdown) {
+        record.total_score_tweak_amount = row.total_score_tweak;
+        record.autograder_score = row.autograder_score;
+      }
+      if (include_autograder_test_results) {
+        record.autograder_test_results = row.autograder_test_results?.map((test) => {
+          return {
+            name: test.name,
+            score: test.score,
+            max_score: test.max_score,
+            extra_data: test.extra_data
+          };
+        });
+      }
+      if (include_rubric_checks) {
+        record.rubric_check_results = allRubricChecks.map((rubricCheck) => {
+          return {
+            name: rubricCheck.name,
+            score: row.rubricCheckIdToScore?.get(rubricCheck.id) ?? 0
+          };
+        });
+      }
+      return record;
+    });
+    const json = JSON.stringify(jsonData, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `grades_${assignment_id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+}
+function ExportGradesButton({ assignment_id, class_id }: { assignment_id: number; class_id: number }) {
+  const supabase = createClient();
+  const [includeScoreBreakdown, setIncludeScoreBreakdown] = useState(true);
+  const [includeRubricChecks, setIncludeRubricChecks] = useState(true);
+  const [includeRepoMetadata, setIncludeRepoMetadata] = useState(false);
+  const [includeSubmissionMetadata, setIncludeSubmissionMetadata] = useState(false);
+  const [includeAutograderTestResults, setIncludeAutograderTestResults] = useState(true);
+
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button variant="subtle">Export Grades</Button>
+      </Popover.Trigger>
+      <Popover.Positioner>
+        <Popover.Content>
+          <Popover.Arrow>
+            <Popover.ArrowTip />
+          </Popover.Arrow>
+          <Popover.Body>
+            <VStack align="start" gap={2}>
+              <Checkbox
+                checked={includeScoreBreakdown}
+                onCheckedChange={(details) => setIncludeScoreBreakdown(details.checked === true)}
+              >
+                Include Score Breakdown
+              </Checkbox>
+              <Checkbox
+                checked={includeRubricChecks}
+                onCheckedChange={(details) => setIncludeRubricChecks(details.checked === true)}
+              >
+                Include Rubric Checks
+              </Checkbox>
+              <Checkbox
+                checked={includeAutograderTestResults}
+                onCheckedChange={(details) => setIncludeAutograderTestResults(details.checked === true)}
+              >
+                Include Autograder Test Results
+              </Checkbox>
+              <Checkbox
+                checked={includeRepoMetadata}
+                onCheckedChange={(details) => setIncludeRepoMetadata(details.checked === true)}
+              >
+                Include Repo Metadata
+              </Checkbox>
+              <Checkbox
+                checked={includeSubmissionMetadata}
+                onCheckedChange={(details) => setIncludeSubmissionMetadata(details.checked === true)}
+              >
+                Include Submission Metadata
+              </Checkbox>
+              <HStack w="100%" justifyContent="center" gap={2}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  colorPalette="green"
+                  onClick={() =>
+                    exportGrades({
+                      assignment_id,
+                      class_id,
+                      supabase,
+                      include_score_breakdown: includeScoreBreakdown,
+                      include_rubric_checks: includeRubricChecks,
+                      include_repo_metadata: includeRepoMetadata,
+                      include_submission_metadata: includeSubmissionMetadata,
+                      include_autograder_test_results: includeAutograderTestResults,
+                      mode: "csv"
+                    })
+                  }
+                >
+                  CSV
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  colorPalette="green"
+                  onClick={() =>
+                    exportGrades({
+                      assignment_id,
+                      class_id,
+                      supabase,
+                      include_score_breakdown: includeScoreBreakdown,
+                      include_rubric_checks: includeRubricChecks,
+                      include_repo_metadata: includeRepoMetadata,
+                      include_submission_metadata: includeSubmissionMetadata,
+                      include_autograder_test_results: includeAutograderTestResults,
+                      mode: "json"
+                    })
+                  }
+                >
+                  JSON
+                </Button>
+              </HStack>
+            </VStack>
+          </Popover.Body>
+        </Popover.Content>
+      </Popover.Positioner>
+    </Popover.Root>
   );
 }
