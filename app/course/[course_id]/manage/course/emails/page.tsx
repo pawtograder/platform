@@ -16,7 +16,8 @@ import {
   Input,
   Skeleton,
   Tabs,
-  Textarea
+  Textarea,
+  Box
 } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
