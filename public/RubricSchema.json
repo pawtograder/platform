@@ -29,20 +29,30 @@
           "type": "string"
         },
         "data": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/{[key:string]:Json|undefined;}"
-            },
-            {
+          "additionalProperties": false,
+          "properties": {
+            "options": {
               "items": {
-                "$ref": "#/definitions/Json"
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "points": {
+                    "type": "number"
+                  }
+                },
+                "required": ["label", "points"],
+                "type": "object"
               },
               "type": "array"
-            },
-            {
-              "type": ["null", "string", "number", "boolean"]
             }
-          ]
+          },
+          "required": ["options"],
+          "type": "object"
         },
         "description": {
           "type": "string"
