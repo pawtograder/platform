@@ -118,7 +118,8 @@ export default function BulkCreateGroup({
     // shuffle ungrouped profiles
     for (let i = ungroupedProfiles.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j], ungroupedProfiles[i]];
+      // Swap profiles (indexes are in-bounds, so non-null assertions are safe)
+      [ungroupedProfiles[i], ungroupedProfiles[j]] = [ungroupedProfiles[j]!, ungroupedProfiles[i]!];
     }
     const tagMap = new Map<string, string[]>();
     const noTagKey = crypto.randomUUID();
@@ -164,7 +165,8 @@ export default function BulkCreateGroup({
       // divide extra profiles evenly across groups of that category
       while (index < tagGroup.length && newGroups.length > 0) {
         const createdGroup: GroupCreateData = newGroups.pop()!;
-        createdGroup?.member_ids.push(tagGroup[index]);
+        // Index is within bounds => tagGroup[index] is defined
+        createdGroup.member_ids.push(tagGroup[index]!);
         newGroups.push(createdGroup);
         index += 1;
       }

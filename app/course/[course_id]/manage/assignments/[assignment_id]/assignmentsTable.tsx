@@ -443,8 +443,7 @@ async function exportGrades({
     .eq("submissions.is_active", true)
     .eq("submissions.assignment_id", assignment_id);
   if (autograder_test_results_error) {
-    console.error(autograder_test_results_error);
-    throw new Error("Error fetching autograder test results");
+    throw new Error("Error fetching autograder test results: " + autograder_test_results_error);
   }
   const { data: roster } = await supabase
     .from("user_roles")
@@ -573,25 +572,25 @@ async function exportGrades({
   if (mode === "csv") {
     const preparedRows = exportRows.map((row) => {
       const record: Record<string, unknown> = {};
-      record.student_name = row.student_name;
-      record.canvas_user_id = row.canvas_user_id;
-      record.student_email = row.student_email;
-      record.group_name = row.group_name;
-      record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
+      record["student_name"] = row.student_name;
+      record["canvas_user_id"] = row.canvas_user_id;
+      record["student_email"] = row.student_email;
+      record["group_name"] = row.group_name;
+      record["total_score"] = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
       if (include_repo_metadata) {
-        record.github_username = row.extra.github_username;
-        record.github_link = row.extra.github_link;
-        record.sha = row.extra.sha;
+        record["github_username"] = row.extra.github_username;
+        record["github_link"] = row.extra.github_link;
+        record["sha"] = row.extra.sha;
       }
       if (include_submission_metadata) {
-        record.submission_id = row.extra.submission_id;
-        record.submission_date = row.extra.submission_date;
-        record.grader_name = row.extra.grader_name;
-        record.checker_name = row.extra.checker_name;
+        record["submission_id"] = row.extra.submission_id;
+        record["submission_date"] = row.extra.submission_date;
+        record["grader_name"] = row.extra.grader_name;
+        record["checker_name"] = row.extra.checker_name;
       }
       if (include_score_breakdown) {
-        record.total_score_tweak_amount = row.total_score_tweak;
-        record.autograder_score = row.autograder_score;
+        record["total_score_tweak_amount"] = row.total_score_tweak;
+        record["autograder_score"] = row.autograder_score;
       }
       if (include_autograder_test_results) {
         for (const test of row.autograder_test_results || []) {
@@ -616,28 +615,28 @@ async function exportGrades({
   } else if (mode === "json") {
     const jsonData = exportRows.map((row) => {
       const record: Record<string, unknown> = {};
-      record.student_name = row.student_name;
-      record.student_email = row.student_email;
-      record.canvas_user_id = row.canvas_user_id;
-      record.group_name = row.group_name;
-      record.total_score = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
+      record["student_name"] = row.student_name;
+      record["student_email"] = row.student_email;
+      record["canvas_user_id"] = row.canvas_user_id;
+      record["group_name"] = row.group_name;
+      record["total_score"] = (row.total_score ?? 0) + (row.total_score_tweak ?? 0);
       if (include_repo_metadata) {
-        record.github_username = row.extra.github_username;
-        record.github_link = row.extra.github_link;
-        record.sha = row.extra.sha;
+        record["github_username"] = row.extra.github_username;
+        record["github_link"] = row.extra.github_link;
+        record["sha"] = row.extra.sha;
       }
       if (include_submission_metadata) {
-        record.submission_id = row.extra.submission_id;
-        record.submission_date = row.extra.submission_date;
-        record.grader_name = row.extra.grader_name;
-        record.checker_name = row.extra.checker_name;
+        record["submission_id"] = row.extra.submission_id;
+        record["submission_date"] = row.extra.submission_date;
+        record["grader_name"] = row.extra.grader_name;
+        record["checker_name"] = row.extra.checker_name;
       }
       if (include_score_breakdown) {
-        record.total_score_tweak_amount = row.total_score_tweak;
-        record.autograder_score = row.autograder_score;
+        record["total_score_tweak_amount"] = row.total_score_tweak;
+        record["autograder_score"] = row.autograder_score;
       }
       if (include_autograder_test_results) {
-        record.autograder_test_results = row.autograder_test_results?.map((test) => {
+        record["autograder_test_results"] = row.autograder_test_results?.map((test) => {
           return {
             name: test.name,
             score: test.score,
@@ -647,7 +646,7 @@ async function exportGrades({
         });
       }
       if (include_rubric_checks) {
-        record.rubric_check_results = allRubricChecks.map((rubricCheck) => {
+        record["rubric_check_results"] = allRubricChecks.map((rubricCheck) => {
           return {
             name: rubricCheck.name,
             score: row.rubricCheckIdToScore?.get(rubricCheck.id) ?? 0
