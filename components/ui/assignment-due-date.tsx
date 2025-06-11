@@ -3,7 +3,7 @@
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
-import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
+import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, isAfter } from "date-fns";
@@ -176,27 +176,38 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 export function AssignmentDueDate({
   assignment,
   showLateTokenButton = false,
-  showTimeZone = false
+  showTimeZone = false,
+  showDue = false
 }: {
   assignment: Assignment;
   showLateTokenButton?: boolean;
   showTimeZone?: boolean;
+  showDue?: boolean;
 }) {
   const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment);
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
   return (
-    <HStack gap={1}>
-      <Text>{formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}</Text>
-      {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
-      {hoursExtended > 0 && (
-        <Text>
-          ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
+    <Flex gap={1} wrap="wrap" maxWidth="100%">
+      <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
+        {showDue && <Text flexShrink={0}>Due: </Text>}
+        <Text minWidth={0}>
+          {formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}
         </Text>
-      )}
-      {showLateTokenButton && <LateTokenButton assignment={assignment} />}
-    </HStack>
+        {showTimeZone && (
+          <Text fontSize="sm" flexShrink={0}>
+            ({time_zone})
+          </Text>
+        )}
+        {hoursExtended > 0 && (
+          <Text>
+            ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
+          </Text>
+        )}
+        {showLateTokenButton && <LateTokenButton assignment={assignment} />}
+      </Flex>
+    </Flex>
   );
 }
 
