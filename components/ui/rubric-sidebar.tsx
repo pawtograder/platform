@@ -766,7 +766,7 @@ export function RubricCheckGlobal({
   const hasOptions = isRubricCheckDataWithOptions(check.data) && check.data.options.length > 0;
   const _selectedOptionIndex =
     hasOptions && rubricCheckComments.length == 1 && isRubricCheckDataWithOptions(check.data)
-      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
+      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0]?.points)
       : undefined;
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
   useEffect(() => {
