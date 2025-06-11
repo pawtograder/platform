@@ -3,7 +3,7 @@ import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assig
 import { AssignmentProvider, useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
 import { useAssignmentDueDate } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, Heading, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { addHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
@@ -102,13 +102,19 @@ function SelfReviewNoticeInner({
             passes and will be <strong>due {review_settings?.deadline_offset} hours later.</strong>
           </Text>
           {review_settings && review_settings.allow_early && (
-            <HStack mt="2" w="100%">
+            <Flex
+              mt="2"
+              w="100%"
+              justifyContent={"space-between"}
+              alignItems={"center"}
+              flexDir={{ base: "column", md: "row" }}
+            >
               <Text fontSize="sm" color="fg.muted">
                 If you are done with your submission, you can finalize it early to be able to submit your self-review
                 early.
               </Text>
               <FinalizeSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} />
-            </HStack>
+            </Flex>
           )}
         </VStack>
       ) : (

@@ -4,6 +4,8 @@ import { createContext, useContext, useState } from "react";
 export type GroupCreateData = {
   name: string;
   member_ids: string[];
+  tagName?: string;
+  tagColor?: string;
 };
 
 export type StudentMoveData = {

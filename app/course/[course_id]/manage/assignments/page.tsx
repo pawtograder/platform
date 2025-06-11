@@ -16,7 +16,8 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
   const assignments = await client
     .from("assignments")
     .select("*, submissions(profile_id, assignment_group_id), classes(time_zone)")
-    .eq("class_id", Number(course_id));
+    .eq("class_id", Number(course_id))
+    .order("due_date", { ascending: false });
 
   let actions = <></>;
   actions = (
