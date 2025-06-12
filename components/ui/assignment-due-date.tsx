@@ -30,15 +30,15 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   });
   const groupOrProfileFilter: CrudFilter = assignment_group_id
     ? {
-      field: "assignment_group_id",
-      operator: "eq",
-      value: assignment_group_id
-    }
+        field: "assignment_group_id",
+        operator: "eq",
+        value: assignment_group_id
+      }
     : {
-      field: "student_id",
-      operator: "eq",
-      value: private_profile_id
-    };
+        field: "student_id",
+        operator: "eq",
+        value: private_profile_id
+      };
 
   const { data: exceptionsForProfile } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
