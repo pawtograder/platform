@@ -33,20 +33,32 @@ interaction_agg AS (
         COUNT(*) FILTER (WHERE fil.action = 'card_returned_to_deck')     AS returned_to_deck
     FROM public.flashcard_interaction_logs AS fil
     GROUP BY fil.class_id, fil.deck_id, fil.student_id
+),
+private_names AS (
+    SELECT ur.user_id, ur.class_id, pr.name
+    FROM public.user_roles ur
+    JOIN public.profiles pr ON pr.id = ur.private_profile_id
 )
 SELECT
-    p.student_profile_id,
-    p.class_id,
-    p.deck_id,
-    pr.name, -- student display name
-    p.mastered_count,
-    (p.total_cards - p.mastered_count)          AS not_mastered_count,
-    COALESCE(i.prompt_views, 0)                 AS prompt_views,
-    COALESCE(i.answer_views, 0)                 AS answer_views,
-    COALESCE(i.returned_to_deck, 0)             AS returned_to_deck
+    COALESCE(p.student_profile_id, i.student_profile_id) AS student_profile_id,
+    COALESCE(p.class_id, i.class_id)                     AS class_id,
+    COALESCE(p.deck_id,  i.deck_id)                      AS deck_id,
+    COALESCE(pn.name, 'User ' || LEFT(COALESCE(p.student_profile_id, i.student_profile_id)::text, 8)) AS name,
+    COALESCE(p.mastered_count, 0)                        AS mastered_count,
+    COALESCE(p.total_cards, 0) - COALESCE(p.mastered_count, 0) AS not_mastered_count,
+    COALESCE(i.prompt_views, 0)                          AS prompt_views,
+    COALESCE(i.answer_views, 0)                          AS answer_views,
+    COALESCE(i.returned_to_deck, 0)                      AS returned_to_deck
 FROM progress_agg p
-LEFT JOIN interaction_agg               AS i  USING (class_id, deck_id, student_profile_id)
-LEFT JOIN public.profiles               AS pr ON pr.id = p.student_profile_id;
+FULL JOIN interaction_agg               AS i
+       ON p.class_id = i.class_id
+      AND p.deck_id  = i.deck_id
+      AND p.student_profile_id = i.student_profile_id
+LEFT JOIN private_names          AS pn
+       ON pn.user_id = COALESCE(p.student_profile_id, i.student_profile_id)
+      AND pn.class_id = COALESCE(p.class_id, i.class_id)
+LEFT JOIN public.profiles               AS pr
+       ON false;
 
 -- -----------------------------------------------------------------
 -- View: flashcard_deck_analytics
@@ -75,12 +87,17 @@ DROP VIEW IF EXISTS public.flashcard_student_card_analytics;
 
 CREATE OR REPLACE VIEW public.flashcard_student_card_analytics
 WITH (security_invoker = TRUE) AS
+WITH private_names AS (
+    SELECT ur.user_id, ur.class_id, pr.name
+    FROM public.user_roles ur
+    JOIN public.profiles pr ON pr.id = ur.private_profile_id
+)
 SELECT
     fil.class_id,
     fil.deck_id,
     fil.card_id,
     fil.student_id          AS student_profile_id,
-    pr.name                 AS student_name,
+    pn.name                 AS student_name,
 
     COUNT(*) FILTER (WHERE fil.action = 'card_prompt_viewed')            AS prompt_views,
     COUNT(*) FILTER (WHERE fil.action = 'card_answer_viewed')            AS answer_views,
@@ -92,8 +109,8 @@ SELECT
     AVG(CASE WHEN fil.action = 'card_marked_got_it'        THEN fil.duration_on_card_ms END) AS avg_got_it_time_ms,
     AVG(CASE WHEN fil.action = 'card_marked_keep_trying'   THEN fil.duration_on_card_ms END) AS avg_keep_trying_time_ms
 FROM public.flashcard_interaction_logs AS fil
-LEFT JOIN public.profiles pr ON pr.id = fil.student_id
-GROUP BY fil.class_id, fil.deck_id, fil.card_id, fil.student_id, pr.name;
+LEFT JOIN private_names pn ON pn.user_id = fil.student_id AND pn.class_id = fil.class_id
+GROUP BY fil.class_id, fil.deck_id, fil.card_id, fil.student_id, pn.name;
 
 -- -----------------------------------------------------------------
 -- View: flashcard_card_analytics

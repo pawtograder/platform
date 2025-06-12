@@ -4669,36 +4669,7 @@ export type Database = {
           returned_to_deck: number | null;
           student_profile_id: string | null;
         };
-        Relationships: [
-          {
-            foreignKeyName: "flashcards_deck_id_fkey";
-            columns: ["deck_id"];
-            isOneToOne: false;
-            referencedRelation: "flashcard_deck_analytics";
-            referencedColumns: ["deck_id"];
-          },
-          {
-            foreignKeyName: "flashcards_deck_id_fkey";
-            columns: ["deck_id"];
-            isOneToOne: false;
-            referencedRelation: "flashcard_decks";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "student_flashcard_deck_progress_student_id_fkey";
-            columns: ["student_profile_id"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
-          }
-        ];
+        Relationships: [];
       };
       submissions_agg: {
         Row: {
