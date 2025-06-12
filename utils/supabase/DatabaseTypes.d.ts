@@ -572,3 +572,11 @@ export type SelfReviewSettings = GetResult<
   Database["public"]["Tables"]["assignment_self_review_settings"]["Relationships"],
   "*"
 >;
+
+export type ReviewAssignments = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["review_assignments"]["Row"],
+  "review_assignments",
+  Database["public"]["Tables"]["review_assignments"]["Relationships"],
+  "*"
+>;

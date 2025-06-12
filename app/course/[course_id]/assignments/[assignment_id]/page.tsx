@@ -1,14 +1,24 @@
+"use client";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
-import { Repository, SelfReviewSettings, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { createClient } from "@/utils/supabase/server";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import {
+  Assignment,
+  Repository,
+  SelfReviewSettings,
+  SubmissionWithGraderResultsAndReview,
+  UserRole,
+  UserRoleWithCourse
+} from "@/utils/supabase/DatabaseTypes";
+import { useParams } from "next/navigation";
+import useAuthState from "@/hooks/useAuthState";
+import { CrudFilter, useList } from "@refinedev/core";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {
@@ -49,66 +59,107 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
     </VStack>
   );
 }
-export default async function AssignmentPage({
-  params
-}: {
-  params: Promise<{ course_id: string; assignment_id: string }>;
-}) {
-  const { course_id, assignment_id } = await params;
-  const client = await createClient();
-  const {
-    data: { user }
-  } = await client.auth.getUser();
-  if (!user) {
-    return <div>You are not logged in</div>;
+export default function AssignmentPage() {
+  const { course_id, assignment_id } = useParams();
+  const { user } = useAuthState();
+  const { data: enrollmentData } = useList<UserRoleWithCourse>({
+    resource: "user_roles",
+    meta: {
+      select: "*, classes(time_zone)",
+      limit: 1
+    },
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "user_id", operator: "eq", value: user?.id }
+    ],
+    queryOptions: {
+      enabled: !!user
+    }
+  });
+  const enrollment = enrollmentData && enrollmentData.data.length > 0 ? enrollmentData.data[0] : null;
+
+  const { data: assignmentData } = useList<Assignment>({
+    resource: "assignments",
+    meta: {
+      select: "*",
+      limit: 1
+    },
+    filters: [
+      {
+        field: "id",
+        operator: "eq",
+        value: assignment_id
+      }
+    ]
+  });
+  const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
+    resource: "submissions",
+    meta: {
+      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)",
+      order: "created_at, { ascending: false }"
+    },
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
+    sorters: [
+      {
+        field: "created_at",
+        order: "desc"
+      }
+    ]
+  });
+  const { data: groupData } = useList({
+    resource: "assignment_groups_members",
+    meta: {
+      select: "*, assignment_groups!id(*)"
+    },
+    filters: [
+      {
+        field: "assignment_id",
+        operator: "eq",
+        value: assignment_id
+      },
+      {
+        field: "profile_id",
+        operator: "eq",
+        value: enrollment?.private_profile_id
+      }
+    ],
+    queryOptions: {
+      enabled: assignmentData?.data[0].group_config !== "individual" && !!enrollment?.private_profile_id
+    }
+  });
+
+  const assignment_group_id: number | undefined =
+    groupData && groupData.data.length > 0 ? groupData.data[0].assignment_group_id : null;
+
+  const filters: CrudFilter[] = [{ field: "assignment_id", operator: "eq", value: assignment_id }];
+  if (assignment_group_id) {
+    filters.push({ field: "assignment_group_id", operator: "eq", value: assignment_group_id });
+  } else if (enrollment?.private_profile_id) {
+    filters.push({ field: "profile_id", operator: "eq", value: enrollment?.private_profile_id });
   }
-  const { data: enrollment } = await client
-    .from("user_roles")
-    .select("*, classes(time_zone)")
-    .eq("class_id", Number.parseInt(course_id))
-    .eq("user_id", user.id)
-    .single();
-  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
-  const { data: assignment } = await client
-    .from("assignments")
-    .select("*")
-    .eq("id", Number.parseInt(assignment_id))
-    .single();
-  if (!assignment) {
+  const { data: repositoriesData } = useList<Repository>({ resource: "repositories", filters });
+
+  const { data: reviewSettingsData } = useList<SelfReviewSettings>({
+    resource: "assignment_self_review_settings",
+    meta: {
+      select: "*",
+      limit: 1
+    },
+    filters: [{ field: "id", operator: "eq", value: assignmentData?.data[0].self_review_setting_id }],
+    queryOptions: {
+      enabled: !!assignmentData && assignmentData.data.length !== 0
+    }
+  });
+
+  if (!assignmentData || assignmentData.data.length === 0) {
     return <div>Assignment not found</div>;
   }
 
-  const { data: submissions } = await client
-    .from("submissions")
-    .select("*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)")
-    .eq("assignment_id", Number.parseInt(assignment_id))
-    .order("created_at", { ascending: false });
-
-  let assignment_group_id: number | undefined;
-  if (assignment.group_config !== "individual" && enrollment?.private_profile_id) {
-    const { data: group } = await client
-      .from("assignment_groups_members")
-      .select("*, assignment_groups!id(*)")
-      .eq("assignment_id", Number.parseInt(assignment_id))
-      .eq("profile_id", enrollment.private_profile_id)
-      .single();
-    assignment_group_id = group?.assignment_group_id;
-  }
-  const { data: repositories } = await client
-    .from("repositories")
-    .select("*")
-    .eq("assignment_id", Number.parseInt(assignment_id))
-    .or(
-      assignment_group_id
-        ? `assignment_group_id.eq.${assignment_group_id},profile_id.eq.${enrollment?.private_profile_id}`
-        : `profile_id.eq.${enrollment?.private_profile_id}`
-    );
-
-  const { data: review_settings } = await client
-    .from("assignment_self_review_settings")
-    .select("*")
-    .eq("id", assignment.self_review_setting_id)
-    .single();
+  const assignment = assignmentData.data[0];
+  const repositories = repositoriesData?.data;
+  const submissions = submissionsData?.data;
+  const review_settings = reviewSettingsData && reviewSettingsData.data.length > 0 ? reviewSettingsData.data[0] : null;
+  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
 
   if (!enrollment) {
     return <Skeleton height="40" width="100%" />;
