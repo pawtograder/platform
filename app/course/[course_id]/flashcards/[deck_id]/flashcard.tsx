@@ -157,24 +157,33 @@ export default function Flashcard({
             pointerEvents: showAnswer ? "auto" : "none"
           }}
         >
-          <Button
-            onClick={onBackToQuestion}
-            size={{ base: "sm", md: "md" }}
-            position="absolute"
-            variant="outline"
-            top={{ base: "1rem", md: "1.5rem" }}
-            right={{ base: "1rem", md: "1.5rem" }}
-            aria-label="Back to question"
-          >
-            <MdReplay />
-            <Box as="span" display={{ base: "none", md: "inline" }} ml={2}>
-              Back to Question
-            </Box>
-          </Button>
-          <Card.Header p={0}>
-            <Text fontWeight="semibold" fontSize={{ base: "xl", md: "4xl" }} lineHeight="1.2" textAlign="center">
+          <Card.Header p={0} pr={{ base: "6rem", md: "9rem" }} position="relative">
+            <Text
+              fontWeight="semibold"
+              fontSize={{ base: "xl", md: "4xl" }}
+              lineHeight="1.2"
+              textAlign="center"
+              w="full"
+              px={2}
+              wordBreak="break-word"
+            >
               Answer: {currentCard.title}
             </Text>
+            <Button
+              onClick={onBackToQuestion}
+              size={{ base: "sm", md: "md" }}
+              variant="outline"
+              aria-label="Back to question"
+              position="absolute"
+              right={0}
+              top="50%"
+              transform="translateY(-50%)"
+            >
+              <MdReplay />
+              <Box as="span" display={{ base: "none", md: "inline" }} ml={2}>
+                Back to Question
+              </Box>
+            </Button>
           </Card.Header>
 
           <Card.Body p={3} flex={1} display="flex" flexDirection="column" minHeight={0}>

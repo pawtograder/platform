@@ -324,8 +324,37 @@ export default function FlashcardsDeckPage() {
   ]);
 
   const handleBackToQuestion = useCallback(() => {
+    if (!currentCard || !user?.id) {
+      return;
+    }
+
+    // Flip back to the question side
     setShowAnswer(false);
-  }, []);
+
+    // Reset timers so that subsequent answer view duration is measured accurately
+    const now = Date.now();
+    setPromptViewTimestamp(now);
+    setAnswerViewTimestamp(0);
+
+    // Log a fresh prompt-view event so analytics reflect this second look at the question
+    supabase
+      .rpc("log_flashcard_interaction", {
+        p_action: "card_prompt_viewed",
+        p_class_id: courseIdNum,
+        p_deck_id: deckIdNum,
+        p_student_id: user.id,
+        p_card_id: currentCard.id,
+        p_duration_on_card_ms: 0
+      })
+      .then(({ error }) => {
+        if (error) {
+          toaster.error({
+            title: "Failed to log flashcard interaction",
+            description: "Error: " + error.message
+          });
+        }
+      });
+  }, [currentCard, user?.id, courseIdNum, deckIdNum, supabase]);
 
   // Handle "Keep Trying" action - move current card to back of queue
   const handleKeepTrying = useCallback(() => {
