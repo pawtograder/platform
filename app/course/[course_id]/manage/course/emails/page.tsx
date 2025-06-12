@@ -1,12 +1,16 @@
 "use client";
-import { Assignment, Tag } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Button, Field, Fieldset, Text, Heading, Input, Textarea, Box, Flex, Card } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
-import { useState } from "react";
+import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
+import {
+  CreatableSelect,
+} from "chakra-react-select";
+
 import {
   AssignmentEmailInfo,
   EmailCreateData,
@@ -16,6 +20,7 @@ import {
   useEmailManagement
 } from "./context";
 import { IoMdClose } from "react-icons/io";
+import { toaster } from "@/components/ui/toaster";
 
 enum Audience {
   All = "all",
@@ -28,13 +33,14 @@ enum Audience {
   NotSubmitted = "notSubmitted"
 }
 
-function Page() {
+function EmailsInnerPage() {
   const { course_id } = useParams();
   const [choice, setChoice] = useState<Audience>();
   const [assignment, setAssignment] = useState<Assignment>();
   const [tag, setTag] = useState<Tag>();
   const [subjectLine, setSubjectLine] = useState<string>("");
   const [body, setBody] = useState<string>("");
+  const [ccList, setCcList] = useState<string[]>([]);
 
   const options = [
     { label: "Students who have submitted an assignment", value: Audience.Submitted },
@@ -68,36 +74,30 @@ function Page() {
       }, new Map())
       .values()
   );
-  const emailToAudienceText = (email: EmailCreateData) => {
-    if (email.audience.type === "assignment") {
-      return "Students who have " + email.audience.submissionType + " " + email.audience.assignment.title;
-    } else if (email.audience.type === "tag") {
-      return "Anyone who is tagged with " + <TagDisplay tag={email.audience.tag} />;
-    } else if (email.audience.type === "general") {
-      let str = "";
-      if (email.audience.includeInstructors) {
-        str += "Instructors ";
-      }
-      if (email.audience.includeGraders) {
-        str += "Graders ";
-      }
-      if (email.audience.includeStudents) {
-        str += "Students";
-      }
-      return str;
+
+  const {data: emailData} = useList({
+    resource: "users",
+    meta: {
+      select: "email"
     }
-    return "No audience selected";
-  };
+  })
+  const emails = emailData?.data.map((item) => item.email);
 
   const prepareMail = () => {
     let audience: AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
     switch (choice) {
       case Audience.Submitted:
-        if (!assignment) return;
+        if(!assignment) {
+          toaster.error({title:"Failed to find assignment"});
+          return;
+        }
         audience = { type: "assignment", assignment: assignment, submissionType: "submitted" };
         break;
       case Audience.NotSubmitted:
-        if (!assignment) return;
+        if(!assignment) {
+          toaster.error({title:"Failed to find assignment"});
+          return;
+        }
         audience = { type: "assignment", assignment: assignment, submissionType: "not submitted" };
         break;
       case Audience.All:
@@ -116,13 +116,29 @@ function Page() {
         audience = { type: "general", includeInstructors: true, includeStudents: false, includeGraders: false };
         break;
       case Audience.Tag:
-        if (!tag) return;
+        if(!tag) {
+          toaster.error({title:"Failed to find tag"});
+          return;
+        }
         audience = { type: "tag", tag: tag };
       default:
         return;
     }
-    setEmailsToCreate([...emailsToCreate, { subject: subjectLine, body: body, cc_emails: [], audience: audience }]);
+    setEmailsToCreate([...emailsToCreate, { subject: subjectLine, body: body, cc_emails: ccList, audience: audience }]);
   };
+
+  
+
+  useEffect(() => {
+    // clear form once emailsToCreate has been properly updated
+    setSubjectLine("");
+    setBody("");
+    setCcList([]);
+    setChoice(undefined);
+    setTag(undefined);
+    setAssignment(undefined);
+
+  }, [emailsToCreate])
 
   return (
     <>
@@ -135,7 +151,9 @@ function Page() {
             <Fieldset.Content>
               <Field.Root>
                 <Field.Label>Select audience</Field.Label>
-                <Select onChange={(e) => (e ? setChoice(e.value) : null)} options={options} />
+                <Select 
+                isClearable={true}
+                onChange={(e) => {if(e){ setChoice(e.value)}}} options={options} />
               </Field.Root>
               {choice && (choice === Audience.NotSubmitted || choice == Audience.Submitted) && (
                 <Field.Root>
@@ -173,15 +191,25 @@ function Page() {
               )}
               <Field.Root>
                 <Field.Label>Cc</Field.Label>
-                <Input onChange={(e) => setSubjectLine(e.target.value)} />
+                <CreatableSelect
+                  value={ccList.map((item) => ({ label: item, value: item }))}
+                  onChange={(e) => setCcList(Array.from(e?.map((item) => item.value.toString()) || []))}
+                  isMulti={true}
+                  options={emails?.map((a: string) => ({ label: a, value: a }))}
+                  placeholder="Select or type email addresses..."
+                />
               </Field.Root>
               <Field.Root>
                 <Field.Label>Subject</Field.Label>
-                <Input onChange={(e) => setSubjectLine(e.target.value)} />
+                <Input
+                 value={subjectLine}
+                 onChange={(e) => setSubjectLine(e.target.value)} />
               </Field.Root>
               <Field.Root>
                 <Field.Label>Body</Field.Label>
-                <Textarea onChange={(e) => setBody(e.target.value)} />
+                <Textarea 
+                value={body}
+                onChange={(e) => setBody(e.target.value)} />
               </Field.Root>
               <Field.Root>
                 <Flex gap="2" alignItems="center">
@@ -198,7 +226,97 @@ function Page() {
             </Fieldset.Content>
           </Fieldset.Root>
         </Box>
-        <Box width={{ base: "100%", lg: "40%" }}>
+        <EmailPreviewAndSend course_id={course_id} emailsToCreate={emailsToCreate} setEmailsToCreate={setEmailsToCreate} tags={tags.tags}/>
+      </Flex>
+    </>
+  );
+}
+
+function EmailPreviewAndSend({
+  course_id,
+  emailsToCreate,
+  setEmailsToCreate,
+  tags
+}:{
+  course_id:string | string[] | undefined,
+  emailsToCreate:EmailCreateData[],
+  setEmailsToCreate:Dispatch<SetStateAction<EmailCreateData[]>>,
+  tags:Tag[],
+
+}) {
+    const {data:userRolesData} = useList<UserRole & {users: {email:string}}>({
+    resource:"user_roles",
+    meta: {
+      select:"*, users!user_roles_user_id_fkey1(email)"
+    },
+    filters:[
+      {field:"class_id", operator:"eq", value:course_id}
+    ]
+  });
+
+
+    const emailToAudienceText = (email: EmailCreateData) => {
+    if (email.audience.type === "assignment") {
+      return "Students who have " + email.audience.submissionType + " " + email.audience.assignment.title;
+    } else if (email.audience.type === "tag") {
+      return "Anyone who is tagged with " + <TagDisplay tag={email.audience.tag} />;
+    } else if (email.audience.type === "general") {
+      let str = "";
+      if (email.audience.includeInstructors) {
+        str += "Instructors ";
+      }
+      if (email.audience.includeGraders) {
+        str += "Graders ";
+      }
+      if (email.audience.includeStudents) {
+        str += "Students";
+      }
+      return str;
+    }
+    return "No audience selected";
+  };
+
+
+  const sendEmails = () => {
+    emailsToCreate.forEach(async (emailToCreate) => {
+      await sendEmail(emailToCreate);
+    })
+  }
+  const sendEmail = async (emailToCreate:EmailCreateData) => {
+    const recipients = [];
+    if(emailToCreate.audience.type === "assignment" && emailToCreate.audience.submissionType === "submitted") {
+      // find everyone who has submitted
+
+    }
+    else if(emailToCreate.audience.type === "assignment" && emailToCreate.audience.submissionType === "not submitted") {
+      // find everyone who has not submitted
+
+    }
+    else if(emailToCreate.audience.type === "tag") {
+      const chosenTag = emailToCreate.audience.tag;
+      const profile_ids = tags.filter((tag) => {return tag.color == chosenTag.color && tag.name == chosenTag.name && tag.visible === chosenTag.visible}).map((tag) => {
+        return tag.profile_id
+      });
+      const emails = userRolesData?.data.filter((user) => {return profile_ids.includes(user.private_profile_id)}).map((user) => {return user.users.email});
+      recipients.push(emails);
+    }
+    else if(emailToCreate.audience.type === "general") {
+      const roles : string[] = [];
+      if(emailToCreate.audience.includeGraders) {
+        roles.push("grader");
+      }
+      if(emailToCreate.audience.includeInstructors) {
+        roles.push("instructor");
+      }
+      if(emailToCreate.audience.includeStudents) {
+        roles.push("student");
+      }
+      recipients.push(userRolesData?.data.filter((userRole) => {return roles.includes(userRole.role)}).map((userRole) => {return userRole.users.email}))
+    }
+  } 
+
+  
+  return (<Box width={{ base: "100%", lg: "40%" }}>
           <Heading size="lg" mt="5" mb="5">
             Preview and send
           </Heading>
@@ -239,16 +357,16 @@ function Page() {
           ) : (
             <Text>No emails drafted at this time</Text>
           )}
-        </Box>
-      </Flex>
-    </>
-  );
+        </Box>);
+
 }
 
-export default function WrappedPage() {
+
+
+export default function EmailsPage() {
   return (
     <EmailManagementProvider>
-      <Page />
+      <EmailsInnerPage />
     </EmailManagementProvider>
   );
 }

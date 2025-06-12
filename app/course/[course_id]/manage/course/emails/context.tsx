@@ -19,13 +19,12 @@ export type GeneralEmailInfo = {
   includeGraders: boolean;
 };
 
-export type EmailAudience = AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
 
 export type EmailCreateData = {
   subject: string;
   body: string;
   cc_emails: string[];
-  audience: EmailAudience;
+  audience: AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
 };
 
 export type EmailManagementContextType = {
