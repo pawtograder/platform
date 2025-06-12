@@ -229,8 +229,13 @@ function CompletedReviewHistory() {
 export default function SubmissionReviewToolbar() {
   const writableReviews = useWritableSubmissionReviews();
   const selfReviewSettings = useSelfReviewSettings();
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const canSubmitEarlyForSelfReview = selfReviewSettings.enabled && selfReviewSettings.allow_early;
-  if ((!writableReviews || writableReviews.length === 0) && !canSubmitEarlyForSelfReview) {
+  if (
+    (!writableReviews || writableReviews.length === 0 || writableReviews.length === 1) &&
+    !canSubmitEarlyForSelfReview &&
+    !activeReviewAssignmentId
+  ) {
     return <></>;
   }
   return (
