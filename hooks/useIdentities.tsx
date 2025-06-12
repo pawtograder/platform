@@ -1,5 +1,5 @@
 import { createClient } from "@/utils/supabase/client";
-import { UserIdentity } from "@supabase/supabase-js";
+import type { UserIdentity } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 
 interface UseIdentityReturn {

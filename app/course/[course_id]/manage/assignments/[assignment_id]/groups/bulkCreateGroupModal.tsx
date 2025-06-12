@@ -1,4 +1,4 @@
-import {
+import type {
   Assignment,
   AssignmentGroupWithMembersInvitationsAndJoinRequests,
   Tag,
@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
 import { type GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import useTags from "@/hooks/useTags";
 import { useList } from "@refinedev/core";
 import TagDisplay from "@/components/ui/tag";

@@ -4,12 +4,12 @@ import Link from "@/components/ui/link";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   ActiveSubmissionsWithGradesForAssignment,
   GraderResultTest,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, HStack, Icon, Input, NativeSelect, Popover, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate } from "@refinedev/core";

@@ -14,7 +14,7 @@ import {
   useSetActiveSubmissionReviewId
 } from "@/hooks/useSubmissionReview";
 import { formatDueDate } from "@/lib/utils";
-import { SubmissionReviewWithRubric } from "@/utils/supabase/DatabaseTypes";
+import type { SubmissionReviewWithRubric } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate } from "@refinedev/core";
 import { formatDate } from "date-fns";
 import { FaRegCheckCircle } from "react-icons/fa";

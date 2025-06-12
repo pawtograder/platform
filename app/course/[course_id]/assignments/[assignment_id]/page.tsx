@@ -8,7 +8,7 @@ import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
-import {
+import type {
   Assignment,
   Repository,
   SelfReviewSettings,
@@ -18,7 +18,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import useAuthState from "@/hooks/useAuthState";
-import { CrudFilter, useList } from "@refinedev/core";
+import { type CrudFilter, useList } from "@refinedev/core";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {

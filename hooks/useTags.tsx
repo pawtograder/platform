@@ -1,4 +1,4 @@
-import { Tag } from "@/utils/supabase/DatabaseTypes";
+import type { Tag } from "@/utils/supabase/DatabaseTypes";
 import { useEffect, useState } from "react";
 import { useCourseController } from "./useCourseController";
 

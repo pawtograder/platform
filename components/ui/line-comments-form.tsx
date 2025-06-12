@@ -1,6 +1,6 @@
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
-import {
+import type {
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric

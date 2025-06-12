@@ -51,14 +51,14 @@ import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubric
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { Select as ChakraReactSelect, type OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname } from "next/navigation";
 import path from "path";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
-import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import { isRubricCheckDataWithOptions, type RubricCheckSubOption } from "./code-file";
 import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
 

@@ -8,7 +8,7 @@ import {
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -25,12 +25,12 @@ import {
   SubmissionWithAllRelatedData,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
+import type { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
-import { LiveEvent, useInvalidate, useList, useShow } from "@refinedev/core";
+import { type LiveEvent, useInvalidate, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Unsubscribe } from "./useCourseController";
+import type { Unsubscribe } from "./useCourseController";
 import { SubmissionReviewProvider } from "./useSubmissionReview";
 
 type ListUpdateCallback<T> = (

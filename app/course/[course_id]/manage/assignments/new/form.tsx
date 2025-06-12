@@ -18,7 +18,7 @@ import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import { appendTimezoneOffset } from "@/lib/utils";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import type { UseFormReturnType } from "@refinedev/react-hook-form";

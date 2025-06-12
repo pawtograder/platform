@@ -1,11 +1,11 @@
 "use client";
-import {
+import type {
   ActiveSubmissionsWithGradesForAssignment,
   AssignmentWithRubricsAndReferences,
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { type LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";

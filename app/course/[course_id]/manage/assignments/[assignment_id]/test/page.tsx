@@ -4,7 +4,7 @@ import { CommitHistoryDialog } from "@/app/course/[course_id]/assignments/[assig
 import CreateStudentReposButton from "@/app/course/[course_id]/assignments/createStudentReposButton";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, Repository, SubmissionWithGraderResultsAndReview } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Link, Skeleton, Table, Text } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
 import { format } from "date-fns";

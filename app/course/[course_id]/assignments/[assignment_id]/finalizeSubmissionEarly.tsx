@@ -1,13 +1,13 @@
 "use client";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroupMember,
   Submission
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
-import { CrudFilter, useCreate, useList } from "@refinedev/core";
+import { type CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, addMinutes, differenceInMinutes } from "date-fns";
 import { useParams } from "next/navigation";
 

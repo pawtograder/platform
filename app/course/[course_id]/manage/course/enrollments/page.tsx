@@ -10,7 +10,7 @@ import useModalManager from "@/hooks/useModalManager";
 import useTags from "@/hooks/useTags";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Checkbox,
@@ -32,7 +32,7 @@ import {
 } from "@chakra-ui/react";
 import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { type ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import Link from "next/link";

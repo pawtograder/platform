@@ -3,7 +3,7 @@
 import { TagColor } from "@/app/course/[course_id]/manage/course/enrollments/TagColors";
 import TagDisplay from "@/components/ui/tag";
 import useTags, { useTagsForProfile } from "@/hooks/useTags";
-import { Tag } from "@/utils/supabase/DatabaseTypes";
+import type { Tag } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Grid, Heading, Icon, SegmentGroup } from "@chakra-ui/react";
 import { useCreate, useInvalidate } from "@refinedev/core";
 import { Select } from "chakra-react-select";

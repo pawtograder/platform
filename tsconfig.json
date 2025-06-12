@@ -1,11 +1,9 @@
 {
   "compilerOptions": {
     "target": "ESNext",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": ["esnext", "dom", "dom.iterable"],
     "allowJs": true,
-    "checkJs": true,
     "skipLibCheck": true,
-    "sourceMap": true,
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
@@ -13,11 +11,10 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "allowImportingTsExtensions": true,
-    // "verbatimModuleSyntax": true, // This checks node_modules too for some reason
+    // "verbatimModuleSyntax": true, // exclude node_modules doesn't work when you import from .ts files that don't explicitly use the type keyword like csv-writer
     "noFallthroughCasesInSwitch": true,
     "noPropertyAccessFromIndexSignature": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    "module": "preserve",
     "moduleDetection": "force",
     "resolveJsonModule": true,
     "isolatedModules": true,

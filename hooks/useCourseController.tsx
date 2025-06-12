@@ -11,7 +11,7 @@ import type {
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
+import { type LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";

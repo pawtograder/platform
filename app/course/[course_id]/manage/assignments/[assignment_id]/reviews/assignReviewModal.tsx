@@ -2,7 +2,7 @@
 
 import { createClient } from "@/utils/supabase/client";
 import { Input, Text, VStack } from "@chakra-ui/react";
-import { HttpError, useCreate, useList, useUpdate } from "@refinedev/core";
+import { type HttpError, useCreate, useList, useUpdate } from "@refinedev/core";
 import { Select as ChakraReactSelect } from "chakra-react-select";
 import { format } from "date-fns";
 import { useEffect, useMemo } from "react";
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
 
 // Type definitions

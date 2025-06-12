@@ -2,10 +2,10 @@
 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
-import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useCreate, useList } from "@refinedev/core";
+import { type CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, isAfter } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";

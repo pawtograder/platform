@@ -8,7 +8,7 @@ import { useIdentity } from "@/hooks/useIdentities";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import { dueDateAdvice } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroup,
@@ -23,11 +23,11 @@ import {
 import { Card, Container, Flex, Heading, Spinner, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
-import { UserIdentity } from "@supabase/supabase-js";
+import type { UserIdentity } from "@supabase/supabase-js";
 import { addHours, addMinutes, differenceInHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
-import { UUID } from "node:crypto";
+import type { UUID } from "node:crypto";
 import { useEffect, useState } from "react";
 
 // Define the type for the groups query result
