@@ -3,8 +3,11 @@ import LinkAccount from "@/components/github/link-account";
 import { Alert } from "@/components/ui/alert";
 import { AssignmentDueDate, SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
+import useAuthState from "@/hooks/useAuthState";
+import { useIdentity } from "@/hooks/useIdentities";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import { dueDateAdvice } from "@/lib/utils";
+import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
   AssignmentDueDateException,
@@ -17,18 +20,15 @@ import {
   SubmissionReview,
   SubmissionWithGraderResults
 } from "@/utils/supabase/DatabaseTypes";
-import useAuthState from "@/hooks/useAuthState";
+import { Card, Container, Flex, Heading, Spinner, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
+import { useInvalidate, useList } from "@refinedev/core";
+import { UserIdentity } from "@supabase/supabase-js";
 import { addHours, addMinutes, differenceInHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { Card, Container, Flex, Heading, Spinner, Table, Text } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { createClient } from "@/utils/supabase/client";
-import { useEffect, useState } from "react";
-import { useIdentity } from "@/hooks/useIdentities";
-import { UserIdentity } from "@supabase/supabase-js";
 import { UUID } from "node:crypto";
+import { useEffect, useState } from "react";
 
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
@@ -102,6 +102,7 @@ export default function StudentPage() {
     private_profile_id_data && private_profile_id_data.data.length > 0
       ? private_profile_id_data.data[0].private_profile_id
       : null;
+  const invalidate = useInvalidate();
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
     meta: {
@@ -135,6 +136,9 @@ export default function StudentPage() {
       { field: "review_assignments.assignee_profile_id", operator: "eq", value: private_profile_id },
       { field: "assignment_due_date_exceptions.student_id", operator: "eq", value: private_profile_id }
     ],
+    pagination: {
+      pageSize: 1000
+    },
     queryOptions: {
       enabled: !!user && !!private_profile_id
     },
@@ -177,19 +181,21 @@ export default function StudentPage() {
     <></>
   );
   const [loading, setLoading] = useState(true);
+  const hasGitHubIdentity = githubIdentity?.user_id !== undefined;
   useEffect(() => {
     const createRepos = async () => {
       try {
         setLoading(true);
-        if (githubIdentity) {
-          await autograderCreateReposForStudent(supabase);
-        }
+        await autograderCreateReposForStudent(supabase);
+        await invalidate({ resource: "repositories", invalidates: ["all"] });
       } finally {
         setLoading(false);
       }
     };
-    createRepos();
-  }, []);
+    if (hasGitHubIdentity && supabase) {
+      createRepos();
+    }
+  }, [hasGitHubIdentity, supabase, invalidate]);
 
   const getLatestSubmission = (assignment: AssignmentWithALot) => {
     return assignment.submissions.sort(
@@ -349,7 +355,7 @@ export default function StudentPage() {
                   )}
                 </Table.Cell>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  {loading ? (
+                  {loading && !work.repo ? (
                     <Spinner />
                   ) : (
                     <Link target="_blank" href={`https://github.com/${work.repo}`}>

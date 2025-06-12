@@ -30,7 +30,7 @@ export function useIdentity(): UseIdentityReturn {
     };
 
     fetchIdentities();
-  }, []);
+  }, [supabase]);
 
   return {
     identities,
