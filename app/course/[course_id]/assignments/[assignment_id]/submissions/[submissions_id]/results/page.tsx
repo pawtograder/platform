@@ -105,7 +105,7 @@ export default function GraderResults() {
   if (!query.data.data.grader_results) {
     return (
       <Container>
-        <Box w="4xl" p={4} m={4}>
+        <Box p={4} margin={{ base: "2", lg: "4" }}>
           <Alert title="Autograder has not finished running">
             The autograder started running {formatDistanceToNow(query.data.data.created_at, { addSuffix: true })}, and
             has not completed yet. Please check{" "}

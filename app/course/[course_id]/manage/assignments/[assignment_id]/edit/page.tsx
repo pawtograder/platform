@@ -35,12 +35,17 @@ export default function EditAssignment() {
   });
   useEffect(() => {
     if (queryData) {
-      console.log(selfReviewSetting?.data.enabled);
       form.setValue("eval_config", selfReviewSetting?.data.enabled ? "use_eval" : "base_only");
       form.setValue("deadline_offset", selfReviewSetting?.data.deadline_offset);
       form.setValue("allow_early", selfReviewSetting?.data.allow_early);
     }
-  }, [queryData, form]);
+  }, [
+    queryData,
+    form,
+    selfReviewSetting?.data.allow_early,
+    selfReviewSetting?.data.deadline_offset,
+    selfReviewSetting?.data.enabled
+  ]);
 
   const onFinish = useCallback(
     async (values: FieldValues) => {
@@ -107,7 +112,7 @@ export default function EditAssignment() {
         });
       }
     },
-    [form.refineCore, assignment_id, course_id]
+    [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update]
   );
 
   if (form.refineCore.query?.isLoading || form.refineCore.formLoading) {
