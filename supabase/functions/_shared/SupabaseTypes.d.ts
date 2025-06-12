@@ -1389,6 +1389,13 @@ export type Database = {
             foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
             columns: ["deck_id"];
             isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
             referencedRelation: "flashcard_decks";
             referencedColumns: ["id"];
           },
@@ -1445,6 +1452,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcards_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
           },
           {
             foreignKeyName: "flashcards_deck_id_fkey";
@@ -4523,6 +4537,166 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          }
+        ];
+      };
+      flashcard_card_analytics: {
+        Row: {
+          answer_viewed_count: number | null;
+          avg_answer_time_ms: number | null;
+          avg_got_it_time_ms: number | null;
+          avg_keep_trying_time_ms: number | null;
+          card_id: number | null;
+          class_id: number | null;
+          deck_id: number | null;
+          got_it_count: number | null;
+          keep_trying_count: number | null;
+          prompt_views: number | null;
+          returned_to_deck: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_interaction_logs_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      flashcard_deck_analytics: {
+        Row: {
+          class_id: number | null;
+          deck_id: number | null;
+          deck_name: string | null;
+          resets: number | null;
+          views: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_decks_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      flashcard_student_card_analytics: {
+        Row: {
+          answer_views: number | null;
+          avg_answer_time_ms: number | null;
+          avg_got_it_time_ms: number | null;
+          avg_keep_trying_time_ms: number | null;
+          card_id: number | null;
+          class_id: number | null;
+          deck_id: number | null;
+          got_it_count: number | null;
+          keep_trying_count: number | null;
+          prompt_views: number | null;
+          returned_to_deck: number | null;
+          student_name: string | null;
+          student_profile_id: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_interaction_logs_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_student_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      flashcard_student_deck_analytics: {
+        Row: {
+          answer_views: number | null;
+          class_id: number | null;
+          deck_id: number | null;
+          mastered_count: number | null;
+          name: string | null;
+          not_mastered_count: number | null;
+          prompt_views: number | null;
+          returned_to_deck: number | null;
+          student_profile_id: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcards_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcards_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_student_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
           }
         ];
       };

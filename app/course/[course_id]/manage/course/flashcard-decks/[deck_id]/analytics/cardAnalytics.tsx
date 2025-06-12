@@ -9,7 +9,21 @@ import { useColorModeValue } from "@/components/ui/color-mode";
 
 // Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
-type FlashcardInteractionLogRow = Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"];
+
+// Aggregated per-card metrics view row
+type CardAggRow = {
+  class_id: number;
+  deck_id: number;
+  card_id: number;
+  prompt_views: number;
+  returned_to_deck: number;
+  avg_answer_time_ms: number | null;
+  answer_viewed_count: number;
+  avg_got_it_time_ms: number | null;
+  got_it_count: number;
+  avg_keep_trying_time_ms: number | null;
+  keep_trying_count: number;
+};
 
 /**
  * This type defines the props for the CardAnalytics component.
@@ -17,28 +31,6 @@ type FlashcardInteractionLogRow = Database["public"]["Tables"]["flashcard_intera
  */
 type CardAnalyticsProps = {
   deckId: string;
-};
-
-/**
- * This type defines the metrics for a flashcard.
- * @param prompt_viewed - The number of times a card has been viewed
- * @param returned_to_deck - The number of times a card has been returned to the deck
- * @param answer_viewed_duration - The average time spent on the answer
- * @param answer_viewed_count - The number of times a card has been viewed
- * @param got_it_duration - The average time spent for "Got It"
- * @param got_it_count - The number of times a card has been marked as "Got It"
- * @param keep_trying_duration - The average time spent for "Keep Trying"
- * @param keep_trying_count - The number of times a card has been marked as "Keep Trying"
- */
-type CardMetrics = {
-  prompt_viewed: number;
-  returned_to_deck: number;
-  answer_viewed_duration: number;
-  answer_viewed_count: number;
-  got_it_duration: number;
-  got_it_count: number;
-  keep_trying_duration: number;
-  keep_trying_count: number;
 };
 
 /**
@@ -87,90 +79,38 @@ export default function CardAnalytics({ deckId }: CardAnalyticsProps) {
     queryOptions: { enabled: !!deckId }
   });
 
-  const { data: interactionsData, isLoading: isLoadingInteractions } = useList<FlashcardInteractionLogRow>({
-    resource: "flashcard_interaction_logs",
+  const { data: cardAggData, isLoading: isLoadingAgg } = useList<CardAggRow>({
+    resource: "flashcard_card_analytics",
     filters: [{ field: "deck_id", operator: "eq", value: deckId }],
-    pagination: { pageSize: 10000 },
+    pagination: { pageSize: 2000 },
     queryOptions: { enabled: !!deckId }
   });
 
   const analyticsData = useMemo(() => {
-    if (!cardsData?.data || !interactionsData?.data) {
+    if (!cardsData?.data || !cardAggData?.data) {
       return [];
     }
 
     const cardMap = new Map(cardsData.data.map((card) => [card.id, card.title]));
-    const metrics: { [cardId: number]: CardMetrics } = {};
 
-    for (const card of cardsData.data) {
-      metrics[card.id] = {
-        prompt_viewed: 0,
-        returned_to_deck: 0,
-        answer_viewed_duration: 0,
-        answer_viewed_count: 0,
-        got_it_duration: 0,
-        got_it_count: 0,
-        keep_trying_duration: 0,
-        keep_trying_count: 0
+    return cardAggData.data.map((row) => {
+      const gotItPlusKeepTrying = row.got_it_count + row.keep_trying_count;
+      return {
+        name: cardMap.get(row.card_id) || `Card ${row.card_id}`,
+        "Prompt Views": row.prompt_views,
+        "Returned to Deck": row.returned_to_deck,
+        "Avg. Time on Answer (s)": row.avg_answer_time_ms ? row.avg_answer_time_ms / 1000 : 0,
+        'Avg. Time for "Got It" (s)': row.avg_got_it_time_ms ? row.avg_got_it_time_ms / 1000 : 0,
+        'Avg. Time for "Keep Trying" (s)': row.avg_keep_trying_time_ms ? row.avg_keep_trying_time_ms / 1000 : 0,
+        "% Got It": gotItPlusKeepTrying > 0 ? (row.got_it_count / gotItPlusKeepTrying) * 100 : 0
       };
-    }
-
-    for (const log of interactionsData.data) {
-      if (log.card_id && metrics[log.card_id]) {
-        switch (log.action) {
-          case "card_prompt_viewed":
-            metrics[log.card_id].prompt_viewed++;
-            break;
-          case "card_returned_to_deck":
-            metrics[log.card_id].returned_to_deck++;
-            break;
-          case "card_answer_viewed":
-            metrics[log.card_id].answer_viewed_duration += log.duration_on_card_ms;
-            metrics[log.card_id].answer_viewed_count++;
-            break;
-          case "card_marked_got_it":
-            metrics[log.card_id].got_it_duration += log.duration_on_card_ms;
-            metrics[log.card_id].got_it_count++;
-            break;
-          case "card_marked_keep_trying":
-            metrics[log.card_id].keep_trying_duration += log.duration_on_card_ms;
-            metrics[log.card_id].keep_trying_count++;
-            break;
-        }
-      }
-    }
-
-    return Object.entries(metrics)
-      .map(([cardId, data]) => {
-        const gotItPlusKeepTrying = data.got_it_count + data.keep_trying_count;
-        return {
-          name: cardMap.get(Number(cardId)) || `Card ${cardId}`,
-          "Prompt Views": data.prompt_viewed,
-          "Returned to Deck": data.returned_to_deck,
-          "Avg. Time on Answer (s)":
-            data.answer_viewed_count > 0
-              ? (data.answer_viewed_duration / data.answer_viewed_count / 1000).toFixed(2)
-              : 0,
-          'Avg. Time for "Got It" (s)':
-            data.got_it_count > 0 ? (data.got_it_duration / data.got_it_count / 1000).toFixed(2) : 0,
-          'Avg. Time for "Keep Trying" (s)':
-            data.keep_trying_count > 0 ? (data.keep_trying_duration / data.keep_trying_count / 1000).toFixed(2) : 0,
-          "% Got It": gotItPlusKeepTrying > 0 ? ((data.got_it_count / gotItPlusKeepTrying) * 100).toFixed(2) : 0
-        };
-      })
-      .map((d) => ({
-        ...d,
-        "Avg. Time on Answer (s)": parseFloat(String(d["Avg. Time on Answer (s)"])),
-        'Avg. Time for "Got It" (s)': parseFloat(String(d['Avg. Time for "Got It" (s)'])),
-        'Avg. Time for "Keep Trying" (s)': parseFloat(String(d['Avg. Time for "Keep Trying" (s)'])),
-        "% Got It": parseFloat(String(d["% Got It"]))
-      }));
-  }, [cardsData, interactionsData]);
+    });
+  }, [cardsData, cardAggData]);
 
   const tickColor = useColorModeValue("black", "white");
   const tooltipBg = useColorModeValue("white", "black");
 
-  if (isLoadingCards || isLoadingInteractions) {
+  if (isLoadingCards || isLoadingAgg) {
     return <Spinner />;
   }
 

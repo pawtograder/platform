@@ -21,9 +21,23 @@ import { useMemo, useState } from "react";
 
 // Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
-type FlashcardInteractionLogRow = Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"];
-type UserRoleRow = Database["public"]["Tables"]["user_roles"]["Row"];
-type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
+
+// View row
+type StudentCardAggRow = {
+  class_id: number;
+  deck_id: number;
+  card_id: number;
+  student_profile_id: string;
+  student_name: string | null;
+  prompt_views: number;
+  answer_views: number;
+  got_it_count: number;
+  keep_trying_count: number;
+  returned_to_deck: number;
+  avg_answer_time_ms: number | null;
+  avg_got_it_time_ms: number | null;
+  avg_keep_trying_time_ms: number | null;
+};
 
 /**
  * @property deckId - The ID of the flashcard deck.
@@ -72,123 +86,38 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
     queryOptions: { enabled: !!deckId }
   });
 
-  const { data: interactionsData, isLoading: isLoadingInteractions } = useList<FlashcardInteractionLogRow>({
-    resource: "flashcard_interaction_logs",
-    filters: [{ field: "deck_id", operator: "eq", value: deckId }],
+  const { data: aggData, isLoading: isLoadingAgg } = useList<StudentCardAggRow>({
+    resource: "flashcard_student_card_analytics",
+    filters: [
+      { field: "deck_id", operator: "eq", value: deckId },
+      { field: "class_id", operator: "eq", value: courseId }
+    ],
     pagination: { pageSize: 10000 },
-    queryOptions: { enabled: !!deckId }
-  });
-
-  const { data: userRolesData, isLoading: isLoadingUserRoles } = useList<UserRoleRow>({
-    resource: "user_roles",
-    filters: [{ field: "class_id", operator: "eq", value: courseId }],
-    pagination: { pageSize: 5000 },
-    queryOptions: { enabled: !!courseId }
-  });
-
-  const profileIds = useMemo(
-    () => userRolesData?.data.map((role) => role.private_profile_id).filter(Boolean) ?? [],
-    [userRolesData]
-  );
-
-  const { data: profilesData, isLoading: isLoadingProfiles } = useList<ProfileRow>({
-    resource: "profiles",
-    filters: [{ field: "id", operator: "in", value: profileIds }],
-    pagination: { pageSize: 5000 },
-    queryOptions: { enabled: profileIds.length > 0 }
+    queryOptions: { enabled: !!deckId && !!courseId }
   });
 
   const analyticsData = useMemo<StudentCardMetrics[]>(() => {
-    if (!interactionsData?.data || !cardsData?.data || !profilesData?.data || !userRolesData?.data) {
+    if (!aggData?.data || !cardsData?.data) {
       return [];
     }
 
     const cardMap = new Map(cardsData.data.map((card) => [card.id, card.title]));
-    const profileMap = new Map(profilesData.data.map((profile) => [profile.id, profile.name]));
-    const userRoleMap = new Map(userRolesData.data.map((role) => [role.user_id, role.private_profile_id]));
 
-    const studentMetrics: {
-      [key: string]: {
-        studentId: string;
-        cardId: number;
-        promptViews: number;
-        answerViews: number;
-        gotIt: number;
-        keepTrying: number;
-        returnedToDeck: number;
-        answerTimeTotal: number;
-        gotItTimeTotal: number;
-        keepTryingTimeTotal: number;
-      };
-    } = {};
-
-    for (const log of interactionsData.data) {
-      if (!log.student_id || !log.card_id) continue;
-
-      const profileId = userRoleMap.get(log.student_id);
-      if (!profileId) continue; // Only include users with a profile in this course
-
-      const key = `${log.student_id}-${log.card_id}`;
-      if (!studentMetrics[key]) {
-        studentMetrics[key] = {
-          studentId: log.student_id,
-          cardId: log.card_id,
-          promptViews: 0,
-          answerViews: 0,
-          gotIt: 0,
-          keepTrying: 0,
-          returnedToDeck: 0,
-          answerTimeTotal: 0,
-          gotItTimeTotal: 0,
-          keepTryingTimeTotal: 0
-        };
-      }
-
-      const metrics = studentMetrics[key];
-      const duration = log.duration_on_card_ms || 0;
-
-      switch (log.action) {
-        case "card_prompt_viewed":
-          metrics.promptViews++;
-          break;
-        case "card_answer_viewed":
-          metrics.answerViews++;
-          metrics.answerTimeTotal += duration;
-          break;
-        case "card_marked_got_it":
-          metrics.gotIt++;
-          metrics.gotItTimeTotal += duration;
-          break;
-        case "card_marked_keep_trying":
-          metrics.keepTrying++;
-          metrics.keepTryingTimeTotal += duration;
-          break;
-        case "card_returned_to_deck":
-          metrics.returnedToDeck++;
-          break;
-      }
-    }
-
-    return Object.values(studentMetrics).map((metrics) => {
-      const profileId = userRoleMap.get(metrics.studentId);
-      const studentName = (profileId ? profileMap.get(profileId) : `User ${metrics.studentId}`) || "Unknown";
-      const cardTitle = cardMap.get(metrics.cardId) || `Card ${metrics.cardId}`;
-
+    return aggData.data.map((row) => {
       return {
-        studentName,
-        cardTitle,
-        promptViews: metrics.promptViews,
-        answerViews: metrics.answerViews,
-        gotIt: metrics.gotIt,
-        keepTrying: metrics.keepTrying,
-        returnedToDeck: metrics.returnedToDeck,
-        avgAnswerTime: metrics.answerViews > 0 ? (metrics.answerTimeTotal / metrics.answerViews / 1000).toFixed(2) : 0,
-        avgGotItTime: metrics.gotIt > 0 ? (metrics.gotItTimeTotal / metrics.gotIt / 1000).toFixed(2) : 0,
-        avgKeepTryingTime:
-          metrics.keepTrying > 0 ? (metrics.keepTryingTimeTotal / metrics.keepTrying / 1000).toFixed(2) : 0
+        studentName: row.student_name || `User ${row.student_profile_id}`,
+        cardTitle: cardMap.get(row.card_id) || `Card ${row.card_id}`,
+        promptViews: row.prompt_views,
+        answerViews: row.answer_views,
+        gotIt: row.got_it_count,
+        keepTrying: row.keep_trying_count,
+        returnedToDeck: row.returned_to_deck,
+        avgAnswerTime: row.avg_answer_time_ms ? (row.avg_answer_time_ms / 1000).toFixed(2) : 0,
+        avgGotItTime: row.avg_got_it_time_ms ? (row.avg_got_it_time_ms / 1000).toFixed(2) : 0,
+        avgKeepTryingTime: row.avg_keep_trying_time_ms ? (row.avg_keep_trying_time_ms / 1000).toFixed(2) : 0
       };
     });
-  }, [interactionsData, cardsData, profilesData, userRolesData]);
+  }, [aggData, cardsData]);
 
   const [sorting, setSorting] = useState<SortingState>([{ id: "studentName", desc: false }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -309,7 +238,7 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
     getPageCount
   } = table;
 
-  if (isLoadingCards || isLoadingInteractions || isLoadingUserRoles || isLoadingProfiles) {
+  if (isLoadingCards || isLoadingAgg) {
     return <Spinner />;
   }
 
