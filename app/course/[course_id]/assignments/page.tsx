@@ -98,10 +98,8 @@ export default function StudentPage() {
       enabled: !!course_id && !!user
     }
   });
-  const private_profile_id: string | null =
-    private_profile_id_data && private_profile_id_data.data.length > 0
-      ? private_profile_id_data.data[0].private_profile_id
-      : null;
+  // Safely extract the student's private profile ID if it exists.
+  const private_profile_id: string | null = private_profile_id_data?.data?.[0]?.["private_profile_id"] ?? null;
   const invalidate = useInvalidate();
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
@@ -227,7 +225,7 @@ export default function StudentPage() {
       const originalDueDate = new TZDate(assignment.due_date);
       const modifiedDueDate = new TZDate(
         addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended),
-        course?.time_zone ?? "America/New_York"
+        course?.["time_zone"] ?? "America/New_York"
       );
       result.push({
         key: assignment.id.toString(),
@@ -279,7 +277,7 @@ export default function StudentPage() {
         <Flex>
           {allAssignedWork()
             .filter((work) => {
-              return work.due_date > new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+              return work.due_date > new TZDate(new Date(), course?.["time_zone"] ?? "America/New_York");
             })
             .map((work) => {
               return (
@@ -297,12 +295,12 @@ export default function StudentPage() {
                     </Text>
                     <Text>
                       <strong>Due:</strong>{" "}
-                      {formatInTimeZone(work.due_date, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}{" "}
+                      {formatInTimeZone(work.due_date, course?.["time_zone"] || "America/New_York", "MMM d h:mm aaa")}{" "}
                       {differenceInHours(
                         new TZDate(work.due_date),
-                        TZDate.tz(course?.time_zone || "America/New_York")
+                        TZDate.tz(course?.["time_zone"] || "America/New_York")
                       ) <= 48
-                        ? dueDateAdvice(work.due_date.toString(), course?.time_zone ?? undefined)
+                        ? dueDateAdvice(work.due_date.toString(), course?.["time_zone"] ?? undefined)
                         : ""}
                     </Text>
                     <Text>
@@ -325,7 +323,7 @@ export default function StudentPage() {
               Due Date
               <br />
               <Text fontSize="sm" color="fg.muted">
-                ({course?.time_zone})
+                ({course?.["time_zone"]})
               </Text>
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>
