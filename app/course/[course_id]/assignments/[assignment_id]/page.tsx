@@ -1,6 +1,7 @@
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
+import SelfReviewNotice from "@/components/ui/self-review-notice";
 import { Repository, SelfReviewSettings, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/server";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
@@ -8,7 +9,6 @@ import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
-import SelfReviewNotice from "@/components/ui/self-review-notice";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {
@@ -116,7 +116,7 @@ export default async function AssignmentPage({
   return (
     <Box p={4}>
       <Flex width="100%" alignItems={"center"}>
-        <Box width="50%">
+        <Box>
           <Heading size="lg">{assignment.title}</Heading>
           <HStack>
             <AssignmentDueDate assignment={assignment} showLateTokenButton={true} showTimeZone={true} showDue={true} />
@@ -141,16 +141,14 @@ export default async function AssignmentPage({
       <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
         <ManageGroupWidget assignment={assignment} />
       </Box>
-      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-        <SelfReviewNotice
-          review_settings={review_settings ?? ({} as SelfReviewSettings)}
-          assignment={assignment}
-          enrollment={enrollment ?? ({} as UserRole)}
-          activeSubmission={submissions?.find((sm) => {
-            return sm.is_active;
-          })}
-        />
-      </Box>
+      <SelfReviewNotice
+        review_settings={review_settings ?? ({} as SelfReviewSettings)}
+        assignment={assignment}
+        enrollment={enrollment ?? ({} as UserRole)}
+        activeSubmission={submissions?.find((sm) => {
+          return sm.is_active;
+        })}
+      />
 
       <Heading size="md">Submission History</Heading>
       <CommitHistoryDialog

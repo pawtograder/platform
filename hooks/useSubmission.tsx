@@ -872,19 +872,6 @@ export function useSubmissionReviewOrGradingReview(reviewId?: number | null) {
     return () => unsubscribe();
   }, [ctx, controller, reviewId]);
 
-  if (!ctx || !reviewId) {
-    return undefined;
-  }
-
-  if (!reviewId && !ctx.submissionController.submission.grading_review_id) {
-    toaster.create({
-      title: "No review ID available",
-      description:
-        "No review ID available for useSubmissionReview and no default found. This is likely a bug. Please contact support.",
-      type: "warning"
-    });
-  }
-
   return review;
 }
 export function useRubricCheck(rubric_check_id: number | null) {

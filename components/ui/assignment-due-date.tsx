@@ -68,13 +68,25 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
       return exception.hours * 60 + exception.minutes < 0;
     }).length > 0
   ) {
-    return <Text>(You may not extend the due date for this assignment as you finalized early)</Text>;
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (You may not extend the due date for this assignment as you finalized early)
+      </Text>
+    );
   }
   if (lateTokensUsedByStudent >= course.late_tokens_per_student) {
-    return <Text>(You have no remaining late tokens)</Text>;
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (You have no remaining late tokens)
+      </Text>
+    );
   }
   if (lateTokensAppliedToAssignment >= assignment.max_late_tokens) {
-    return <Text>(You may not extend the due date for this assignment any further)</Text>;
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (You may not extend the due date for this assignment any further)
+      </Text>
+    );
   }
   //Make sure that our own due date is still in the future
   const extensionsInHours = lateTokens
