@@ -130,9 +130,14 @@ export default function SelfReviewNotice(props: {
   enrollment: UserRole;
   activeSubmission?: Submission;
 }) {
+  if (!props.review_settings.enabled) {
+    return <></>;
+  }
   return (
-    <AssignmentProvider>
-      <SelfReviewNoticeInner {...props} />
-    </AssignmentProvider>
+    <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
+      <AssignmentProvider>
+        <SelfReviewNoticeInner {...props} />
+      </AssignmentProvider>
+    </Box>
   );
 }
