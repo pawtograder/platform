@@ -134,7 +134,6 @@ export default function FinalizeSubmissionEarly({
         triggerLabel="Finalize Submission Early"
         trigger={
           <Button
-            float="right"
             variant="surface"
             colorPalette="green"
             disabled={

@@ -1,8 +1,9 @@
 "use client";
+import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
 import { AssignmentProvider, useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
 import { useAssignmentDueDate } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Flex, Heading, Skeleton, Text } from "@chakra-ui/react";
+import { Box, Button, Flex, Heading, HStack, Skeleton, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useList } from "@refinedev/core";
 import { addHours } from "date-fns";
@@ -90,16 +91,30 @@ function SelfReviewNoticeInner({
           )}
         </Box>
       ) : review_settings?.enabled ? (
-        <>
-          <Flex alignItems="center" gap="2">
-            <FaExclamationTriangle />
-            <Heading size="md">Self Review Notice</Heading>
-          </Flex>
-          <Text fontSize="sm" color="fg.muted">
-            There is a self review scheduled on this assignment which will release immediately after your deadline
-            passes and will be <strong>due {review_settings?.deadline_offset} hours later.</strong>
-          </Text>
-        </>
+        <HStack justifyContent="space-between">
+          <Box>
+            <Flex alignItems="center" gap="2">
+              <FaExclamationTriangle />
+              <Heading size="md">Self Review Notice</Heading>
+            </Flex>
+            <Text fontSize="sm" color="fg.muted">
+              There is a self review scheduled on this assignment which will release immediately after your deadline
+              passes and will be <strong>due {review_settings?.deadline_offset} hours later.</strong>
+            </Text>
+            {review_settings.allow_early && (
+              <Text fontSize="sm" color="fg.muted">
+                You may also finalize your submission early, in which case you will be able to submit your review
+                immediately (within {review_settings.deadline_offset} hours of clicking &quot;Finalize Submission
+                Early&quot;).
+              </Text>
+            )}
+          </Box>
+          <Box>
+            {review_settings.allow_early && (
+              <FinalizeSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} />
+            )}
+          </Box>
+        </HStack>
       ) : (
         <></>
       )}
@@ -113,9 +128,14 @@ export default function SelfReviewNotice(props: {
   enrollment: UserRole;
   activeSubmission?: Submission;
 }) {
+  if (!props.review_settings.enabled) {
+    return <></>;
+  }
   return (
-    <AssignmentProvider>
-      <SelfReviewNoticeInner {...props} />
-    </AssignmentProvider>
+    <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
+      <AssignmentProvider>
+        <SelfReviewNoticeInner {...props} />
+      </AssignmentProvider>
+    </Box>
   );
 }
