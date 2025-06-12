@@ -23,8 +23,139 @@ import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import useTags from "@/hooks/useTags";
+import { useParams } from "next/navigation";
+import TagDisplay from "@/components/ui/tag";
 
-export default function EmailPage() {
+enum Audience {
+  All = "all",
+  CourseStaff = "courseStaff",
+  Graders = "graders",
+  Students = "students",
+  Instructors = "instructors",
+  Tag = "tag",
+  Submitted = "submitted",
+  NotSubmitted = "notSubmitted"
+}
+
+export default function Page() {
+  const { course_id } = useParams();
+  const [choice, setChoice] = useState<Audience>();
+  const [assignment, setAssignment] = useState<Assignment>();
+  const [tag, setTag] = useState<Tag>();
+  const [group, setGroup] = useState();
+  const [subjectLine, setSubjectLine] = useState<string>("");
+  const [body, setBody] = useState<string>("");
+
+  const options = [
+    { label: "Students who have submitted an assignment", value: Audience.Submitted },
+    { label: "Students who have not submitted an assignment", value: Audience.NotSubmitted },
+    { label: "Students, Instructors, and Graders", value: Audience.All },
+    { label: "Instructors and Graders", value: Audience.CourseStaff },
+    { label: "Students", value: Audience.Students },
+    { label: "Graders", value: Audience.Graders },
+    { label: "Instructors", value: Audience.Instructors },
+    { label: "Tag", value: Audience.Tag }
+  ];
+
+  const { data: assignmentsData } = useList<Assignment>({
+    resource: "assignments",
+    meta: {
+      select: "*"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
+  });
+
+  const tags = useTags();
+
+  const uniqueTags: Tag[] = Array.from(
+    tags.tags
+      .reduce((map, tag) => {
+        if (!map.has(tag.name + tag.color + tag.visible)) {
+          map.set(tag.name + tag.color + tag.visible, tag);
+        }
+        return map;
+      }, new Map())
+      .values()
+  );
+
+  return (
+    <>
+      <Heading size="lg" mt="5" mb="5">
+        Draft email
+      </Heading>
+      <Fieldset.Root maxWidth="2xl">
+        <Fieldset.Content>
+          <Field.Root>
+            <Field.Label>Select audience</Field.Label>
+            <Select onChange={(e) => (e ? setChoice(e.value) : null)} options={options} />
+          </Field.Root>
+          {choice && (choice === Audience.NotSubmitted || choice == Audience.Submitted) && (
+            <Field.Root>
+              <Field.Label>Choose assignment</Field.Label>
+              <Select
+                onChange={(e) => (e ? setAssignment(e.value) : null)}
+                options={assignmentsData?.data.map((a: Assignment) => ({ label: a.title, value: a }))}
+              />
+            </Field.Root>
+          )}
+          {choice && choice === Audience.Tag && (
+            <Field.Root>
+              <Field.Label>Select Tag</Field.Label>
+              <Select
+                getOptionValue={(option) => option.value.id}
+                onChange={(e) => {
+                  setTag(e?.value);
+                }}
+                options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
+                components={{
+                  Option: ({ data, ...props }) => (
+                    <Box
+                      key={data.value.id}
+                      {...props.innerProps}
+                      p="4px 8px"
+                      cursor="pointer"
+                      _hover={{ bg: "gray.100" }}
+                    >
+                      {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                    </Box>
+                  ),
+                  MultiValue: ({ data, ...props }) => (
+                    <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer">
+                      {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                    </Box>
+                  )
+                }}
+              />
+            </Field.Root>
+          )}
+          <Field.Root>
+            <Field.Label>Cc</Field.Label>
+            <Input onChange={(e) => setSubjectLine(e.target.value)} />
+          </Field.Root>
+          <Field.Root>
+            <Field.Label>Subject</Field.Label>
+            <Input onChange={(e) => setSubjectLine(e.target.value)} />
+          </Field.Root>
+          <Field.Root>
+            <Field.Label>Body</Field.Label>
+            <Textarea onChange={(e) => setBody(e.target.value)} />
+          </Field.Root>
+          <Field.Root>
+          <Button>
+            Prepare mail 
+          </Button>
+          <Field.HelperText>
+            You&apos;ll be able to review the email before it is sent
+          </Field.HelperText>
+          </Field.Root>
+        </Fieldset.Content>
+        
+      </Fieldset.Root>
+    </>
+  );
+}
+
+export function EmailPage() {
   const [emails, setEmails] = useState<string[]>([]);
   const [subjectLine, setSubjectLine] = useState<string>("");
   const [body, setBody] = useState<string>("");
@@ -86,7 +217,6 @@ export default function EmailPage() {
               </Accordion.Item>
             </Accordion.Root>
           </Field.Root>
-
           <Field.Root>
             <Field.Label>Subject</Field.Label>
             <Input onChange={(e) => setSubjectLine(e.target.value)} />
@@ -173,8 +303,6 @@ function GeneralForm({ setEmails }: { setEmails: Dispatch<SetStateAction<string[
 function TagForm({ setEmails }: { setEmails: Dispatch<SetStateAction<string[]>> }) {
   const [tag, setTag] = useState<Tag | null>();
   const tags = useTags();
-  console.log(tag);
-  console.log(setEmails);
 
   const uniqueTags: Tag[] = Array.from(
     tags.tags
