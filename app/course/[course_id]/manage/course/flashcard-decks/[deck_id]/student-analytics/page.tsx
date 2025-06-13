@@ -11,8 +11,8 @@ import StudentDeckAnalytics from "./studentDeckAnalytics";
  */
 export default function StudentAnalyticsPage() {
   const params = useParams();
-  const course_id = params.course_id as string;
-  const deck_id = params.deck_id as string;
+  const course_id = params["course_id"] as string;
+  const deck_id = params["deck_id"] as string;
 
   return (
     <VStack align="stretch" gap={6}>

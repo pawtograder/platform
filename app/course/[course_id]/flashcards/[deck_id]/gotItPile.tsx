@@ -2,7 +2,7 @@
 
 import { Card, Text, IconButton, Flex, Box, HStack, Badge } from "@chakra-ui/react";
 import { FaUndo } from "react-icons/fa";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 // Supabase types
 type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];

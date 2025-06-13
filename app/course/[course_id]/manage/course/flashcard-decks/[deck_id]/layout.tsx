@@ -1,5 +1,5 @@
 "use client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, Flex, Heading, HStack, IconButton, Link, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
 import NextLink from "next/link";

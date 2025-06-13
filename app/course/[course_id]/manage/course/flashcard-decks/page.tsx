@@ -18,7 +18,7 @@ import Link from "@/components/ui/link";
  */
 export default function FlashcardDecksPage() {
   const params = useParams();
-  const course_id = params.course_id as string;
+  const course_id = params["course_id"] as string;
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Modal management

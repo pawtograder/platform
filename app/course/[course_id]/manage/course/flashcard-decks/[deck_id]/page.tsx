@@ -6,7 +6,7 @@ import Markdown from "@/components/ui/markdown";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, Heading, HStack, IconButton, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useDelete, useList, useOne } from "@refinedev/core";
 import { format } from "date-fns";
@@ -29,7 +29,7 @@ type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 export default function FlashcardDeckPage() {
   const params = useParams();
   const router = useRouter();
-  const deck_id = params.deck_id as string;
+  const deck_id = params["deck_id"] as string;
 
   // Modal management for adding flashcards
   const { isOpen: isAddCardModalOpen, openModal: openAddCardModal, closeModal: closeAddCardModal } = useModalManager();

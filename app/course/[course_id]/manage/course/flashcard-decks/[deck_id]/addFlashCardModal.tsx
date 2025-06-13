@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { DialogRoot, DialogContent, DialogHeader, DialogTitle, DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { toaster } from "@/components/ui/toaster";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import useAuthState from "@/hooks/useAuthState";
 
 // Supabase types
@@ -51,7 +51,7 @@ type FlashcardFormData = {
  */
 export default function AddFlashCardModal({ isOpen, onClose, deckId, onSuccess }: AddFlashCardModalProps) {
   const params = useParams();
-  const course_id = params.course_id as string;
+  const course_id = params["course_id"] as string;
   const { user } = useAuthState();
 
   const {
