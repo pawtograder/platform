@@ -29,7 +29,6 @@ type FlashcardRow = Database["public"]["Tables"]["flashcards"]["Row"];
 export default function FlashcardDeckPage() {
   const params = useParams();
   const router = useRouter();
-  const course_id = params.course_id as string;
   const deck_id = params.deck_id as string;
 
   // Modal management for adding flashcards
