@@ -1291,6 +1291,184 @@ export type Database = {
           }
         ];
       };
+      flashcard_decks: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          creator_id: string;
+          deleted_at: string | null;
+          description: string | null;
+          id: number;
+          name: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          creator_id: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          id?: number;
+          name: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          creator_id?: string;
+          deleted_at?: string | null;
+          description?: string | null;
+          id?: number;
+          name?: string;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_decks_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_decks_creator_id_fkey";
+            columns: ["creator_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      flashcard_interaction_logs: {
+        Row: {
+          action: Database["public"]["Enums"]["flashcard_actions"];
+          card_id: number | null;
+          class_id: number;
+          created_at: string;
+          deck_id: number;
+          duration_on_card_ms: number;
+          id: number;
+          student_id: string;
+        };
+        Insert: {
+          action: Database["public"]["Enums"]["flashcard_actions"];
+          card_id?: number | null;
+          class_id: number;
+          created_at?: string;
+          deck_id: number;
+          duration_on_card_ms: number;
+          id?: number;
+          student_id: string;
+        };
+        Update: {
+          action?: Database["public"]["Enums"]["flashcard_actions"];
+          card_id?: number | null;
+          class_id?: number;
+          created_at?: string;
+          deck_id?: number;
+          duration_on_card_ms?: number;
+          id?: number;
+          student_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_interaction_logs_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      flashcards: {
+        Row: {
+          answer: string;
+          class_id: number;
+          created_at: string;
+          deck_id: number;
+          deleted_at: string | null;
+          id: number;
+          order: number | null;
+          prompt: string;
+          title: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          answer: string;
+          class_id: number;
+          created_at?: string;
+          deck_id: number;
+          deleted_at?: string | null;
+          id?: number;
+          order?: number | null;
+          prompt: string;
+          title: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          answer?: string;
+          class_id?: number;
+          created_at?: string;
+          deck_id?: number;
+          deleted_at?: string | null;
+          id?: number;
+          order?: number | null;
+          prompt?: string;
+          title?: string;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcards_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcards_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcards_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       grader_keys: {
         Row: {
           class_id: number;
@@ -3111,6 +3289,61 @@ export type Database = {
           }
         ];
       };
+      student_flashcard_deck_progress: {
+        Row: {
+          card_id: number;
+          class_id: number;
+          created_at: string;
+          first_answered_correctly_at: string | null;
+          is_mastered: boolean;
+          last_answered_correctly_at: string | null;
+          student_id: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          card_id: number;
+          class_id: number;
+          created_at?: string;
+          first_answered_correctly_at?: string | null;
+          is_mastered?: boolean;
+          last_answered_correctly_at?: string | null;
+          student_id: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          card_id?: number;
+          class_id?: number;
+          created_at?: string;
+          first_answered_correctly_at?: string | null;
+          is_mastered?: boolean;
+          last_answered_correctly_at?: string | null;
+          student_id?: string;
+          updated_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "student_flashcard_deck_progress_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_flashcard_deck_progress_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       submission_artifact_comments: {
         Row: {
           author: string;
@@ -4307,6 +4540,137 @@ export type Database = {
           }
         ];
       };
+      flashcard_card_analytics: {
+        Row: {
+          answer_viewed_count: number | null;
+          avg_answer_time_ms: number | null;
+          avg_got_it_time_ms: number | null;
+          avg_keep_trying_time_ms: number | null;
+          card_id: number | null;
+          class_id: number | null;
+          deck_id: number | null;
+          got_it_count: number | null;
+          keep_trying_count: number | null;
+          prompt_views: number | null;
+          returned_to_deck: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_interaction_logs_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      flashcard_deck_analytics: {
+        Row: {
+          class_id: number | null;
+          deck_id: number | null;
+          deck_name: string | null;
+          resets: number | null;
+          views: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_decks_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      flashcard_student_card_analytics: {
+        Row: {
+          answer_views: number | null;
+          avg_answer_time_ms: number | null;
+          avg_got_it_time_ms: number | null;
+          avg_keep_trying_time_ms: number | null;
+          card_id: number | null;
+          class_id: number | null;
+          deck_id: number | null;
+          got_it_count: number | null;
+          keep_trying_count: number | null;
+          prompt_views: number | null;
+          returned_to_deck: number | null;
+          student_name: string | null;
+          student_profile_id: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "flashcard_interaction_logs_card_id_fkey";
+            columns: ["card_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcards";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_deck_analytics";
+            referencedColumns: ["deck_id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_deck_id_fkey";
+            columns: ["deck_id"];
+            isOneToOne: false;
+            referencedRelation: "flashcard_decks";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "flashcard_interaction_logs_student_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      flashcard_student_deck_analytics: {
+        Row: {
+          answer_views: number | null;
+          class_id: number | null;
+          deck_id: number | null;
+          mastered_count: number | null;
+          name: string | null;
+          not_mastered_count: number | null;
+          prompt_views: number | null;
+          returned_to_deck: number | null;
+          student_profile_id: string | null;
+        };
+        Relationships: [];
+      };
       submissions_agg: {
         Row: {
           assignment_id: number | null;
@@ -4622,9 +4986,33 @@ export type Database = {
         Args: { _person_id: string; _student_id: string };
         Returns: boolean;
       };
+      log_flashcard_interaction: {
+        Args: {
+          p_action: string;
+          p_class_id: number;
+          p_deck_id: number;
+          p_student_id: string;
+          p_duration_on_card_ms: number;
+          p_card_id?: number;
+        };
+        Returns: undefined;
+      };
+      reset_all_flashcard_progress: {
+        Args: { p_class_id: number; p_student_id: string; p_card_ids: number[] };
+        Returns: undefined;
+      };
       submission_set_active: {
         Args: { _submission_id: number };
         Returns: boolean;
+      };
+      update_card_progress: {
+        Args: {
+          p_class_id: number;
+          p_student_id: string;
+          p_card_id: number;
+          p_is_mastered: boolean;
+        };
+        Returns: undefined;
       };
     };
     Enums: {
@@ -4633,6 +5021,15 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
+      flashcard_actions:
+        | "deck_viewed"
+        | "card_prompt_viewed"
+        | "card_answer_viewed"
+        | "card_marked_got_it"
+        | "card_marked_keep_trying"
+        | "card_returned_to_deck"
+        | "deck_progress_reset_all"
+        | "deck_progress_reset_card";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
     };
@@ -4748,6 +5145,16 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
+      flashcard_actions: [
+        "deck_viewed",
+        "card_prompt_viewed",
+        "card_answer_viewed",
+        "card_marked_got_it",
+        "card_marked_keep_trying",
+        "card_returned_to_deck",
+        "deck_progress_reset_all",
+        "deck_progress_reset_card"
+      ],
       review_round: ["self-review", "grading-review", "meta-grading-review"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"]
     }
