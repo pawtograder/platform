@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS "public"."emails" (
     "created_at" timestamp with time zone not null default now(),
     "subject" text not null,
     "body" text not null,
-    "class_id" bigint not null,
+    "class_id" bigint not null
 );
 
 CREATE TABLE IF NOT EXISTS "public"."email_recipients" (

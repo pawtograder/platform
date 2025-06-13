@@ -19,7 +19,6 @@ export type GeneralEmailInfo = {
   includeGraders: boolean;
 };
 
-
 export type EmailCreateData = {
   subject: string;
   body: string;
