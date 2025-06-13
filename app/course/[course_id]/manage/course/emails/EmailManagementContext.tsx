@@ -1,5 +1,5 @@
 import { Assignment, Tag } from "@/utils/supabase/DatabaseTypes";
-import { createContext, Dispatch, SetStateAction, useContext, useState } from "react";
+import { createContext, useContext, useState } from "react";
 
 export type AssignmentEmailInfo = {
   type: "assignment";
@@ -20,6 +20,7 @@ export type GeneralEmailInfo = {
 };
 
 export type EmailCreateData = {
+  id?: string;
   subject: string;
   body: string;
   cc_emails: string[];
@@ -28,7 +29,13 @@ export type EmailCreateData = {
 
 export type EmailManagementContextType = {
   emailsToCreate: EmailCreateData[];
-  setEmailsToCreate: Dispatch<SetStateAction<EmailCreateData[]>>;
+  addEmail: (email: EmailCreateData) => void;
+  removeEmail: (id: string) => void;
+  updateEmailField: (
+    id: string,
+    field: string,
+    value: string | string[] | AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo
+  ) => void;
 };
 
 export const EmailManagementContext = createContext<EmailManagementContextType>({} as EmailManagementContextType);
@@ -44,11 +51,36 @@ export const useEmailManagement = () => {
 export function EmailManagementProvider({ children }: { children: React.ReactNode }) {
   const [emailsToCreate, setEmailsToCreate] = useState<EmailCreateData[]>([]);
 
+  const addEmail = (email: EmailCreateData) => {
+    if (!email.id) {
+      email.id = crypto.randomUUID();
+    }
+    setEmailsToCreate([...emailsToCreate, email]);
+  };
+
+  const removeEmail = (id: string) => {
+    setEmailsToCreate(
+      emailsToCreate.filter((e) => {
+        return e.id != id;
+      })
+    );
+  };
+
+  const updateEmailField = (
+    id: string,
+    field: string,
+    value: string | string[] | AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo
+  ) => {
+    setEmailsToCreate((prev) => prev.map((email) => (email.id === id ? { ...email, [field]: value } : email)));
+  };
+
   return (
     <EmailManagementContext.Provider
       value={{
         emailsToCreate,
-        setEmailsToCreate
+        addEmail,
+        removeEmail,
+        updateEmailField
       }}
     >
       {children}

@@ -1,24 +1,22 @@
 "use client";
-import { Assignment, Submission, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { Button, Field, Fieldset, Text, Heading, Input, Textarea, Box, Flex, Card } from "@chakra-ui/react";
+import { Assignment, Tag } from "@/utils/supabase/DatabaseTypes";
+import { Button, Field, Fieldset, Heading, Input, Textarea, Box, Flex } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
-import { Dispatch, SetStateAction, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
 import { CreatableSelect } from "chakra-react-select";
-
 import {
   AssignmentEmailInfo,
-  EmailCreateData,
   EmailManagementProvider,
   GeneralEmailInfo,
   TagEmailInfo,
   useEmailManagement
-} from "./context";
-import { IoMdClose } from "react-icons/io";
+} from "./EmailManagementContext";
 import { toaster } from "@/components/ui/toaster";
+import EmailPreviewAndSend from "./previewAndSend";
 
 enum Audience {
   All = "all",
@@ -33,13 +31,14 @@ enum Audience {
 
 function EmailsInnerPage() {
   const { course_id } = useParams();
-  const [choice, setChoice] = useState<Audience>();
+  const { emailsToCreate, addEmail } = useEmailManagement();
+  const [choice, setChoice] = useState<{ label: string; value: Audience | null }>();
   const [assignment, setAssignment] = useState<Assignment>();
   const [tag, setTag] = useState<Tag>();
   const [subjectLine, setSubjectLine] = useState<string>("");
   const [body, setBody] = useState<string>("");
   const [ccList, setCcList] = useState<string[]>([]);
-
+  const tags = useTags();
   const options = [
     { label: "Students who have submitted an assignment", value: Audience.Submitted },
     { label: "Students who have not submitted an assignment", value: Audience.NotSubmitted },
@@ -58,9 +57,6 @@ function EmailsInnerPage() {
     },
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
-
-  const tags = useTags();
-  const { emailsToCreate, setEmailsToCreate } = useEmailManagement();
 
   const uniqueTags: Tag[] = Array.from(
     tags.tags
@@ -81,10 +77,15 @@ function EmailsInnerPage() {
   });
   const emails = userData?.data.map((item) => item.email);
 
+  /**
+   * Creates an email draft that will be held for the user to review and send.  The main computation is "audience"
+   * which is an object populated in one of three formats using the data the user entered / selected in the first few
+   * fields. Using three objects rather than a variety of optional fields ensures all the information is stored for one of
+   * the three choices, and nothing more/less.
+   */
   const prepareMail = () => {
-    console.log("prepare hit");
     let audience: AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
-    switch (choice) {
+    switch (choice?.value) {
       case Audience.Submitted:
         if (!assignment) {
           toaster.error({ title: "Failed to find assignment" });
@@ -94,7 +95,6 @@ function EmailsInnerPage() {
         break;
       case Audience.NotSubmitted:
         if (!assignment) {
-          console.log("assignmenthit");
           toaster.error({ title: "Failed to find assignment" });
           return;
         }
@@ -125,24 +125,28 @@ function EmailsInnerPage() {
       default:
         return;
     }
-    console.log(audience);
-    setEmailsToCreate([...emailsToCreate, { subject: subjectLine, body: body, cc_emails: ccList, audience: audience }]);
+    addEmail({ subject: subjectLine, body: body, cc_emails: ccList, audience: audience });
   };
 
+  // only clear the form when the size of emails to create increases (someone drafts a new email)
+  // don't clear the form if instructor deletes another email draft midway through
+  const prevEmailsToCreateLength = useRef(emailsToCreate.length);
   useEffect(() => {
-    // clear form once emailsToCreate has been properly updated
-    setSubjectLine("");
-    setBody("");
-    setCcList([]);
-    setChoice(undefined);
-    setTag(undefined);
-    setAssignment(undefined);
+    if (emailsToCreate.length > prevEmailsToCreateLength.current) {
+      setSubjectLine("");
+      setBody("");
+      setCcList([]);
+      setChoice({ label: "", value: null });
+      setTag(undefined);
+      setAssignment(undefined);
+    }
+    prevEmailsToCreateLength.current = emailsToCreate.length;
   }, [emailsToCreate]);
 
   return (
     <>
       <Flex gap="10" width="100%" wrap={{ base: "wrap", lg: "nowrap" }}>
-        <Box width={{ base: "100%", lg: "40%" }}>
+        <Box width={{ base: "100%" }}>
           <Heading size="lg" mt="5" mb="5">
             Draft email
           </Heading>
@@ -154,13 +158,14 @@ function EmailsInnerPage() {
                   isClearable={true}
                   onChange={(e) => {
                     if (e) {
-                      setChoice(e.value);
+                      setChoice(e);
                     }
                   }}
+                  value={choice}
                   options={options}
                 />
               </Field.Root>
-              {choice && (choice === Audience.NotSubmitted || choice == Audience.Submitted) && (
+              {choice && (choice.value === Audience.NotSubmitted || choice.value == Audience.Submitted) && (
                 <Field.Root>
                   <Field.Label>Choose assignment</Field.Label>
                   <Select
@@ -169,7 +174,7 @@ function EmailsInnerPage() {
                   />
                 </Field.Root>
               )}
-              {choice && choice === Audience.Tag && (
+              {choice && choice.value === Audience.Tag && (
                 <Field.Root>
                   <Field.Label>Select Tag</Field.Label>
                   <Select
@@ -227,248 +232,9 @@ function EmailsInnerPage() {
             </Fieldset.Content>
           </Fieldset.Root>
         </Box>
-        <EmailPreviewAndSend
-          course_id={course_id}
-          emailsToCreate={emailsToCreate}
-          setEmailsToCreate={setEmailsToCreate}
-          tags={tags.tags}
-        />
+        <EmailPreviewAndSend tags={tags.tags} />
       </Flex>
     </>
-  );
-}
-
-function EmailPreviewAndSend({
-  course_id,
-  emailsToCreate,
-  setEmailsToCreate,
-  tags
-}: {
-  course_id: string | string[] | undefined;
-  emailsToCreate: EmailCreateData[];
-  setEmailsToCreate: Dispatch<SetStateAction<EmailCreateData[]>>;
-  tags: Tag[];
-}) {
-  const { data: userRolesData } = useList<UserRole & { users: { email: string } }>({
-    resource: "user_roles",
-    meta: {
-      select: "*, users!user_roles_user_id_fkey1(email)"
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
-
-  type SubmissionEmails = Submission & {
-    // emails for individual submissions
-    user_roles: {
-      users: {
-        email: string;
-      };
-    } | null;
-    // emails for group submissions
-    assignment_groups: {
-      assignment_groups_members: {
-        user_roles: {
-          users: {
-            email: string;
-          };
-        };
-      }[];
-    } | null;
-  };
-
-  const { data: submissions } = useList<SubmissionEmails>({
-    resource: "submissions",
-    meta: {
-      select: `
-      *,
-        user_roles!submissions_profile_id_fkey (
-          users!user_roles_user_id_fkey1 (
-            email
-          )
-        ),
-        assignment_groups!submissions_assignment_group_id_fkey (
-          assignment_groups_members!assignment_groups_members_assignment_group_id_fkey (
-              user_roles!assignment_groups_members_profile_id_fkey1(
-                users!user_roles_user_id_fkey1 (
-                  email
-            )
-        )
-          )
-        )
-      `
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "is_active", operator: "eq", value: true }
-    ]
-  });
-
-  const emailToAudienceText = (email: EmailCreateData) => {
-    if (email.audience.type === "assignment") {
-      return (
-        <>
-          Students who have {email.audience.submissionType} {email.audience.assignment.title}
-        </>
-      );
-    } else if (email.audience.type === "tag") {
-      return (
-        <>
-          Anyone who is tagged with <TagDisplay tag={email.audience.tag} />
-        </>
-      );
-    } else if (email.audience.type === "general") {
-      let str = "";
-      if (email.audience.includeInstructors) {
-        str += "Instructors ";
-      }
-      if (email.audience.includeGraders) {
-        str += "Graders ";
-      }
-      if (email.audience.includeStudents) {
-        str += "Students";
-      }
-      return <>{str}</>;
-    }
-    return <>No audience selected</>;
-  };
-
-  const sendEmails = () => {
-    emailsToCreate.forEach(async (emailToCreate) => {
-      await sendEmail(emailToCreate);
-    });
-  };
-  const sendEmail = async (emailToCreate: EmailCreateData) => {
-    const emails = getEmailsToSendTo(emailToCreate);
-    console.log(emails);
-  };
-
-  const getEmailsToSendTo = (emailToCreate: EmailCreateData) => {
-    const recipients = [];
-    if (emailToCreate.audience.type === "assignment") {
-      const assignment = emailToCreate.audience.assignment;
-      const submittedEmails =
-        submissions?.data
-          .filter((submission) => {
-            return submission.assignment_id == assignment.id;
-          })
-          .map((submission) => {
-            return submission.user_roles
-              ? [submission.user_roles.users.email]
-              : submission.assignment_groups
-                ? submission.assignment_groups.assignment_groups_members.map((member) => {
-                    return member.user_roles.users.email.toString();
-                  })
-                : [];
-          })
-          .reduce((prev, next) => {
-            return prev.concat(next);
-          }, []) ?? [];
-      if (emailToCreate.audience.submissionType === "submitted") {
-        recipients.push(submittedEmails);
-      } else if (emailToCreate.audience.submissionType === "not submitted") {
-        const studentEmailsForClass = userRolesData?.data
-          .filter((user) => {
-            return user.role === "student";
-          })
-          .map((user) => {
-            return user.users.email;
-          });
-        recipients.push(
-          studentEmailsForClass?.filter((email) => {
-            return !submittedEmails.includes(email);
-          })
-        );
-      }
-    } else if (emailToCreate.audience.type === "tag") {
-      const chosenTag = emailToCreate.audience.tag;
-      const profile_ids = tags
-        .filter((tag) => {
-          return tag.color == chosenTag.color && tag.name == chosenTag.name && tag.visible === chosenTag.visible;
-        })
-        .map((tag) => {
-          return tag.profile_id;
-        });
-      const emails = userRolesData?.data
-        .filter((user) => {
-          return profile_ids.includes(user.private_profile_id);
-        })
-        .map((user) => {
-          return user.users.email;
-        });
-      recipients.push(emails);
-    } else if (emailToCreate.audience.type === "general") {
-      const roles: string[] = [];
-      if (emailToCreate.audience.includeGraders) {
-        roles.push("grader");
-      }
-      if (emailToCreate.audience.includeInstructors) {
-        roles.push("instructor");
-      }
-      if (emailToCreate.audience.includeStudents) {
-        roles.push("student");
-      }
-      recipients.push(
-        userRolesData?.data
-          .filter((userRole) => {
-            return roles.includes(userRole.role);
-          })
-          .map((userRole) => {
-            return userRole.users.email;
-          })
-      );
-    }
-    return recipients;
-  };
-
-  return (
-    <Box width={{ base: "100%", lg: "40%" }}>
-      <Heading size="lg" mt="5" mb="5">
-        Preview and send
-      </Heading>
-      {emailsToCreate.length > 0 ? (
-        <Box spaceY="4">
-          {emailsToCreate.map((email, key) => {
-            return (
-              <Card.Root key={key} padding="2" mt="5" maxWidth="2xl" size="sm">
-                <Flex justifyContent={"space-between"}>
-                  <Card.Title>Subject: {email.subject}</Card.Title>
-                  <Text
-                    onClick={() =>
-                      setEmailsToCreate(
-                        emailsToCreate.filter((e) => {
-                          return e != email;
-                        })
-                      )
-                    }
-                  >
-                    <IoMdClose />
-                  </Text>
-                </Flex>
-                <Flex flexDir={"column"} fontSize="sm">
-                  <Text>To: {emailToAudienceText(email)}</Text>
-                  <Text>
-                    Cc:{" "}
-                    {email.cc_emails.map((cc) => {
-                      return cc + " ";
-                    })}
-                  </Text>
-                  <Text>Body: {email.body}</Text>
-                </Flex>
-              </Card.Root>
-            );
-          })}
-          <Button
-            onClick={() => {
-              sendEmails();
-            }}
-          >
-            Send emails
-          </Button>
-        </Box>
-      ) : (
-        <Text>No emails drafted at this time</Text>
-      )}
-    </Box>
   );
 }
 
