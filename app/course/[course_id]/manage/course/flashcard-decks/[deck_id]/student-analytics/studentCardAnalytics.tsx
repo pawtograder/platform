@@ -6,6 +6,7 @@ import { Box, HStack, Input, Spinner, Table, Text, VStack } from "@chakra-ui/rea
 import { useList } from "@refinedev/core";
 import {
   ColumnDef,
+  ColumnFiltersState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
@@ -13,10 +14,10 @@ import {
   getSortedRowModel,
   Row,
   SortingState,
-  useReactTable,
-  ColumnFiltersState
+  useReactTable
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
+import Papa from "papaparse";
 import { useMemo, useState } from "react";
 
 // Supabase types
@@ -242,6 +243,19 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
     return <Spinner />;
   }
 
+  // Export handler
+  const handleExportCSV = () => {
+    if (!analyticsData.length) return;
+    const csv = Papa.unparse(analyticsData);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `student_card_analytics_${deckId}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const currentRows = getRowModel().rows;
 
   if (currentRows.length === 0) {
@@ -250,6 +264,12 @@ export default function StudentCardAnalytics({ deckId, courseId }: StudentCardAn
 
   return (
     <VStack align="stretch" w="100%">
+      {/* Export Button */}
+      <HStack justifyContent="flex-end" mb={2}>
+        <Button size="sm" colorPalette="green" variant="subtle" onClick={handleExportCSV}>
+          Export CSV
+        </Button>
+      </HStack>
       <Box overflowX="auto">
         <Table.Root striped style={{ tableLayout: "fixed", width: "100%" }}>
           <Table.Header>

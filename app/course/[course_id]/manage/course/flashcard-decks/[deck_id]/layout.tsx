@@ -1,11 +1,11 @@
 "use client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
+import { Box, Button, Flex, Heading, HStack, IconButton, Link, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
 import NextLink from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import React from "react";
-import { FaHome, FaChartBar, FaUsers } from "react-icons/fa";
+import { FaArrowLeft, FaChartBar, FaHome, FaUsers } from "react-icons/fa";
 
 // Supabase types
 type FlashcardDeckRow = Database["public"]["Tables"]["flashcard_decks"]["Row"];
@@ -69,7 +69,14 @@ export default function FlashcardDeckLayout({ children }: { children: React.Reac
         </VStack>
       </Box>
       <Box borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4} flexGrow={1} minWidth="0">
-        <Heading size="lg">Flashcard Deck: {deck ? deck.data?.name : "Loading..."}</Heading>
+        <HStack justifyContent="flex-start" gap={0}>
+          <Link href={`/course/${course_id}/manage/course/flashcard-decks`}>
+            <IconButton variant="ghost" size="sm" aria-label="Go back to flashcard decks">
+              <FaArrowLeft />
+            </IconButton>
+          </Link>
+          <Heading size="lg">Flashcard Deck: {deck ? deck.data?.name : "Loading..."}</Heading>
+        </HStack>
         <Box>{children}</Box>
       </Box>
     </Flex>

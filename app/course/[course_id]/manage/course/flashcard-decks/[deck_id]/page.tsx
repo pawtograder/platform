@@ -2,7 +2,6 @@
 
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
@@ -12,7 +11,7 @@ import { Badge, Box, Heading, HStack, IconButton, Spinner, Text, VStack } from "
 import { useDelete, useList, useOne } from "@refinedev/core";
 import { format } from "date-fns";
 import { useParams, useRouter } from "next/navigation";
-import { FaArrowLeft, FaEdit, FaPlus, FaTrash } from "react-icons/fa";
+import { FaEdit, FaPlus, FaTrash } from "react-icons/fa";
 import AddFlashCardModal from "./addFlashCardModal";
 import EditDeckModal from "./editDeckModal";
 import EditFlashCardModal from "./editFlashCardModal";
@@ -169,16 +168,15 @@ export default function FlashcardDeckPage() {
       {/* Header Section */}
       <HStack justifyContent="space-between" alignItems="flex-start">
         <HStack gap={4} align="flex-start">
-          <Link href={`/course/${course_id}/manage/course/flashcard-decks`}>
-            <IconButton variant="ghost" size="sm" aria-label="Go back to flashcard decks">
-              <FaArrowLeft />
-            </IconButton>
-          </Link>
           <VStack align="start" gap={2}>
             <HStack gap={3} align="center">
-              <Heading size="xl">{deck.name}</Heading>
+              <Heading size="md">Edit Flashcard Deck</Heading>
               <Badge variant="subtle" px={2} py={1}>
-                {flashcards.length} {flashcards.length === 1 ? "card" : "cards"}
+                {isFlashcardsLoading ? (
+                  <Spinner />
+                ) : (
+                  `${flashcards.length} ${flashcards.length === 1 ? "card" : "cards"}`
+                )}
               </Badge>
             </HStack>
             <Text fontSize="sm">
