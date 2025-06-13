@@ -2,6 +2,11 @@
   --nav-height: 140px;
 }
 
+a,
+button {
+  cursor: pointer;
+}
+
 .embedded-markdown ol {
   list-style-type: decimal;
   margin: 0em 0;
