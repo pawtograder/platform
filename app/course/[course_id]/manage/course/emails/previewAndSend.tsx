@@ -1,6 +1,6 @@
 import { EmailCreateData, useEmailManagement } from "./EmailManagementContext";
 import { Submission, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { useList } from "@refinedev/core";
+import { useCreate, useList } from "@refinedev/core";
 import TagDisplay from "@/components/ui/tag";
 import { Box, Button, Card, Editable, Flex, Heading, Text } from "@chakra-ui/react";
 import { IoMdClose } from "react-icons/io";
@@ -9,12 +9,13 @@ import { useParams } from "next/navigation";
 export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
   const { course_id } = useParams();
   const { emailsToCreate, removeEmail, updateEmailField } = useEmailManagement();
-  type UserRoleWithEmail = UserRole & { users: { email: string } };
+  type UserRoleWithUserId = UserRole & { users: { user_id: string } };
+  const {mutateAsync} = useCreate();
 
-  const { data: userRolesData } = useList<UserRoleWithEmail>({
+  const { data: userRolesData } = useList<UserRoleWithUserId>({
     resource: "user_roles",
     meta: {
-      select: "*, users!user_roles_user_id_fkey1(email)"
+      select: "*, users!user_roles_user_id_fkey1(user_id)"
     },
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
@@ -23,7 +24,7 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
     // emails for individual submissions
     user_roles: {
       users: {
-        email: string;
+        user_id: string;
       };
     } | null;
     // emails for group submissions
@@ -31,7 +32,7 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
       assignment_groups_members: {
         user_roles: {
           users: {
-            email: string;
+            user_id: string;
           };
         };
       }[];
@@ -45,14 +46,14 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
       *,
         user_roles!submissions_profile_id_fkey (
           users!user_roles_user_id_fkey1 (
-            email
+            user_id
           )
         ),
         assignment_groups!submissions_assignment_group_id_fkey (
           assignment_groups_members!assignment_groups_members_assignment_group_id_fkey (
               user_roles!assignment_groups_members_profile_id_fkey1(
                 users!user_roles_user_id_fkey1 (
-                  email
+                  user_id
             )
         )
           )
@@ -107,8 +108,29 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
   };
 
   const sendSingleEmail = async (emailToCreate: EmailCreateData) => {
-    const emails = getEmailsToSendTo(emailToCreate);
-    console.log(emails);
+   const ids = getIdsToSendTo(emailToCreate);
+   // console.log(emails);
+   // user_id
+   // class_id
+   const {data:createdEmail} = await mutateAsync({
+        resource:"emails",
+        values: {
+          class_id:course_id,
+          subject:emailToCreate.subject,
+          body:emailToCreate.body
+        }
+      });
+   ids.forEach(async (id) => {
+      await mutateAsync({
+        resource:"email_recipients",
+        values: {
+          user_id:id,
+          class_id:course_id,
+          email_id:createdEmail.id
+        }
+      });
+      
+   })
   };
 
   /**
@@ -116,21 +138,21 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
    * apply to.  This function will be called once per drafted email (EmailCreateData)
    * when the "send" button is pressed.
    */
-  const getEmailsToSendTo = (emailToCreate: EmailCreateData) => {
+  const getIdsToSendTo = (emailToCreate: EmailCreateData) => {
     const recipients: string[] = [];
     if (emailToCreate.audience.type === "assignment") {
       const assignment = emailToCreate.audience.assignment;
-      const submittedEmails =
+      const submittedIds =
         submissions?.data
           .filter((submission) => {
             return submission.assignment_id == assignment.id;
           })
           .map((submission) => {
             return submission.user_roles
-              ? [submission.user_roles.users.email]
+              ? [submission.user_roles.users.user_id]
               : submission.assignment_groups
                 ? submission.assignment_groups.assignment_groups_members.map((member) => {
-                    return member.user_roles.users.email.toString();
+                    return member.user_roles.users.user_id.toString();
                   })
                 : [];
           })
@@ -138,21 +160,21 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
             return prev.concat(next);
           }, []) ?? [];
       if (emailToCreate.audience.submissionType === "submitted") {
-        submittedEmails.forEach((email) => recipients.push(email));
+        submittedIds.forEach((id) => recipients.push(id));
       } else if (emailToCreate.audience.submissionType === "not submitted") {
-        const studentEmailsForClass = userRolesData?.data
+        const studentIdsForClass = userRolesData?.data
           .filter((user) => {
             return user.role === "student";
           })
           .map((user) => {
-            return user.users.email;
+            return user.users.user_id;
           });
-        studentEmailsForClass
-          ?.filter((email) => {
-            return !submittedEmails.includes(email);
+        studentIdsForClass
+          ?.filter((id) => {
+            return !submittedIds.includes(id);
           })
-          .forEach((email) => {
-            recipients.push(email);
+          .forEach((id) => {
+            recipients.push(id);
           });
       }
     } else if (emailToCreate.audience.type === "tag") {
@@ -164,14 +186,14 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
         .map((tag) => {
           return tag.profile_id;
         });
-      const emails = userRolesData?.data
+      const ids = userRolesData?.data
         .filter((user) => {
           return profile_ids.includes(user.private_profile_id);
         })
         .map((user) => {
-          return user.users.email;
+          return user.users.user_id;
         });
-      emails?.forEach((email) => recipients.push(email));
+      ids?.forEach((id) => recipients.push(id));
     } else if (emailToCreate.audience.type === "general") {
       const roles: string[] = [];
       if (emailToCreate.audience.includeGraders) {
@@ -188,9 +210,9 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
           return roles.includes(userRole.role);
         })
         .map((userRole) => {
-          return userRole.users.email;
+          return userRole.users.user_id;
         })
-        .forEach((email) => recipients.push(email));
+        .forEach((id) => recipients.push(id));
     }
     return recipients;
   };
@@ -205,7 +227,6 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
           {emailsToCreate.map((email, key) => {
             return (
               <Card.Root key={key} padding="2" mt="5" size="sm">
-                np
                 <Flex justifyContent={"space-between"}>
                   <Card.Title>
                     <Flex alignItems="center">

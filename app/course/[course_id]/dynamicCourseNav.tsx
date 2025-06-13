@@ -72,7 +72,7 @@ const LinkItems = (courseID: number) => [
       { name: "Enrollments", icon: FiUsers, target: `/course/${courseID}/manage/course/enrollments` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
-      { name: "Manage Emails", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` }
+      { name: "Emailer", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` }
     ]
   }
 ];
