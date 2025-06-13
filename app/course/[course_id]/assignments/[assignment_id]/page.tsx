@@ -8,7 +8,7 @@ import { TZDate } from "@date-fns/tz";
 import { format } from "date-fns";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
-import {
+import type {
   Assignment,
   Repository,
   SelfReviewSettings,
@@ -18,7 +18,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import useAuthState from "@/hooks/useAuthState";
-import { CrudFilter, useList } from "@refinedev/core";
+import { type CrudFilter, useList } from "@refinedev/core";
 
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {
@@ -34,7 +34,7 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+        <Link href={`https://github.com/${repositories[0]?.repository}`}>{repositories[0]?.repository}</Link>
       </HStack>
     );
   }
@@ -124,12 +124,11 @@ export default function AssignmentPage() {
       }
     ],
     queryOptions: {
-      enabled: assignmentData?.data[0].group_config !== "individual" && !!enrollment?.private_profile_id
+      enabled: assignmentData?.data?.[0]?.group_config !== "individual" && !!enrollment?.private_profile_id
     }
   });
 
-  const assignment_group_id: number | undefined =
-    groupData && groupData.data.length > 0 ? groupData.data[0].assignment_group_id : null;
+  const assignment_group_id: number | undefined = groupData?.data?.[0]?.["assignment_group_id"];
 
   const filters: CrudFilter[] = [{ field: "assignment_id", operator: "eq", value: assignment_id }];
   if (assignment_group_id) {
@@ -145,7 +144,7 @@ export default function AssignmentPage() {
       select: "*",
       limit: 1
     },
-    filters: [{ field: "id", operator: "eq", value: assignmentData?.data[0].self_review_setting_id }],
+    filters: [{ field: "id", operator: "eq", value: assignmentData?.data?.[0]?.self_review_setting_id }],
     queryOptions: {
       enabled: !!assignmentData && assignmentData.data.length !== 0
     }
@@ -155,7 +154,7 @@ export default function AssignmentPage() {
     return <div>Assignment not found</div>;
   }
 
-  const assignment = assignmentData.data[0];
+  const assignment = assignmentData.data[0]!;
   const repositories = repositoriesData?.data;
   const submissions = submissionsData?.data;
   const review_settings = reviewSettingsData && reviewSettingsData.data.length > 0 ? reviewSettingsData.data[0] : null;

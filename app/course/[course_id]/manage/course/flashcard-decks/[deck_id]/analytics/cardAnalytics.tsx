@@ -1,7 +1,7 @@
 "use client";
 
 import { useList } from "@refinedev/core";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Heading, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";

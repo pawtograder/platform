@@ -2,10 +2,10 @@
 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
-import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
 import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useCreate, useList } from "@refinedev/core";
+import { type CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, isAfter } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";
@@ -167,12 +167,11 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
                     type: "success"
                   });
                 } catch (err) {
-                  console.error(err);
-                  toaster.create({
+                  toaster.error({
                     title: "Error consuming late token",
                     description:
-                      "An error occurred while consuming the late token. Please try again, and reach out to your instructor if the problem persists.",
-                    type: "error"
+                      "An error occurred while consuming the late token. Please try again, and reach out to your instructor if the problem persists. More details: " +
+                      (err instanceof Error ? err.message : "Unknown error")
                   });
                 }
               }}

@@ -1,6 +1,6 @@
 "use client";
 import { Button } from "@/components/ui/button";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -51,14 +51,14 @@ import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubric
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { Select as ChakraReactSelect, type OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname } from "next/navigation";
 import path from "path";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
 import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
-import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
+import { isRubricCheckDataWithOptions, type RubricCheckSubOption } from "./code-file";
 import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
 
@@ -766,7 +766,7 @@ export function RubricCheckGlobal({
   const hasOptions = isRubricCheckDataWithOptions(check.data) && check.data.options.length > 0;
   const _selectedOptionIndex =
     hasOptions && rubricCheckComments.length == 1 && isRubricCheckDataWithOptions(check.data)
-      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
+      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0]?.points)
       : undefined;
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
   useEffect(() => {
@@ -1186,7 +1186,7 @@ export function RubricCriteria({
   }
   const singleCheck =
     criteria.max_checks_per_submission === 1 && comments.length === 1
-      ? comments[0].rubric_check_id?.toString()
+      ? comments[0]?.rubric_check_id?.toString()
       : undefined;
   criteria.rubric_checks.sort((a, b) => a.ordinal - b.ordinal);
   return (

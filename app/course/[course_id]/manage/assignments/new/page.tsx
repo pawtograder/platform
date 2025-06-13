@@ -3,7 +3,7 @@ import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useCourseController";
 import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";

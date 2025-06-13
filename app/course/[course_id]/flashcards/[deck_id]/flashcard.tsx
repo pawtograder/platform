@@ -1,7 +1,7 @@
 "use client";
 
 import Markdown from "@/components/ui/markdown";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Button, Card, HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
 import { FaCheckCircle, FaTimes } from "react-icons/fa";
 import { MdReplay } from "react-icons/md";

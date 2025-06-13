@@ -20,6 +20,7 @@ import { StyleSheetManager, ThemeProvider } from "styled-components";
 import { useParams } from "next/navigation";
 import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import { toaster } from "@/components/ui/toaster";
 const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => {
   return (
     <ThemeProvider theme={lightTheme}>
@@ -62,13 +63,19 @@ function HelpMeeting() {
   useEffect(() => {
     const joinMeeting = async () => {
       // Fetch the meeting and attendee data from your server application
-      console.log("Fetching meeting and attendee data");
+      toaster.loading({
+        title: "Fetching meeting and attendee data",
+        description: "This may take a few seconds"
+      });
       const supabase = createClient();
       const { Meeting, Attendee } = await liveMeetingForHelpRequest(
         { courseId: parseInt(course_id as string), helpRequestId: parseInt(help_request_id as string) },
         supabase
       );
-      console.log("Meeting and attendee data fetched");
+      toaster.create({
+        title: "Meeting and attendee data fetched",
+        type: "info"
+      });
       const meetingSessionConfiguration = new MeetingSessionConfiguration(Meeting, Attendee);
       await meetingManager.join(meetingSessionConfiguration);
 
@@ -79,13 +86,14 @@ function HelpMeeting() {
 
       // Start the `MeetingSession` to join the meeting
       await meetingManager.start();
-      console.log("Meeting joined and started");
+      toaster.success({
+        title: "Meeting joined and started"
+      });
+      toaster.dismiss();
     };
     if (!initialized.current) {
       initialized.current = true;
-
-      console.log("Triggering join meeting");
-      console.log(meetingManager);
+      // eslint-disable-next-line no-console
       joinMeeting().catch(console.error);
     }
     return () => {

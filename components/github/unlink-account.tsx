@@ -4,10 +4,11 @@ import { Button, VStack } from "@chakra-ui/react";
 import { createBrowserClient } from "@supabase/ssr";
 import { BsGithub } from "react-icons/bs";
 import { PopConfirm } from "../ui/popconfirm";
+import { toaster } from "../ui/toaster";
 export default function UnlinkAccount() {
   const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+    process.env["NEXT_PUBLIC_SUPABASE_URL"] || "",
+    process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"] || ""
   );
   return (
     <VStack>
@@ -38,7 +39,11 @@ export default function UnlinkAccount() {
           }
         }}
         onCancel={() => {
-          console.log("Canceled");
+          toaster.create({
+            title: "Canceled",
+            description: "You did not unlink your GitHub account",
+            type: "info"
+          });
         }}
       ></PopConfirm>
     </VStack>

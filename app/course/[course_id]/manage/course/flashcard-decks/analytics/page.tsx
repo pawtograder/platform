@@ -13,7 +13,7 @@ import { FaArrowLeft } from "react-icons/fa";
  */
 export default function FlashcardDeckAnalyticsPage() {
   const params = useParams();
-  const course_id = params.course_id as string;
+  const course_id = params["course_id"] as string;
 
   return (
     <VStack align="stretch" w="100%" gap={6} p={6}>
