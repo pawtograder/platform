@@ -92,19 +92,16 @@ BEGIN
    WHEN 'INSERT' THEN
       SELECT * FROM public.emails WHERE id = NEW.email_id INTO email;
 
-      -- Safe conversion to JSONB
       BEGIN
-         -- If email.body is already valid JSON, convert it
          body_jsonb := email.body::jsonb;
          subject_jsonb := email.subject::jsonb;
       EXCEPTION
          WHEN OTHERS THEN
-            -- If not valid JSON, wrap it as a simple JSON string
             body_jsonb := to_jsonb(email.body);
             subject_jsonb := to_jsonb(email.subject);
       END;
 
-      INSERT INTO notifications (class_id, subject, body, style, user_id) VALUES 
+      INSERT INTO notifications (class_id, "subject", body, style, user_id) VALUES 
         (email.class_id, subject_jsonb, body_jsonb, 'email', NEW.user_id);
 
    ELSE

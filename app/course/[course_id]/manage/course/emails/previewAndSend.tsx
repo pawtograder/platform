@@ -1,16 +1,23 @@
-import { EmailCreateData, useEmailManagement } from "./EmailManagementContext";
+import {
+  AssignmentEmailInfo,
+  EmailCreateData,
+  GeneralEmailInfo,
+  TagEmailInfo,
+  useEmailManagement
+} from "./EmailManagementContext";
 import { Submission, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useList } from "@refinedev/core";
 import TagDisplay from "@/components/ui/tag";
 import { Box, Button, Card, Editable, Flex, Heading, Text } from "@chakra-ui/react";
 import { IoMdClose } from "react-icons/io";
 import { useParams } from "next/navigation";
+import { toaster } from "@/components/ui/toaster";
 
 export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
   const { course_id } = useParams();
   const { emailsToCreate, removeEmail, updateEmailField } = useEmailManagement();
   type UserRoleWithUserId = UserRole & { users: { user_id: string } };
-  const {mutateAsync} = useCreate();
+  const { mutateAsync } = useCreate();
 
   const { data: userRolesData } = useList<UserRoleWithUserId>({
     resource: "user_roles",
@@ -103,34 +110,40 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
 
   const sendEmails = () => {
     emailsToCreate.forEach(async (emailToCreate) => {
-      await sendSingleEmail(emailToCreate);
+      await sendSingleEmail(emailToCreate)
+        .then(() => {
+          toaster.success({
+            title: "Successfully sent email " + emailToCreate.subject,
+            description: "To: " + emailToAudienceText(emailToCreate)
+          });
+        })
+        .catch((error) => {
+          toaster.error({ title: "Error sending email " + emailToCreate.subject, description: error.message });
+        });
+      removeEmail(emailToCreate.id);
     });
   };
 
   const sendSingleEmail = async (emailToCreate: EmailCreateData) => {
-   const ids = getIdsToSendTo(emailToCreate);
-   // console.log(emails);
-   // user_id
-   // class_id
-   const {data:createdEmail} = await mutateAsync({
-        resource:"emails",
-        values: {
-          class_id:course_id,
-          subject:emailToCreate.subject,
-          body:emailToCreate.body
-        }
-      });
-   ids.forEach(async (id) => {
+    const ids = getIdsToSendTo(emailToCreate);
+    const { data: createdEmail } = await mutateAsync({
+      resource: "emails",
+      values: {
+        class_id: course_id,
+        subject: emailToCreate.subject,
+        body: emailToCreate.body
+      }
+    });
+    ids.forEach(async (id) => {
       await mutateAsync({
-        resource:"email_recipients",
+        resource: "email_recipients",
         values: {
-          user_id:id,
-          class_id:course_id,
-          email_id:createdEmail.id
+          user_id: id,
+          class_id: course_id,
+          email_id: createdEmail.id
         }
       });
-      
-   })
+    });
   };
 
   /**
@@ -139,82 +152,93 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
    * when the "send" button is pressed.
    */
   const getIdsToSendTo = (emailToCreate: EmailCreateData) => {
-    const recipients: string[] = [];
     if (emailToCreate.audience.type === "assignment") {
-      const assignment = emailToCreate.audience.assignment;
-      const submittedIds =
-        submissions?.data
-          .filter((submission) => {
-            return submission.assignment_id == assignment.id;
-          })
-          .map((submission) => {
-            return submission.user_roles
-              ? [submission.user_roles.users.user_id]
-              : submission.assignment_groups
-                ? submission.assignment_groups.assignment_groups_members.map((member) => {
-                    return member.user_roles.users.user_id.toString();
-                  })
-                : [];
-          })
-          .reduce((prev, next) => {
-            return prev.concat(next);
-          }, []) ?? [];
-      if (emailToCreate.audience.submissionType === "submitted") {
-        submittedIds.forEach((id) => recipients.push(id));
-      } else if (emailToCreate.audience.submissionType === "not submitted") {
-        const studentIdsForClass = userRolesData?.data
+      return getAssignmentIds(emailToCreate.audience);
+    } else if (emailToCreate.audience.type === "tag") {
+      return getTagIds(emailToCreate.audience);
+    } else if (emailToCreate.audience.type === "general") {
+      return getGeneralIds(emailToCreate.audience);
+    }
+    return [];
+  };
+
+  const getAssignmentIds = (audience: AssignmentEmailInfo) => {
+    const assignment = audience.assignment;
+    const submittedIds =
+      submissions?.data
+        .filter((submission) => {
+          return submission.assignment_id == assignment.id;
+        })
+        .map((submission) => {
+          return submission.user_roles
+            ? [submission.user_roles.users.user_id]
+            : submission.assignment_groups
+              ? submission.assignment_groups.assignment_groups_members.map((member) => {
+                  return member.user_roles.users.user_id.toString();
+                })
+              : [];
+        })
+        .reduce((prev, next) => {
+          return prev.concat(next);
+        }, []) ?? [];
+    if (audience.submissionType === "submitted") {
+      return submittedIds;
+    } else if (audience.submissionType === "not submitted") {
+      const studentIdsForClass =
+        userRolesData?.data
           .filter((user) => {
             return user.role === "student";
           })
           .map((user) => {
             return user.users.user_id;
-          });
-        studentIdsForClass
-          ?.filter((id) => {
-            return !submittedIds.includes(id);
-          })
-          .forEach((id) => {
-            recipients.push(id);
-          });
-      }
-    } else if (emailToCreate.audience.type === "tag") {
-      const chosenTag = emailToCreate.audience.tag;
-      const profile_ids = tags
-        .filter((tag) => {
-          return tag.color == chosenTag.color && tag.name == chosenTag.name && tag.visible === chosenTag.visible;
-        })
-        .map((tag) => {
-          return tag.profile_id;
-        });
-      const ids = userRolesData?.data
+          }) ?? [];
+      return studentIdsForClass?.filter((id) => {
+        return !submittedIds.includes(id);
+      });
+    }
+    return [];
+  };
+
+  const getTagIds = (audience: TagEmailInfo) => {
+    const chosenTag = audience.tag;
+    const profile_ids = tags
+      .filter((tag) => {
+        return tag.color == chosenTag.color && tag.name == chosenTag.name && tag.visible === chosenTag.visible;
+      })
+      .map((tag) => {
+        return tag.profile_id;
+      });
+    const ids =
+      userRolesData?.data
         .filter((user) => {
           return profile_ids.includes(user.private_profile_id);
         })
         .map((user) => {
           return user.users.user_id;
-        });
-      ids?.forEach((id) => recipients.push(id));
-    } else if (emailToCreate.audience.type === "general") {
-      const roles: string[] = [];
-      if (emailToCreate.audience.includeGraders) {
-        roles.push("grader");
-      }
-      if (emailToCreate.audience.includeInstructors) {
-        roles.push("instructor");
-      }
-      if (emailToCreate.audience.includeStudents) {
-        roles.push("student");
-      }
+        }) ?? [];
+    return ids;
+  };
+
+  const getGeneralIds = (audience: GeneralEmailInfo) => {
+    const roles: string[] = [];
+    if (audience.includeGraders) {
+      roles.push("grader");
+    }
+    if (audience.includeInstructors) {
+      roles.push("instructor");
+    }
+    if (audience.includeStudents) {
+      roles.push("student");
+    }
+    return (
       userRolesData?.data
         .filter((userRole) => {
           return roles.includes(userRole.role);
         })
         .map((userRole) => {
           return userRole.users.user_id;
-        })
-        .forEach((id) => recipients.push(id));
-    }
-    return recipients;
+        }) ?? []
+    );
   };
 
   return (

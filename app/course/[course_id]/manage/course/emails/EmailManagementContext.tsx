@@ -20,7 +20,14 @@ export type GeneralEmailInfo = {
 };
 
 export type EmailCreateData = {
-  id?: string;
+  id: string;
+  subject: string;
+  body: string;
+  cc_emails: string[];
+  audience: AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
+};
+
+export type EmailCreateDataWithoutId = {
   subject: string;
   body: string;
   cc_emails: string[];
@@ -29,7 +36,7 @@ export type EmailCreateData = {
 
 export type EmailManagementContextType = {
   emailsToCreate: EmailCreateData[];
-  addEmail: (email: EmailCreateData) => void;
+  addEmail: (email: EmailCreateDataWithoutId) => void;
   removeEmail: (id: string) => void;
   updateEmailField: (
     id: string,
@@ -51,11 +58,17 @@ export const useEmailManagement = () => {
 export function EmailManagementProvider({ children }: { children: React.ReactNode }) {
   const [emailsToCreate, setEmailsToCreate] = useState<EmailCreateData[]>([]);
 
-  const addEmail = (email: EmailCreateData) => {
-    if (!email.id) {
-      email.id = crypto.randomUUID();
-    }
-    setEmailsToCreate([...emailsToCreate, email]);
+  const addEmail = (email: EmailCreateDataWithoutId) => {
+    setEmailsToCreate([
+      ...emailsToCreate,
+      {
+        id: crypto.randomUUID(),
+        subject: email.subject,
+        body: email.body,
+        cc_emails: email.cc_emails,
+        audience: email.audience
+      }
+    ]);
   };
 
   const removeEmail = (id: string) => {
