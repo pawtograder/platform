@@ -8,7 +8,7 @@ export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
+  "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
 >;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
@@ -168,7 +168,7 @@ export type SubmissionReviewWithRubric = GetResult<
   Database["public"]["Tables"]["submission_reviews"]["Row"],
   "submission_reviews",
   Database["public"]["Tables"]["submission_reviews"]["Relationships"],
-  "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
+  "*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
 >;
 export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"],
@@ -450,8 +450,12 @@ export type HydratedRubricCriteria = Omit<Database["public"]["Tables"]["rubric_c
   data?: RubricCriteriaDataType;
 };
 export type RubricCriteriaDataType = Json;
-export type HydratedRubricCheck = Omit<Database["public"]["Tables"]["rubric_checks"]["Row"], "data"> & {
+export type HydratedRubricCheck = Omit<
+  Database["public"]["Tables"]["rubric_checks"]["Row"],
+  "data" | "student_visibility"
+> & {
   data?: Json;
+  student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
 };
 export type RubricChecksDataType = {
   options: {
@@ -518,6 +522,7 @@ export type YmlRubricChecksType = Omit<
   | "max_annotations"
   | "artifact"
   | "annotation_target"
+  | "data"
 > & {
   id?: number;
   description?: string;
@@ -525,6 +530,7 @@ export type YmlRubricChecksType = Omit<
   artifact?: string;
   max_annotations?: number;
   annotation_target?: "file" | "artifact";
+  data?: RubricChecksDataType;
 };
 
 export type AssignmentDueDateException = GetResult<
@@ -572,5 +578,64 @@ export type EmailDistributionItem = GetResult<
   Database["public"]["Tables"]["email_distribution_item"]["Row"],
   "email_distribution_item",
   Database["public"]["Tables"]["email_distribution_item"]["Relationships"],
+  "*"
+>;
+
+/**
+ * Flashcard Deck Types
+ */
+export type FlashcardDeck = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_decks"]["Row"],
+  "flashcard_decks",
+  Database["public"]["Tables"]["flashcard_decks"]["Relationships"],
+  "*"
+>;
+
+export type Flashcard = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcards"]["Row"],
+  "flashcards",
+  Database["public"]["Tables"]["flashcards"]["Relationships"],
+  "*"
+>;
+
+export type FlashcardDeckWithCards = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_decks"]["Row"],
+  "flashcard_decks",
+  Database["public"]["Tables"]["flashcard_decks"]["Relationships"],
+  "*, flashcards(*)"
+>;
+
+export type StudentFlashcardDeckProgress = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["student_flashcard_deck_progress"]["Row"],
+  "student_flashcard_deck_progress",
+  Database["public"]["Tables"]["student_flashcard_deck_progress"]["Relationships"],
+  "*"
+>;
+
+export type FlashcardInteractionLog = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"],
+  "flashcard_interaction_logs",
+  Database["public"]["Tables"]["flashcard_interaction_logs"]["Relationships"],
+  "*"
+>;
+
+export type SelfReviewSettings = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Row"],
+  "self_review_settings",
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Relationships"],
+  "*"
+>;
+
+export type ReviewAssignments = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["review_assignments"]["Row"],
+  "review_assignments",
+  Database["public"]["Tables"]["review_assignments"]["Relationships"],
   "*"
 >;

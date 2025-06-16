@@ -36,6 +36,8 @@ import {
   StudentMoveData,
   useGroupManagement
 } from "./GroupManagementContext";
+import useTags from "@/hooks/useTags";
+import TagDisplay from "@/components/ui/tag";
 
 export type RolesWithProfilesAndGroupMemberships = GetResult<
   Database["public"],
@@ -78,7 +80,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     removeMoveToFulfill
   } = useGroupManagement();
   const invalidate = useInvalidate();
-
+  const { tags } = useTags();
   const supabase = createClient();
 
   /**
@@ -175,6 +177,17 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
     invalidate({ resource: "assignment_groups_members", invalidates: ["all"] });
   };
 
+  const tagDisplay = (group: GroupCreateData) => {
+    const tag = tags.find((t) => {
+      return t.name === group.tagName && t.color === group.tagColor;
+    });
+    if (tag) {
+      return <TagDisplay tag={tag} />;
+    } else {
+      return <></>;
+    }
+  };
+
   if (!groupsData || !assignment) {
     return (
       <Box>
@@ -232,6 +245,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                       <Table.Row>
                         <Table.ColumnHeader>Group</Table.ColumnHeader>
                         <Table.ColumnHeader>Members</Table.ColumnHeader>
+                        <Table.ColumnHeader>Common Tag</Table.ColumnHeader>
                         <Table.ColumnHeader>Actions</Table.ColumnHeader>
                       </Table.Row>
                     </Table.Header>
@@ -249,6 +263,7 @@ function AssignmentGroupsTable({ assignment, course_id }: { assignment: Assignme
                                 );
                               })}
                             </Table.Cell>
+                            <Table.Cell>{tagDisplay(group)}</Table.Cell>
                             <Table.Cell>
                               <Button
                                 variant={"surface"}

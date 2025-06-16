@@ -5,6 +5,7 @@ import { assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } f
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
+import { useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
@@ -18,11 +19,33 @@ export default function NewAssignmentPage() {
   const { time_zone } = useCourse();
   const timezone = time_zone || "America/New_York";
 
+  const { mutateAsync } = useCreate();
   const onSubmit = useCallback(async () => {
     async function create() {
       const supabase = createClient();
+      // create the self eval configuration first
+      const isEnabled = getValues("eval_config") === "use_eval";
+      const settings = await mutateAsync(
+        {
+          resource: "assignment_self_review_settings",
+          values: {
+            enabled: isEnabled,
+            deadline_offset: isEnabled ? getValues("deadline_offset") : null,
+            allow_early: isEnabled ? getValues("allow_early") : null,
+            class_id: course_id
+          }
+        },
+        {
+          onError: (error) => {
+            toaster.error({ title: "Error creating self review settings", description: error.message });
+          }
+        }
+      );
 
-      // console.log(getValues("submission_files"));
+      if (!settings.data.id) {
+        return;
+      }
+
       const { data, error } = await supabase
         .from("assignments")
         .insert({
@@ -41,6 +64,7 @@ export default function NewAssignmentPage() {
           min_group_size: getValues("min_group_size") || null,
           max_group_size: getValues("max_group_size") || null,
           allow_student_formed_groups: getValues("allow_student_formed_groups"),
+          self_review_setting_id: settings.data.id as number,
           group_formation_deadline: getValues("group_formation_deadline")
             ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
             : null
@@ -72,6 +96,6 @@ export default function NewAssignmentPage() {
       }
     }
     await create();
-  }, [course_id, getValues, router]);
+  }, [course_id, getValues, router, mutateAsync, timezone]);
   return <CreateAssignment form={form} onSubmit={onSubmit} />;
 }

@@ -1,16 +1,33 @@
 import { TZDate } from "@date-fns/tz";
 import { clsx, type ClassValue } from "clsx";
+import { differenceInHours, formatDistance } from "date-fns";
 import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatDueDate(date: string | null) {
+export function dueDateAdvice(date: string | null, courseTimezone?: string) {
+  let advice = "";
+  if (courseTimezone && date) {
+    const hoursUntilDue = differenceInHours(new TZDate(date), TZDate.tz(courseTimezone));
+    if (hoursUntilDue < 36) {
+      advice = ` (${formatDistance(new TZDate(date), TZDate.tz(courseTimezone))})`;
+    }
+  }
+  return advice;
+}
+
+export function formatDueDate(date: string | null, courseTimezone?: string) {
   if (!date) {
     return "N/A";
   }
-  return new Date(date).toLocaleDateString() + " " + new Date(date).toLocaleTimeString();
+  return (
+    new Date(date).toLocaleDateString() +
+    " " +
+    new Date(date).toLocaleTimeString() +
+    dueDateAdvice(date, courseTimezone)
+  );
 }
 
 export function appendTimezoneOffset(date: string | null, timezone: string) {

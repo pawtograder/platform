@@ -1,5 +1,12 @@
 INSERT into public.classes(name, semester, slug, is_demo, github_org, time_zone) VALUES ('Demo Class', 20281, 'demo-class', true, 'autograder-dev', 'America/New_York');
 
+DO $$
+DECLARE 
+    alyssa_self_review_id int8;
+BEGIN
+INSERT INTO public.assignment_self_review_settings(id, enabled, deadline_offset, allow_early, class_id)
+  VALUES (1, true, 2, true, 1) RETURNING id into alyssa_self_review_id;
+    
 INSERT INTO public.assignments (
   id,
   class_id,
@@ -13,7 +20,8 @@ INSERT INTO public.assignments (
   slug,
   release_date,
   total_points,
-  template_repo
+  template_repo,
+  self_review_setting_id
 ) VALUES (1,
   1,
   '2028-12-31T23:59:59Z',
@@ -26,9 +34,11 @@ INSERT INTO public.assignments (
   'demo-assignment',
   '2024-12-01T00:00:00Z',
   100,
-  'not-actually/a-template-repo'
+  'not-actually/a-template-repo',
+  alyssa_self_review_id
 );
 
+END $$;
 
 insert into help_queues (name, description, class_id, available, depth)
   VALUES ('demo','demo description', 1, TRUE, 0);
@@ -80,7 +90,8 @@ BEGIN
 
   update public.user_roles set role='instructor' where private_profile_id=eva_profile_id;
 
-INSERT into public.repositories(assignment_id, repository, class_id, profile_id, synced_handout_sha,synced_repo_sha)
+
+INSERT into public.repositories(assignment_id, repository, class_id, profile_id, synced_handout_sha, synced_repo_sha)
   VALUES (1, 'not-actually/repository', 1, alyssa_profile_id, 'none', 'none') RETURNING id into alyssa_repo_id;
 
 INSERT INTO public.repository_check_runs (class_id, repository_id, check_run_id, status, sha, commit_message)
@@ -131,4 +142,367 @@ public class Entrypoint {
  output
  **wow**', 'markdown', 1, alyssa_profile_id, alyssa_submission_id, TRUE);
   
+END $$;
+
+-- Flashcard seed data
+DO $$
+DECLARE
+  cs101_deck_id int8;
+  java_deck_id int8;
+  eva_user_id uuid := '11111111-1111-1111-1111-111111111111';
+  demo_class_id int8 := 1;
+BEGIN
+
+INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+VALUES (
+  demo_class_id,
+  eva_user_id,
+  'Demo CS 101 Deck',
+  'Flashcards for introductory computer science concepts.'
+) RETURNING id INTO cs101_deck_id;
+
+INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer)
+VALUES
+(demo_class_id, cs101_deck_id, 'Algorithm', 'What is an algorithm?', 'A step-by-step procedure for solving a problem or accomplishing some end.'),
+(demo_class_id, cs101_deck_id, 'Data Structure', 'What is a data structure?', 'A particular way of organizing data in a computer so that it can be used effectively.'),
+(demo_class_id, cs101_deck_id, 'Variable', 'What is a variable in programming?', 'A storage location, with an associated symbolic name, which contains some known or unknown quantity of information referred to as a value.');
+
+
+INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+VALUES (
+  demo_class_id,
+  eva_user_id,
+  'Java Fundamentals',
+  'Basic concepts in Java programming.'
+) RETURNING id INTO java_deck_id;
+
+INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer)
+VALUES
+(demo_class_id, java_deck_id, 'Java File Extension', 'What is the file extension for a Java source file?', '`.java`'),
+(demo_class_id, java_deck_id, 'Java Class File Extension', 'What is the file extension for a compiled Java class file?', '`.class`'),
+(demo_class_id, java_deck_id, 'Compile Java', 'What command compiles a Java file named HelloWorld.java?', '`javac HelloWorld.java`'),
+(demo_class_id, java_deck_id, 'Run Java', 'What command runs a compiled Java class named HelloWorld?', '`java HelloWorld`'),
+(demo_class_id, java_deck_id, 'Class Keyword', 'What keyword is used to define a class in Java?', '`class`'),
+(demo_class_id, java_deck_id, 'Single-line Comment', 'How do you write a single-line comment in Java?', '`// comment`'),
+(demo_class_id, java_deck_id, 'Multi-line Comment Start', 'How do you start a multi-line comment in Java?', '`/*`'),
+(demo_class_id, java_deck_id, 'Multi-line Comment End', 'How do you end a multi-line comment in Java?', '`*/`'),
+(demo_class_id, java_deck_id, 'Main Method', 'What is the entry point method for a Java application?', '`public static void main(String[] args)`'),
+(demo_class_id, java_deck_id, 'Print Line', 'How do you print "Hello, World!" to the console?', '`System.out.println("Hello, World!");`'),
+(demo_class_id, java_deck_id, 'Final Keyword', 'What keyword is used to create a constant variable?', '`final`'),
+(demo_class_id, java_deck_id, 'Declare int', 'How do you declare an integer variable named count?', '`int count;`'),
+(demo_class_id, java_deck_id, 'Assign Value', 'How do you assign the value 10 to a variable named x?', '`x = 10;`'),
+(demo_class_id, java_deck_id, 'Boolean Type', 'What data type is used for true/false values?', '`boolean`'),
+(demo_class_id, java_deck_id, 'Declare Boolean', 'How do you declare a boolean variable named isActive?', '`boolean isActive;`'),
+(demo_class_id, java_deck_id, 'Char Type', 'What data type is used for single characters?', '`char`'),
+(demo_class_id, java_deck_id, 'Declare Char', 'How do you declare a character variable named grade with value ''A''?', '`char grade = ''A'';`'),
+(demo_class_id, java_deck_id, 'Double Type', 'What data type is used for decimal numbers?', '`double`'),
+(demo_class_id, java_deck_id, 'Declare Double', 'How do you declare a double variable named price?', '`double price;`'),
+(demo_class_id, java_deck_id, 'Declare String', 'How do you declare a String variable named name?', '`String name;`'),
+(demo_class_id, java_deck_id, 'String Concatenation', 'How do you concatenate two strings a and b?', '`a + b`'),
+(demo_class_id, java_deck_id, 'String Length', 'How do you get the length of a String str?', '`str.length()`'),
+(demo_class_id, java_deck_id, 'String Equality', 'How do you compare two strings for equality?', '`str1.equals(str2)`'),
+(demo_class_id, java_deck_id, 'Addition Operator', 'What is the operator for addition in Java?', '`+`'),
+(demo_class_id, java_deck_id, 'Subtraction Operator', 'What is the operator for subtraction in Java?', '`-`'),
+(demo_class_id, java_deck_id, 'Multiplication Operator', 'What is the operator for multiplication in Java?', '`*`'),
+(demo_class_id, java_deck_id, 'Division Operator', 'What is the operator for division in Java?', '`/`'),
+(demo_class_id, java_deck_id, 'Modulus Operator', 'What is the operator for modulus (remainder) in Java?', '`%`'),
+(demo_class_id, java_deck_id, 'Logical AND', 'What is the operator for logical AND in Java?', '`&&`'),
+(demo_class_id, java_deck_id, 'Logical OR', 'What is the operator for logical OR in Java?', '`||`'),
+(demo_class_id, java_deck_id, 'Logical NOT', 'What is the operator for logical NOT in Java?', '`!`'),
+(demo_class_id, java_deck_id, 'If Statement', 'How do you write an if statement in Java?', '`if (condition) { }`'),
+(demo_class_id, java_deck_id, 'If-Else Statement', 'How do you write an if-else statement in Java?', '`if (condition) { } else { }`'),
+(demo_class_id, java_deck_id, 'Else If Statement', 'How do you write an else-if statement in Java?', '`if (a) { } else if (b) { }`'),
+(demo_class_id, java_deck_id, 'For Loop', 'How do you write a for loop that counts from 0 to 9?', '`for (int i = 0; i < 10; i++) { }`'),
+(demo_class_id, java_deck_id, 'While Loop', 'How do you write a while loop in Java?', '`while (condition) { }`'),
+(demo_class_id, java_deck_id, 'Do-While Loop', 'How do you write a do-while loop in Java?', '`do { } while (condition);`'),
+(demo_class_id, java_deck_id, 'Declare Array', 'How do you declare an array of 5 integers?', '`int[] arr = new int[5];`'),
+(demo_class_id, java_deck_id, 'Access Array Element', 'How do you access the first element of an array arr?', '`arr[0]`'),
+(demo_class_id, java_deck_id, 'Array Length', 'How do you get the length of an array arr?', '`arr.length`'),
+(demo_class_id, java_deck_id, 'Define Method', 'How do you define a method that returns an int?', '`public int methodName() { }`'),
+(demo_class_id, java_deck_id, 'Method with Parameters', 'How do you define a method with parameters?', '`public void methodName(int x, String y) { }`'),
+(demo_class_id, java_deck_id, 'Return Value', 'How do you return a value from a method?', '`return value;`'),
+(demo_class_id, java_deck_id, 'Call Method', 'How do you call a method named foo?', '`foo();`'),
+(demo_class_id, java_deck_id, 'Define Class', 'How do you define a class named Dog?', '`public class Dog { }`'),
+(demo_class_id, java_deck_id, 'Create Object', 'How do you create an object of class Dog?', '`Dog myDog = new Dog();`'),
+(demo_class_id, java_deck_id, 'Constructor', 'How do you define a constructor in Java?', '`public ClassName() { }`'),
+(demo_class_id, java_deck_id, 'Class Field', 'How do you define a field in a class?', '`private int age;`'),
+(demo_class_id, java_deck_id, 'Access Field', 'How do you access a field age of object dog?', '`dog.age`'),
+(demo_class_id, java_deck_id, 'Inheritance', 'How do you make class Dog inherit from Animal?', '`public class Dog extends Animal { }`'),
+(demo_class_id, java_deck_id, 'Call Superclass Constructor', 'How do you call a superclass constructor?', '`super();`'),
+(demo_class_id, java_deck_id, 'Override Method', 'How do you override a method?', '`@Override\npublic void methodName() { }`'),
+(demo_class_id, java_deck_id, 'Define Interface', 'How do you define an interface?', '`public interface MyInterface { }`'),
+(demo_class_id, java_deck_id, 'Implement Interface', 'How do you implement an interface?', '`public class MyClass implements MyInterface { }`'),
+(demo_class_id, java_deck_id, 'Abstract Class', 'How do you define an abstract class?', '`public abstract class MyClass { }`'),
+(demo_class_id, java_deck_id, 'Abstract Method', 'How do you define an abstract method?', '`public abstract void myMethod();`'),
+(demo_class_id, java_deck_id, 'Declare Package', 'How do you declare a package at the top of a file?', '`package mypackage;`'),
+(demo_class_id, java_deck_id, 'Import Class', 'How do you import a class from another package?', '`import package.ClassName;`'),
+(demo_class_id, java_deck_id, 'Static Variable', 'How do you declare a static variable?', '`static int count;`'),
+(demo_class_id, java_deck_id, 'Call Static Method', 'How do you call a static method?', '`ClassName.methodName();`'),
+(demo_class_id, java_deck_id, 'Final Variable', 'What does the final keyword do for a variable?', 'Makes it a constant (cannot be changed)'),
+(demo_class_id, java_deck_id, 'Final Method', 'What does the final keyword do for a method?', 'Prevents the method from being overridden'),
+(demo_class_id, java_deck_id, 'Final Class', 'What does the final keyword do for a class?', 'Prevents the class from being subclassed'),
+(demo_class_id, java_deck_id, 'Public Keyword', 'What does public mean in Java?', 'The member is accessible from any other class'),
+(demo_class_id, java_deck_id, 'Private Keyword', 'What does private mean in Java?', 'The member is accessible only within its own class'),
+(demo_class_id, java_deck_id, 'Protected Keyword', 'What does protected mean in Java?', 'The member is accessible within its package and subclasses'),
+(demo_class_id, java_deck_id, 'This Keyword', 'What does this refer to in Java?', 'The current object'),
+(demo_class_id, java_deck_id, 'Super Keyword', 'What does super refer to in Java?', 'The superclass of the current object'),
+(demo_class_id, java_deck_id, 'Try-Catch', 'How do you handle exceptions in Java?', '`try { } catch (Exception e) { }`'),
+(demo_class_id, java_deck_id, 'Throw Exception', 'How do you throw an exception?', '`throw new Exception("message");`'),
+(demo_class_id, java_deck_id, 'Throws Clause', 'How do you declare a method that throws an exception?', '`public void myMethod() throws Exception { }`'),
+(demo_class_id, java_deck_id, 'Try-Finally', 'How do you use a finally block?', '`try { } finally { }`'),
+(demo_class_id, java_deck_id, 'Cast int to double', 'How do you cast an int to a double?', '`(double) myInt`'),
+(demo_class_id, java_deck_id, 'Cast double to int', 'How do you cast a double to an int?', '`(int) myDouble`'),
+(demo_class_id, java_deck_id, 'Wrapper Class for int', 'What is the wrapper class for int?', '`Integer`'),
+(demo_class_id, java_deck_id, 'Wrapper Class for double', 'What is the wrapper class for double?', '`Double`'),
+(demo_class_id, java_deck_id, 'Wrapper Class for boolean', 'What is the wrapper class for boolean?', '`Boolean`'),
+(demo_class_id, java_deck_id, 'Wrapper Class for char', 'What is the wrapper class for char?', '`Character`'),
+(demo_class_id, java_deck_id, 'Define Enum', 'How do you define an enum?', '`enum Color { RED, GREEN, BLUE }`'),
+(demo_class_id, java_deck_id, 'Access Enum Value', 'How do you access an enum value?', '`Color.RED`'),
+(demo_class_id, java_deck_id, 'Enhanced For Loop', 'How do you write an enhanced for loop?', '`for (int num : numbers) { }`'),
+(demo_class_id, java_deck_id, 'Break Statement', 'What does break do in a loop?', 'Exits the current loop or switch'),
+(demo_class_id, java_deck_id, 'Continue Statement', 'What does continue do in a loop?', 'Skips to the next iteration of the loop'),
+(demo_class_id, java_deck_id, 'Return Statement', 'What does return do in a method?', 'Exits a method and optionally returns a value'),
+(demo_class_id, java_deck_id, 'Null Keyword', 'What does null mean in Java?', 'No object or value assigned'),
+(demo_class_id, java_deck_id, 'Instanceof Operator', 'What does instanceof do?', 'Checks if an object is an instance of a class'),
+(demo_class_id, java_deck_id, 'Override toString', 'How do you override toString()?', '`public String toString() { return "something"; }`'),
+(demo_class_id, java_deck_id, 'Create Scanner', 'How do you create a Scanner for input?', '`Scanner sc = new Scanner(System.in);`'),
+(demo_class_id, java_deck_id, 'Scanner nextInt', 'How do you read an int using Scanner?', '`int x = sc.nextInt();`'),
+(demo_class_id, java_deck_id, 'Scanner nextLine', 'How do you read a line using Scanner?', '`String line = sc.nextLine();`'),
+(demo_class_id, java_deck_id, 'Math abs', 'How do you get the absolute value of x?', '`Math.abs(x)`'),
+(demo_class_id, java_deck_id, 'Math max', 'How do you get the maximum of a and b?', '`Math.max(a, b)`'),
+(demo_class_id, java_deck_id, 'Math min', 'How do you get the minimum of a and b?', '`Math.min(a, b)`'),
+(demo_class_id, java_deck_id, 'Math random', 'How do you get a random number between 0.0 and 1.0?', '`Math.random()`'),
+(demo_class_id, java_deck_id, 'System exit', 'How do you exit a Java program?', '`System.exit(0);`'),
+(demo_class_id, java_deck_id, 'System currentTimeMillis', 'How do you get the current time in milliseconds?', '`System.currentTimeMillis()`'),
+(demo_class_id, java_deck_id, 'StringBuilder', 'How do you create a StringBuilder?', '`StringBuilder sb = new StringBuilder();`'),
+(demo_class_id, java_deck_id, 'StringBuilder append', 'How do you append to a StringBuilder?', '`sb.append("text");`'),
+(demo_class_id, java_deck_id, 'StringBuilder toString', 'How do you convert a StringBuilder to a String?', '`sb.toString()`'),
+(demo_class_id, java_deck_id, 'ArrayList', 'How do you create an ArrayList of Strings?', '`ArrayList<String> list = new ArrayList<>();`'),
+(demo_class_id, java_deck_id, 'ArrayList add', 'How do you add an element to an ArrayList?', '`list.add("item");`'),
+(demo_class_id, java_deck_id, 'ArrayList size', 'How do you get the size of an ArrayList?', '`list.size()`'),
+(demo_class_id, java_deck_id, 'ArrayList get', 'How do you access the first element of an ArrayList?', '`list.get(0)`'),
+(demo_class_id, java_deck_id, 'ArrayList remove', 'How do you remove an element from an ArrayList?', '`list.remove("item");`'),
+(demo_class_id, java_deck_id, 'HashMap', 'How do you create a HashMap?', '`HashMap<KeyType, ValueType> map = new HashMap<>();`'),
+(demo_class_id, java_deck_id, 'HashMap put', 'How do you put a value in a HashMap?', '`map.put(key, value);`'),
+(demo_class_id, java_deck_id, 'HashMap get', 'How do you get a value from a HashMap?', '`map.get(key)`'),
+(demo_class_id, java_deck_id, 'HashMap remove', 'How do you remove a value from a HashMap?', '`map.remove(key);`');
+
+END $$;
+
+-- More seed data for analytics testing
+
+DO $$
+DECLARE
+    -- User IDs
+    student_1_id uuid;
+    student_2_id uuid;
+    student_3_id uuid;
+    student_4_id uuid;
+    student_5_id uuid;
+    student_6_id uuid;
+    student_7_id uuid;
+    student_8_id uuid;
+    student_9_id uuid;
+    student_10_id uuid;
+    student_11_id uuid;
+    student_12_id uuid;
+    student_13_id uuid;
+    student_14_id uuid;
+    student_15_id uuid;
+    student_16_id uuid;
+    student_17_id uuid;
+    student_18_id uuid;
+    student_19_id uuid;
+    student_20_id uuid;
+    
+    -- Deck IDs
+    python_deck_id int8;
+    sql_deck_id int8;
+    web_dev_deck_id int8;
+
+    -- Class ID
+    demo_class_id int8 := 1;
+
+    -- User counter for profile creation
+    i int;
+BEGIN
+    -- Insert 20 new student users
+    FOR i IN 1..20 LOOP
+        EXECUTE format('
+            INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, is_super_admin)
+            VALUES (''00000000-0000-0000-0000-000000000000'', ''33333333-3333-3333-3333-%s'', ''authenticated'', ''authenticated'', ''student%s@pawtograder.com'', ''dummyhash'', NOW(), ''{}'', ''{}'', FALSE);
+        ', lpad(i::text, 12, '0'), i);
+    END LOOP;
+
+    -- Update profiles for the new users. Assumes a trigger creates profiles and user_roles on user creation.
+    FOR i IN 1..20 LOOP
+        EXECUTE format('
+            WITH user_and_profiles AS (
+                SELECT
+                    ur.private_profile_id,
+                    ur.public_profile_id
+                FROM
+                    auth.users u
+                JOIN
+                    public.user_roles ur ON u.id = ur.user_id
+                WHERE
+                    u.email = ''student%s@pawtograder.com''
+            )
+            UPDATE public.profiles
+            SET
+                name = ''Student %s'',
+                sortable_name = ''Student, %s'',
+                short_name = ''Student %s''
+            WHERE
+                id IN (
+                    (SELECT private_profile_id FROM user_and_profiles),
+                    (SELECT public_profile_id FROM user_and_profiles)
+                );
+        ', i, i, i, i);
+    END LOOP;
+    
+    -- Get student IDs
+    SELECT id INTO student_1_id FROM auth.users WHERE email = 'student1@pawtograder.com';
+    SELECT id INTO student_2_id FROM auth.users WHERE email = 'student2@pawtograder.com';
+    SELECT id INTO student_3_id FROM auth.users WHERE email = 'student3@pawtograder.com';
+    SELECT id INTO student_4_id FROM auth.users WHERE email = 'student4@pawtograder.com';
+    SELECT id INTO student_5_id FROM auth.users WHERE email = 'student5@pawtograder.com';
+    SELECT id INTO student_6_id FROM auth.users WHERE email = 'student6@pawtograder.com';
+    SELECT id INTO student_7_id FROM auth.users WHERE email = 'student7@pawtograder.com';
+    SELECT id INTO student_8_id FROM auth.users WHERE email = 'student8@pawtograder.com';
+    SELECT id INTO student_9_id FROM auth.users WHERE email = 'student9@pawtograder.com';
+    SELECT id INTO student_10_id FROM auth.users WHERE email = 'student10@pawtograder.com';
+    SELECT id INTO student_11_id FROM auth.users WHERE email = 'student11@pawtograder.com';
+    SELECT id INTO student_12_id FROM auth.users WHERE email = 'student12@pawtograder.com';
+    SELECT id INTO student_13_id FROM auth.users WHERE email = 'student13@pawtograder.com';
+    SELECT id INTO student_14_id FROM auth.users WHERE email = 'student14@pawtograder.com';
+    SELECT id INTO student_15_id FROM auth.users WHERE email = 'student15@pawtograder.com';
+    SELECT id INTO student_16_id FROM auth.users WHERE email = 'student16@pawtograder.com';
+    SELECT id INTO student_17_id FROM auth.users WHERE email = 'student17@pawtograder.com';
+    SELECT id INTO student_18_id FROM auth.users WHERE email = 'student18@pawtograder.com';
+    SELECT id INTO student_19_id FROM auth.users WHERE email = 'student19@pawtograder.com';
+    SELECT id INTO student_20_id FROM auth.users WHERE email = 'student20@pawtograder.com';
+
+    -- Create Python Deck
+    INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+    VALUES (demo_class_id, student_1_id, 'Python Basics', 'Core concepts of Python programming.')
+    RETURNING id INTO python_deck_id;
+
+    -- Add cards to Python Deck
+    INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer, "order")
+    VALUES
+        (demo_class_id, python_deck_id, 'Python Variable', 'How do you create a variable in Python?', '`x = 5`', 1),
+        (demo_class_id, python_deck_id, 'Python Function', 'How do you define a function in Python?', '`def my_function():`', 2),
+        (demo_class_id, python_deck_id, 'Python List', 'How do you create a list in Python?', '`my_list = [1, 2, 3]`', 3),
+        (demo_class_id, python_deck_id, 'Python For Loop', 'How do you write a for loop in Python?', '`for x in my_list:`', 4),
+        (demo_class_id, python_deck_id, 'Python Dictionary', 'How do you create a dictionary?', '`my_dict = {"key": "value"}`', 5),
+        (demo_class_id, python_deck_id, 'Python If Statement', 'How do you write an if statement?', '`if condition:`', 6),
+        (demo_class_id, python_deck_id, 'Python Comment', 'How do you write a single-line comment?', '`# This is a comment`', 7),
+        (demo_class_id, python_deck_id, 'Python String Length', 'How do you get the length of a string `s`?', '`len(s)`', 8),
+        (demo_class_id, python_deck_id, 'Python Import', 'How do you import a module named `math`?', '`import math`', 9),
+        (demo_class_id, python_deck_id, 'Python Class', 'How do you define a class?', '`class MyClass:`', 10);
+
+    -- Create SQL Deck
+    INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+    VALUES (demo_class_id, student_2_id, 'SQL Fundamentals', 'Learn the basics of SQL.')
+    RETURNING id INTO sql_deck_id;
+
+    -- Add cards to SQL Deck
+    INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer, "order")
+    VALUES
+        (demo_class_id, sql_deck_id, 'SQL SELECT', 'What is the `SELECT` statement used for?', 'To query data from a database.', 1),
+        (demo_class_id, sql_deck_id, 'SQL INSERT', 'What is the `INSERT INTO` statement used for?', 'To insert new records in a table.', 2),
+        (demo_class_id, sql_deck_id, 'SQL UPDATE', 'What is the `UPDATE` statement used for?', 'To modify records in a table.', 3),
+        (demo_class_id, sql_deck_id, 'SQL DELETE', 'What is the `DELETE` statement used for?', 'To delete records from a table.', 4),
+        (demo_class_id, sql_deck_id, 'SQL WHERE', 'What is the `WHERE` clause used for?', 'To filter records.', 5),
+        (demo_class_id, sql_deck_id, 'SQL JOIN', 'What is a `JOIN` clause used for?', 'To combine rows from two or more tables.', 6),
+        (demo_class_id, sql_deck_id, 'SQL PRIMARY KEY', 'What is a `PRIMARY KEY`?', 'A constraint that uniquely identifies each record in a table.', 7),
+        (demo_class_id, sql_deck_id, 'SQL FOREIGN KEY', 'What is a `FOREIGN KEY`?', 'A key used to link two tables together.', 8),
+        (demo_class_id, sql_deck_id, 'SQL COUNT', 'What does `COUNT()` function do?', 'Returns the number of rows that matches a specified criteria.', 9),
+        (demo_class_id, sql_deck_id, 'SQL ORDER BY', 'What is the `ORDER BY` keyword used for?', 'To sort the result-set in ascending or descending order.', 10);
+
+    -- Create Web Dev Deck
+    INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
+    VALUES (demo_class_id, student_3_id, 'Web Development Basics', 'HTML, CSS, and JavaScript fundamentals.')
+    RETURNING id INTO web_dev_deck_id;
+
+    -- Add cards to Web Dev Deck
+    INSERT INTO public.flashcards (class_id, deck_id, title, prompt, answer, "order")
+    VALUES
+        (demo_class_id, web_dev_deck_id, 'HTML', 'What does HTML stand for?', 'HyperText Markup Language', 1),
+        (demo_class_id, web_dev_deck_id, 'CSS', 'What does CSS stand for?', 'Cascading Style Sheets', 2),
+        (demo_class_id, web_dev_deck_id, 'JavaScript', 'What is JavaScript primarily used for?', 'To create dynamic and interactive web content.', 3),
+        (demo_class_id, web_dev_deck_id, 'HTML Tag', 'What is an HTML tag?', 'The hidden keywords within a web page that define how your web browser must format and display the content.', 4),
+        (demo_class_id, web_dev_deck_id, 'CSS Selector', 'What is a CSS selector?', 'A pattern to select the element(s) you want to style.', 5),
+        (demo_class_id, web_dev_deck_id, 'JS Variable', 'How do you declare a variable in JavaScript?', 'Using `var`, `let`, or `const` keywords.', 6),
+        (demo_class_id, web_dev_deck_id, 'HTML Link', 'How do you create a hyperlink in HTML?', '`<a href="url">link text</a>`', 7),
+        (demo_class_id, web_dev_deck_id, 'CSS Color', 'How do you set the text color in CSS?', '`color: blue;`', 8),
+        (demo_class_id, web_dev_deck_id, 'JS Function', 'How do you define a function in JavaScript?', '`function myFunction() {}`', 9),
+        (demo_class_id, web_dev_deck_id, 'HTML Image', 'How do you insert an image in HTML?', '`<img src="image.jpg" alt="description">`', 10);
+
+    -- Generate a large amount of interaction logs
+    DECLARE
+        student_ids uuid[] := ARRAY[student_1_id, student_2_id, student_3_id, student_4_id, student_5_id, student_6_id, student_7_id, student_8_id, student_9_id, student_10_id, student_11_id, student_12_id, student_13_id, student_14_id, student_15_id, student_16_id, student_17_id, student_18_id, student_19_id, student_20_id];
+        deck_ids int8[] := ARRAY(SELECT id FROM public.flashcard_decks WHERE class_id = demo_class_id);
+        card_ids int[];
+        s_id uuid;
+        d_id int8;
+        c_id int;
+        action public.flashcard_actions;
+        duration int;
+        r int;
+    BEGIN
+        FOREACH d_id IN ARRAY deck_ids
+        LOOP
+            -- Get card IDs for the current deck
+            card_ids := ARRAY(SELECT id FROM public.flashcards WHERE deck_id = d_id);
+            
+            -- Each student interacts with each deck
+            FOREACH s_id IN ARRAY student_ids
+            LOOP
+                -- Log deck_viewed action
+                INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, student_id, action, duration_on_card_ms)
+                VALUES (demo_class_id, d_id, s_id, 'deck_viewed', (random() * 1000 + 500)::int);
+
+                -- Each student interacts with some cards in the deck
+                FOR r IN 1..((random() * (array_length(card_ids, 1) - 1) + 1)::int)
+                LOOP
+                    c_id := card_ids[(random() * (array_length(card_ids, 1) - 1) + 1)::int];
+                    
+                    -- card_prompt_viewed
+                    duration := (random() * 5000 + 1000)::int;
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, c_id, s_id, 'card_prompt_viewed', duration);
+                    
+                    -- card_answer_viewed
+                    duration := (random() * 8000 + 2000)::int;
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, c_id, s_id, 'card_answer_viewed', duration);
+
+                    -- card_marked_got_it or card_marked_keep_trying
+                    duration := (random() * 3000 + 1000)::int;
+                    IF random() > 0.3 THEN
+                        action := 'card_marked_got_it';
+                    ELSE
+                        action := 'card_marked_keep_trying';
+                    END IF;
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, c_id, s_id, action, duration);
+                    
+                    -- card_returned_to_deck (less frequent)
+                    IF random() > 0.8 THEN
+                         INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, card_id, student_id, action, duration_on_card_ms)
+                         VALUES (demo_class_id, d_id, c_id, s_id, 'card_returned_to_deck', 0);
+                    END IF;
+                END LOOP;
+                
+                -- deck_progress_reset_all (occasional)
+                IF random() > 0.9 THEN
+                    INSERT INTO public.flashcard_interaction_logs (class_id, deck_id, student_id, action, duration_on_card_ms)
+                    VALUES (demo_class_id, d_id, s_id, 'deck_progress_reset_all', 0);
+                END IF;
+
+            END LOOP;
+        END LOOP;
+    END;
 END $$;

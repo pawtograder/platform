@@ -82,7 +82,7 @@ async function handleRequest(req: Request) {
   }
   const assignments = allAssignments.filter(
     (a) =>
-      a.template_repo.includes("/") &&
+      a.template_repo?.includes("/") &&
       ((a.release_date && new TZDate(a.release_date, a.classes.time_zone!) < TZDate.tz(a.classes.time_zone!)) ||
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader"))
   );
@@ -93,7 +93,7 @@ async function handleRequest(req: Request) {
       c!.profiles!.assignment_groups_members!.flatMap(async (groupMembership) => {
         const group = groupMembership.assignment_groups;
         const assignment = groupMembership.assignments;
-        if (!assignment.template_repo.includes("/")) {
+        if (!assignment.template_repo?.includes("/")) {
           return;
         }
         const repoName = `${c.classes!.slug}-${assignment.slug}-group-${group.name}`;
@@ -180,6 +180,7 @@ async function handleRequest(req: Request) {
         .single();
       if (error) {
         console.error(error);
+        throw new UserVisibleError(`Error inserting repo: ${error}`);
       }
 
       try {

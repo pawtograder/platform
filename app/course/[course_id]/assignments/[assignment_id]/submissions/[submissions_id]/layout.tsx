@@ -2,63 +2,44 @@
 import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import {
-  HydratedRubric,
-  HydratedRubricCheck,
-  HydratedRubricCriteria,
-  HydratedRubricPart,
   Submission,
-  SubmissionReview,
   SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Heading, HStack, List, Popover, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import { Box, Flex, Heading, HStack, List, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
 
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import AskForHelpButton from "@/components/ui/ask-for-help-button";
 import { DataListItem, DataListRoot } from "@/components/ui/data-list";
 import Link from "@/components/ui/link";
 import PersonName from "@/components/ui/person-name";
-import RubricSidebar, { RubricCheckComment } from "@/components/ui/rubric-sidebar";
+import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
+import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { Toaster } from "@/components/ui/toaster";
-import { useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
-  useAllRubricCheckInstances,
   useReviewAssignment,
   useRubricCriteriaInstances,
   useSubmission,
   useSubmissionComments,
-  useSubmissionReview,
-  useSubmissionReviewByAssignmentId,
-  useSubmissionReviewForRubric,
-  useSubmissionRubric
+  useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
+import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Tables } from "@/utils/supabase/SupabaseTypes";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ElementType as ReactElementType, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
-import {
-  FaBell,
-  FaCheckCircle,
-  FaFile,
-  FaHistory,
-  FaInfo,
-  FaQuestionCircle,
-  FaRegCheckCircle,
-  FaTimesCircle
-} from "react-icons/fa";
+import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
 import { HiOutlineInformationCircle } from "react-icons/hi";
 import { LuMoon, LuSun } from "react-icons/lu";
@@ -67,11 +48,6 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
-
-interface RubricOptionType extends OptionBase {
-  value: number;
-  label: string;
-}
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -172,7 +148,7 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
           {hasNewSubmission && <Icon as={FaBell} />}
         </Button>
       </PopoverTrigger>
-      <PopoverContent width="lg">
+      <PopoverContent minWidth={{ base: "none", md: "lg" }}>
         <PopoverArrow />
         <PopoverBody>
           <Text>Submission History</Text>
@@ -321,7 +297,7 @@ function TestResults() {
 }
 function ReviewStats() {
   const submission = useSubmission();
-  const review = useSubmissionReview();
+  const review = useSubmissionReviewOrGradingReview();
   const { checked_by, completed_by, checked_at, completed_at } = review || {};
   const allRubricInstances = useRubricCriteriaInstances({
     review_id: review?.id,
@@ -368,168 +344,8 @@ function ReviewStats() {
   );
 }
 
-function incompleteRubricChecks(
-  rubric: Tables<"rubrics"> & { rubric_parts: Array<HydratedRubricPart> },
-  comments: { rubric_check_id: number | null; submission_review_id: number | null }[]
-): {
-  required_checks: HydratedRubricCheck[];
-  optional_checks: HydratedRubricCheck[];
-  required_criteria: {
-    criteria: HydratedRubricCriteria;
-    check_count_applied: number;
-  }[];
-  optional_criteria: {
-    criteria: HydratedRubricCriteria;
-    check_count_applied: number;
-  }[];
-} {
-  const allRubricCriteria = rubric.rubric_parts.flatMap((part) => part.rubric_criteria || []);
-
-  const required_checks = allRubricCriteria.flatMap((criteria) =>
-    criteria.rubric_checks.filter(
-      (check) => check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
-    )
-  ) as HydratedRubricCheck[];
-  const optional_checks = allRubricCriteria
-    .filter((criteria) => criteria.min_checks_per_submission === null)
-    .flatMap((criteria) =>
-      criteria.rubric_checks.filter(
-        (check) => !check.is_required && !comments.some((comment) => comment.rubric_check_id === check.id)
-      )
-    ) as HydratedRubricCheck[];
-  const criteriaEvaluation = allRubricCriteria.map((criteria) => ({
-    criteria: criteria as HydratedRubricCriteria,
-    check_count_applied: criteria.rubric_checks.filter((check) =>
-      comments.some((comment) => comment.rubric_check_id === check.id)
-    ).length
-  }));
-  const required_criteria = criteriaEvaluation.filter(
-    (item) =>
-      item.criteria.min_checks_per_submission !== null &&
-      item.check_count_applied < item.criteria.min_checks_per_submission
-  );
-  const optional_criteria = criteriaEvaluation.filter(
-    (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
-  );
-  return {
-    required_checks,
-    optional_checks,
-    required_criteria,
-    optional_criteria
-  };
-}
-function CompleteRubricButton() {
-  const review = useSubmissionReview();
-  const { rubric: actualRubric, isLoading: isLoadingRubric } = useSubmissionRubric();
-  const comments = useAllRubricCheckInstances(review?.id);
-  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
-    resource: "submission_reviews"
-  });
-  const { private_profile_id } = useClassProfiles();
-
-  if (isLoadingRubric || !actualRubric) {
-    // Render a loading state or disabled button
-    return (
-      <Button variant="surface" loading>
-        Graded <Icon as={FaRegCheckCircle} />
-      </Button>
-    );
-  }
-
-  const { required_checks, optional_checks, required_criteria, optional_criteria } = incompleteRubricChecks(
-    actualRubric,
-    comments
-  );
-  const missingRequiredChecks = required_checks.length > 0 || required_criteria.length > 0;
-  const missingOptionalChecks = optional_checks.length > 0 || optional_criteria.length > 0;
-
-  return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <Button variant="surface">
-          Graded <Icon as={FaRegCheckCircle} />
-        </Button>
-      </Popover.Trigger>
-      <Popover.Positioner>
-        <Popover.Content>
-          <Popover.Arrow>
-            <Popover.ArrowTip />
-          </Popover.Arrow>
-          <Popover.Body
-            bg={missingRequiredChecks ? "bg.error" : missingOptionalChecks ? "bg.warning" : "bg.success"}
-            borderRadius="md"
-          >
-            <VStack align="start">
-              <Box w="100%">
-                <Heading size="md">
-                  {missingRequiredChecks
-                    ? "Required Checks Missing"
-                    : missingOptionalChecks
-                      ? "Confirm that you have carefully reviewed the submission"
-                      : "Complete Grading"}
-                </Heading>
-              </Box>
-              {missingRequiredChecks && (
-                <Box>
-                  <Heading size="sm">
-                    These checks are required. Please grade them before marking the submission as graded.
-                  </Heading>
-                  <List.Root as="ol">
-                    {required_checks.map((check) => (
-                      <List.Item key={check.id}>{check.name}</List.Item>
-                    ))}
-                    {required_criteria.map((criteria) => (
-                      <List.Item key={criteria.criteria.id}>
-                        {criteria.criteria.name} (select at least {criteria.criteria.min_checks_per_submission} checks)
-                      </List.Item>
-                    ))}
-                  </List.Root>
-                </Box>
-              )}
-              {missingOptionalChecks && (
-                <Box>
-                  <Heading size="sm">
-                    These checks were not applied, but not required. Please take a quick look to make sure that you did
-                    not miss anything:
-                  </Heading>
-                  <List.Root as="ol">
-                    {optional_checks.map((check) => (
-                      <List.Item key={check.id}>{check.name}</List.Item>
-                    ))}
-                    {optional_criteria.map((criteria) => (
-                      <List.Item key={criteria.criteria.id}>
-                        {criteria.criteria.name} (select at least {criteria.criteria.min_checks_per_submission} checks)
-                      </List.Item>
-                    ))}
-                  </List.Root>
-                </Box>
-              )}
-              {!missingRequiredChecks && !missingOptionalChecks && (
-                <Text>All checks have been graded. Click the button below to mark the submission as graded.</Text>
-              )}
-              {!missingRequiredChecks && (
-                <Button
-                  variant="solid"
-                  colorPalette="green"
-                  onClick={() => {
-                    updateReview({
-                      id: review!.id,
-                      values: { completed_at: new Date(), completed_by: private_profile_id }
-                    });
-                  }}
-                >
-                  Mark as Graded
-                </Button>
-              )}
-            </VStack>
-          </Popover.Body>
-        </Popover.Content>
-      </Popover.Positioner>
-    </Popover.Root>
-  );
-}
 function ReviewActions() {
-  const review = useSubmissionReview();
+  const review = useSubmissionReviewOrGradingReview();
   const { private_profile_id } = useClassProfiles();
   const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
     resource: "submission_reviews"
@@ -542,7 +358,7 @@ function ReviewActions() {
       <Toaster />
       <ReviewStats />
       <HStack>
-        {!review.completed_at && <CompleteRubricButton />}
+        {!review.completed_at && <CompleteReviewButton />}
         {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
           <Button
             variant="surface"
@@ -616,183 +432,40 @@ function UnGradedGradingSummary() {
     </Box>
   );
 }
+
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
-  const { replace } = useRouter();
-  const reviewAssignmentIdParam = searchParams.get("review_assignment_id");
-  const selectedRubricIdParam = searchParams.get("selected_rubric_id");
-  const reviewAssignmentId = reviewAssignmentIdParam ? parseInt(reviewAssignmentIdParam, 10) : undefined;
-  const [selectedRubricIdState, setSelectedRubricIdState] = useState<number | undefined>(
-    selectedRubricIdParam ? parseInt(selectedRubricIdParam, 10) : undefined
-  );
-  const prevReviewAssignmentIdRef = useRef<number | undefined>(reviewAssignmentId);
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const scrollRootRef = useRef<HTMLDivElement>(null);
 
   const {
     reviewAssignment,
     isLoading: isLoadingReviewAssignment,
     error: reviewAssignmentError
-  } = useReviewAssignment(reviewAssignmentId);
+  } = useReviewAssignment(activeReviewAssignmentId);
 
-  // Use cached rubrics from useAssignment hook instead of making a separate API call
-  const allRubrics = useRubrics();
-  const assignmentRubricsData = useMemo(
-    () => ({
-      data: allRubrics.map((rubric) => ({
-        id: rubric.id,
-        name: rubric.name,
-        review_round: rubric.review_round
-      }))
-    }),
-    [allRubrics]
-  );
-  const isLoadingAssignmentRubrics = false; // Since useRubrics provides cached data
-
-  // Function to update URL with selected rubric ID
-  const updateSelectedRubricInURL = useCallback(
-    (rubricId: number | undefined) => {
-      const updatedQueryParams = new URLSearchParams(searchParams);
-      if (rubricId) {
-        updatedQueryParams.set("selected_rubric_id", rubricId.toString());
-      } else {
-        updatedQueryParams.delete("selected_rubric_id");
-      }
-      const queryString = updatedQueryParams.toString();
-      replace(queryString ? `${pathname}?${queryString}` : pathname);
-    },
-    [pathname, replace, searchParams]
-  );
-
-  useEffect(() => {
-    // Check if we're transitioning out of peer review mode
-    const wasInPeerReview = prevReviewAssignmentIdRef.current !== undefined;
-    const isNowInPeerReview = reviewAssignmentId !== undefined;
-    const exitingPeerReview = wasInPeerReview && !isNowInPeerReview;
-
-    // Update the ref for next comparison
-    prevReviewAssignmentIdRef.current = reviewAssignmentId;
-
-    // Priority 1: If we're in peer review mode, always use the review assignment's rubric
-    if (reviewAssignmentId && reviewAssignment?.rubric_id) {
-      setSelectedRubricIdState(reviewAssignment.rubric_id);
-      updateSelectedRubricInURL(reviewAssignment.rubric_id);
-      return;
-    }
-
-    // Priority 2: If exiting peer review, ignore URL param and fall back to defaults
-    if (exitingPeerReview) {
-      if (submission.assignments.grading_rubric_id) {
-        setSelectedRubricIdState(submission.assignments.grading_rubric_id);
-        updateSelectedRubricInURL(submission.assignments.grading_rubric_id);
-        return;
-      }
-      if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
-        setSelectedRubricIdState(assignmentRubricsData.data[0].id);
-        updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
-        return;
-      }
-    }
-
-    // Priority 3: If there's a URL parameter AND we're not exiting peer review, use it
-    if (selectedRubricIdParam && !exitingPeerReview) {
-      setSelectedRubricIdState(parseInt(selectedRubricIdParam, 10));
-      return;
-    }
-
-    // Priority 4: Fall back to assignment's default grading rubric
-    if (submission.assignments.grading_rubric_id) {
-      setSelectedRubricIdState(submission.assignments.grading_rubric_id);
-      updateSelectedRubricInURL(submission.assignments.grading_rubric_id);
-      return;
-    }
-
-    // Priority 5: Fall back to first available rubric
-    if (assignmentRubricsData?.data && assignmentRubricsData.data.length > 0) {
-      setSelectedRubricIdState(assignmentRubricsData.data[0].id);
-      updateSelectedRubricInURL(assignmentRubricsData.data[0].id);
-      return;
-    }
-  }, [
-    reviewAssignmentId,
-    reviewAssignment?.rubric_id,
-    submission.assignments.grading_rubric_id,
-    assignmentRubricsData?.data,
-    selectedRubricIdParam,
-    updateSelectedRubricInURL
-  ]);
-
-  const rubricIdToDisplay =
-    reviewAssignmentId && reviewAssignment?.rubric_id ? reviewAssignment.rubric_id : selectedRubricIdState;
-
-  // Use cached rubrics from useAssignment hook instead of making a separate API call
-  const rubricToDisplayData = allRubrics.find((rubric) => rubric.id === rubricIdToDisplay);
-  const isLoadingRubricToDisplay = false; // Since useRubrics provides cached data
-
-  const assignmentRubricData = rubricToDisplayData;
-  let preparedInitialRubric: HydratedRubric | undefined = undefined;
-
-  if (assignmentRubricData) {
-    // Using cached rubric data from useRubrics hook
-    preparedInitialRubric = assignmentRubricData;
-  }
-
-  const mainSubmissionReviewData = useSubmissionReview();
-  const { submissionReview: peerReviewSubmissionData } = useSubmissionReviewByAssignmentId(reviewAssignmentId);
-
-  // Find or create submission review for the selected rubric
-  const { submissionReview: selectedRubricReviewData } = useSubmissionReviewForRubric(
-    selectedRubricIdState,
-    !reviewAssignmentId // Only enabled when not in peer review mode
-  );
-
-  // Determine which review to use based on context
-  let activeReviewForSidebar: SubmissionReview | undefined;
-  if (reviewAssignmentId && peerReviewSubmissionData && peerReviewSubmissionData.id) {
-    // Peer review mode - use peer review data only if it has a valid ID
-    activeReviewForSidebar = peerReviewSubmissionData;
-  } else if (selectedRubricIdState && selectedRubricReviewData && selectedRubricReviewData.id) {
-    // Specific rubric selected - use review for that rubric only if it has a valid ID
-    activeReviewForSidebar = selectedRubricReviewData;
-  } else {
-    // Fallback to main submission review (which should have a proper ID from database trigger)
-    activeReviewForSidebar = mainSubmissionReviewData;
-  }
-
-  const rubricOptions: RubricOptionType[] = useMemo(() => {
-    return (
-      assignmentRubricsData?.data.map((rubric) => ({
-        value: rubric.id,
-        label: `${rubric.name} (${rubric.review_round || "N/A"})`
-      })) || []
-    );
-  }, [assignmentRubricsData]);
-
-  const displayScoreFromReview = activeReviewForSidebar;
-
-  const showHandGradingControls =
-    isGraderOrInstructor || (activeReviewForSidebar?.released ?? false) || !!reviewAssignmentId;
+  const gradingReview = useSubmissionReviewOrGradingReview();
 
   return (
     <Box
       position="sticky"
       top="0"
-      borderLeftWidth="1px"
+      borderTopWidth={{ base: "1px", lg: "0" }}
+      borderLeftWidth={{ base: "0", lg: "1px" }}
       borderColor="border.emphasized"
-      py={2}
-      px={1}
-      ml={0}
+      padding="2"
       height="100vh"
       overflowX="hidden"
       overflowY="auto"
+      ref={scrollRootRef}
     >
       <VStack align="start" gap={2}>
-        {isLoadingReviewAssignment && reviewAssignmentId && <Skeleton height="100px" />}
-        {reviewAssignmentError && reviewAssignmentId && (
+        {isLoadingReviewAssignment && activeReviewAssignmentId && <Skeleton height="100px" />}
+        {reviewAssignmentError && activeReviewAssignmentId && (
           <Text color="red.500">Error loading review details: {reviewAssignmentError.message}</Text>
         )}
-        {reviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
+        {activeReviewAssignmentId && reviewAssignment && !isLoadingReviewAssignment && !reviewAssignmentError && (
           <Box mb={2} p={2} borderWidth="1px" borderRadius="md" borderColor="border.default">
             <Heading size="md">
               Review Task: {reviewAssignment.rubrics?.name} ({reviewAssignment.rubrics?.review_round})
@@ -808,40 +481,15 @@ function RubricView() {
             )}
           </Box>
         )}
-        {!reviewAssignmentId && !isLoadingAssignmentRubrics && rubricOptions.length > 1 && (
-          <Box w="full">
-            <Text fontSize="sm" fontWeight="bold" mb={1}>
-              Select Rubric to View:
-            </Text>
-            <ChakraReactSelect<RubricOptionType, false>
-              options={rubricOptions}
-              value={rubricOptions.find((option) => option.value === selectedRubricIdState)}
-              onChange={(option) => {
-                setSelectedRubricIdState(option?.value);
-                updateSelectedRubricInURL(option?.value);
-              }}
-              isLoading={isLoadingAssignmentRubrics || isLoadingRubricToDisplay}
-              isDisabled={!!reviewAssignmentId}
-              chakraStyles={{ menu: (provided) => ({ ...provided, zIndex: 9999 }) }}
-            />
-          </Box>
-        )}
-        {displayScoreFromReview && submission.assignments.total_points !== null && (
+        {submission.assignments.total_points !== null && (
           <Heading size="xl">
-            Overall Score ({displayScoreFromReview.total_score}/{submission.assignments.total_points})
+            Overall Score ({gradingReview?.total_score}/{submission.assignments.total_points})
           </Heading>
         )}
-        {!reviewAssignmentId && !activeReviewForSidebar && <UnGradedGradingSummary />}
+        {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
-        {showHandGradingControls && (
-          <RubricSidebar
-            initialRubric={preparedInitialRubric}
-            reviewAssignmentId={reviewAssignmentId}
-            submissionReview={activeReviewForSidebar}
-          />
-        )}
-        {!showHandGradingControls && <Text>Rubric and manual grading are not available.</Text>}
+        <ListOfRubricsInSidebar scrollRootRef={scrollRootRef} />
         <Comments />
       </VStack>
     </Box>
@@ -867,11 +515,12 @@ function Comments() {
 
 function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const submission = useSubmission();
   const submitter = useUserProfile(submission.profile_id);
   return (
     <Flex direction="column" minW="0px">
-      <HStack pl={4} pr={4} pt={2} alignItems="center" justify="space-between" align="center">
+      <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
           <VStack align="flex-start">
             <HStack gap={1}>
@@ -912,7 +561,8 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           <AskForHelpButton />
           <SubmissionHistory submission={submission} />
         </HStack>
-      </HStack>
+      </Flex>
+      <SubmissionReviewToolbar />
       <Box
         p={0}
         m={0}
@@ -921,29 +571,27 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         bg="bg.muted"
         defaultValue="results"
       >
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "results")}>
+        <NextLink prefetch={true} href={linkToSubPage(pathname, "results", searchParams)}>
           <Button variant={pathname.includes("/results") ? "solid" : "ghost"}>
             <Icon as={FaCheckCircle} />
             Grading Summary
           </Button>
         </NextLink>
-        <NextLink prefetch={true} href={linkToSubPage(pathname, "files")}>
+        <NextLink prefetch={true} href={linkToSubPage(pathname, "files", searchParams)}>
           <Button variant={pathname.includes("/files") ? "solid" : "ghost"}>
             <Icon as={FaFile} />
             Files
           </Button>
         </NextLink>
       </Box>
-      <Box flex={1}>
-        <Flex>
-          <Box flex={10} pr={4} minW="0">
-            {children}
-          </Box>
-          <Box flex={1} minW="md" maxW="lg">
-            <RubricView />
-          </Box>
-        </Flex>
-      </Box>
+      <Flex flexDirection={"row"} wrap="wrap">
+        <Box flex={10} pr={4}>
+          {children}
+        </Box>
+        <Box flex={1} minWidth={{ base: "100%", lg: "md" }}>
+          <RubricView />
+        </Box>
+      </Flex>
     </Flex>
   );
 }

@@ -21,7 +21,7 @@ import {
   PopoverTitle,
   PopoverTrigger
 } from "@/components/ui/popover";
-import { CommentActions } from "@/components/ui/rubric-sidebar";
+import { CommentActions, StudentVisibilityIndicator } from "@/components/ui/rubric-sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -33,8 +33,8 @@ import {
   useSubmissionArtifactComments,
   useSubmissionFileComments,
   useSubmissionMaybe,
-  useSubmissionReview,
   useSubmissionReviewByAssignmentId,
+  useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -76,9 +76,8 @@ import zipToHTMLBlobs from "./zipToHTMLBlobs";
 
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
-  const isGraderOrInstructor = useIsGraderOrInstructor();
   const comments = useSubmissionFileComments({});
-  const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
+  const showCommentsFeature = true; //submission.released !== null || isGraderOrInstructor;
   return (
     <Box
       maxH="250px"
@@ -209,7 +208,7 @@ function ArtifactAnnotation({
     resource: "submission_artifact_comments"
   });
   const { reviewAssignment, isLoading: reviewAssignmentLoading } = useReviewAssignment(reviewAssignmentId);
-  const gradingReview = useSubmissionReview(comment.submission_review_id);
+  const gradingReview = useSubmissionReviewOrGradingReview(comment.submission_review_id);
 
   if (reviewAssignmentLoading) {
     return <Skeleton height="100px" width="100%" />;
@@ -260,6 +259,7 @@ function ArtifactAnnotation({
                   {commentAuthor?.name} ({reviewName})
                 </Text>
                 <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                <StudentVisibilityIndicator check={rubricCheck} isApplied={true} isReleased={comment.released} />
               </HStack>
             </Flex>
           </Box>
@@ -426,7 +426,7 @@ function ArtifactCommentsForm({
   reviewAssignmentId?: number;
 }) {
   const invalidate = useInvalidate();
-  const reviewContext = useSubmissionReview();
+  const reviewContext = useSubmissionReviewOrGradingReview();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
 
@@ -486,7 +486,7 @@ function ArtifactCheckPopover({
   reviewAssignmentId?: number;
 }) {
   const submission = useSubmission();
-  const reviewContext = useSubmissionReview();
+  const reviewContext = useSubmissionReviewOrGradingReview();
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
 
@@ -938,14 +938,7 @@ export default function FilesView() {
         <Box w={"100%"}>
           {fileId ||
           (curFileIndex === -1 && curArtifactIndex === -1 && submission.submission_files.length > 0 && selectedFile) ? (
-            selectedFile && (
-              <CodeFile
-                file={selectedFile}
-                submissionReviewId={finalActiveSubmissionReviewId}
-                reviewAssignmentId={reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined}
-                selectedRubricId={selectedRubricIdFromQuery ? Number(selectedRubricIdFromQuery) : undefined}
-              />
-            )
+            selectedFile && <CodeFile file={selectedFile} />
           ) : selectedArtifact ? (
             selectedArtifact.data !== null ? (
               <ArtifactWithComments

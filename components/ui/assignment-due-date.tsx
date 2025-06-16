@@ -3,9 +3,9 @@
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useLateTokens } from "@/hooks/useCourseController";
 import { Assignment, AssignmentDueDateException, AssignmentGroup } from "@/utils/supabase/DatabaseTypes";
-import { Dialog, Heading, HStack, Text } from "@chakra-ui/react";
+import { Dialog, Flex, Heading, HStack, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useCreate, useList } from "@refinedev/core";
+import { CrudFilter, useCreate, useList } from "@refinedev/core";
 import { addHours, isAfter } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useState } from "react";
@@ -28,7 +28,31 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { mutateAsync: createAssignmentDueDateException } = useCreate<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions"
   });
-  if (!lateTokens || !dueDate) {
+  const groupOrProfileFilter: CrudFilter = assignment_group_id
+    ? {
+        field: "assignment_group_id",
+        operator: "eq",
+        value: assignment_group_id
+      }
+    : {
+        field: "student_id",
+        operator: "eq",
+        value: private_profile_id
+      };
+
+  const { data: exceptionsForProfile } = useList<AssignmentDueDateException>({
+    resource: "assignment_due_date_exceptions",
+    filters: [
+      {
+        field: "assignment_id",
+        operator: "eq",
+        value: assignment.id
+      },
+      groupOrProfileFilter
+    ]
+  });
+
+  if (!lateTokens || !dueDate || !exceptionsForProfile) {
     return <Skeleton height="20px" width="80px" />;
   }
   const lateTokensUsedByStudent = lateTokens.filter((e) => e.tokens_consumed > 0).length;
@@ -39,11 +63,30 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (course.late_tokens_per_student === 0) {
     return <Text>(No late submissions allowed)</Text>;
   }
+  if (
+    exceptionsForProfile.data.filter((exception) => {
+      return exception.hours * 60 + exception.minutes < 0;
+    }).length > 0
+  ) {
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (You may not extend the due date for this assignment as you finalized early)
+      </Text>
+    );
+  }
   if (lateTokensUsedByStudent >= course.late_tokens_per_student) {
-    return <Text>(You have no remaining late tokens)</Text>;
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (You have no remaining late tokens)
+      </Text>
+    );
   }
   if (lateTokensAppliedToAssignment >= assignment.max_late_tokens) {
-    return <Text>(You may not extend the due date for this assignment any further)</Text>;
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        (You may not extend the due date for this assignment any further)
+      </Text>
+    );
   }
   //Make sure that our own due date is still in the future
   const extensionsInHours = lateTokens
@@ -145,27 +188,76 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
 export function AssignmentDueDate({
   assignment,
   showLateTokenButton = false,
-  showTimeZone = false
+  showTimeZone = false,
+  showDue = false
 }: {
   assignment: Assignment;
   showLateTokenButton?: boolean;
   showTimeZone?: boolean;
+  showDue?: boolean;
 }) {
   const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment);
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  console.log(dueDate);
+  return (
+    <Flex gap={1} wrap="wrap" maxWidth="100%">
+      <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
+        {showDue && <Text flexShrink={0}>Due: </Text>}
+        <Text minWidth={0}>
+          {formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}
+        </Text>
+        {showTimeZone && (
+          <Text fontSize="sm" flexShrink={0}>
+            ({time_zone})
+          </Text>
+        )}
+        {hoursExtended > 0 && (
+          <Text>
+            ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
+          </Text>
+        )}
+        {showLateTokenButton && <LateTokenButton assignment={assignment} />}
+      </Flex>
+    </Flex>
+  );
+}
+
+export function SelfReviewDueDate({
+  assignment,
+  showTimeZone = false
+}: {
+  assignment: Assignment;
+  showTimeZone?: boolean;
+}) {
+  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment);
+  const { data: reviewAssignment } = useList<{ deadline_offset: number }>({
+    resource: "assignment_self_review_settings",
+    meta: {
+      select: "deadline_offset"
+    },
+    filters: [
+      {
+        field: "id",
+        operator: "eq",
+        value: assignment.self_review_setting_id
+      }
+    ]
+  });
+
+  if (!dueDate || !originalDueDate || !reviewAssignment?.data[0]) {
+    return <Skeleton height="20px" width="80px" />;
+  }
   return (
     <HStack gap={1}>
-      <Text>{formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}</Text>
+      <Text>
+        {formatInTimeZone(
+          new TZDate(addHours(dueDate, reviewAssignment.data[0].deadline_offset)),
+          time_zone || "America/New_York",
+          "MMM d h:mm aaa"
+        )}
+      </Text>
       {showTimeZone && <Text fontSize="sm">({time_zone})</Text>}
-      {hoursExtended > 0 && (
-        <Text>
-          ({hoursExtended}-hour extension applied, {lateTokensConsumed} late tokens consumed)
-        </Text>
-      )}
-      {showLateTokenButton && <LateTokenButton assignment={assignment} />}
     </HStack>
   );
 }
