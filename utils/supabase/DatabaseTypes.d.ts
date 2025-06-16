@@ -565,6 +565,22 @@ export type RubricCheckReference = GetResult<
   "*"
 >;
 
+export type EmailDistributionList = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_list"]["Row"],
+  "email_distribution_list",
+  Database["public"]["Tables"]["email_distribution_list"]["Relationships"],
+  "*"
+>;
+
+export type EmailDistributionItem = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_item"]["Row"],
+  "email_distribution_item",
+  Database["public"]["Tables"]["email_distribution_item"]["Relationships"],
+  "*"
+>;
+
 /**
  * Flashcard Deck Types
  */

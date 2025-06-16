@@ -1469,6 +1469,114 @@ export type Database = {
           }
         ];
       };
+      email_distribution_exception: {
+        Row: {
+          assignment_id: number | null;
+          class_id: number;
+          created_at: string;
+          id: number;
+          include: boolean;
+          profile_id: string;
+          tag_id: number | null;
+        };
+        Insert: {
+          assignment_id?: number | null;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          include: boolean;
+          profile_id: string;
+          tag_id?: number | null;
+        };
+        Update: {
+          assignment_id?: number | null;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          include?: boolean;
+          profile_id?: string;
+          tag_id?: number | null;
+        };
+        Relationships: [];
+      };
+      email_distribution_item: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          email: string;
+          email_distribution_list_id: number;
+          id: number;
+          profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          email: string;
+          email_distribution_list_id: number;
+          id?: number;
+          profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          email?: string;
+          email_distribution_list_id?: number;
+          id?: number;
+          profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "email_distribution_item_keys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_distribution_item_keys_list_fkey";
+            columns: ["email_distribution_list_id"];
+            isOneToOne: false;
+            referencedRelation: "email_distribution_list";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_distribution_item_keys_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      email_distribution_list: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          name: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          name: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          name?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "email_distribution_list_keys_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       grader_keys: {
         Row: {
           class_id: number;

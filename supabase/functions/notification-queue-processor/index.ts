@@ -66,6 +66,13 @@ export type AssignmentGroupJoinRequestNotification = NotificationEnvelope & {
   decision_maker_name?: string;
 };
 
+export type EmailNotification = NotificationEnvelope & {
+  type: "email";
+  action: "create";
+  subject: string;
+  body: string;
+};
+
 async function sendEmail(params: {
   adminSupabase: SupabaseClient<Database>;
   transporter: nodemailer.Transporter;

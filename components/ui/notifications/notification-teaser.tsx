@@ -61,6 +61,13 @@ export type AssignmentGroupJoinRequestNotification = NotificationEnvelope & {
   decision_maker_name?: string;
 };
 
+export type EmailNotification = NotificationEnvelope & {
+  type: "email";
+  action: "create";
+  subject: string;
+  body: string;
+};
+
 // function truncateString(str: string, maxLength: number) {
 //   if (str.length <= maxLength) {
 //     return str;
@@ -157,6 +164,11 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
   );
 }
 
+function EmailNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as EmailNotification;
+  return <Text>{body.subject}</Text>;
+}
+
 export default function NotificationTeaser({
   notification_id,
   markAsRead,
@@ -191,7 +203,10 @@ export default function NotificationTeaser({
     teaser = <AssignmentGroupInvitationNotificationTeaser notification={notification} />;
   } else if (body.type === "assignment_group_join_request") {
     teaser = <AssignmentGroupJoinRequestNotificationTeaser notification={notification} />;
+  } else if (body.type === "email") {
+    teaser = <EmailNotificationTeaser notification={notification} />;
   } else {
+    console.log(body.type);
     teaser = <Text>Unknown notification type: {body.type}</Text>;
   }
   return (
