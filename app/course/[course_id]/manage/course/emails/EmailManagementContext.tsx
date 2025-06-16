@@ -23,14 +23,12 @@ export type EmailCreateData = {
   id: string;
   subject: string;
   body: string;
-  cc_emails: string[];
   audience: AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
 };
 
 export type EmailCreateDataWithoutId = {
   subject: string;
   body: string;
-  cc_emails: string[];
   audience: AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
 };
 
@@ -65,7 +63,6 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
         id: crypto.randomUUID(),
         subject: email.subject,
         body: email.body,
-        cc_emails: email.cc_emails,
         audience: email.audience
       }
     ]);

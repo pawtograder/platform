@@ -7,7 +7,6 @@ import { useEffect, useRef, useState } from "react";
 import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
-import { CreatableSelect } from "chakra-react-select";
 import {
   AssignmentEmailInfo,
   EmailManagementProvider,
@@ -37,7 +36,6 @@ function EmailsInnerPage() {
   const [tag, setTag] = useState<Tag>();
   const [subjectLine, setSubjectLine] = useState<string>("");
   const [body, setBody] = useState<string>("");
-  const [ccList, setCcList] = useState<string[]>([]);
   const tags = useTags();
   const options = [
     { label: "Students who have submitted an assignment", value: Audience.Submitted },
@@ -75,7 +73,6 @@ function EmailsInnerPage() {
       select: "email"
     }
   });
-  const emails = userData?.data.map((item) => item.email);
 
   /**
    * Creates an email draft that will be held for the user to review and send.  The main computation is "audience"
@@ -125,7 +122,7 @@ function EmailsInnerPage() {
       default:
         return;
     }
-    addEmail({ subject: subjectLine, body: body, cc_emails: ccList, audience: audience });
+    addEmail({ subject: subjectLine, body: body, audience: audience });
   };
 
   // only clear the form when the size of emails to create increases (someone drafts a new email)
@@ -135,7 +132,6 @@ function EmailsInnerPage() {
     if (emailsToCreate.length > prevEmailsToCreateLength.current) {
       setSubjectLine("");
       setBody("");
-      setCcList([]);
       setChoice({ label: "", value: null });
       setTag(undefined);
       setAssignment(undefined);
@@ -200,16 +196,6 @@ function EmailsInnerPage() {
                   />
                 </Field.Root>
               )}
-              <Field.Root>
-                <Field.Label>Cc</Field.Label>
-                <CreatableSelect
-                  value={ccList.map((item) => ({ label: item, value: item }))}
-                  onChange={(e) => setCcList(Array.from(e?.map((item) => item.value.toString()) || []))}
-                  isMulti={true}
-                  options={emails?.map((a: string) => ({ label: a, value: a }))}
-                  placeholder="Select or type email addresses..."
-                />
-              </Field.Root>
               <Field.Root>
                 <Field.Label>Subject</Field.Label>
                 <Input value={subjectLine} onChange={(e) => setSubjectLine(e.target.value)} />

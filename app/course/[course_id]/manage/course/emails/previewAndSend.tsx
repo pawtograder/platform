@@ -281,12 +281,6 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
                 </Flex>
                 <Flex flexDir={"column"} fontSize="sm">
                   <Text>To: {emailToAudienceText(email)}</Text>
-                  <Text>
-                    Cc:{" "}
-                    {email.cc_emails.map((cc) => {
-                      return cc + " ";
-                    })}
-                  </Text>
                   <Flex alignItems="center">
                     Body:
                     <Editable.Root
