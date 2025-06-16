@@ -113,12 +113,11 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
       await sendSingleEmail(emailToCreate)
         .then(() => {
           toaster.success({
-            title: "Successfully sent email " + emailToCreate.subject,
-            description: "To: " + emailToAudienceText(emailToCreate)
+            title: `Successfully sent email \"${emailToCreate.subject}\"`
           });
         })
         .catch((error) => {
-          toaster.error({ title: "Error sending email " + emailToCreate.subject, description: error.message });
+          toaster.error({ title: `Error sending email ${emailToCreate.subject}`, description: error.message });
         });
       removeEmail(emailToCreate.id);
     });

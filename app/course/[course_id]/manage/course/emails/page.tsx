@@ -15,7 +15,7 @@ import {
   TagEmailInfo,
   useEmailManagement
 } from "./EmailManagementContext";
-import { toaster } from "@/components/ui/toaster";
+import { toaster, Toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
 
 enum Audience {
@@ -146,6 +146,7 @@ function EmailsInnerPage() {
   return (
     <>
       <Flex gap="10" width="100%" wrap={{ base: "wrap", lg: "nowrap" }}>
+        <Toaster />
         <Box width={{ base: "100%" }}>
           <Heading size="lg" mt="5" mb="5">
             Draft email

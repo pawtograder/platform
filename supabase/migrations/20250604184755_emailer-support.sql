@@ -91,13 +91,17 @@ BEGIN
    CASE TG_OP
    WHEN 'INSERT' THEN
       SELECT * FROM public.emails WHERE id = NEW.email_id INTO email;
+      body_jsonb := jsonb_build_object(
+         'type', 'email',
+         'action', 'create',
+         'subject', email.subject,
+         'body', email.body
+      );
 
       BEGIN
-         body_jsonb := email.body::jsonb;
          subject_jsonb := email.subject::jsonb;
       EXCEPTION
          WHEN OTHERS THEN
-            body_jsonb := to_jsonb(email.body);
             subject_jsonb := to_jsonb(email.subject);
       END;
 

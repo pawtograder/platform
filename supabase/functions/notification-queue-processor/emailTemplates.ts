@@ -55,5 +55,11 @@ export const emailTemplates = {
       subject: "{course_name} - {thread_name} has a new reply from {reply_author_name}",
       body: "{reply_author_name} has replied to your post in {thread_name}. Read more details in Pawtograder at {thread_url}"
     }
+  },
+  email: {
+    create: {
+      subject: "{course_name} - {subject}",
+      body: "{body}"
+    }
   }
 };
