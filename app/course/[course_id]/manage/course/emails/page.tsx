@@ -67,13 +67,6 @@ function EmailsInnerPage() {
       .values()
   );
 
-  const { data: userData } = useList({
-    resource: "users",
-    meta: {
-      select: "email"
-    }
-  });
-
   /**
    * Creates an email draft that will be held for the user to review and send.  The main computation is "audience"
    * which is an object populated in one of three formats using the data the user entered / selected in the first few
