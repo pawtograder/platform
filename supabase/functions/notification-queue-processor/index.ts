@@ -81,6 +81,10 @@ async function sendEmail(params: {
   courses: { name: string | null; slug: string | null; id: number }[];
 }) {
   const { adminSupabase, transporter, notification, emails, courses } = params;
+  const { data: assignments, error: emailsError } = await adminSupabase
+    .schema("public")
+    .from("assignments")
+    .select("*");
 
   if (!notification.message.body) {
     console.error(`No body found for notification ${notification.message.id}`);
@@ -107,6 +111,12 @@ async function sendEmail(params: {
   let emailBody = emailTemplate.body as string;
   //Fill in the variables using the keys of body
   const variables = Object.keys(body);
+  if ("subject" in body) {
+    emailSubject = emailBody.replace("{subject}", body["subject" as keyof NotificationEnvelope]);
+  }
+  if ("body" in body) {
+    emailBody = emailBody.replace("{body}", body["body" as keyof NotificationEnvelope]);
+  }
   for (const variable of variables) {
     emailSubject = emailSubject.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
     emailBody = emailBody.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);

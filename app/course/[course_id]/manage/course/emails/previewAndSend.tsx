@@ -1,243 +1,41 @@
-import {
-  AssignmentEmailInfo,
-  EmailCreateData,
-  GeneralEmailInfo,
-  TagEmailInfo,
-  useEmailManagement
-} from "./EmailManagementContext";
-import { Submission, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { useCreate, useList } from "@refinedev/core";
-import TagDisplay from "@/components/ui/tag";
-import { Box, Button, Card, Editable, Flex, Heading, Text } from "@chakra-ui/react";
+import { useEmailManagement } from "./EmailManagementContext";
+import { useCreate } from "@refinedev/core";
+import { Box, Button, Card, Editable, Flex, Heading, HStack, Spacer, Text } from "@chakra-ui/react";
 import { IoMdClose } from "react-icons/io";
 import { useParams } from "next/navigation";
-import { toaster } from "@/components/ui/toaster";
+import { SetStateAction, useMemo, useState } from "react";
+import { Select } from "chakra-react-select";
 
-export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
+export default function EmailPreviewAndSend() {
   const { course_id } = useParams();
-  const { emailsToCreate, removeEmail, updateEmailField } = useEmailManagement();
-  type UserRoleWithUserId = UserRole & { users: { user_id: string } };
+  const { emailsToCreate, batches } = useEmailManagement();
   const { mutateAsync } = useCreate();
 
-  const { data: userRolesData } = useList<UserRoleWithUserId>({
-    resource: "user_roles",
-    meta: {
-      select: "*, users!user_roles_user_id_fkey1(user_id)"
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
-
-  type SubmissionEmail = Submission & {
-    // emails for individual submissions
-    user_roles: {
-      users: {
-        user_id: string;
-      };
-    } | null;
-    // emails for group submissions
-    assignment_groups: {
-      assignment_groups_members: {
-        user_roles: {
-          users: {
-            user_id: string;
-          };
-        };
-      }[];
-    } | null;
-  };
-
-  const { data: submissions } = useList<SubmissionEmail>({
-    resource: "submissions",
-    meta: {
-      select: `
-      *,
-        user_roles!submissions_profile_id_fkey (
-          users!user_roles_user_id_fkey1 (
-            user_id
-          )
-        ),
-        assignment_groups!submissions_assignment_group_id_fkey (
-          assignment_groups_members!assignment_groups_members_assignment_group_id_fkey (
-              user_roles!assignment_groups_members_profile_id_fkey1(
-                users!user_roles_user_id_fkey1 (
-                  user_id
-            )
-        )
-          )
-        )
-      `
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "is_active", operator: "eq", value: true }
-    ]
-  });
-
-  /**
-   * Translates a drafted email (stored in EmailCreateData) to a JSX element that details
-   * who the email will be sent to via attribute.  The exact emails will depend on the state of
-   * the data when "send" is pressed, e.g. who has submitted versus not in that moment.
-   * Used in email draft previews.
-   */
-  const emailToAudienceText = (email: EmailCreateData) => {
-    if (email.audience.type === "assignment") {
-      return (
-        <>
-          Students who have {email.audience.submissionType} {email.audience.assignment.title}
-        </>
-      );
-    } else if (email.audience.type === "tag") {
-      return (
-        <>
-          Anyone who is tagged with <TagDisplay tag={email.audience.tag} />
-        </>
-      );
-    } else if (email.audience.type === "general") {
-      let str = "";
-      if (email.audience.includeInstructors) {
-        str += "Instructors ";
-      }
-      if (email.audience.includeGraders) {
-        str += "Graders ";
-      }
-      if (email.audience.includeStudents) {
-        str += "Students";
-      }
-      return <>{str}</>;
-    }
-    return <>No audience selected</>;
-  };
-
   const sendEmails = () => {
-    emailsToCreate.forEach(async (emailToCreate) => {
-      await sendSingleEmail(emailToCreate)
-        .then(() => {
-          toaster.success({
-            title: `Successfully sent email \"${emailToCreate.subject}\"`
-          });
-        })
-        .catch((error) => {
-          toaster.error({ title: `Error sending email ${emailToCreate.subject}`, description: error.message });
-        });
-      removeEmail(emailToCreate.id);
-    });
-  };
-
-  const sendSingleEmail = async (emailToCreate: EmailCreateData) => {
-    const ids = getIdsToSendTo(emailToCreate);
-    const { data: createdEmail } = await mutateAsync({
-      resource: "emails",
-      values: {
-        class_id: course_id,
-        subject: emailToCreate.subject,
-        body: emailToCreate.body
-      }
-    });
-    ids.forEach(async (id) => {
-      await mutateAsync({
-        resource: "email_recipients",
+    batches.forEach(async (batch) => {
+      const emailsForBatch = emailsToCreate.filter((email) => email.batch_id === batch.id);
+      const { data: createdEmail } = await mutateAsync({
+        resource: "emails",
         values: {
-          user_id: id,
           class_id: course_id,
-          email_id: createdEmail.id
+          subject: batch.subject,
+          body: batch.body,
+          assignment_id: batch.assignment_id
         }
       });
+      emailsForBatch.forEach(async (email) => {
+        await mutateAsync({
+          resource: "email_recipients",
+          values: {
+            user_id: email.to.user_id,
+            class_id: course_id,
+            email_id: createdEmail.id,
+            subject: email.subject,
+            body: email.body
+          }
+        });
+      });
     });
-  };
-
-  /**
-   * For a single drafted email spec, determines the list of emails the conditions
-   * apply to.  This function will be called once per drafted email (EmailCreateData)
-   * when the "send" button is pressed.
-   */
-  const getIdsToSendTo = (emailToCreate: EmailCreateData) => {
-    if (emailToCreate.audience.type === "assignment") {
-      return getAssignmentIds(emailToCreate.audience);
-    } else if (emailToCreate.audience.type === "tag") {
-      return getTagIds(emailToCreate.audience);
-    } else if (emailToCreate.audience.type === "general") {
-      return getGeneralIds(emailToCreate.audience);
-    }
-    return [];
-  };
-
-  const getAssignmentIds = (audience: AssignmentEmailInfo) => {
-    const assignment = audience.assignment;
-    const submittedIds =
-      submissions?.data
-        .filter((submission) => {
-          return submission.assignment_id == assignment.id;
-        })
-        .map((submission) => {
-          return submission.user_roles
-            ? [submission.user_roles.users.user_id]
-            : submission.assignment_groups
-              ? submission.assignment_groups.assignment_groups_members.map((member) => {
-                  return member.user_roles.users.user_id.toString();
-                })
-              : [];
-        })
-        .reduce((prev, next) => {
-          return prev.concat(next);
-        }, []) ?? [];
-    if (audience.submissionType === "submitted") {
-      return submittedIds;
-    } else if (audience.submissionType === "not submitted") {
-      const studentIdsForClass =
-        userRolesData?.data
-          .filter((user) => {
-            return user.role === "student";
-          })
-          .map((user) => {
-            return user.users.user_id;
-          }) ?? [];
-      return studentIdsForClass?.filter((id) => {
-        return !submittedIds.includes(id);
-      });
-    }
-    return [];
-  };
-
-  const getTagIds = (audience: TagEmailInfo) => {
-    const chosenTag = audience.tag;
-    const profile_ids = tags
-      .filter((tag) => {
-        return tag.color == chosenTag.color && tag.name == chosenTag.name && tag.visible === chosenTag.visible;
-      })
-      .map((tag) => {
-        return tag.profile_id;
-      });
-    const ids =
-      userRolesData?.data
-        .filter((user) => {
-          return profile_ids.includes(user.private_profile_id);
-        })
-        .map((user) => {
-          return user.users.user_id;
-        }) ?? [];
-    return ids;
-  };
-
-  const getGeneralIds = (audience: GeneralEmailInfo) => {
-    const roles: string[] = [];
-    if (audience.includeGraders) {
-      roles.push("grader");
-    }
-    if (audience.includeInstructors) {
-      roles.push("instructor");
-    }
-    if (audience.includeStudents) {
-      roles.push("student");
-    }
-    return (
-      userRolesData?.data
-        .filter((userRole) => {
-          return roles.includes(userRole.role);
-        })
-        .map((userRole) => {
-          return userRole.users.user_id;
-        }) ?? []
-    );
   };
 
   return (
@@ -247,60 +45,7 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
       </Heading>
       {emailsToCreate.length > 0 ? (
         <Box spaceY="4">
-          {emailsToCreate.map((email, key) => {
-            return (
-              <Card.Root key={key} padding="2" mt="5" size="sm">
-                <Flex justifyContent={"space-between"}>
-                  <Card.Title>
-                    <Flex alignItems="center">
-                      Subject:
-                      <Editable.Root
-                        value={email.subject}
-                        onValueChange={(e) => {
-                          {
-                            if (email.id) {
-                              updateEmailField(email.id, "subject", e.value);
-                            }
-                          }
-                        }}
-                      >
-                        <Editable.Preview />
-                        <Editable.Input />
-                      </Editable.Root>
-                    </Flex>
-                  </Card.Title>
-                  <Text
-                    onClick={() => {
-                      if (email.id) {
-                        removeEmail(email.id);
-                      }
-                    }}
-                  >
-                    <IoMdClose />
-                  </Text>
-                </Flex>
-                <Flex flexDir={"column"} fontSize="sm">
-                  <Text>To: {emailToAudienceText(email)}</Text>
-                  <Flex alignItems="center">
-                    Body:
-                    <Editable.Root
-                      value={email.body}
-                      onValueChange={(e) => {
-                        {
-                          if (email.id) {
-                            updateEmailField(email.id, "body", e.value);
-                          }
-                        }
-                      }}
-                    >
-                      <Editable.Preview />
-                      <Editable.Input />
-                    </Editable.Root>
-                  </Flex>
-                </Flex>
-              </Card.Root>
-            );
-          })}
+          <EmailListWithPagination />
           <Button
             onClick={() => {
               sendEmails();
@@ -315,3 +60,197 @@ export default function EmailPreviewAndSend({ tags }: { tags: Tag[] }) {
     </Box>
   );
 }
+
+const EmailListWithPagination = () => {
+  const { emailsToCreate, removeEmail, updateEmailField, batches } = useEmailManagement();
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(5);
+
+  // Calculate pagination values
+  const totalItems = emailsToCreate.length;
+  const totalPages = Math.ceil(totalItems / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+
+  // Get current page items
+  const currentEmails = useMemo(() => {
+    return emailsToCreate.slice(startIndex, endIndex);
+  }, [emailsToCreate, startIndex, endIndex]);
+
+  // Handle page change
+  const handlePageChange = (page: SetStateAction<number>) => {
+    setCurrentPage(page);
+  };
+
+  // Handle items per page change
+  const handleItemsPerPageChange = (value: number) => {
+    setItemsPerPage(Number(value));
+    setCurrentPage(1); // Reset to first page
+  };
+
+  // Generate page numbers for navigation
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisiblePages = 5;
+
+    if (totalPages <= maxVisiblePages) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      const start = Math.max(1, currentPage - 2);
+      const end = Math.min(totalPages, start + maxVisiblePages - 1);
+
+      for (let i = start; i <= end; i++) {
+        pages.push(i);
+      }
+    }
+
+    return pages;
+  };
+
+  return (
+    <Box>
+      {/* Pagination Controls - Top */}
+      <Flex alignItems="center" mb={4} gap={4}>
+        <Text fontSize="sm" color="gray.600">
+          Showing {startIndex + 1}-{Math.min(endIndex, totalItems)} of {totalItems} emails
+        </Text>
+        <Spacer />
+        <Flex alignItems="center" gap={2}>
+          <Text fontSize="sm">Show:</Text>
+          <Select
+            size="sm"
+            value={{ label: itemsPerPage, value: itemsPerPage }}
+            onChange={(e) => (e ? handleItemsPerPageChange(e.value) : null)}
+            options={[5, 10, 20, 30].map((num) => {
+              return { label: num, value: num };
+            })}
+          />
+          <Text fontSize="sm">per page</Text>
+        </Flex>
+      </Flex>
+
+      {/* Email List */}
+      {currentEmails.map((email, key) => {
+        const batch = batches.find((batch) => batch.id === email.batch_id);
+        return (
+          <Card.Root key={email.id || key} padding="2" mt="5" size="sm">
+            <Flex justifyContent={"space-between"}>
+              <Card.Title>
+                <Flex alignItems="center">
+                  Subject:
+                  <Editable.Root
+                    value={email.subject ?? batch?.subject}
+                    onValueChange={(e) => {
+                      if (email.id) {
+                        updateEmailField(email.id, "subject", e.value);
+                      }
+                    }}
+                  >
+                    <Editable.Preview />
+                    <Editable.Input />
+                  </Editable.Root>
+                </Flex>
+              </Card.Title>
+              <Text
+                onClick={() => {
+                  if (email.id) {
+                    removeEmail(email.id);
+                  }
+                }}
+                cursor="pointer"
+                _hover={{ color: "red.500" }}
+              >
+                <IoMdClose />
+              </Text>
+            </Flex>
+            <Flex flexDir={"column"} fontSize="sm">
+              <Box>To: {email.to.email}</Box>
+              <Box>Why: {email.why}</Box>
+              <Flex alignItems="center">
+                Body:
+                <Editable.Root
+                  value={email.body ?? batch?.body}
+                  onValueChange={(e) => {
+                    if (email.id) {
+                      updateEmailField(email.id, "body", e.value);
+                    }
+                  }}
+                >
+                  <Editable.Preview />
+                  <Editable.Input />
+                </Editable.Root>
+              </Flex>
+            </Flex>
+          </Card.Root>
+        );
+      })}
+
+      {/* Pagination Controls - Bottom */}
+      {totalPages > 1 && (
+        <Flex justifyContent="center" alignItems="center" mt={6} gap={2}>
+          {/* Previous Button */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handlePageChange(currentPage - 1)}
+            disabled={currentPage === 1}
+          >
+            Previous
+          </Button>
+
+          {/* Page Numbers */}
+          <HStack>
+            {/* First page if not visible */}
+            {getPageNumbers()[0] > 1 && (
+              <>
+                <Button size="sm" variant={1 === currentPage ? "solid" : "outline"} onClick={() => handlePageChange(1)}>
+                  1
+                </Button>
+                {getPageNumbers()[0] > 2 && <Text>...</Text>}
+              </>
+            )}
+
+            {/* Visible page numbers */}
+            {getPageNumbers().map((page) => (
+              <Button
+                key={page}
+                size="sm"
+                variant={page === currentPage ? "solid" : "outline"}
+                onClick={() => handlePageChange(page)}
+                colorScheme={page === currentPage ? "blue" : "gray"}
+              >
+                {page}
+              </Button>
+            ))}
+
+            {/* Last page if not visible */}
+            {getPageNumbers()[getPageNumbers().length - 1] < totalPages && (
+              <>
+                {getPageNumbers()[getPageNumbers().length - 1] < totalPages - 1 && <Text>...</Text>}
+                <Button
+                  size="sm"
+                  variant={totalPages === currentPage ? "solid" : "outline"}
+                  onClick={() => handlePageChange(totalPages)}
+                >
+                  {totalPages}
+                </Button>
+              </>
+            )}
+          </HStack>
+
+          {/* Next Button */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handlePageChange(currentPage + 1)}
+            disabled={currentPage === totalPages}
+          >
+            Next
+          </Button>
+        </Flex>
+      )}
+    </Box>
+  );
+};

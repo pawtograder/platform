@@ -1,22 +1,17 @@
 "use client";
-import { Assignment, Tag } from "@/utils/supabase/DatabaseTypes";
-import { Button, Field, Fieldset, Heading, Input, Textarea, Box, Flex } from "@chakra-ui/react";
+import { Assignment, Submission, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
+import { Button, Field, Fieldset, Heading, Input, Textarea, Box, Flex, Text } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useEffect, useRef, useState } from "react";
 import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
-import {
-  AssignmentEmailInfo,
-  EmailManagementProvider,
-  GeneralEmailInfo,
-  TagEmailInfo,
-  useEmailManagement
-} from "./EmailManagementContext";
+import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
 
+/* types */
 enum Audience {
   All = "all",
   CourseStaff = "courseStaff",
@@ -27,35 +22,37 @@ enum Audience {
   Submitted = "submitted",
   NotSubmitted = "notSubmitted"
 }
+type SubmissionWithUser = Submission & {
+  // emails for individual submissions
+  user_roles: {
+    users: {
+      email: string;
+      user_id: string;
+    };
+  } | null;
+  // emails for group submissions
+  assignment_groups: {
+    assignment_groups_members: {
+      user_roles: {
+        users: {
+          email: string;
+          user_id: string;
+        };
+      };
+    }[];
+  } | null;
+};
+type UserRoleWithUserId = UserRole & { users: { email: string; user_id: string } };
 
 function EmailsInnerPage() {
   const { course_id } = useParams();
-  const { emailsToCreate, addEmail } = useEmailManagement();
+  const { emailsToCreate, addEmails, addBatch } = useEmailManagement();
   const [choice, setChoice] = useState<{ label: string; value: Audience | null }>();
   const [assignment, setAssignment] = useState<Assignment>();
   const [tag, setTag] = useState<Tag>();
   const [subjectLine, setSubjectLine] = useState<string>("");
   const [body, setBody] = useState<string>("");
   const tags = useTags();
-  const options = [
-    { label: "Students who have submitted an assignment", value: Audience.Submitted },
-    { label: "Students who have not submitted an assignment", value: Audience.NotSubmitted },
-    { label: "Instructors, Graders, and Students", value: Audience.All },
-    { label: "Instructors and Graders", value: Audience.CourseStaff },
-    { label: "Students", value: Audience.Students },
-    { label: "Graders", value: Audience.Graders },
-    { label: "Instructors", value: Audience.Instructors },
-    { label: "Tag", value: Audience.Tag }
-  ];
-
-  const { data: assignmentsData } = useList<Assignment>({
-    resource: "assignments",
-    meta: {
-      select: "*"
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
-
   const uniqueTags: Tag[] = Array.from(
     tags.tags
       .reduce((map, tag) => {
@@ -66,60 +63,31 @@ function EmailsInnerPage() {
       }, new Map())
       .values()
   );
+  /* Options for audience dropdown */
+  const options = [
+    { label: "Students who have submitted an assignment", value: Audience.Submitted },
+    { label: "Students who have not submitted an assignment", value: Audience.NotSubmitted },
+    { label: "Instructors, Graders, and Students", value: Audience.All },
+    { label: "Instructors and Graders", value: Audience.CourseStaff },
+    { label: "Students", value: Audience.Students },
+    { label: "Graders", value: Audience.Graders },
+    { label: "Instructors", value: Audience.Instructors },
+    { label: "Tag", value: Audience.Tag }
+  ];
+  /* Template variables to reference in subject/body that will be resolved with actual values */
 
+  const templateVariables = [
+    "assignment_name",
+    "assignment_slug",
+    "due_date",
+    "assignment_url",
+    "assignment_group_name",
+    "course_name"
+  ];
   /**
-   * Creates an email draft that will be held for the user to review and send.  The main computation is "audience"
-   * which is an object populated in one of three formats using the data the user entered / selected in the first few
-   * fields. Using three objects rather than a variety of optional fields ensures all the information is stored for one of
-   * the three choices, and nothing more/less.
+   * Only clear the form when the size of emails to create increases (someone drafts a new email)
+   * Don't clear the form if instructor deletes another email draft midway through
    */
-  const prepareMail = () => {
-    let audience: AssignmentEmailInfo | TagEmailInfo | GeneralEmailInfo;
-    switch (choice?.value) {
-      case Audience.Submitted:
-        if (!assignment) {
-          toaster.error({ title: "Failed to find assignment" });
-          return;
-        }
-        audience = { type: "assignment", assignment: assignment, submissionType: "submitted" };
-        break;
-      case Audience.NotSubmitted:
-        if (!assignment) {
-          toaster.error({ title: "Failed to find assignment" });
-          return;
-        }
-        audience = { type: "assignment", assignment: assignment, submissionType: "not submitted" };
-        break;
-      case Audience.All:
-        audience = { type: "general", includeInstructors: true, includeStudents: true, includeGraders: true };
-        break;
-      case Audience.CourseStaff:
-        audience = { type: "general", includeInstructors: true, includeStudents: false, includeGraders: true };
-        break;
-      case Audience.Students:
-        audience = { type: "general", includeInstructors: false, includeStudents: true, includeGraders: false };
-        break;
-      case Audience.Graders:
-        audience = { type: "general", includeInstructors: false, includeStudents: false, includeGraders: true };
-        break;
-      case Audience.Instructors:
-        audience = { type: "general", includeInstructors: true, includeStudents: false, includeGraders: false };
-        break;
-      case Audience.Tag:
-        if (!tag) {
-          toaster.error({ title: "Failed to find tag" });
-          return;
-        }
-        audience = { type: "tag", tag: tag };
-        break;
-      default:
-        return;
-    }
-    addEmail({ subject: subjectLine, body: body, audience: audience });
-  };
-
-  // only clear the form when the size of emails to create increases (someone drafts a new email)
-  // don't clear the form if instructor deletes another email draft midway through
   const prevEmailsToCreateLength = useRef(emailsToCreate.length);
   useEffect(() => {
     if (emailsToCreate.length > prevEmailsToCreateLength.current) {
@@ -132,6 +100,201 @@ function EmailsInnerPage() {
     prevEmailsToCreateLength.current = emailsToCreate.length;
   }, [emailsToCreate]);
 
+  const { data: assignmentsData } = useList<Assignment>({
+    resource: "assignments",
+    meta: {
+      select: "*"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
+  });
+
+  const { data: userRolesData } = useList<UserRoleWithUserId>({
+    resource: "user_roles",
+    meta: {
+      select: "*, users!user_roles_user_id_fkey1(email, user_id)"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
+  });
+
+  const { data: submissionsData } = useList<SubmissionWithUser>({
+    resource: "submissions",
+    meta: {
+      select: `
+      *,
+        user_roles!submissions_profile_id_fkey (
+          users!user_roles_user_id_fkey1 (
+            email, user_id
+          )
+        ),
+        assignment_groups!submissions_assignment_group_id_fkey (
+          assignment_groups_members!assignment_groups_members_assignment_group_id_fkey (
+            user_roles!assignment_groups_members_profile_id_fkey1(
+              users!user_roles_user_id_fkey1 (
+                email, user_id
+              )
+            )
+          )
+        )
+      `
+    },
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "is_active", operator: "eq", value: true }
+    ]
+  });
+
+  const prepareMail = () => {
+    const batch = addBatch({ subject: subjectLine, body: body, assignment_id: assignment?.id });
+    const identities = getIdentitiesForChosenCategory() ?? [];
+    const formattedEmails: EmailCreateDataWithoutId[] = [];
+    identities.forEach((email) => {
+      formattedEmails.push({ batch_id: batch.id, to: email, why: whyLine() });
+    });
+    addEmails(formattedEmails);
+  };
+
+  const whyLine = () => {
+    switch (choice?.value) {
+      case Audience.Submitted:
+        return <>Submitted {assignment?.title}</>;
+      case Audience.NotSubmitted:
+        return <>Not submitted {assignment?.title}</>;
+      case Audience.All:
+        return <>Student, Grader, or Instructor</>;
+      case Audience.CourseStaff:
+        return <>Grader or Instructor</>;
+      case Audience.Graders:
+        return <>Grader</>;
+      case Audience.Students:
+        return <>Student</>;
+      case Audience.Instructors:
+        return <>Instructor</>;
+      case Audience.Tag:
+        return tag ? (
+          <>
+            Tagged with <TagDisplay tag={tag} />
+          </>
+        ) : (
+          <></>
+        );
+      default:
+        <></>;
+    }
+    return <></>;
+  };
+
+  const getIdentitiesForChosenCategory = () => {
+    switch (choice?.value) {
+      case Audience.Submitted:
+        if (!assignment) {
+          toaster.error({ title: "Failed to find assignment" });
+          return;
+        }
+        return getAssignmentIdentities(assignment, "submitted");
+      case Audience.NotSubmitted:
+        if (!assignment) {
+          toaster.error({ title: "Failed to find assignment" });
+          return;
+        }
+        return getAssignmentIdentities(assignment, "not submitted");
+      case Audience.All:
+        return getGeneralIdentities(true, true, true);
+      case Audience.CourseStaff:
+        return getGeneralIdentities(false, true, true);
+      case Audience.Students:
+        return getGeneralIdentities(true, false, false);
+      case Audience.Graders:
+        return getGeneralIdentities(false, true, false);
+      case Audience.Instructors:
+        return getGeneralIdentities(false, false, true);
+      case Audience.Tag:
+        if (!tag) {
+          toaster.error({ title: "Failed to find tag" });
+          return;
+        }
+        return getTagIdentities(tag);
+      default:
+        return;
+    }
+  };
+
+  const getAssignmentIdentities = (assignment: Assignment, submissionStatus: string) => {
+    const submittedEmails =
+      submissionsData?.data
+        .filter((submission) => {
+          return submission.assignment_id == assignment.id;
+        })
+        .map((submission) => {
+          return submission.user_roles
+            ? [submission.user_roles.users]
+            : submission.assignment_groups
+              ? submission.assignment_groups.assignment_groups_members.map((member) => {
+                  return member.user_roles.users;
+                })
+              : [];
+        })
+        .reduce((prev, next) => {
+          return prev.concat(next);
+        }, []) ?? [];
+    if (submissionStatus === "submitted") {
+      return submittedEmails;
+    } else if (submissionStatus === "not submitted") {
+      const studentEmailsForClass =
+        userRolesData?.data
+          .filter((user) => {
+            return user.role === "student";
+          })
+          .map((user) => {
+            return user.users;
+          }) ?? [];
+      return studentEmailsForClass?.filter((email) => {
+        return !submittedEmails.includes(email);
+      });
+    }
+    return [];
+  };
+
+  const getTagIdentities = (chosenTag: Tag) => {
+    const profile_ids = tags.tags
+      .filter((tag) => {
+        return tag.color == chosenTag.color && tag.name == chosenTag.name && tag.visible === chosenTag.visible;
+      })
+      .map((tag) => {
+        return tag.profile_id;
+      });
+    const ids =
+      userRolesData?.data
+        .filter((user) => {
+          return profile_ids.includes(user.private_profile_id);
+        })
+        .map((user) => {
+          return user.users;
+        }) ?? [];
+    return ids;
+  };
+
+  const getGeneralIdentities = (includeStudents: boolean, includeGraders: boolean, includeInstructors: boolean) => {
+    const roles: string[] = [];
+    if (includeStudents) {
+      roles.push("student");
+    }
+    if (includeGraders) {
+      roles.push("grader");
+    }
+    if (includeInstructors) {
+      roles.push("instructor");
+    }
+    return (
+      userRolesData?.data
+        .filter((userRole) => {
+          return roles.includes(userRole.role);
+        })
+        .map((userRole) => {
+          return userRole.users;
+        }) ?? []
+    );
+  };
+
   return (
     <>
       <Flex gap="10" width="100%" wrap={{ base: "wrap", lg: "nowrap" }}>
@@ -142,6 +305,19 @@ function EmailsInnerPage() {
           </Heading>
           <Fieldset.Root>
             <Fieldset.Content>
+              <Field.Root>
+                <Field.Label>Template variables:</Field.Label>
+                <Text fontSize="sm">
+                  {templateVariables.map((val) => {
+                    return `{${val}} `;
+                  })}
+                </Text>
+                <Field.HelperText>
+                  These variables can be referenced in brackets {"{}"} in the email subject or body, and will be filled
+                  in with the proper values.
+                </Field.HelperText>
+              </Field.Root>
+
               <Field.Root>
                 <Field.Label>Select audience</Field.Label>
                 <Select
@@ -212,7 +388,7 @@ function EmailsInnerPage() {
             </Fieldset.Content>
           </Fieldset.Root>
         </Box>
-        <EmailPreviewAndSend tags={tags.tags} />
+        <EmailPreviewAndSend />
       </Flex>
     </>
   );
