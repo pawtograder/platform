@@ -8,7 +8,7 @@ import {
   Notification,
   Tag,
   UserProfile,
-  UserRole
+  UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
@@ -187,8 +187,12 @@ export type UserProfileWithPrivateProfile = UserProfile & {
   private_profile?: UserProfile;
 };
 
-class CourseController {
+export class CourseController {
   private _isLoaded = false;
+  private _isObfuscatedGrades: boolean = false;
+  private _onlyShowGradesFor: string = "";
+  private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
+  private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   constructor(public courseId: number) {}
   private discussionThreadReadStatusesSubscribers: Map<
     number,
@@ -196,7 +200,9 @@ class CourseController {
   > = new Map();
   private discussionThreadReadStatuses: Map<number, DiscussionThreadReadWithAllDescendants> = new Map();
   private userProfiles: Map<string, UserProfileWithPrivateProfile> = new Map();
-  private userRoles: Map<string, UserRole> = new Map();
+  private userRoles: Map<string, UserRoleWithUser> = new Map(); //From uid to role
+  private userRolesByPrivateProfileId: Map<string, UserRoleWithUser> = new Map(); //From private profile id to role
+
   private userProfileSubscribers: Map<string, UpdateCallback<UserProfileWithPrivateProfile>[]> = new Map();
 
   private discussionThreadTeasers: DiscussionThreadTeaser[] = [];
@@ -517,12 +523,13 @@ class CourseController {
       }
     }
   }
-  setUserProfiles(profiles: UserProfile[], roles: UserRole[]) {
+  setUserProfiles(profiles: UserProfile[], roles: UserRoleWithUser[]) {
     for (const profile of profiles) {
       this.userProfiles.set(profile.id, { ...profile });
     }
     for (const role of roles) {
       this.userRoles.set(role.user_id, role);
+      this.userRolesByPrivateProfileId.set(role.private_profile_id, role);
       const privateProfile = this.userProfiles.get(role.private_profile_id);
       const publicProfile = this.userProfiles.get(role.public_profile_id);
       if (privateProfile && publicProfile) {
@@ -536,6 +543,12 @@ class CourseController {
         callbacks.forEach((cb) => cb(this.userProfiles.get(id)!));
       }
     }
+  }
+  getUserRole(user_id: string) {
+    return this.userRoles.get(user_id);
+  }
+  getUserRoleByPrivateProfileId(private_profile_id: string) {
+    return this.userRolesByPrivateProfileId.get(private_profile_id);
   }
   getUserProfile(id: string, callback?: UpdateCallback<UserProfileWithPrivateProfile>) {
     const profile = this.userProfiles.get(id);
@@ -639,6 +652,38 @@ class CourseController {
         ?.forEach((callback) => callback(this.tags.filter((t) => t.profile_id === tag.profile_id)));
     }
   }
+  getRoster(): UserRoleWithUser[] {
+    return Array.from(this.userRoles.values()).filter((role) => role.role === "student");
+  }
+  getProfileBySisId(sis_id: string) {
+    return Array.from(this.userProfiles.values()).find((profile) => profile.sis_user_id === sis_id);
+  }
+  setObfuscatedGradesMode(val: boolean) {
+    this._isObfuscatedGrades = val;
+    this.isObfuscatedGradesListeners.forEach((cb) => cb(val));
+  }
+  setOnlyShowGradesFor(val: string) {
+    this._onlyShowGradesFor = val;
+    this.onlyShowGradesForListeners.forEach((cb) => cb(val));
+  }
+  get isObfuscatedGrades() {
+    return this._isObfuscatedGrades;
+  }
+  get onlyShowGradesFor() {
+    return this._onlyShowGradesFor;
+  }
+  subscribeObfuscatedGradesMode(cb: (val: boolean) => void) {
+    this.isObfuscatedGradesListeners.push(cb);
+    return () => {
+      this.isObfuscatedGradesListeners = this.isObfuscatedGradesListeners.filter((fn) => fn !== cb);
+    };
+  }
+  subscribeOnlyShowGradesFor(cb: (val: string) => void) {
+    this.onlyShowGradesForListeners.push(cb);
+    return () => {
+      this.onlyShowGradesForListeners = this.onlyShowGradesForListeners.filter((fn) => fn !== cb);
+    };
+  }
 }
 
 function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
@@ -673,13 +718,16 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
     },
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
-  const { data: roles } = useList<UserRole>({
+  const { data: roles } = useList<UserRoleWithUser>({
     resource: "user_roles",
     queryOptions: {
       staleTime: Infinity
     },
     pagination: {
       pageSize: 1000
+    },
+    meta: {
+      select: "*, users(*)"
     },
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
@@ -903,4 +951,48 @@ export function useCourseController() {
     throw new Error("CourseController not found");
   }
   return controller;
+}
+
+export function useSetObfuscatedGradesMode(): (val: boolean) => void {
+  const controller = useCourseController();
+  return useCallback(
+    (val: boolean) => {
+      controller.setObfuscatedGradesMode(val);
+    },
+    [controller]
+  );
+}
+
+export function useSetOnlyShowGradesFor(): (val: string) => void {
+  const controller = useCourseController();
+  return useCallback(
+    (val: string) => {
+      controller.setOnlyShowGradesFor(val);
+    },
+    [controller]
+  );
+}
+
+export function useObfuscatedGradesMode(): boolean {
+  const controller = useCourseController();
+  const [isObfuscated, setIsObfuscated] = useState(controller.isObfuscatedGrades);
+  useEffect(() => {
+    const unsubscribe = controller.subscribeObfuscatedGradesMode(setIsObfuscated);
+    setIsObfuscated(controller.isObfuscatedGrades);
+    return unsubscribe;
+  }, [controller]);
+  return isObfuscated;
+}
+
+export function useCanShowGradeFor(userId: string): boolean {
+  const controller = useCourseController();
+  const [onlyShowFor, setOnlyShowFor] = useState(controller.onlyShowGradesFor);
+  const isObfuscated = useObfuscatedGradesMode();
+  useEffect(() => {
+    const unsubscribe = controller.subscribeOnlyShowGradesFor(setOnlyShowFor);
+    setOnlyShowFor(controller.onlyShowGradesFor);
+    return unsubscribe;
+  }, [controller]);
+  if (!isObfuscated) return true;
+  return onlyShowFor === userId;
 }

@@ -1,4 +1,4 @@
-INSERT into public.classes(name, semester, slug, is_demo, github_org, time_zone) VALUES ('Demo Class', 20281, 'demo-class', true, 'autograder-dev', 'America/New_York');
+INSERT into public.classes(id,name, semester, slug, is_demo, github_org, time_zone) VALUES (1, 'Demo Class', 20281, 'demo-class', true, 'autograder-dev', 'America/New_York');
 
 DO $$
 DECLARE 
@@ -47,6 +47,16 @@ INSERT INTO "public"."name_generation_words" ("id", "word", "is_noun", "is_adjec
 
 
 
+
+INSERT INTO public.gradebook_columns (id, sort_order, gradebook_id, class_id, slug, name, description, score_expression, render_expression, max_score, dependencies) VALUES
+(2, 2, 1, 1, 'average.assignments', 'Assignments Average', 'Average of all assignments', 'mean(gradebook_columns("assignment-*"))', 'letter(score)', 100, '{"gradebook_columns": [1]}'),
+(3, 3, 1, 1, 'participation', 'Participation', 'Participation in class', NULL, NULL, 100, NULL),
+(4, 4, 1, 1, 'exam-1', 'Exam 1', 'Score for Exam 1', NULL, NULL, 100, NULL),
+(5, 5, 1, 1, 'exam-2', 'Exam 2', 'Score for Exam 2', NULL, NULL, 100, NULL),
+(6, 6, 1, 1, 'average.exams', 'Exam average,', 'Average of all exams', 'mean(gradebook_columns("exam-*"))', 'letter(score)', 100, '{"gradebook_columns": [4,5]}'),
+(7, 7, 1, 1, 'final', 'Final', 'Final score', 'gradebook_columns("average.assignments")*0.4 + gradebook_columns("participation")*0.1 + gradebook_columns("average.exams")*0.5', 'letter(score)', 100, '{"gradebook_columns": [2,3,6]}');
+
+
 INSERT INTO auth.users (
   instance_id,
   id,
@@ -60,7 +70,17 @@ INSERT INTO auth.users (
   is_super_admin
 ) VALUES
   ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111111', 'authenticated', 'authenticated', 'test1@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '22222222-2222-2222-2222-222222222222', 'authenticated', 'authenticated', 'test2@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE);
+  ('00000000-0000-0000-0000-000000000000', '22222222-2222-2222-2222-222222222222', 'authenticated', 'authenticated', 'test2@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333331', 'authenticated', 'authenticated', 'nullpointer@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333332', 'authenticated', 'authenticated', 'segfault@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333333', 'authenticated', 'authenticated', 'infiniteloop@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333334', 'authenticated', 'authenticated', 'offbyone@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333335', 'authenticated', 'authenticated', 'racecondition@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333336', 'authenticated', 'authenticated', 'rubberduck@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333337', 'authenticated', 'authenticated', 'stackoverflow@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333338', 'authenticated', 'authenticated', 'syntaxerror@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333339', 'authenticated', 'authenticated', 'foobar@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333340', 'authenticated', 'authenticated', 'helloworld@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE);
 
 DO $$
 DECLARE
@@ -141,8 +161,93 @@ public class Entrypoint {
  **MORE**
  output
  **wow**', 'markdown', 1, alyssa_profile_id, alyssa_submission_id, TRUE);
+
+update public.gradebook_column_students set score=100 where gradebook_column_id=3 and student_id=alyssa_profile_id;
+update public.gradebook_column_students set score=0,is_excused=true where gradebook_column_id=4 and student_id=alyssa_profile_id;
+update public.gradebook_column_students set score=100 where gradebook_column_id=5 and student_id=alyssa_profile_id;
+
+
   
 END $$;
+
+-- Add 10 new students' submissions
+DO $$
+DECLARE
+  student_profile_id uuid;
+  student_repo_id int8;
+  student_check_run_id int8;
+  student_submission_id int8;
+  student_user_id uuid;
+  i int;
+  student_uuid_arr uuid[] := ARRAY[
+    '33333333-3333-3333-3333-333333333331',
+    '33333333-3333-3333-3333-333333333332',
+    '33333333-3333-3333-3333-333333333333',
+    '33333333-3333-3333-3333-333333333334',
+    '33333333-3333-3333-3333-333333333335',
+    '33333333-3333-3333-3333-333333333336',
+    '33333333-3333-3333-3333-333333333337',
+    '33333333-3333-3333-3333-333333333338',
+    '33333333-3333-3333-3333-333333333339',
+    '33333333-3333-3333-3333-333333333340'
+  ];
+BEGIN
+  FOR i IN 1..10 LOOP
+    student_user_id := student_uuid_arr[i];
+    -- Get the profile_id for this student
+    SELECT p.id INTO student_profile_id
+    FROM public.profiles p
+    INNER JOIN public.user_roles r ON r.private_profile_id = p.id
+    WHERE r.user_id = student_user_id;
+
+    -- Insert repository
+    INSERT INTO public.repositories(assignment_id, repository, class_id, profile_id, synced_handout_sha, synced_repo_sha)
+      VALUES (1, 'not-actually/repository-' || i, 1, student_profile_id, 'none', 'none')
+      RETURNING id INTO student_repo_id;
+
+    -- Insert repository check run
+    INSERT INTO public.repository_check_runs (class_id, repository_id, check_run_id, status, sha, commit_message)
+      VALUES (1, student_repo_id, 1, '{}', 'none', 'none')
+      RETURNING id INTO student_check_run_id;
+
+    -- Insert submission
+    INSERT INTO public.submissions (
+      id, assignment_id, profile_id, sha, repository, run_attempt, run_number, class_id, repository_check_run_id, repository_id
+    ) VALUES (
+      i + 1, 1, student_profile_id, 'none', 'not-actually/a-repository-' || i, 1, 1, 1, student_check_run_id, student_repo_id
+    ) RETURNING id INTO student_submission_id;
+
+    UPDATE public.submission_reviews set total_score=i*5 where submission_id=student_submission_id;
+
+    -- Insert submission file
+    INSERT INTO public.submission_files (name, contents, class_id, profile_id, submission_id)
+    VALUES ('sample.java', 'package com.pawtograder.example.java;\n\npublic class Entrypoint {\n    public static void main(String[] args) {\n        System.out.println("Hello from student ' || i || '!");\n    }\n\n    public int doMath(int a, int b) {\n        return a+b;\n    }\n\n    public String getMessage() {\n        return "Hello from student ' || i || '!";\n    }\n}', 1, student_profile_id, student_submission_id);
+
+    -- Insert grader results
+    INSERT INTO grader_results (id, submission_id, score, class_id, profile_id, lint_passed, lint_output, lint_output_format, max_score)
+    VALUES (student_submission_id, student_submission_id, 5, 1, student_profile_id, TRUE, 'no lint output', 'markdown', 10);
+
+    -- Insert grader result tests
+    INSERT INTO grader_result_tests (score, max_score, name, name_format, output, output_format, class_id, student_id, grader_result_id, is_released)
+    VALUES
+      (0, 5, 'test 1', 'text', 'output for student ' || i, 'markdown', 1, student_profile_id, student_submission_id, TRUE),
+      (5, 5, 'test 2', 'text', 'output for student ' || i, 'markdown', 1, student_profile_id, student_submission_id, TRUE);
+
+   update public.gradebook_column_students set score=i*5 where gradebook_column_id=3 and student_id=student_profile_id;
+   update public.gradebook_column_students set score=i*7 where gradebook_column_id=4 and student_id=student_profile_id;
+   update public.gradebook_column_students set score=i*10 where gradebook_column_id=5 and student_id=student_profile_id;
+
+  END LOOP;
+END $$;
+
+SELECT setval('classes_id_seq', (SELECT MAX(id) FROM "classes"));
+SELECT setval('assignments_id_seq', (SELECT MAX(id) FROM "assignments"));
+SELECT setval('gradebooks_id_seq', (SELECT MAX(id) FROM "gradebooks"));
+SELECT setval('gradebook_columns_id_seq', (SELECT MAX(id) FROM "gradebook_columns"));
+SELECT setval('submissio_id_seq', (SELECT MAX(id) FROM "submissions"));
+SELECT setval('repositories_id_seq', (SELECT MAX(id) FROM "repositories"));
+SELECT setval('repository_check_runs_id_seq', (SELECT MAX(id) FROM "repository_check_runs"));
+SELECT setval('grader_results_id_seq', (SELECT MAX(id) FROM "grader_results"));
 
 -- Flashcard seed data
 DO $$
