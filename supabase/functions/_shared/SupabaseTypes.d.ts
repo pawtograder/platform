@@ -1291,6 +1291,114 @@ export type Database = {
           }
         ];
       };
+      email_recipients: {
+        Row: {
+          body: string | null;
+          class_id: number;
+          created_at: string;
+          email_id: number;
+          id: number;
+          subject: string | null;
+          user_id: string;
+        };
+        Insert: {
+          body?: string | null;
+          class_id: number;
+          created_at?: string;
+          email_id: number;
+          id?: number;
+          subject?: string | null;
+          user_id: string;
+        };
+        Update: {
+          body?: string | null;
+          class_id?: number;
+          created_at?: string;
+          email_id?: number;
+          id?: number;
+          subject?: string | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "email_recipients_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_recipients_emails_fkey";
+            columns: ["email_id"];
+            isOneToOne: false;
+            referencedRelation: "emails";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "email_recipients_users_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      emails: {
+        Row: {
+          assignment_id: number | null;
+          body: string;
+          class_id: number;
+          created_at: string;
+          id: number;
+          subject: string;
+        };
+        Insert: {
+          assignment_id?: number | null;
+          body: string;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          subject: string;
+        };
+        Update: {
+          assignment_id?: number | null;
+          body?: string;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          subject?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "emails_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "emails_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "emails_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "emails_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       flashcard_decks: {
         Row: {
           class_id: number;
@@ -1465,114 +1573,6 @@ export type Database = {
             columns: ["deck_id"];
             isOneToOne: false;
             referencedRelation: "flashcard_decks";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      email_distribution_exception: {
-        Row: {
-          assignment_id: number | null;
-          class_id: number;
-          created_at: string;
-          id: number;
-          include: boolean;
-          profile_id: string;
-          tag_id: number | null;
-        };
-        Insert: {
-          assignment_id?: number | null;
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          include: boolean;
-          profile_id: string;
-          tag_id?: number | null;
-        };
-        Update: {
-          assignment_id?: number | null;
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          include?: boolean;
-          profile_id?: string;
-          tag_id?: number | null;
-        };
-        Relationships: [];
-      };
-      email_distribution_item: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          email: string;
-          email_distribution_list_id: number;
-          id: number;
-          profile_id: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          email: string;
-          email_distribution_list_id: number;
-          id?: number;
-          profile_id: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          email?: string;
-          email_distribution_list_id?: number;
-          id?: number;
-          profile_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "email_distribution_item_keys_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "email_distribution_item_keys_list_fkey";
-            columns: ["email_distribution_list_id"];
-            isOneToOne: false;
-            referencedRelation: "email_distribution_list";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "email_distribution_item_keys_profile_id_fkey";
-            columns: ["profile_id"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      email_distribution_list: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          id: number;
-          name: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          name: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          name?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "email_distribution_list_keys_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
             referencedColumns: ["id"];
           }
         ];

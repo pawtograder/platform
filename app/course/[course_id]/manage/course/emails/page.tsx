@@ -1,6 +1,25 @@
 "use client";
-import { Assignment, Submission, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { Button, Field, Fieldset, Heading, Input, Textarea, Box, Flex, Text } from "@chakra-ui/react";
+import {
+  Assignment,
+  ClassSection,
+  EmailWithRecipients,
+  Submission,
+  Tag,
+  UserRole
+} from "@/utils/supabase/DatabaseTypes";
+import {
+  Button,
+  Field,
+  Fieldset,
+  Heading,
+  Input,
+  Textarea,
+  Box,
+  Flex,
+  Text,
+  Card,
+  Collapsible
+} from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useEffect, useRef, useState } from "react";
@@ -10,6 +29,7 @@ import TagDisplay from "@/components/ui/tag";
 import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
+import _ from "lodash";
 
 /* types */
 enum Audience {
@@ -53,6 +73,7 @@ function EmailsInnerPage() {
   const [subjectLine, setSubjectLine] = useState<string>("");
   const [body, setBody] = useState<string>("");
   const tags = useTags();
+  const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
   const uniqueTags: Tag[] = Array.from(
     tags.tags
       .reduce((map, tag) => {
@@ -141,6 +162,14 @@ function EmailsInnerPage() {
       { field: "class_id", operator: "eq", value: course_id },
       { field: "is_active", operator: "eq", value: true }
     ]
+  });
+
+  const { data: classSectionsData } = useList<ClassSection>({
+    resource: "class_sections",
+    meta: {
+      select: "*"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
 
   const prepareMail = () => {
@@ -287,7 +316,11 @@ function EmailsInnerPage() {
     return (
       userRolesData?.data
         .filter((userRole) => {
-          return roles.includes(userRole.role);
+          return (
+            roles.includes(userRole.role) &&
+            (userRole.class_section_id ||
+              (userRole.class_section_id && classSectionIds.includes(userRole.class_section_id)))
+          );
         })
         .map((userRole) => {
           return userRole.users;
@@ -365,6 +398,32 @@ function EmailsInnerPage() {
                   />
                 </Field.Root>
               )}
+              {choice?.value &&
+                [
+                  Audience.All,
+                  Audience.CourseStaff,
+                  Audience.Graders,
+                  Audience.Instructors,
+                  Audience.Students
+                ].includes(choice.value) && (
+                  <Field.Root>
+                    <Field.Label>Select Class Section(s)</Field.Label>
+                    <Select
+                      isMulti={true}
+                      onChange={(e) => {
+                        setClassSectionIds(
+                          e.map((section) => {
+                            return section.value;
+                          })
+                        );
+                      }}
+                      options={classSectionsData?.data.map((section) => {
+                        return { label: section.name, value: section.id };
+                      })}
+                    />
+                  </Field.Root>
+                )}
+
               <Field.Root>
                 <Field.Label>Subject</Field.Label>
                 <Input value={subjectLine} onChange={(e) => setSubjectLine(e.target.value)} />
@@ -389,8 +448,79 @@ function EmailsInnerPage() {
           </Fieldset.Root>
         </Box>
         <EmailPreviewAndSend />
+        <HistoryPage />
       </Flex>
     </>
+  );
+}
+
+function HistoryPage() {
+  const { course_id } = useParams();
+
+  const { data: emails } = useList<EmailWithRecipients>({
+    resource: "emails",
+    meta: {
+      select: "*, email_recipients!email_recipients_emails_fkey(*)"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    sorters: [{ field: "created_at", order: "desc" }]
+  });
+  const createTimeKey = (dateString: string, bucketMinutes: number = 5) => {
+    const date = new Date(dateString);
+    const minutes = date.getMinutes();
+    const bucketedMinutes = Math.floor(minutes / bucketMinutes) * bucketMinutes;
+    const bucketedDate = new Date(date);
+    bucketedDate.setMinutes(bucketedMinutes, 0, 0);
+    return bucketedDate.toISOString().slice(0, 16); 
+  };
+
+  const groupedByTime: _.Dictionary<EmailWithRecipients[]> = _.groupBy(
+    emails?.data || [],
+    (email) => createTimeKey(email.created_at, 5) // 5-minute buckets
+  );
+
+  const timeGroupsArray = Object.entries(groupedByTime).map(([timeKey, emailGroup]) => ({
+    timeKey,
+    emails: emailGroup,
+    count: emailGroup.length
+  }));
+
+  return (
+    <Flex flexDir={"column"} gap="3">
+      <Heading size="lg">History</Heading>
+      {timeGroupsArray.map((group, key) => {
+        return (
+          <Card.Root padding="2" size="sm" key={key}>
+            <Collapsible.Root>
+              <Collapsible.Trigger>
+                <Card.Title>
+                  {group.count} emails sent at {new Date(group.timeKey).toString()}
+                </Card.Title>
+              </Collapsible.Trigger>
+              <Collapsible.Content>
+                <Card.Body>
+                  {group.emails.map((email: EmailWithRecipients) => {
+                    return (
+                      <>
+                        {email.email_recipients.map((recipient, key) => {
+                          return (
+                            <Box key={key}>
+                              <Box>Subject: {recipient.subject ?? email.subject}</Box>
+                              <Box>To: {recipient.user_id}</Box>
+                              <Box>Body: {recipient.body ?? email.body}</Box>
+                            </Box>
+                          );
+                        })}
+                      </>
+                    );
+                  })}
+                </Card.Body>
+              </Collapsible.Content>
+            </Collapsible.Root>
+          </Card.Root>
+        );
+      })}
+    </Flex>
   );
 }
 

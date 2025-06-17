@@ -27,6 +27,21 @@ ALTER TABLE "public"."emails" ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE "public"."email_recipients" ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE "public"."emails"
+    ADD CONSTRAINT "emails_class_id_fkey" FOREIGN KEY ("class_id") REFERENCES "public"."classes"("id");
+
+ALTER TABLE "public"."emails"
+    ADD CONSTRAINT "emails_assignment_id_fkey" FOREIGN KEY ("assignment_id") REFERENCES "public"."assignments"("id");
+
+ALTER TABLE "public"."email_recipients"
+    ADD CONSTRAINT "email_recipients_users_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("user_id");
+
+ALTER TABLE "public"."email_recipients"
+    ADD CONSTRAINT "email_recipients_emails_fkey" FOREIGN KEY ("email_id") REFERENCES "public"."emails"("id");
+
+ALTER TABLE "public"."email_recipients"
+    ADD CONSTRAINT "email_recipients_class_id_fkey" FOREIGN KEY ("class_id") REFERENCES "public"."classes"("id");
+
 create policy "Instructors can view emails"
 on "public"."emails"
 as permissive

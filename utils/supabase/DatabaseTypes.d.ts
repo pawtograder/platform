@@ -639,3 +639,23 @@ export type ReviewAssignments = GetResult<
   Database["public"]["Tables"]["review_assignments"]["Relationships"],
   "*"
 >;
+
+export type Emails = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["emails"]["Row"],
+  "emails",
+  Database["public"]["Tables"]["emails"]["Relationships"],
+  "*"
+>;
+
+export type EmailRecipients = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_recipients"]["Row"],
+  "email_recipients",
+  Database["public"]["Tables"]["email_recipients"]["Relationships"],
+  "*"
+>;
+
+export type EmailWithRecipients = Emails & {
+  email_recipients: EmailRecipients[];
+};
