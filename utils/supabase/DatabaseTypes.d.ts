@@ -85,6 +85,13 @@ export type UserRole = GetResult<
   Database["public"]["Tables"]["user_roles"]["Relationships"],
   "*"
 >;
+export type UserRoleWithUser = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["user_roles"]["Row"],
+  "user_roles",
+  Database["public"]["Tables"]["user_roles"]["Relationships"],
+  "*, users(*)"
+>;
 
 export type UserRoleWithPrivateProfileAndUser = GetResult<
   Database["public"],
@@ -564,6 +571,32 @@ export type RubricCheckReference = GetResult<
   Database["public"]["Tables"]["rubric_check_references"]["Relationships"],
   "*"
 >;
+
+export type GradebookColumnDependencies = {
+  assignments?: int[];
+  gradebook_columns?: int[];
+};
+export type GradebookWithAllData = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["gradebooks"]["Row"],
+  "gradebooks",
+  Database["public"]["Tables"]["gradebooks"]["Relationships"],
+  "*, gradebook_columns!gradebook_columns_gradebook_id_fkey(*, gradebook_column_students(*))"
+>;
+
+type _GradebookColumnWithEntries = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["gradebook_columns"]["Row"],
+  "gradebook_columns",
+  Database["public"]["Tables"]["gradebook_columns"]["Relationships"],
+  "*, gradebook_column_students(*)"
+>;
+export type GradebookColumnWithEntries = Omit<_GradebookColumnWithEntries, "dependencies"> & {
+  dependencies: GradebookColumnDependencies | null;
+};
+export type Gradebook = Database["public"]["Tables"]["gradebooks"]["Row"];
+export type GradebookColumn = Database["public"]["Tables"]["gradebook_columns"]["Row"];
+export type GradebookColumnStudent = Database["public"]["Tables"]["gradebook_column_students"]["Row"];
 
 /**
  * Flashcard Deck Types

@@ -25,6 +25,7 @@ import React, { Fragment, useEffect, useRef, useState } from "react";
 import { FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
+  FiBookOpen,
   FiClipboard,
   FiCompass,
   FiMenu,
@@ -60,6 +61,8 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/help`,
     feature_flag: "office-hours"
   },
+  { name: "Gradebook", icon: FiBookOpen, student_only: true, target: `/course/${courseID}/gradebook` },
+  { name: "Gradebook", icon: FiBookOpen, instructor_only: true, target: `/course/${courseID}/manage/gradebook` },
   {
     name: "Course Settings",
     icon: FiSettings,

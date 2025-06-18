@@ -57,6 +57,11 @@ export function useIsGrader() {
   return role.role === "grader";
 }
 
+export function useIsInstructor() {
+  const { role } = useClassProfiles();
+  return role.role === "instructor";
+}
+
 export function useIsGraderOrInstructor() {
   const { role } = useClassProfiles();
   return role.role === "grader" || role.role === "instructor";
