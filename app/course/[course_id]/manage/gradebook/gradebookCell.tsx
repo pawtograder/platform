@@ -4,6 +4,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useColorMode } from "@/components/ui/color-mode";
 import { Field } from "@/components/ui/field";
 import PersonName from "@/components/ui/person-name";
+import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useCanShowGradeFor } from "@/hooks/useCourseController";
 import {
@@ -12,7 +13,7 @@ import {
   useGradebookController,
   useReferencedContent
 } from "@/hooks/useGradebook";
-import { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
+import type { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Box, Button, Code, HStack, Icon, Input, Popover, Portal, Text, VStack } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 import { memo, useEffect, useId, useState } from "react";
@@ -236,7 +237,10 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
                             </VStack>
                           );
                         } catch (e) {
-                          console.error(e);
+                          toaster.error({
+                            title: "Error parsing CSV import",
+                            description: `Error parsing CSV import: ${e instanceof Error ? e.message : String(e)}`
+                          });
                         }
                       }
                     }

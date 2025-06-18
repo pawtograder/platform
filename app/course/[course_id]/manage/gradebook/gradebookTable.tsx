@@ -19,7 +19,7 @@ import {
   useStudentDetailView
 } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import { GradebookColumn, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import type { GradebookColumn, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Button,
@@ -40,8 +40,8 @@ import {
 import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import {
-  Column,
-  ColumnDef,
+  type Column,
+  type ColumnDef,
   filterFns,
   flexRender,
   getCoreRowModel,
@@ -51,7 +51,7 @@ import {
   useReactTable
 } from "@tanstack/react-table";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { FieldValues } from "react-hook-form";
+import type { FieldValues } from "react-hook-form";
 import { FiDownload, FiMoreVertical, FiPlus } from "react-icons/fi";
 import { LuArrowDown, LuArrowLeft, LuArrowRight, LuArrowUp, LuCheck, LuPencil, LuTrash } from "react-icons/lu";
 import { TbEye, TbEyeOff } from "react-icons/tb";
@@ -133,16 +133,16 @@ function AddColumnDialog() {
     });
     setIsLoading(true);
     try {
-      const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", -1);
+      const dependencies = gradebookController.extractAndValidateDependencies(data["scoreExpression"] ?? "", -1);
       await createColumn({
         resource: "gradebook_columns",
         values: {
-          name: data.name,
-          description: data.description,
-          max_score: data.maxScore,
-          slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
-          render_expression: data.renderExpression?.length ? data.renderExpression : null,
+          name: data["name"],
+          description: data["description"],
+          max_score: data["maxScore"],
+          slug: data["slug"],
+          score_expression: data["scoreExpression"]?.length ? data["scoreExpression"] : null,
+          render_expression: data["renderExpression"]?.length ? data["renderExpression"] : null,
           dependencies,
           class_id: gradebookController.gradebook.class_id,
           gradebook_id: gradebookController.gradebook.id,
@@ -187,18 +187,18 @@ function AddColumnDialog() {
                     </Text>
                   </Label>
                   <Input id="name" {...register("name", { required: "Name is required" })} placeholder="Column Name" />
-                  {errors.name && (
+                  {errors["name"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.name.message as string}
+                      {errors["name"].message as string}
                     </Text>
                   )}
                 </Box>
                 <Box>
                   <Label htmlFor="description">Description</Label>
                   <Input id="description" {...register("description")} placeholder="Description" />
-                  {errors.description && (
+                  {errors["description"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.description.message as string}
+                      {errors["description"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -219,9 +219,9 @@ function AddColumnDialog() {
                     })}
                     placeholder="Max Score"
                   />
-                  {errors.maxScore && (
+                  {errors["maxScore"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.maxScore.message as string}
+                      {errors["maxScore"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -233,18 +233,18 @@ function AddColumnDialog() {
                     </Text>
                   </Label>
                   <Input id="slug" {...register("slug", { required: "Slug is required" })} placeholder="Slug" />
-                  {errors.slug && (
+                  {errors["slug"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.slug.message as string}
+                      {errors["slug"].message as string}
                     </Text>
                   )}
                 </Box>
                 <Box>
                   <Label htmlFor="scoreExpression">Score Expression</Label>
                   <Input id="scoreExpression" {...register("scoreExpression")} placeholder="Score Expression" />
-                  {errors.scoreExpression && (
+                  {errors["scoreExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.scoreExpression.message as string}
+                      {errors["scoreExpression"].message as string}
                     </Text>
                   )}
                   <ScoreExprDocs />
@@ -252,9 +252,9 @@ function AddColumnDialog() {
                 <Box>
                   <Label htmlFor="renderExpression">Render Expression</Label>
                   <Input id="renderExpression" {...register("renderExpression")} placeholder="Render Expression" />
-                  {errors.renderExpression && (
+                  {errors["renderExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.renderExpression.message as string}
+                      {errors["renderExpression"].message as string}
                     </Text>
                   )}
                   <RenderExprDocs />
@@ -334,17 +334,17 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
     });
     setIsLoading(true);
     try {
-      const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", columnId);
+      const dependencies = gradebookController.extractAndValidateDependencies(data["scoreExpression"] ?? "", columnId);
       await updateColumn({
         resource: "gradebook_columns",
         id: columnId,
         values: {
-          name: data.name,
-          description: data.description,
-          max_score: data.maxScore,
-          slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
-          render_expression: data.renderExpression?.length ? data.renderExpression : null,
+          name: data["name"],
+          description: data["description"],
+          max_score: data["maxScore"],
+          slug: data["slug"],
+          score_expression: data["scoreExpression"]?.length ? data["scoreExpression"] : null,
+          render_expression: data["renderExpression"]?.length ? data["renderExpression"] : null,
           dependencies
         }
       });
@@ -386,18 +386,18 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     </Text>
                   </Label>
                   <Input id="name" {...register("name", { required: "Name is required" })} placeholder="Column Name" />
-                  {errors.name && (
+                  {errors["name"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.name.message as string}
+                      {errors["name"].message as string}
                     </Text>
                   )}
                 </Box>
                 <Box>
                   <Label htmlFor="description">Description</Label>
                   <Input id="description" {...register("description")} placeholder="Description" />
-                  {errors.description && (
+                  {errors["description"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.description.message as string}
+                      {errors["description"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -418,9 +418,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     })}
                     placeholder="Max Score"
                   />
-                  {errors.maxScore && (
+                  {errors["maxScore"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.maxScore.message as string}
+                      {errors["maxScore"].message as string}
                     </Text>
                   )}
                 </Box>
@@ -432,18 +432,18 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     </Text>
                   </Label>
                   <Input id="slug" {...register("slug", { required: "Slug is required" })} placeholder="Slug" />
-                  {errors.slug && (
+                  {errors["slug"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.slug.message as string}
+                      {errors["slug"].message as string}
                     </Text>
                   )}
                 </Box>
                 <Box>
                   <Label htmlFor="scoreExpression">Score Expression</Label>
                   <Input id="scoreExpression" {...register("scoreExpression")} placeholder="Score Expression" />
-                  {errors.scoreExpression && (
+                  {errors["scoreExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.scoreExpression.message as string}
+                      {errors["scoreExpression"].message as string}
                     </Text>
                   )}
                   <ScoreExprDocs />
@@ -451,9 +451,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                 <Box>
                   <Label htmlFor="renderExpression">Render Expression</Label>
                   <Input id="renderExpression" {...register("renderExpression")} placeholder="Render Expression" />
-                  {errors.renderExpression && (
+                  {errors["renderExpression"] && (
                     <Text color="red.500" fontSize="sm">
-                      {errors.renderExpression.message as string}
+                      {errors["renderExpression"].message as string}
                     </Text>
                   )}
                   <RenderExprDocs />
@@ -616,7 +616,7 @@ function GradebookColumnHeader({
         sort_order: column.sort_order + 1
       })
       .eq("id", column_id);
-  }, [columnModel]);
+  }, [column_id, column.sort_order, column.gradebook_id, supabase]);
   const toolTipText = useMemo(() => {
     const ret: string[] = [];
     if (column.description) {

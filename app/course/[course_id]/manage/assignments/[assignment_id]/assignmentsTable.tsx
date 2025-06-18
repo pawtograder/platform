@@ -10,7 +10,7 @@ import type {
   GraderResultTest,
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
   Button,
