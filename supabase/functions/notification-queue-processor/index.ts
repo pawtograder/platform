@@ -81,10 +81,6 @@ async function sendEmail(params: {
   courses: { name: string | null; slug: string | null; id: number }[];
 }) {
   const { adminSupabase, transporter, notification, emails, courses } = params;
-  const { data: assignments, error: emailsError } = await adminSupabase
-    .schema("public")
-    .from("assignments")
-    .select("*");
 
   if (!notification.message.body) {
     console.error(`No body found for notification ${notification.message.id}`);

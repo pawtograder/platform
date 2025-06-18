@@ -7,6 +7,7 @@ export type EmailCreateData = {
   batch_id: string;
   subject?: string;
   body?: string;
+  cc_ids: { email: string; user_id: string }[];
   to: { email: string; user_id: string };
   why: JSX.Element;
 };
@@ -15,6 +16,7 @@ export type EmailCreateDataWithoutId = {
   batch_id: string;
   subject?: string;
   body?: string;
+  cc_ids: { email: string; user_id: string }[];
   to: { email: string; user_id: string };
   why: JSX.Element;
 };
@@ -39,8 +41,13 @@ export type EmailManagementContextType = {
   addEmail: (email: EmailCreateDataWithoutId) => void;
   addEmails: (emails: EmailCreateDataWithoutId[]) => void;
   removeEmail: (id: string) => void;
-  updateEmailField: (id: string, field: string, value: string | string[]) => void;
+  updateEmailField: (
+    id: string,
+    field: string,
+    value: string | string[] | { email: string; user_id: string }[]
+  ) => void;
   addBatch: (data: BatchWithoutId) => Batch;
+  clearEmails: () => void;
   batches: Batch[];
 };
 
@@ -65,6 +72,9 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
         batch_id: email.batch_id,
         subject: email.subject,
         body: email.body,
+        cc_ids: email.cc_ids.filter((cc) => {
+          return cc.user_id != email.to.user_id;
+        }),
         to: email.to,
         why: email.why
       }
@@ -89,6 +99,9 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
         batch_id: email.batch_id,
         subject: email.subject,
         body: email.body,
+        cc_ids: email.cc_ids.filter((cc) => {
+          return cc.user_id != email.to.user_id;
+        }),
         to: email.to,
         why: email.why
       };
@@ -104,7 +117,16 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
     );
   };
 
-  const updateEmailField = (id: string, field: string, value: string | string[]) => {
+  const clearEmails = () => {
+    setEmailsToCreate([]);
+    setBatches([]);
+  };
+
+  const updateEmailField = (
+    id: string,
+    field: string,
+    value: string | string[] | { email: string; user_id: string }[]
+  ) => {
     setEmailsToCreate((prev) => prev.map((email) => (email.id === id ? { ...email, [field]: value } : email)));
   };
 
@@ -117,6 +139,7 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
         addBatch,
         removeEmail,
         updateEmailField,
+        clearEmails,
         batches
       }}
     >

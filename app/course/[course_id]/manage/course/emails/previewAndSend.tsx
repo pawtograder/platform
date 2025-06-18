@@ -4,11 +4,12 @@ import { Box, Button, Card, Editable, Flex, Heading, HStack, Spacer, Text } from
 import { IoMdClose } from "react-icons/io";
 import { useParams } from "next/navigation";
 import { SetStateAction, useMemo, useState } from "react";
-import { Select } from "chakra-react-select";
+import { CreatableSelect, Select } from "chakra-react-select";
+import { UserRoleWithUserDetails } from "./page";
 
-export default function EmailPreviewAndSend() {
+export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
   const { course_id } = useParams();
-  const { emailsToCreate, batches } = useEmailManagement();
+  const { emailsToCreate, batches, clearEmails } = useEmailManagement();
   const { mutateAsync } = useCreate();
 
   const sendEmails = () => {
@@ -24,7 +25,7 @@ export default function EmailPreviewAndSend() {
         }
       });
       emailsForBatch.forEach(async (email) => {
-        await mutateAsync({
+        const { data: createdRecipient } = await mutateAsync({
           resource: "email_recipients",
           values: {
             user_id: email.to.user_id,
@@ -34,8 +35,19 @@ export default function EmailPreviewAndSend() {
             body: email.body
           }
         });
+        email.cc_ids.forEach(async (cc) => {
+          await mutateAsync({
+            resource: "email_ccs",
+            values: {
+              user_id: cc.user_id,
+              class_id: course_id,
+              email_recipient_id: createdRecipient.id
+            }
+          });
+        });
       });
     });
+    clearEmails();
   };
 
   return (
@@ -45,7 +57,7 @@ export default function EmailPreviewAndSend() {
       </Heading>
       {emailsToCreate.length > 0 ? (
         <Box spaceY="4">
-          <EmailListWithPagination />
+          <EmailListWithPagination userRoles={userRoles} />
           <Button
             onClick={() => {
               sendEmails();
@@ -61,7 +73,7 @@ export default function EmailPreviewAndSend() {
   );
 }
 
-const EmailListWithPagination = () => {
+const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) => {
   const { emailsToCreate, removeEmail, updateEmailField, batches } = useEmailManagement();
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(5);
@@ -167,6 +179,23 @@ const EmailListWithPagination = () => {
             </Flex>
             <Flex flexDir={"column"} fontSize="sm">
               <Box>To: {email.to.email}</Box>
+
+              <Flex gap="1" alignItems={"center"}>
+                Cc:{" "}
+                <CreatableSelect
+                  value={email.cc_ids.map((cc) => ({ label: cc.email, value: cc.user_id }))}
+                  onChange={(e) =>
+                    updateEmailField(
+                      email.id,
+                      "cc_ids",
+                      Array.from(e).map((elem) => ({ email: elem.label, user_id: elem.value }))
+                    )
+                  }
+                  isMulti={true}
+                  options={userRoles?.map((a) => ({ label: a.users.email, value: a.users.user_id }))}
+                  placeholder="Select or type email addresses..."
+                />
+              </Flex>
               <Box>Why: {email.why}</Box>
               <Flex alignItems="center">
                 Body:

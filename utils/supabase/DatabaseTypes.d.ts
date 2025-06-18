@@ -659,3 +659,11 @@ export type EmailRecipients = GetResult<
 export type EmailWithRecipients = Emails & {
   email_recipients: EmailRecipients[];
 };
+
+export type Course = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["classes"]["Row"],
+  "classes",
+  Database["public"]["Tables"]["classes"]["Relationships"],
+  "*"
+>;

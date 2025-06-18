@@ -2,6 +2,7 @@
 import {
   Assignment,
   ClassSection,
+  Course,
   EmailWithRecipients,
   Submission,
   Tag,
@@ -20,8 +21,8 @@ import {
   Card,
   Collapsible
 } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
-import { Select } from "chakra-react-select";
+import { useList, useOne } from "@refinedev/core";
+import { CreatableSelect, Select } from "chakra-react-select";
 import { useEffect, useRef, useState } from "react";
 import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
@@ -30,6 +31,8 @@ import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement }
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
 import _ from "lodash";
+import { formatInTimeZone } from "date-fns-tz";
+import { TZDate } from "@date-fns/tz";
 
 /* types */
 enum Audience {
@@ -62,7 +65,7 @@ type SubmissionWithUser = Submission & {
     }[];
   } | null;
 };
-type UserRoleWithUserId = UserRole & { users: { email: string; user_id: string } };
+export type UserRoleWithUserDetails = UserRole & { users: { email: string; user_id: string } };
 
 function EmailsInnerPage() {
   const { course_id } = useParams();
@@ -74,6 +77,7 @@ function EmailsInnerPage() {
   const [body, setBody] = useState<string>("");
   const tags = useTags();
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
+  const [ccList, setCcList] = useState<{ email: string; user_id: string }[]>([]);
   const uniqueTags: Tag[] = Array.from(
     tags.tags
       .reduce((map, tag) => {
@@ -114,6 +118,7 @@ function EmailsInnerPage() {
     if (emailsToCreate.length > prevEmailsToCreateLength.current) {
       setSubjectLine("");
       setBody("");
+      setCcList([]);
       setChoice({ label: "", value: null });
       setTag(undefined);
       setAssignment(undefined);
@@ -129,13 +134,15 @@ function EmailsInnerPage() {
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
 
-  const { data: userRolesData } = useList<UserRoleWithUserId>({
+  const { data: userRolesData } = useList<UserRoleWithUserDetails>({
     resource: "user_roles",
     meta: {
       select: "*, users!user_roles_user_id_fkey1(email, user_id)"
     },
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
+
+  const users = userRolesData?.data.map((item) => item.users);
 
   const { data: submissionsData } = useList<SubmissionWithUser>({
     resource: "submissions",
@@ -177,7 +184,7 @@ function EmailsInnerPage() {
     const identities = getIdentitiesForChosenCategory() ?? [];
     const formattedEmails: EmailCreateDataWithoutId[] = [];
     identities.forEach((email) => {
-      formattedEmails.push({ batch_id: batch.id, to: email, why: whyLine() });
+      formattedEmails.push({ batch_id: batch.id, to: email, why: whyLine(), cc_ids: ccList });
     });
     addEmails(formattedEmails);
   };
@@ -329,7 +336,7 @@ function EmailsInnerPage() {
   };
 
   return (
-    <>
+    <Flex flexDirection={"column"} gap="10">
       <Flex gap="10" width="100%" wrap={{ base: "wrap", lg: "nowrap" }}>
         <Toaster />
         <Box width={{ base: "100%" }}>
@@ -350,7 +357,6 @@ function EmailsInnerPage() {
                   in with the proper values.
                 </Field.HelperText>
               </Field.Root>
-
               <Field.Root>
                 <Field.Label>Select audience</Field.Label>
                 <Select
@@ -423,7 +429,16 @@ function EmailsInnerPage() {
                     />
                   </Field.Root>
                 )}
-
+              <Field.Root>
+                <Field.Label>Cc</Field.Label>
+                <CreatableSelect
+                  value={ccList.map((cc) => ({ label: cc.email, value: cc.user_id }))}
+                  onChange={(e) => setCcList(Array.from(e).map((elem) => ({ email: elem.label, user_id: elem.value })))}
+                  isMulti={true}
+                  options={users?.map((a) => ({ label: a.email, value: a.user_id }))}
+                  placeholder="Select or type email addresses..."
+                />
+              </Field.Root>
               <Field.Root>
                 <Field.Label>Subject</Field.Label>
                 <Input value={subjectLine} onChange={(e) => setSubjectLine(e.target.value)} />
@@ -447,15 +462,16 @@ function EmailsInnerPage() {
             </Fieldset.Content>
           </Fieldset.Root>
         </Box>
-        <EmailPreviewAndSend />
-        <HistoryPage />
+        <EmailPreviewAndSend userRoles={userRolesData?.data} />
       </Flex>
-    </>
+      <HistoryPage userRoles={userRolesData?.data} />
+    </Flex>
   );
 }
 
-function HistoryPage() {
+function HistoryPage({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
   const { course_id } = useParams();
+  const [displayNumber, setDisplayNumber] = useState<number>(1);
 
   const { data: emails } = useList<EmailWithRecipients>({
     resource: "emails",
@@ -465,13 +481,23 @@ function HistoryPage() {
     filters: [{ field: "class_id", operator: "eq", value: course_id }],
     sorters: [{ field: "created_at", order: "desc" }]
   });
+
+  const { data: course } = useOne<Course>({
+    resource: "classes",
+    id: course_id as string,
+    queryOptions: {
+      enabled: !!course_id
+    }
+  });
+
   const createTimeKey = (dateString: string, bucketMinutes: number = 5) => {
     const date = new Date(dateString);
     const minutes = date.getMinutes();
     const bucketedMinutes = Math.floor(minutes / bucketMinutes) * bucketMinutes;
     const bucketedDate = new Date(date);
     bucketedDate.setMinutes(bucketedMinutes, 0, 0);
-    return bucketedDate.toISOString().slice(0, 16); 
+    const timezoneSuffix = bucketedDate.toISOString().substring(23);
+    return bucketedDate.toISOString().slice(0, 16) + timezoneSuffix;
   };
 
   const groupedByTime: _.Dictionary<EmailWithRecipients[]> = _.groupBy(
@@ -482,36 +508,54 @@ function HistoryPage() {
   const timeGroupsArray = Object.entries(groupedByTime).map(([timeKey, emailGroup]) => ({
     timeKey,
     emails: emailGroup,
-    count: emailGroup.length
+    count: emailGroup.reduce((acc, cur) => {
+      return acc + cur.email_recipients.length;
+    }, 0)
   }));
 
   return (
     <Flex flexDir={"column"} gap="3">
       <Heading size="lg">History</Heading>
       {timeGroupsArray.map((group, key) => {
+        if (key >= displayNumber) {
+          return <></>;
+        }
         return (
           <Card.Root padding="2" size="sm" key={key}>
             <Collapsible.Root>
               <Collapsible.Trigger>
                 <Card.Title>
-                  {group.count} emails sent at {new Date(group.timeKey).toString()}
+                  {group.count} emails sent at{" "}
+                  {formatInTimeZone(
+                    new TZDate(group.timeKey, course?.data.time_zone ?? "America/New_York"),
+                    course?.data.time_zone || "America/New_York",
+                    "MMM d h:mm aaa"
+                  )}{" "}
+                  ({course?.data.time_zone})
                 </Card.Title>
               </Collapsible.Trigger>
               <Collapsible.Content>
                 <Card.Body>
-                  {group.emails.map((email: EmailWithRecipients) => {
+                  {group.emails.map((email: EmailWithRecipients, key) => {
                     return (
-                      <>
+                      <Box key={key}>
                         {email.email_recipients.map((recipient, key) => {
                           return (
                             <Box key={key}>
                               <Box>Subject: {recipient.subject ?? email.subject}</Box>
-                              <Box>To: {recipient.user_id}</Box>
+                              <Box>
+                                To:{" "}
+                                {
+                                  userRoles?.find((user) => {
+                                    return user.user_id === recipient.user_id;
+                                  })?.users.email
+                                }
+                              </Box>
                               <Box>Body: {recipient.body ?? email.body}</Box>
                             </Box>
                           );
                         })}
-                      </>
+                      </Box>
                     );
                   })}
                 </Card.Body>
@@ -520,6 +564,17 @@ function HistoryPage() {
           </Card.Root>
         );
       })}
+      {displayNumber < timeGroupsArray.length && (
+        <Button
+          variant={"ghost"}
+          onClick={() => {
+            setDisplayNumber(displayNumber + 1);
+          }}
+        >
+          {" "}
+          Show more
+        </Button>
+      )}
     </Flex>
   );
 }
