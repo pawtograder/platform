@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { SetStateAction, useMemo, useState } from "react";
 import { CreatableSelect, Select } from "chakra-react-select";
 import { UserRoleWithUserDetails } from "./page";
+import { ToggleTip } from "@/components/ui/toggle-tip";
+import { LuInfo } from "react-icons/lu";
 
 export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
   const { course_id } = useParams();
@@ -37,7 +39,8 @@ export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRol
               emails: email.cc_ids.map((cc) => {
                 return cc.email;
               })
-            }
+            },
+            reply_to: email.reply_to
           }
         });
       });
@@ -190,7 +193,15 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
                   placeholder="Select or type email addresses..."
                 />
               </Flex>
-              <Box>Why: {email.why}</Box>
+              <Box>Reply to: {email.reply_to ?? "General pawtograder email"}</Box>
+              <Flex alignItems="center" gap="2">
+                <Text>Why: {email.why}</Text>{" "}
+                <ToggleTip size="xs" content="We won't share this with the recipient">
+                  <Button size="xs" variant="ghost">
+                    <LuInfo />
+                  </Button>
+                </ToggleTip>
+              </Flex>
               <Flex alignItems="center">
                 Body:
                 <Editable.Root

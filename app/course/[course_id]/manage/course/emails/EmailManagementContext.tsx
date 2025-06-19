@@ -10,6 +10,7 @@ export type EmailCreateData = {
   cc_ids: { email: string; user_id: string }[];
   to: { email: string; user_id: string };
   why: JSX.Element;
+  reply_to?: string;
 };
 
 export type EmailCreateDataWithoutId = {
@@ -19,10 +20,9 @@ export type EmailCreateDataWithoutId = {
   cc_ids: { email: string; user_id: string }[];
   to: { email: string; user_id: string };
   why: JSX.Element;
+  reply_to?: string;
 };
 
-// a base email going out to a set of students.  if emails are not personalized futher in staging,
-// they will use the subject/body in the base
 export type Batch = {
   id: string;
   subject: string;
@@ -76,7 +76,8 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
           return cc.user_id != email.to.user_id;
         }),
         to: email.to,
-        why: email.why
+        why: email.why,
+        reply_to: email.reply_to
       }
     ]);
   };
@@ -103,7 +104,8 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
           return cc.user_id != email.to.user_id;
         }),
         to: email.to,
-        why: email.why
+        why: email.why,
+        reply_to: email.reply_to
       };
     });
     setEmailsToCreate(emailsToCreate.concat(properEmails));

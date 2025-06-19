@@ -1299,6 +1299,7 @@ export type Database = {
           created_at: string;
           email_id: number;
           id: number;
+          reply_to: string | null;
           subject: string;
           user_id: string;
         };
@@ -1309,6 +1310,7 @@ export type Database = {
           created_at?: string;
           email_id: number;
           id?: number;
+          reply_to?: string | null;
           subject: string;
           user_id: string;
         };
@@ -1319,6 +1321,7 @@ export type Database = {
           created_at?: string;
           email_id?: number;
           id?: number;
+          reply_to?: string | null;
           subject?: string;
           user_id?: string;
         };

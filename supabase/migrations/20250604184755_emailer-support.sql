@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS "public"."email_recipients" (
     "class_id" bigint not null,
     "subject" text not null,
     "body" text not null,
-    "cc_emails" jsonb not null
+    "cc_emails" jsonb not null,
+    "reply_to" text
 );
 
 
@@ -110,58 +111,25 @@ DECLARE
    assignment public.assignments%ROWTYPE;
    private_id uuid;
    assignment_group public.assignment_groups%ROWTYPE;
-   body text;
-   subject_line text;
    net_deadline_change_hours bigint;
    net_deadline_change_minutes bigint;
 BEGIN
    CASE TG_OP
    WHEN 'INSERT' THEN
-      SELECT private_profile_id FROM public.user_roles WHERE user_id = NEW.user_id LIMIT 1 INTO private_id;
-      SELECT * FROM public.emails WHERE id = NEW.email_id INTO email;
-      SELECT * FROM public.assignments WHERE id = email.assignment_id LIMIT 1 INTO assignment;
-      SELECT * FROM public.assignment_groups ag WHERE EXISTS (SELECT 1 FROM public.assignment_groups_members WHERE profile_id = private_id AND 
-         ag.id = assignment_group_id) LIMIT 1 INTO assignment_group; 
-
-      SELECT COALESCE(SUM("hours"), 0) INTO net_deadline_change_hours      
-      FROM public.assignment_due_date_exceptions      
-      WHERE assignment_id = assignment.id      
-      AND (student_id = private_id OR assignment_group_id = assignment_group.id);     
-
-      SELECT COALESCE(SUM("minutes"), 0) INTO net_deadline_change_minutes 
-      FROM public.assignment_due_date_exceptions      
-      WHERE assignment_id = assignment.id      
-      AND (student_id = private_id OR assignment_group_id = assignment_group.id);     
-
-      IF (NEW.subject IS NOT NULL) THEN  
-         subject_line = NEW.subject;
-      ELSE 
-         subject_line = email.subject;
-      END IF;
-
-      IF (NEW.body IS NOT NULL) THEN
-         body = NEW.body;
-      ELSE 
-         body = email.body;
-      END IF;
-
       body_jsonb := jsonb_build_object(
          'type', 'email',
          'action', 'create',
-         'subject', subject_line,
-         'body', body
+         'subject', NEW.subject,
+         'body', NEW.body,
+         'cc_emails', NEW.cc_emails
       );
 
-      IF assignment IS NOT NULL THEN
-         body_jsonb := body_jsonb || jsonb_build_object('assignment_name', assignment.title) || jsonb_build_object('assignment_slug', assignment.slug);
-         IF assignment_group IS NOT NULL THEN
-            body_jsonb := body_jsonb || jsonb_build_object('assignment_group_name', assignment_group.name);
-         END IF;
-         body_jsonb := body_jsonb || jsonb_build_object('due_date', assignment.due_date AT TIME ZONE 'UTC' + (INTERVAL '1 hour' * net_deadline_change_hours) + (INTERVAL '1 minute' * net_deadline_change_minutes));
+      IF NEW.reply_to IS NOT NULL THEN
+         body_jsonb := body_jsonb || jsonb_build_object('reply_to', NEW.reply_to);
       END IF;
 
       INSERT INTO notifications (class_id, "subject", body, style, user_id) VALUES 
-         (email.class_id, to_jsonb(subject_line), body_jsonb, 'email', NEW.user_id);
+         (NEW.class_id, to_jsonb(NEW.subject), body_jsonb, 'email', NEW.user_id);
    ELSE
       RAISE EXCEPTION 'Unexpected TG_OP: "%". Should not occur!', TG_OP;
    END CASE;

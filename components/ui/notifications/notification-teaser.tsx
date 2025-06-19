@@ -66,6 +66,8 @@ export type EmailNotification = NotificationEnvelope & {
   action: "create";
   subject: string;
   body: string;
+  cc_emails: { emails: string[] };
+  reply_to?: string;
 };
 
 // function truncateString(str: string, maxLength: number) {

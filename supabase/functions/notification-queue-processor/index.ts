@@ -71,6 +71,8 @@ export type EmailNotification = NotificationEnvelope & {
   action: "create";
   subject: string;
   body: string;
+  cc_emails: { emails: string[] };
+  reply_to?: string;
 };
 
 async function sendEmail(params: {
@@ -87,6 +89,12 @@ async function sendEmail(params: {
     return;
   }
   const body = notification.message.body as NotificationEnvelope;
+  const cc_emails: string[] = [];
+  if ("cc_emails" in body) {
+    const data = body.cc_emails as { emails: string[] };
+    data.emails.forEach((email) => cc_emails.push(email));
+  }
+
   let emailTemplate = emailTemplates[body.type as keyof typeof emailTemplates];
   if (!emailTemplate) {
     console.error(`No email template found for notification type ${body.type}`);
@@ -150,7 +158,8 @@ async function sendEmail(params: {
     await transporter.sendMail({
       from: "Pawtograder <" + Deno.env.get("SMTP_FROM") + ">",
       to: recipient.email,
-      replyTo: Deno.env.get("SMTP_REPLY_TO"),
+      cc: cc_emails,
+      replyTo: body["reply_to" as keyof NotificationEnvelope] ?? Deno.env.get("SMTP_REPLY_TO"),
       subject: emailSubject,
       text: emailBody
     });
