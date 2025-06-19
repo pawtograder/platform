@@ -15,11 +15,8 @@ export const emailTemplates = {
    * {status} - The status of the request
    *
    * Emailer variables:
-   * {assignment_group_name} - The name of the assignment group
-   * {assignemnt_name} - The name of the assignment group
-   * {assignment_slug} - The slug of the assignment
+   * {subject} - The slug of the assignment
    * {body} - The general body of the email, which may contain additional variables
-   * {due_date} - The due date of the assignment for this student at time of email sent
    */
   assignment_group_member: {
     join: {

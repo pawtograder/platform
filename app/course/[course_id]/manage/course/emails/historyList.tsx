@@ -1,7 +1,6 @@
-import { Course, EmailRecipients } from "@/utils/supabase/DatabaseTypes";
+import { Course, Emails } from "@/utils/supabase/DatabaseTypes";
 import { Button, Card, Collapsible, Flex, Separator, Box, Heading } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
 import { useState } from "react";
 import { UserRoleWithUserDetails } from "./page";
 import { formatInTimeZone } from "date-fns-tz";
@@ -9,17 +8,19 @@ import { TZDate } from "@date-fns/tz";
 import _ from "lodash";
 
 export default function HistoryPage({ course, userRoles }: { course?: Course; userRoles?: UserRoleWithUserDetails[] }) {
-  const { course_id } = useParams();
   const [displayNumber, setDisplayNumber] = useState<number>(10);
 
-  const { data: emails } = useList<EmailRecipients>({
-    resource: "email_recipients",
+  const { data: emails } = useList<Emails>({
+    resource: "emails",
     meta: {
       select: "*"
     },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    filters: [{ field: "class_id", operator: "eq", value: course?.id }],
     sorters: [{ field: "created_at", order: "desc" }],
-    liveMode: "auto"
+    liveMode: "auto",
+    queryOptions: {
+      enabled: !!course
+    }
   });
 
   const createTimeKey = (dateString: string, bucketMinutes: number = 5) => {
@@ -32,7 +33,7 @@ export default function HistoryPage({ course, userRoles }: { course?: Course; us
     return bucketedDate.toISOString().slice(0, 16) + timezoneSuffix;
   };
 
-  const groupedByTime: _.Dictionary<EmailRecipients[]> = _.groupBy(
+  const groupedByTime: _.Dictionary<Emails[]> = _.groupBy(
     emails?.data || [],
     (email) => createTimeKey(email.created_at, 5) // 5-minute buckets
   );
@@ -78,19 +79,10 @@ export default function HistoryPage({ course, userRoles }: { course?: Course; us
                             })?.users.email
                           }
                         </Box>
-                        <Box>
-                          Cc:{" "}
-                          {typeof recipient.cc_emails === "object" &&
-                            recipient.cc_emails !== null &&
-                            !Array.isArray(recipient.cc_emails) &&
-                            "emails" in recipient.cc_emails &&
-                            (recipient.cc_emails as { emails: string[] }).emails.map((email) => {
-                              return email + " ";
-                            })}
-                        </Box>
-                        <Box>Reply to: {recipient.reply_to ?? "General pawtograder email"}</Box>
+                        <Box>Cc: {(recipient.cc_emails as { emails?: string[] })?.emails?.join(", ")}</Box>
+                        <Box>Reply to: {recipient.reply_to ?? "General Pawtograder email"}</Box>
 
-                        <Box>Body: {recipient.body ?? recipient.body}</Box>
+                        <Box paddingBottom="2">Body: {recipient.body ?? recipient.body}</Box>
                         <Separator />
                       </Box>
                     );

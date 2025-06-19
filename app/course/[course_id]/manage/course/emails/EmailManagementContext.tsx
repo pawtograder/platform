@@ -4,7 +4,6 @@ import { createContext, useContext, useState } from "react";
 // part of a larger category
 export type EmailCreateData = {
   id: string;
-  batch_id: string;
   subject: string;
   body: string;
   cc_ids: { email: string; user_id: string }[];
@@ -14,26 +13,12 @@ export type EmailCreateData = {
 };
 
 export type EmailCreateDataWithoutId = {
-  batch_id: string;
   subject: string;
   body: string;
   cc_ids: { email: string; user_id: string }[];
   to: { email: string; user_id: string };
   why: JSX.Element;
   reply_to?: string;
-};
-
-export type Batch = {
-  id: string;
-  subject: string;
-  body: string;
-  assignment_id?: number;
-};
-
-export type BatchWithoutId = {
-  subject: string;
-  body: string;
-  assignment_id?: number;
 };
 
 export type EmailManagementContextType = {
@@ -46,9 +31,7 @@ export type EmailManagementContextType = {
     field: string,
     value: string | string[] | { email: string; user_id: string }[]
   ) => void;
-  addBatch: (data: BatchWithoutId) => Batch;
   clearEmails: () => void;
-  batches: Batch[];
 };
 
 export const EmailManagementContext = createContext<EmailManagementContextType>({} as EmailManagementContextType);
@@ -63,13 +46,11 @@ export const useEmailManagement = () => {
 
 export function EmailManagementProvider({ children }: { children: React.ReactNode }) {
   const [emailsToCreate, setEmailsToCreate] = useState<EmailCreateData[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const addEmail = (email: EmailCreateDataWithoutId) => {
     setEmailsToCreate([
       ...emailsToCreate,
       {
         id: crypto.randomUUID(),
-        batch_id: email.batch_id,
         subject: email.subject,
         body: email.body,
         cc_ids: email.cc_ids.filter((cc) => {
@@ -82,22 +63,10 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
     ]);
   };
 
-  const addBatch = (batch: BatchWithoutId) => {
-    const created = {
-      id: crypto.randomUUID(),
-      subject: batch.subject,
-      body: batch.body,
-      assignment_id: batch.assignment_id
-    };
-    setBatches([...batches, created]);
-    return created;
-  };
-
   const addEmails = (emails: EmailCreateDataWithoutId[]) => {
     const properEmails = emails.map((email) => {
       return {
         id: crypto.randomUUID(),
-        batch_id: email.batch_id,
         subject: email.subject,
         body: email.body,
         cc_ids: email.cc_ids.filter((cc) => {
@@ -121,7 +90,6 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
 
   const clearEmails = () => {
     setEmailsToCreate([]);
-    setBatches([]);
   };
 
   const updateEmailField = (
@@ -138,11 +106,9 @@ export function EmailManagementProvider({ children }: { children: React.ReactNod
         emailsToCreate,
         addEmail,
         addEmails,
-        addBatch,
         removeEmail,
         updateEmailField,
-        clearEmails,
-        batches
+        clearEmails
       }}
     >
       {children}

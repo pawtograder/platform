@@ -1,10 +1,11 @@
-import { Avatar, Box, Button, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Avatar, Box, Button, Flex, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import Link from "next/link";
 import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams } from "next/navigation";
+import { LucideMail } from "lucide-react";
 // type NotificationTextProps = {
 //   notification: Notification;
 // } & TextProps;
@@ -168,7 +169,15 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
 
 function EmailNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as EmailNotification;
-  return <Text>{body.subject}</Text>;
+  return (
+    <Flex gap="2" alignItems={"center"}>
+      <LucideMail />
+      <Box>
+        <Text>Subject: {body.subject}</Text>
+        <Text fontSize="xs">Check your email</Text>
+      </Box>
+    </Flex>
+  );
 }
 
 export default function NotificationTeaser({

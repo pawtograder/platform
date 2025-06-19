@@ -8,43 +8,44 @@ import { CreatableSelect, Select } from "chakra-react-select";
 import { UserRoleWithUserDetails } from "./page";
 import { ToggleTip } from "@/components/ui/toggle-tip";
 import { LuInfo } from "react-icons/lu";
+import { toaster } from "@/components/ui/toaster";
 
 export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
   const { course_id } = useParams();
-  const { emailsToCreate, batches, clearEmails } = useEmailManagement();
+  const { emailsToCreate, clearEmails } = useEmailManagement();
   const { mutateAsync } = useCreate();
 
   const sendEmails = () => {
-    batches.forEach(async (batch) => {
-      const emailsForBatch = emailsToCreate.filter((email) => email.batch_id === batch.id);
-      const { data: createdEmail } = await mutateAsync({
+    emailsToCreate.forEach(async (email) => {
+      await mutateAsync({
         resource: "emails",
         values: {
+          user_id: email.to.user_id,
           class_id: course_id,
-          subject: batch.subject,
-          body: batch.body,
-          assignment_id: batch.assignment_id
+          subject: email.subject,
+          body: email.body,
+          cc_emails: {
+            emails: email.cc_ids.map((cc) => {
+              return cc.email;
+            })
+          },
+          reply_to: email.reply_to
         }
-      });
-      emailsForBatch.forEach(async (email) => {
-        await mutateAsync({
-          resource: "email_recipients",
-          values: {
-            user_id: email.to.user_id,
-            class_id: course_id,
-            email_id: createdEmail.id,
-            subject: email.subject,
-            body: email.body,
-            cc_emails: {
-              emails: email.cc_ids.map((cc) => {
-                return cc.email;
-              })
-            },
-            reply_to: email.reply_to
-          }
-        });
-      });
+      })
+        .then(() =>
+          toaster.success({
+            title: "Successfully created email",
+            description: `Subject: ${email.subject} To:${email.to.email}`
+          })
+        )
+        .catch((e) =>
+          toaster.error({
+            title: "Error creating email",
+            description: `Subject: ${email.subject} To:${email.to.email}, with ${e.message}`
+          })
+        );
     });
+
     clearEmails();
   };
 
@@ -72,7 +73,7 @@ export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRol
 }
 
 const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) => {
-  const { emailsToCreate, removeEmail, updateEmailField, batches } = useEmailManagement();
+  const { emailsToCreate, removeEmail, updateEmailField } = useEmailManagement();
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(5);
 
@@ -102,7 +103,6 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
   const getPageNumbers = () => {
     const pages = [];
     const maxVisiblePages = 5;
-
     if (totalPages <= maxVisiblePages) {
       for (let i = 1; i <= totalPages; i++) {
         pages.push(i);
@@ -115,7 +115,6 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
         pages.push(i);
       }
     }
-
     return pages;
   };
 
@@ -143,7 +142,6 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
 
       {/* Email List */}
       {currentEmails.map((email, key) => {
-        const batch = batches.find((batch) => batch.id === email.batch_id);
         return (
           <Card.Root key={email.id || key} padding="2" mt="5" size="sm">
             <Flex justifyContent={"space-between"}>
@@ -151,7 +149,7 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
                 <Flex alignItems="center">
                   Subject:
                   <Editable.Root
-                    value={email.subject ?? batch?.subject}
+                    value={email.subject}
                     onValueChange={(e) => {
                       if (email.id) {
                         updateEmailField(email.id, "subject", e.value);
@@ -189,13 +187,17 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
                     )
                   }
                   isMulti={true}
-                  options={userRoles?.map((a) => ({ label: a.users.email, value: a.users.user_id }))}
+                  options={userRoles
+                    ?.filter((item) => {
+                      return item.user_id !== email.to.user_id;
+                    })
+                    .map((a) => ({ label: a.users.email, value: a.users.user_id }))}
                   placeholder="Select or type email addresses..."
                 />
               </Flex>
-              <Box>Reply to: {email.reply_to ?? "General pawtograder email"}</Box>
+              <Box>Reply to: {email.reply_to ?? "General Pawtograder email"}</Box>
               <Flex alignItems="center" gap="2">
-                <Text>Why: {email.why}</Text>{" "}
+                <Box>Why: {email.why}</Box>{" "}
                 <ToggleTip size="xs" content="We won't share this with the recipient">
                   <Button size="xs" variant="ghost">
                     <LuInfo />
@@ -205,7 +207,7 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
               <Flex alignItems="center">
                 Body:
                 <Editable.Root
-                  value={email.body ?? batch?.body}
+                  value={email.body}
                   onValueChange={(e) => {
                     if (email.id) {
                       updateEmailField(email.id, "body", e.value);

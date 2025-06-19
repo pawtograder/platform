@@ -1291,13 +1291,12 @@ export type Database = {
           }
         ];
       };
-      email_recipients: {
+      emails: {
         Row: {
           body: string;
           cc_emails: Json;
           class_id: number;
           created_at: string;
-          email_id: number;
           id: number;
           reply_to: string | null;
           subject: string;
@@ -1308,7 +1307,6 @@ export type Database = {
           cc_emails: Json;
           class_id: number;
           created_at?: string;
-          email_id: number;
           id?: number;
           reply_to?: string | null;
           subject: string;
@@ -1319,7 +1317,6 @@ export type Database = {
           cc_emails?: Json;
           class_id?: number;
           created_at?: string;
-          email_id?: number;
           id?: number;
           reply_to?: string | null;
           subject?: string;
@@ -1327,81 +1324,18 @@ export type Database = {
         };
         Relationships: [
           {
-            foreignKeyName: "email_recipients_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "email_recipients_emails_fkey";
-            columns: ["email_id"];
-            isOneToOne: false;
-            referencedRelation: "emails";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "email_recipients_users_fkey";
-            columns: ["user_id"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
-          }
-        ];
-      };
-      emails: {
-        Row: {
-          assignment_id: number | null;
-          body: string;
-          class_id: number;
-          created_at: string;
-          id: number;
-          subject: string;
-        };
-        Insert: {
-          assignment_id?: number | null;
-          body: string;
-          class_id: number;
-          created_at?: string;
-          id?: number;
-          subject: string;
-        };
-        Update: {
-          assignment_id?: number | null;
-          body?: string;
-          class_id?: number;
-          created_at?: string;
-          id?: number;
-          subject?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "emails_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "assignments";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "emails_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "emails_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
-            referencedColumns: ["assignment_id"];
-          },
-          {
             foreignKeyName: "emails_class_id_fkey";
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "emails_users_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
           }
         ];
       };

@@ -648,18 +648,6 @@ export type Emails = GetResult<
   "*"
 >;
 
-export type EmailRecipients = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["email_recipients"]["Row"],
-  "email_recipients",
-  Database["public"]["Tables"]["email_recipients"]["Relationships"],
-  "*"
->;
-
-export type EmailWithRecipients = Emails & {
-  email_recipients: EmailRecipients[];
-};
-
 export type Course = GetResult<
   Database["public"],
   Database["public"]["Tables"]["classes"]["Row"],
