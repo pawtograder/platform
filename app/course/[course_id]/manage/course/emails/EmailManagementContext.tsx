@@ -5,8 +5,8 @@ import { createContext, useContext, useState } from "react";
 export type EmailCreateData = {
   id: string;
   batch_id: string;
-  subject?: string;
-  body?: string;
+  subject: string;
+  body: string;
   cc_ids: { email: string; user_id: string }[];
   to: { email: string; user_id: string };
   why: JSX.Element;
@@ -14,8 +14,8 @@ export type EmailCreateData = {
 
 export type EmailCreateDataWithoutId = {
   batch_id: string;
-  subject?: string;
-  body?: string;
+  subject: string;
+  body: string;
   cc_ids: { email: string; user_id: string }[];
   to: { email: string; user_id: string };
   why: JSX.Element;

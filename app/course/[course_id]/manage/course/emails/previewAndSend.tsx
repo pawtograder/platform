@@ -25,25 +25,20 @@ export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRol
         }
       });
       emailsForBatch.forEach(async (email) => {
-        const { data: createdRecipient } = await mutateAsync({
+        await mutateAsync({
           resource: "email_recipients",
           values: {
             user_id: email.to.user_id,
             class_id: course_id,
             email_id: createdEmail.id,
             subject: email.subject,
-            body: email.body
-          }
-        });
-        email.cc_ids.forEach(async (cc) => {
-          await mutateAsync({
-            resource: "email_ccs",
-            values: {
-              user_id: cc.user_id,
-              class_id: course_id,
-              email_recipient_id: createdRecipient.id
+            body: email.body,
+            cc_emails: {
+              emails: email.cc_ids.map((cc) => {
+                return cc.email;
+              })
             }
-          });
+          }
         });
       });
     });
@@ -149,7 +144,7 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
         return (
           <Card.Root key={email.id || key} padding="2" mt="5" size="sm">
             <Flex justifyContent={"space-between"}>
-              <Card.Title>
+              <Card.Title width="80%">
                 <Flex alignItems="center">
                   Subject:
                   <Editable.Root
@@ -172,7 +167,6 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
                   }
                 }}
                 cursor="pointer"
-                _hover={{ color: "red.500" }}
               >
                 <IoMdClose />
               </Text>

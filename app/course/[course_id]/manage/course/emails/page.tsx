@@ -1,6 +1,8 @@
 "use client";
 import {
   Assignment,
+  AssignmentDueDateException,
+  AssignmentGroupMembersWithGroup,
   ClassSection,
   Course,
   EmailWithRecipients,
@@ -19,7 +21,8 @@ import {
   Flex,
   Text,
   Card,
-  Collapsible
+  Collapsible,
+  Separator
 } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
 import { CreatableSelect, Select } from "chakra-react-select";
@@ -33,6 +36,7 @@ import EmailPreviewAndSend from "./previewAndSend";
 import _ from "lodash";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
+import { addHours, addMinutes } from "date-fns";
 
 /* types */
 enum Audience {
@@ -99,8 +103,8 @@ function EmailsInnerPage() {
     { label: "Instructors", value: Audience.Instructors },
     { label: "Tag", value: Audience.Tag }
   ];
-  /* Template variables to reference in subject/body that will be resolved with actual values */
 
+  /* Template variables to reference in subject/body that will be resolved with actual values */
   const templateVariables = [
     "assignment_name",
     "assignment_slug",
@@ -109,6 +113,7 @@ function EmailsInnerPage() {
     "assignment_group_name",
     "course_name"
   ];
+
   /**
    * Only clear the form when the size of emails to create increases (someone drafts a new email)
    * Don't clear the form if instructor deletes another email draft midway through
@@ -179,14 +184,111 @@ function EmailsInnerPage() {
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
 
+  const { data: course } = useOne<Course>({
+    resource: "classes",
+    id: course_id as string,
+    queryOptions: {
+      enabled: !!course_id
+    }
+  });
+
+  const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
+    resource: "assignment_due_date_exceptions",
+    meta: {
+      select: "*"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
+  });
+
+  const { data: groups } = useList<AssignmentGroupMembersWithGroup>({
+    resource: "assignment_groups_members",
+    queryOptions: { enabled: !!assignment },
+    meta: { select: "*, assignment_groups(*)" },
+    pagination: { pageSize: 1000 },
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment?.id }]
+  });
+
   const prepareMail = () => {
     const batch = addBatch({ subject: subjectLine, body: body, assignment_id: assignment?.id });
     const identities = getIdentitiesForChosenCategory() ?? [];
-    const formattedEmails: EmailCreateDataWithoutId[] = [];
+    const formatted_emails: EmailCreateDataWithoutId[] = [];
     identities.forEach((email) => {
-      formattedEmails.push({ batch_id: batch.id, to: email, why: whyLine(), cc_ids: ccList });
+      // setup
+      const profile_id = userRolesData?.data.find((role) => {
+        return role.user_id === email.user_id;
+      })?.private_profile_id;
+      const group = assignment && profile_id ? userGroup(profile_id) : null;
+      const baseUrl = window.location.origin;
+      // template variables
+      const course_name = course?.data.name;
+      const assignment_name = assignment?.title;
+      const assignment_slug = assignment?.slug;
+      const assignment_group_name = group?.name;
+      const due_date = assignment && profile_id ? userDueDate(profile_id, assignment, group?.id) : null;
+      const assignment_url = assignment ? `${baseUrl}/course/${course_id}/assignments/${assignment.id}` : null;
+      // insert to body
+      let insert_subject = subjectLine;
+      let insert_body = body;
+      if (course_name) {
+        insert_subject = insert_subject.replace(/{course_name}/g, course_name);
+        insert_body = insert_body.replace(/{course_name}/g, course_name);
+      }
+      if (assignment_name) {
+        insert_subject = insert_subject.replace(/{assignment_name}/g, assignment_name);
+        insert_body = insert_body.replace(/{assignment_name}/g, assignment_name);
+      }
+      if (assignment_slug) {
+        insert_subject = insert_subject.replace(/{assignment_slug}/g, assignment_slug);
+        insert_body = insert_body.replace(/{assignment_slug}/g, assignment_slug);
+      }
+      if (assignment_group_name) {
+        insert_subject = insert_subject.replace(/{assignment_group_name}/g, assignment_group_name);
+        insert_body = insert_body.replace(/{assignment_group_name}/g, assignment_group_name);
+      }
+      if (due_date) {
+        insert_subject = insert_subject.replace(/{due_date}/g, due_date.toDateString());
+        insert_body = insert_body.replace(/{due_date}/g, due_date.toDateString());
+      }
+      if (assignment_url) {
+        insert_subject = insert_subject.replace(/{assignment_url}/g, assignment_url);
+        insert_body = insert_body.replace(/{assignment_url}/g, assignment_url);
+      }
+      formatted_emails.push({
+        batch_id: batch.id,
+        to: email,
+        why: whyLine(),
+        subject: insert_subject,
+        body: insert_body,
+        cc_ids: ccList
+      });
     });
-    addEmails(formattedEmails);
+    addEmails(formatted_emails);
+  };
+
+  const userDueDate = (profile_id: string, selected_assignment: Assignment, group_id?: number) => {
+    if (!selected_assignment || !dueDateExceptions || !userRolesData) {
+      return null;
+    }
+    const myExceptionsForAssignment = dueDateExceptions.data.filter((exception) => {
+      return (
+        (exception.student_id === profile_id || exception.assignment_group_id === group_id) &&
+        exception.assignment_id === selected_assignment.id
+      );
+    });
+    const hoursExtended = myExceptionsForAssignment.reduce((acc, curr) => acc + curr.hours, 0);
+    const minutesExtended = myExceptionsForAssignment.reduce((acc, curr) => acc + curr.minutes, 0);
+    const originalDueDate = new TZDate(selected_assignment.due_date);
+    const dueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
+    return dueDate;
+  };
+
+  const userGroup = (user_id: string) => {
+    const myProfileId = userRolesData?.data.find((role) => {
+      return role.user_id === user_id;
+    })?.private_profile_id;
+    return groups?.data.find((groupmember) => {
+      return groupmember.profile_id === myProfileId;
+    })?.assignment_groups;
   };
 
   const whyLine = () => {
@@ -284,7 +386,11 @@ function EmailsInnerPage() {
             return user.users;
           }) ?? [];
       return studentEmailsForClass?.filter((email) => {
-        return !submittedEmails.includes(email);
+        return !submittedEmails
+          .map((e) => {
+            return e.user_id;
+          })
+          .includes(email.user_id);
       });
     }
     return [];
@@ -464,12 +570,12 @@ function EmailsInnerPage() {
         </Box>
         <EmailPreviewAndSend userRoles={userRolesData?.data} />
       </Flex>
-      <HistoryPage userRoles={userRolesData?.data} />
+      <HistoryPage userRoles={userRolesData?.data} course={course?.data} />
     </Flex>
   );
 }
 
-function HistoryPage({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
+function HistoryPage({ course, userRoles }: { course?: Course; userRoles?: UserRoleWithUserDetails[] }) {
   const { course_id } = useParams();
   const [displayNumber, setDisplayNumber] = useState<number>(1);
 
@@ -480,14 +586,6 @@ function HistoryPage({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
     },
     filters: [{ field: "class_id", operator: "eq", value: course_id }],
     sorters: [{ field: "created_at", order: "desc" }]
-  });
-
-  const { data: course } = useOne<Course>({
-    resource: "classes",
-    id: course_id as string,
-    queryOptions: {
-      enabled: !!course_id
-    }
   });
 
   const createTimeKey = (dateString: string, bucketMinutes: number = 5) => {
@@ -514,34 +612,34 @@ function HistoryPage({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
   }));
 
   return (
-    <Flex flexDir={"column"} gap="3">
+    <Flex flexDir={"column"}>
       <Heading size="lg">History</Heading>
       {timeGroupsArray.map((group, key) => {
         if (key >= displayNumber) {
-          return <></>;
+          return <Box key={key}></Box>;
         }
         return (
-          <Card.Root padding="2" size="sm" key={key}>
+          <Card.Root padding="2" size="sm" key={key} marginTop="2" marginBottom="2">
             <Collapsible.Root>
               <Collapsible.Trigger>
                 <Card.Title>
-                  {group.count} emails sent at{" "}
+                  {group.count} emails sent{" "}
                   {formatInTimeZone(
-                    new TZDate(group.timeKey, course?.data.time_zone ?? "America/New_York"),
-                    course?.data.time_zone || "America/New_York",
+                    new TZDate(group.timeKey, course?.time_zone ?? "America/New_York"),
+                    course?.time_zone || "America/New_York",
                     "MMM d h:mm aaa"
                   )}{" "}
-                  ({course?.data.time_zone})
+                  ({course?.time_zone})
                 </Card.Title>
               </Collapsible.Trigger>
               <Collapsible.Content>
                 <Card.Body>
                   {group.emails.map((email: EmailWithRecipients, key) => {
                     return (
-                      <Box key={key}>
+                      <Flex key={key} flexDir={"column"}>
                         {email.email_recipients.map((recipient, key) => {
                           return (
-                            <Box key={key}>
+                            <Box key={key} padding="1" fontSize="sm">
                               <Box>Subject: {recipient.subject ?? email.subject}</Box>
                               <Box>
                                 To:{" "}
@@ -551,11 +649,22 @@ function HistoryPage({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
                                   })?.users.email
                                 }
                               </Box>
+                              <Box>
+                                Cc:{" "}
+                                {typeof recipient.cc_emails === "object" &&
+                                  recipient.cc_emails !== null &&
+                                  !Array.isArray(recipient.cc_emails) &&
+                                  "emails" in recipient.cc_emails &&
+                                  (recipient.cc_emails as { emails: string[] }).emails.map((email) => {
+                                    return email + " ";
+                                  })}
+                              </Box>
                               <Box>Body: {recipient.body ?? email.body}</Box>
+                              <Separator />
                             </Box>
                           );
                         })}
-                      </Box>
+                      </Flex>
                     );
                   })}
                 </Card.Body>

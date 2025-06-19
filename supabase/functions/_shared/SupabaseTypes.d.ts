@@ -1293,30 +1293,33 @@ export type Database = {
       };
       email_recipients: {
         Row: {
-          body: string | null;
+          body: string;
+          cc_emails: Json;
           class_id: number;
           created_at: string;
           email_id: number;
           id: number;
-          subject: string | null;
+          subject: string;
           user_id: string;
         };
         Insert: {
-          body?: string | null;
+          body: string;
+          cc_emails: Json;
           class_id: number;
           created_at?: string;
           email_id: number;
           id?: number;
-          subject?: string | null;
+          subject: string;
           user_id: string;
         };
         Update: {
-          body?: string | null;
+          body?: string;
+          cc_emails?: Json;
           class_id?: number;
           created_at?: string;
           email_id?: number;
           id?: number;
-          subject?: string | null;
+          subject?: string;
           user_id?: string;
         };
         Relationships: [
