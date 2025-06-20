@@ -1,7 +1,7 @@
 "use client";
 
-import { Checkbox, Container, Dialog, Field, Fieldset, Flex, HStack, Heading, Text } from "@chakra-ui/react";
-import { useInvalidate, useList } from "@refinedev/core";
+import { Box, Card, Checkbox, Container, Dialog, Field, Fieldset, Flex, HStack, Heading, Text } from "@chakra-ui/react";
+import { useCreate, useInvalidate, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { FaPlus } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
@@ -14,12 +14,26 @@ import { Select } from "chakra-react-select";
 import { useEffect, useState } from "react";
 import { Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { LuCheck } from "react-icons/lu";
+import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
+import { AssignmentResult, TAAssignmentSolver } from "./assignmentCalculator";
 
 type RubricRow = Database["public"]["Tables"]["rubrics"]["Row"];
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
-type SubmissionWithGrading = Submission & {
+export type SubmissionWithGrading = Submission & {
   submission_reviews: SubmissionReview[];
   review_assignments: ReviewAssignmentRow[];
+};
+export type UserRoleWithConflicts = UserRole & {
+  profiles: {
+    grading_conflicts: GradingConflictWithPopulatedProfiles[];
+  };
+};
+
+type DraftReviewAssignment = {
+  assignee_profile_id: string;
+  assignee_name: string;
+  submission_id: number;
+  submission_owner: string;
 };
 
 // Main Page Component
@@ -82,7 +96,8 @@ export function ReviewAssignmentBulkModal() {
   const [selectedRubric, setSelectedRubric] = useState<RubricRow>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
   const [role, setRole] = useState<String>();
-
+  const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>();
+const {mutateAsync} = useCreate();
   const { data: gradingRubrics } = useList<RubricRow>({
     resource: "rubrics",
     meta: {
@@ -113,10 +128,11 @@ export function ReviewAssignmentBulkModal() {
     }
   });
 
-  const { data: courseStaff } = useList<UserRole>({
+  const { data: courseStaff } = useList<UserRoleWithConflicts>({
     resource: "user_roles",
     meta: {
-      select: "*"
+      select:
+        "*, profiles!user_roles_private_profile_id_fkey(grading_conflicts!grading_conflicts_grader_profile_id_fkey(*))"
     },
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
@@ -124,15 +140,25 @@ export function ReviewAssignmentBulkModal() {
     ]
   });
 
+  const { data: i } = useList<UserRole & { profiles: { name: string } }>({
+    resource: "user_roles",
+    meta: {
+      select: "*, profiles!user_roles_private_profile_id_fkey(name)"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }]
+  });
+
   useEffect(() => {
-    if (selectedRubric && activeSubmissions?.data) {
+    console.log(activeSubmissions);
+    if (selectedRubric && activeSubmissions) {
+      console.log("setting");
       setSubmissionsToDo(
-        activeSubmissions?.data.filter((sub) => {
-          return sub.submission_reviews.length === 0 && sub.review_assignments.length === 0;
+        activeSubmissions.data.filter((sub) => {
+          return sub.review_assignments.length === 0;
         })
       );
     }
-  }, [activeSubmissions, selectedRubric]);
+  }, [selectedRubric, activeSubmissions]);
 
   /**
    * options for assigning grading
@@ -155,6 +181,68 @@ export function ReviewAssignmentBulkModal() {
    *
    *
    */
+
+  const generateReviews = () => {
+    const users = courseStaff?.data.filter((staff) => {
+      if (role === "graders") {
+        return staff.role === "grader";
+      } else if (role === "instructors") {
+        return staff.role === "instructor";
+      } else if (role === "instructors and graders") {
+        return staff.role === "grader" || staff.role === "instructor";
+      } else {
+        return false;
+      }
+    });
+    if (!courseStaff || !submissionsToDo) {
+      return;
+    }
+    const solver = new TAAssignmentSolver(courseStaff.data, submissionsToDo);
+    const result = solver.solve();
+    console.log(result);
+    // transfer result to review assignment form
+    toReview(result);
+  };
+
+  const toReview = (result: AssignmentResult) => {
+    const reviewAssignments: DraftReviewAssignment[] = [];
+    result.assignments?.entries().forEach((entry) => {
+      const user: UserRoleWithConflicts = entry[0];
+      const assignees: SubmissionWithGrading[] = entry[1];
+      assignees.forEach((assignee) => {
+        const grader = i?.data.find((item) => {
+          return item.private_profile_id === user.private_profile_id;
+        })?.profiles;
+        console.log(user);
+        const to = i?.data.find((item) => {
+          return item.private_profile_id === assignee.profile_id;
+        })?.profiles;
+        reviewAssignments.push({
+          assignee_profile_id: user.private_profile_id,
+          assignee_name: grader?.name ?? "",
+          submission_id: assignee.id,
+          submission_owner: to?.name ?? ""
+        });
+      });
+    });
+    setDraftReviews(reviewAssignments);
+  };
+
+  const assign = () => {
+    draftReviews?.forEach((review) => {
+      mutateAsync({
+        resource:"review_assignments",
+        values: {
+          assignee_profile_id:review.assignee_profile_id, // todo add due date
+          submission_id:review.submission_id,
+          assignment_id: assignment_id,
+          rubric_id:selectedRubric?.id, // todo handle if null
+          class_id:course_id,
+          submission_review_id:1 // TODO get actual
+        }
+      }) // todo clear afterwards
+    })
+  }
 
   return (
     <Dialog.Root size="lg" placement={"center"}>
@@ -208,10 +296,24 @@ export function ReviewAssignmentBulkModal() {
                     </Field.Label>
                   </Flex>
                 </Field.Root>
-                <Button></Button>
+                <Button onClick={generateReviews}>Generate Reviews</Button>
               </Fieldset.Content>
             </Fieldset.Root>
-            <Dialog.Footer>Close</Dialog.Footer>
+            <Flex flexDir={"column"} gap="3" padding="2">
+              {draftReviews?.map((review, key) => {
+                return (
+                  <Card.Root key={key} padding="2">
+                    <Box>Grader: {review.assignee_name}</Box>
+                    <Box>Submission: {review.submission_owner}</Box>
+                  </Card.Root>
+                );
+              })}
+            </Flex>
+            <Dialog.Footer>
+              <Button onClick={assign}>
+                Assign
+              </Button>
+            </Dialog.Footer>
           </Dialog.Body>
         </Dialog.Content>
       </Dialog.Positioner>

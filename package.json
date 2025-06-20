@@ -23,6 +23,7 @@
     "@chakra-ui/pro-theme": "^0.10.0",
     "@chakra-ui/react": "^3.7.0",
     "@date-fns/tz": "^1.2.0",
+    "@dnd-kit/core": "^6.3.1",
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
     "@emotion/react": "^11.14.0",
