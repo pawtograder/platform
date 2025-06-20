@@ -1,5 +1,5 @@
 "use client";
-import {
+import type {
   Assignment,
   GradebookColumn,
   GradebookColumnDependencies,
@@ -8,12 +8,12 @@ import {
   GradebookWithAllData
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { type LiveEvent, useList, useShow } from "@refinedev/core";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useCourse } from "./useAuthState";
 import { CourseController } from "./useCourseController";
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { all, ConstantNode, create, FunctionNode } from "mathjs";
 import { minimatch } from "minimatch";
 
@@ -288,7 +288,7 @@ export class GradebookController {
   }
 
   public extractAndValidateDependencies(expr: string, column_id: number) {
-    const math = create(all);
+    const math = create(all!);
     const exprNode = math.parse(expr);
     const dependencies: Record<string, number[]> = {};
     const errors: string[] = [];
@@ -300,19 +300,15 @@ export class GradebookController {
       if (node.type === "FunctionNode") {
         const functionName = (node as FunctionNode).fn.name;
         if (functionName in availableDependencies) {
-          const args = (node as FunctionNode).args;
-          const argType = args[0].type;
-          if (argType === "ConstantNode") {
-            const argName = (args[0] as ConstantNode).value;
+          const firstArg = (node as FunctionNode).args?.[0];
+          if (firstArg?.type === "ConstantNode") {
+            const argName = (firstArg as ConstantNode).value;
             if (typeof argName === "string") {
               const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
                 minimatch(d.slug!, argName)
               );
               if (matching.length > 0) {
-                if (!(functionName in dependencies)) {
-                  dependencies[functionName] = [];
-                }
-                dependencies[functionName].push(...matching.map((d) => d.id));
+                (dependencies[functionName] ??= []).push(...matching.map((d) => d.id));
               } else {
                 errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
               }
@@ -321,7 +317,7 @@ export class GradebookController {
         }
       }
     });
-    if (dependencies.gradebook_columns) {
+    if (dependencies["gradebook_columns"]) {
       //Check for cycles between the columns
       const visited = new Set<number>();
       const checkForCycles = (column_id: number) => {
@@ -342,7 +338,7 @@ export class GradebookController {
         }
       };
       visited.add(column_id);
-      for (const dependentColumn of dependencies.gradebook_columns) {
+      for (const dependentColumn of dependencies["gradebook_columns"]!) {
         checkForCycles(dependentColumn);
       }
     }
@@ -356,7 +352,7 @@ export class GradebookController {
   }
 
   createRendererForColumn(column: GradebookColumn): (cell: RendererParams) => React.ReactNode {
-    const math = create(all);
+    const math = create(all!);
     //Remove access to security-sensitive functions
     const securityFunctions = ["import", "createUnit", "reviver", "resolve"];
     //eslint-disable-next-line @typescript-eslint/no-explicit-any

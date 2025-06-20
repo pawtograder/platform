@@ -63,11 +63,14 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
         setActiveSubmissionReviewId(writableReviews.find((wr) => wr.id === gradingReview.id)?.id ?? undefined);
         setActiveRubricId(gradingReview.rubric_id);
       } else {
-        setActiveReviewAssignmentId(
-          myAssignedReviews.find((ra) => ra.submission_review_id === writableReviews[0].id)?.id
-        );
-        setActiveSubmissionReviewId(writableReviews[0].id);
-        setActiveRubricId(writableReviews[0].rubric_id);
+        const firstWritableReview = writableReviews[0];
+        if (firstWritableReview) {
+          setActiveReviewAssignmentId(
+            myAssignedReviews.find((ra) => ra.submission_review_id === firstWritableReview.id)?.id
+          );
+          setActiveSubmissionReviewId(firstWritableReview.id);
+          setActiveRubricId(firstWritableReview.rubric_id);
+        }
       }
     } else {
       //Default to grading review

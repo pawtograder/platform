@@ -7,7 +7,7 @@ import {
   useReferencedContent
 } from "@/hooks/useGradebook";
 import { GradebookWhatIfProvider, useGradebookWhatIf, useWhatIfGrade } from "@/hooks/useGradebookWhatIf";
-import { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
+import type { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Card, Code, Heading, HStack, Input, Text, VStack } from "@chakra-ui/react";
 import { useState } from "react";
 

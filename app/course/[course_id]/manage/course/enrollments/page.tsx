@@ -10,7 +10,7 @@ import useModalManager from "@/hooks/useModalManager";
 import useTags from "@/hooks/useTags";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Checkbox,
@@ -32,7 +32,7 @@ import {
 } from "@chakra-ui/react";
 import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { type ColumnDef, flexRender } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import Link from "next/link";
@@ -189,7 +189,7 @@ function EnrollmentsTable() {
         header: "Class ID",
         enableColumnFilter: true,
         enableHiding: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           return String(row.original.class_id) === String(filterValue);
         }
       },
@@ -205,7 +205,7 @@ function EnrollmentsTable() {
           }
           return "N/A";
         },
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const name = row.original.profiles?.name;
           if (!name) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -217,7 +217,7 @@ function EnrollmentsTable() {
         accessorKey: "users.email",
         header: "Email",
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const email = row.original.users?.email;
           if (!email) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -228,7 +228,7 @@ function EnrollmentsTable() {
         id: "role",
         header: "Role",
         accessorKey: "role",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const role = row.original.role;
           if (!role) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -239,7 +239,7 @@ function EnrollmentsTable() {
         id: "github_username",
         header: "Github Username",
         accessorKey: "users.github_username",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const username = row.original.users?.github_username;
           if (!username) return false;
           const filterString = String(filterValue).toLowerCase();

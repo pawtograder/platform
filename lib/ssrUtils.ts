@@ -1,5 +1,5 @@
 import { createClient } from "@/utils/supabase/server";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { jwtDecode } from "jwt-decode";
 
 type UserRoleJwt = Pick<
@@ -23,11 +23,13 @@ async function getRolesForCourse(course_id: number): Promise<UserRoleJwt["role"]
     const decoded = jwtDecode<DecodedToken>(token);
     // Ensure user_roles exists and is an array before filtering/mapping
     if (!decoded.user_roles || !Array.isArray(decoded.user_roles)) {
+      // eslint-disable-next-line no-console
       console.error("JWT does not contain valid user_roles array");
       return [];
     }
     return decoded.user_roles.filter((role) => role.class_id === course_id).map((role) => role.role);
   } catch (error) {
+    // eslint-disable-next-line no-console
     console.error("Failed to decode JWT:", error);
     return [];
   }

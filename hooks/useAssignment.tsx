@@ -1,11 +1,11 @@
 "use client";
-import {
+import type {
   ActiveSubmissionsWithGradesForAssignment,
   AssignmentWithRubricsAndReferences,
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { type LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
@@ -24,7 +24,7 @@ export function useRubricCheck(rubric_check_id: number | null | undefined) {
   if (!check) {
     return undefined;
   }
-  const options = check.data instanceof Object && "options" in check.data ? check.data.options : [];
+  const options = check.data instanceof Object && "options" in check.data ? check.data["options"] : [];
   return {
     ...check,
     options,
@@ -227,7 +227,7 @@ export function AssignmentProvider({
   const params = useParams();
   const controller = useRef<AssignmentController>(new AssignmentController());
   const [ready, setReady] = useState(false);
-  const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
+  const assignment_id = initial_assignment_id ?? Number(params["assignment_id"]);
 
   if (!assignment_id || isNaN(assignment_id)) {
     return <Text>Error: Invalid Assignment ID.</Text>;

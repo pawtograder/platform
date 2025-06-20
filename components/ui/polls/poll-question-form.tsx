@@ -1,5 +1,5 @@
 "use client";
-import { PollQuestionWithAnswers } from "@/utils/supabase/DatabaseTypes";
+import type { PollQuestionWithAnswers } from "@/utils/supabase/DatabaseTypes";
 import { Card, HStack, Progress, Text, VStack } from "@chakra-ui/react";
 
 export function PollQuestionForm({ question }: { question: PollQuestionWithAnswers }) {

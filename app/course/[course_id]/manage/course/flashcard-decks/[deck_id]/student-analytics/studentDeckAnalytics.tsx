@@ -4,15 +4,15 @@ import { Button } from "@/components/ui/button";
 import { Box, HStack, Input, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import {
-  ColumnDef,
-  ColumnFiltersState,
+  type ColumnDef,
+  type ColumnFiltersState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
-  Row,
-  SortingState,
+  type Row,
+  type SortingState,
   useReactTable
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";

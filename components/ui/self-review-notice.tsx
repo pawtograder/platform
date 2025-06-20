@@ -2,7 +2,13 @@
 import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
 import { AssignmentProvider, useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
 import { useAssignmentDueDate } from "@/hooks/useCourseController";
-import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
+import type {
+  Assignment,
+  SelfReviewSettings,
+  Submission,
+  SubmissionReview,
+  UserRole
+} from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import { addHours } from "date-fns";
