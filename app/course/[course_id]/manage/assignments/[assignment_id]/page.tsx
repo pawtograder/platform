@@ -21,7 +21,7 @@ export default async function AssignmentHome({
 
   return (
     <Box>
-      <Box p={4}>
+      <Box>
         <HStack justify="space-between">
           <VStack align="flex-start">
             <DataList.Root orientation="horizontal">

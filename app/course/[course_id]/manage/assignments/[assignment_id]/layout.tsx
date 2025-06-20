@@ -2,12 +2,12 @@
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
+import { Select } from "chakra-react-select";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
-import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaUsers, FaSearch } from "react-icons/fa";
+import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
-import { Select } from "chakra-react-select";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
@@ -101,7 +101,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
             }))}
           />
         </Box>
-        <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4}>
+        <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2}>
           <Heading size="lg">Assignment: {assignment ? assignment.data?.title : "Loading..."}</Heading>
           <Box>{children}</Box>
         </Box>
