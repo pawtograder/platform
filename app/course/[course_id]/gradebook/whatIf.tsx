@@ -189,7 +189,8 @@ function GradebookCard({ column, private_profile_id }: { column: GradebookColumn
 }
 export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
   const columns = useGradebookColumns();
-  columns.sort((a, b) => a.sort_order - b.sort_order);
+  // Ensure null sort_order values don't break the comparator by pushing them to the end
+  columns.sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
   return (
     <GradebookWhatIfProvider private_profile_id={private_profile_id}>
       <VStack minW="md" maxW="xl" align="flex-start">

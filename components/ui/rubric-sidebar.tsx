@@ -880,10 +880,15 @@ export function RubricCheckGlobal({
                 w="100%"
                 value={selectedOptionIndex?.toString()}
                 onValueChange={(value) => {
+                  const indexStr = value.value;
+                  if (indexStr === null) {
+                    return;
+                  }
                   if (isRubricCheckDataWithOptions(check.data)) {
-                    const selectedOption = check.data.options[parseInt(value.value)];
+                    const index = parseInt(indexStr, 10);
+                    const selectedOption = check.data.options[index];
                     if (selectedOption) {
-                      setSelectedOptionIndex(parseInt(value.value));
+                      setSelectedOptionIndex(index);
                       if (gradingIsPermitted) {
                         setIsEditing(true);
                       }

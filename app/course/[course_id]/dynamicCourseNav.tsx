@@ -51,15 +51,15 @@ const LinkItems = (courseID: number) => [
     name: "Office Hours",
     student_only: true,
     icon: FiMessageSquare,
-    target: `/course/${courseID}/office-hours`
-    // feature_flag: "office-hours"
+    target: `/course/${courseID}/office-hours`,
+    feature_flag: "office-hours"
   },
   {
     name: "Manage Office Hours",
     instructor_only: true,
     icon: FiClipboard,
-    target: `/course/${courseID}/manage/office-hours`
-    // feature_flag: "office-hours"
+    target: `/course/${courseID}/manage/office-hours`,
+    feature_flag: "office-hours"
   },
   { name: "Gradebook", icon: FiBookOpen, student_only: true, target: `/course/${courseID}/gradebook` },
   { name: "Gradebook", icon: FiBookOpen, instructor_only: true, target: `/course/${courseID}/manage/gradebook` },

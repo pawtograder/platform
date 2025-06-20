@@ -608,6 +608,7 @@ export type Database = {
           created_at: string;
           description: string | null;
           due_date: string;
+          gradebook_column_id: number | null;
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
@@ -636,6 +637,7 @@ export type Database = {
           created_at?: string;
           description?: string | null;
           due_date: string;
+          gradebook_column_id?: number | null;
           grading_rubric_id?: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -664,6 +666,7 @@ export type Database = {
           created_at?: string;
           description?: string | null;
           due_date?: string;
+          gradebook_column_id?: number | null;
           grading_rubric_id?: number | null;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -1607,7 +1610,7 @@ export type Database = {
           score_expression: string | null;
           show_max_score: boolean;
           slug: string;
-          sort_order: number;
+          sort_order: number | null;
         };
         Insert: {
           class_id: number;
@@ -1623,7 +1626,7 @@ export type Database = {
           score_expression?: string | null;
           show_max_score?: boolean;
           slug: string;
-          sort_order: number;
+          sort_order?: number | null;
         };
         Update: {
           class_id?: number;
@@ -1639,7 +1642,7 @@ export type Database = {
           score_expression?: string | null;
           show_max_score?: boolean;
           slug?: string;
-          sort_order?: number;
+          sort_order?: number | null;
         };
         Relationships: [
           {

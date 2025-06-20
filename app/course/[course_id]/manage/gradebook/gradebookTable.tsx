@@ -127,7 +127,7 @@ function AddColumnDialog() {
   }, [isOpen, reset]);
 
   const onSubmit = async (data: FieldValues) => {
-    const loadingToast = toaster.loading({
+    toaster.loading({
       title: "Saving...",
       description: "This may take a few seconds to recalculate..."
     });
@@ -150,11 +150,11 @@ function AddColumnDialog() {
         }
       });
       setIsLoading(false);
-      toaster.dismiss(loadingToast);
+      toaster.dismiss();
       setIsOpen(false);
     } catch (e) {
-      toaster.dismiss(loadingToast);
       setIsLoading(false);
+      toaster.dismiss();
       let message = "An unknown error occurred";
       if (e && typeof e === "object" && "message" in e && typeof (e as { message?: string }).message === "string") {
         message = (e as { message: string }).message;
@@ -328,7 +328,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   if (!column) throw new Error(`Column ${columnId} not found`);
 
   const onSubmit = async (data: FieldValues) => {
-    const loadingToast = toaster.loading({
+    toaster.loading({
       title: "Saving...",
       description: "This may take a few seconds to recalculate..."
     });
@@ -354,11 +354,11 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         invalidates: ["all"]
       });
       setIsLoading(false);
-      toaster.dismiss(loadingToast);
+      toaster.dismiss();
       onClose();
     } catch (e) {
-      toaster.dismiss(loadingToast);
       setIsLoading(false);
+      toaster.dismiss();
       let message = "An unknown error occurred";
       if (e && typeof e === "object" && "message" in e && typeof (e as { message?: string }).message === "string") {
         message = (e as { message: string }).message;
@@ -582,18 +582,18 @@ function GradebookColumnHeader({
   const supabase = createClient();
   const invalidate = useInvalidate();
   const moveLeft = useCallback(async () => {
-    if (column.sort_order === 0) return;
+    if (column.sort_order == null || column.sort_order === 0) return;
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order
+        sort_order: column.sort_order!
       })
       .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", column.sort_order - 1);
+      .eq("sort_order", column.sort_order! - 1);
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order - 1
+        sort_order: column.sort_order! - 1
       })
       .eq("id", column_id);
     await invalidate({
@@ -603,20 +603,21 @@ function GradebookColumnHeader({
     });
   }, [column_id, column, invalidate, supabase]);
   const moveRight = useCallback(async () => {
+    if (column.sort_order == null) return;
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order
+        sort_order: column.sort_order!
       })
       .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", column.sort_order + 1);
+      .eq("sort_order", column.sort_order! + 1);
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order + 1
+        sort_order: column.sort_order! + 1
       })
       .eq("id", column_id);
-  }, [columnModel]);
+  }, [column.gradebook_id, column.sort_order, column_id, supabase]);
   const toolTipText = useMemo(() => {
     const ret: string[] = [];
     if (column.description) {
@@ -802,7 +803,7 @@ export default function GradebookTable() {
         enableSorting: true
       }
     ];
-    gradebookColumns.sort((a, b) => a.sort_order - b.sort_order);
+    gradebookColumns.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
     gradebookColumns.forEach((col) => {
       cols.push({
         id: `grade_${col.id}`,

@@ -217,7 +217,9 @@ export function TagAddForm({
                 height="auto"
                 value={selectedColor}
                 onValueChange={(details) => {
-                  handleColorChange(details.value, true);
+                  if (details.value) {
+                    handleColorChange(details.value, true);
+                  }
                 }}
                 size="xs"
                 display="flex"
