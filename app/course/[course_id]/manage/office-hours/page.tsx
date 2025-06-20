@@ -3,6 +3,8 @@ import { useList } from "@refinedev/core";
 import { HelpQueue as HelpQueueType } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { Box } from "@chakra-ui/react";
+import HelpQueuesDashboard from "./HelpQueuesDashboard";
+
 export default function HelpManagePage() {
   const { course_id } = useParams();
   const queues = useList<HelpQueueType>({
@@ -15,5 +17,9 @@ export default function HelpManagePage() {
   if (queues.error) {
     return <div>Error: {queues.error.message}</div>;
   }
-  return <Box>(Dashboard goes here)</Box>;
+  return (
+    <Box>
+      <HelpQueuesDashboard />
+    </Box>
+  );
 }

@@ -6,6 +6,8 @@ import { HelpRequestChatChannelProvider } from "@/lib/chat";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
 import { BsCameraVideo } from "react-icons/bs";
+import { useList } from "@refinedev/core";
+
 // function ChatChannelParticipants() {
 //   const { participants } = useChatChannel();
 //   const profiles = useUserProfiles();
@@ -20,8 +22,8 @@ import { BsCameraVideo } from "react-icons/bs";
 //     </>
 //   );
 // }
+
 function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
-  console.log(request.is_video_live);
   if (request.is_video_live)
     return (
       <>
@@ -30,7 +32,7 @@ function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
           variant="ghost"
           onClick={() => {
             window.open(
-              `${process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/course/${request.class_id}/help/${request.help_queue}/request/${request.id}/meet`,
+              `${process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/course/${request.class_id}/office-hours/${request.help_queue}/request/${request.id}/meet`,
               "_blank"
             );
           }}
@@ -41,14 +43,28 @@ function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
     );
   else return <></>;
 }
+
 export default function CurrentRequest({ queue, request }: { queue: HelpQueue; request: HelpRequest }) {
   const assignee = useUserProfile(request.assignee);
+  // Fetch unresolved requests in this queue to compute position
+  const { data: openRequestsData } = useList<HelpRequest>({
+    resource: "help_requests",
+    filters: [
+      { field: "help_queue", operator: "eq", value: queue.id },
+      { field: "resolved_by", operator: "null", value: null }
+    ],
+    sorters: [{ field: "created_at", order: "asc" }],
+    pagination: { current: 1, pageSize: 1000 }
+  });
+
+  const unresolved = openRequestsData?.data ?? [];
+  const position = unresolved.findIndex((r) => r.id === request.id) + 1;
   return (
     <Box width="100%">
       <DataList.Root>
         <DataList.Item>
           <DataList.ItemLabel>Your position in the queue</DataList.ItemLabel>
-          <DataList.ItemValue>{queue.depth} (need to implement)</DataList.ItemValue>
+          <DataList.ItemValue>{position > 0 ? position : "-"}</DataList.ItemValue>
         </DataList.Item>
         <DataList.Item>
           <DataList.ItemLabel>Working on this request:</DataList.ItemLabel>
@@ -58,7 +74,8 @@ export default function CurrentRequest({ queue, request }: { queue: HelpQueue; r
 
       <Flex height="100vh" overflow="hidden" width="100%">
         <HelpRequestChatChannelProvider help_request={request}>
-          <HelpRequestChat request={request} actions={<HelpRequestStudentActions request={request} />} />
+          <HelpRequestChat request={request} />
+          <HelpRequestStudentActions request={request} />
         </HelpRequestChatChannelProvider>
       </Flex>
     </Box>

@@ -432,7 +432,7 @@ export class GradebookController {
     };
     if (newColumn.sort_order !== column?.sort_order) {
       const newColumns = this.gradebook.gradebook_columns.map((c) => (c.id === column_id ? newColumn : c));
-      newColumns.sort((a, b) => a.sort_order - b.sort_order);
+      newColumns.sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
       this.gradebook.gradebook_columns = newColumns;
     } else {
       //update in place
@@ -531,7 +531,7 @@ export class GradebookController {
   exportGradebook(courseController: CourseController) {
     const roster = courseController.getRoster();
     const columns = this.gradebook.gradebook_columns;
-    columns.sort((a, b) => a.sort_order - b.sort_order);
+    columns.sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
     const result = [];
     result.push(["Name", "Email", "Canvas ID", "SID", ...columns.map((col) => col.name)]);
     roster.forEach((student) => {

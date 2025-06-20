@@ -1,18 +1,42 @@
-import { HStack, Icon, Text } from "@chakra-ui/react";
+import { Collapsible, HStack, Icon, Text } from "@chakra-ui/react";
+import { LuChevronDown, LuChevronRight } from "react-icons/lu";
 
-interface Props {
+type Props = {
   icon: React.ElementType;
+  title: string;
+  count?: number;
   children: React.ReactNode;
-}
+  defaultOpen?: boolean;
+};
 
+/**
+ * A collapsible group header component for organizing help requests by category.
+ * Displays an icon, title with optional count, and expandable content section.
+ */
 export const ChatGroupHeader = (props: Props) => {
-  const { icon, children } = props;
+  const { icon, title, count, children, defaultOpen = true } = props;
+
   return (
-    <HStack color="fg.muted">
-      <Icon as={icon} />
-      <Text fontWeight="semibold" textTransform="uppercase" fontSize="xs">
-        {children}
-      </Text>
-    </HStack>
+    <Collapsible.Root defaultOpen={defaultOpen}>
+      <Collapsible.Trigger asChild>
+        <HStack
+          color="fg.muted"
+          cursor="pointer"
+          _hover={{ color: "fg.default" }}
+          transition="color 0.2s"
+          role="button"
+          tabIndex={0}
+        >
+          <Icon as={icon} />
+          <Text fontWeight="semibold" textTransform="uppercase" fontSize="xs">
+            {title} {typeof count !== "undefined" && `(${count})`}
+          </Text>
+          <Collapsible.Context>
+            {(collapsible) => <Icon as={collapsible.open ? LuChevronDown : LuChevronRight} fontSize="xs" ml="auto" />}
+          </Collapsible.Context>
+        </HStack>
+      </Collapsible.Trigger>
+      <Collapsible.Content>{children}</Collapsible.Content>
+    </Collapsible.Root>
   );
 };
