@@ -1,11 +1,15 @@
-import { Input, Group, InputProps } from "@chakra-ui/react";
+import { Input, InputGroup, InputProps } from "@chakra-ui/react";
 import { BsSearch } from "react-icons/bs";
 
-export const SearchInput = (props: InputProps) => {
+export type SearchInputProps = InputProps & {
+  value?: string;
+  onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void;
+};
+
+export const SearchInput = ({ value, onChange, ...props }: SearchInputProps) => {
   return (
-    <Group attached>
-      <BsSearch />
-      <Input placeholder="Search messages..." {...props} />
-    </Group>
+    <InputGroup startElement={<BsSearch />}>
+      <Input placeholder="Search messages..." value={value} onChange={onChange} {...props} />
+    </InputGroup>
   );
 };

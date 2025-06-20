@@ -47,18 +47,18 @@ const LinkItems = (courseID: number) => [
   { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion` },
   { name: "Flashcards", icon: TbCards, student_only: true, target: `/course/${courseID}/flashcards` },
   {
-    name: "Get Help Now",
+    name: "Office Hours",
     student_only: true,
     icon: FiMessageSquare,
-    target: `/course/${courseID}/help`,
-    feature_flag: "office-hours"
+    target: `/course/${courseID}/office-hours`
+    // feature_flag: "office-hours"
   },
   {
-    name: "Give Help Now",
+    name: "Manage Office Hours",
     instructor_only: true,
     icon: FiClipboard,
-    target: `/course/${courseID}/manage/help`,
-    feature_flag: "office-hours"
+    target: `/course/${courseID}/manage/office-hours`
+    // feature_flag: "office-hours"
   },
   {
     name: "Course Settings",
