@@ -217,7 +217,6 @@ export default function NotificationTeaser({
   } else if (body.type === "email") {
     teaser = <EmailNotificationTeaser notification={notification} />;
   } else {
-    console.log(body.type);
     teaser = <Text>Unknown notification type: {body.type}</Text>;
   }
   return (

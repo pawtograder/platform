@@ -1,5 +1,5 @@
 import { useEmailManagement } from "./EmailManagementContext";
-import { useCreate } from "@refinedev/core";
+import { useCreate, useInvalidate } from "@refinedev/core";
 import { Box, Button, Card, Editable, Flex, Heading, HStack, Spacer, Text } from "@chakra-ui/react";
 import { IoMdClose } from "react-icons/io";
 import { useParams } from "next/navigation";
@@ -9,42 +9,68 @@ import { UserRoleWithUserDetails } from "./page";
 import { ToggleTip } from "@/components/ui/toggle-tip";
 import { LuInfo } from "react-icons/lu";
 import { toaster } from "@/components/ui/toaster";
+import { Emails } from "@/utils/supabase/DatabaseTypes";
 
 export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
   const { course_id } = useParams();
-  const { emailsToCreate, clearEmails } = useEmailManagement();
+  const { emailsToCreate, clearEmails, batches } = useEmailManagement();
   const { mutateAsync } = useCreate();
+  const invalidate = useInvalidate();
 
-  const sendEmails = () => {
-    emailsToCreate.forEach(async (email) => {
-      await mutateAsync({
-        resource: "emails",
+  const sendEmails = async () => {
+    const emailsFormatted: Omit<Emails, "id" | "created_at">[] = [];
+    for (const batch of batches) {
+      const { data: createdBatch } = await mutateAsync({
+        resource: "email_batches",
         values: {
-          user_id: email.to.user_id,
           class_id: course_id,
-          subject: email.subject,
-          body: email.body,
+          subject: batch.subject ?? "",
+          body: batch.body ?? "",
           cc_emails: {
-            emails: email.cc_ids.map((cc) => {
-              return cc.email;
-            })
+            emails: batch.cc_ids.map((cc) => cc.email)
+          },
+          reply_to: batch.reply_to
+        }
+      });
+
+      const emailsForBatch = emailsToCreate.filter((email) => {
+        return email.batch_id == batch.id;
+      });
+
+      emailsForBatch.forEach((email) => {
+        emailsFormatted.push({
+          user_id: email.to.user_id,
+          class_id: Number(course_id),
+          batch_id: Number(createdBatch.id),
+          subject: email.subject ?? "",
+          body: email.body ?? "",
+          cc_emails: {
+            emails: email.cc_ids.map((cc) => cc.email) ?? []
           },
           reply_to: email.reply_to
-        }
+        });
+      });
+    }
+    await mutateAsync({
+      resource: "emails",
+      values: emailsFormatted
+    })
+      .then(() => {
+        invalidate({
+          resource: "email_batches",
+          invalidates: ["list"]
+        });
+        toaster.success({
+          title: "Successfully created emails",
+          description: `Created ${emailsToCreate.length} emails`
+        });
       })
-        .then(() =>
-          toaster.success({
-            title: "Successfully created email",
-            description: `Subject: ${email.subject} To:${email.to.email}`
-          })
-        )
-        .catch((e) =>
-          toaster.error({
-            title: "Error creating email",
-            description: `Subject: ${email.subject} To:${email.to.email}, with ${e.message}`
-          })
-        );
-    });
+      .catch((e) => {
+        toaster.error({
+          title: "Error creating emails",
+          description: `Failed to create emails: ${e}`
+        });
+      });
 
     clearEmails();
   };

@@ -648,6 +648,14 @@ export type Emails = GetResult<
   "*"
 >;
 
+export type EmailBatches = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_batches"]["Row"],
+  "email_batches",
+  Database["public"]["Tables"]["email_batches"]["Relationships"],
+  "*"
+>;
+
 export type Course = GetResult<
   Database["public"],
   Database["public"]["Tables"]["classes"]["Row"],

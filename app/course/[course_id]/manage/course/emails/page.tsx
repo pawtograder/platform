@@ -9,7 +9,7 @@ import {
   Tag,
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
-import { Button, Field, Fieldset, Heading, Input, Textarea, Box, Flex, Text, Checkbox } from "@chakra-ui/react";
+import { Button, Field, Fieldset, Heading, Input, Box, Flex, Text, Checkbox } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
 import { CreatableSelect, Select } from "chakra-react-select";
 import { useEffect, useRef, useState } from "react";
@@ -25,7 +25,7 @@ import HistoryPage from "./historyList";
 import { formatInTimeZone } from "date-fns-tz";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { LuCheck } from "react-icons/lu";
-
+import MdEditor from "@/components/ui/md-editor";
 /* types */
 enum Audience {
   All = "all",
@@ -61,7 +61,7 @@ export type UserRoleWithUserDetails = UserRole & { users: { email: string; user_
 
 function EmailsInnerPage() {
   const { course_id } = useParams();
-  const { emailsToCreate, addEmails } = useEmailManagement();
+  const { emailsToCreate, addEmails, addBatch } = useEmailManagement();
   const [choice, setChoice] = useState<{ label: string; value: Audience | null }>();
   const [assignment, setAssignment] = useState<Assignment>();
   const [tag, setTag] = useState<Tag>();
@@ -72,6 +72,7 @@ function EmailsInnerPage() {
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
   const [ccList, setCcList] = useState<{ email: string; user_id: string }[]>([]);
   const [replyEmail, setReplyEmail] = useState<string>();
+  const [ccSelf, setCcSelf] = useState<boolean>(false);
   /* Tags unique by color and name */
   const uniqueTags: Tag[] = Array.from(
     tags.tags
@@ -83,6 +84,7 @@ function EmailsInnerPage() {
       }, new Map())
       .values()
   );
+
   /* Options for audience dropdown */
   const options = [
     { label: "Students who have submitted an assignment", value: Audience.Submitted },
@@ -96,16 +98,32 @@ function EmailsInnerPage() {
   ];
 
   /* Template variables to reference in subject/body that will be resolved with actual values */
-  const templateVariables = [
-    "assignment_name",
-    "assignment_slug",
-    "due_date",
-    "assignment_url",
-    "assignment_group_name",
-    "course_name",
-    "tag_name",
-    "class_section"
-  ];
+  const audienceTemplateVariables: Record<Audience, string[]> = {
+    [Audience.All]: ["course_name", "class_section"],
+    [Audience.CourseStaff]: ["course_name", "class_section"],
+    [Audience.Graders]: ["course_name", "class_section"],
+    [Audience.Students]: ["course_name", "class_section"],
+    [Audience.Instructors]: ["course_name", "class_section"],
+    [Audience.Tag]: ["tag_name", "course_name", "class_section"],
+    [Audience.Submitted]: [
+      "assignment_name",
+      "assignment_slug",
+      "due_date",
+      "assignment_url",
+      "assignment_group_name",
+      "course_name",
+      "class_section"
+    ],
+    [Audience.NotSubmitted]: [
+      "assignment_name",
+      "assignment_slug",
+      "due_date",
+      "assignment_url",
+      "assignment_group_name",
+      "course_name",
+      "class_section"
+    ]
+  };
 
   /**
    * Only clear the form when the size of emails to create increases (someone drafts a new email)
@@ -131,7 +149,10 @@ function EmailsInnerPage() {
     meta: {
       select: "*"
     },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
+    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    pagination: {
+      pageSize: 1000
+    }
   });
 
   const { data: userRolesData } = useList<UserRoleWithUserDetails>({
@@ -145,6 +166,7 @@ function EmailsInnerPage() {
       current: 1
     }
   });
+
   const myEmail = userRolesData?.data.find((user) => user.user_id === enrollment.user_id)?.users.email;
   const users = userRolesData?.data.map((item) => item.users);
 
@@ -175,6 +197,9 @@ function EmailsInnerPage() {
     ],
     queryOptions: {
       enabled: !!course_id
+    },
+    pagination: {
+      pageSize: 1000
     }
   });
 
@@ -220,16 +245,24 @@ function EmailsInnerPage() {
    * Adds all mail to the "preview" section based on the current values in form.
    */
   const prepareMail = () => {
+    const batch = addBatch({
+      subject: subjectLine,
+      body: body,
+      assignment_id: assignment?.id,
+      cc_ids: ccList,
+      reply_to: replyEmail ?? myEmail ?? ""
+    });
     const identities = getIdentitiesForChosenCategory() ?? [];
     const formatted_emails: EmailCreateDataWithoutId[] = [];
     identities.forEach((email) => {
       formatted_emails.push({
+        batch_id: batch.id,
         to: email,
         why: whyLine(),
         subject: replaceTemplateVariables(subjectLine, email.user_id),
         body: replaceTemplateVariables(body, email.user_id),
         cc_ids: ccList,
-        reply_to: replyEmail
+        reply_to: replyEmail ?? myEmail ?? ""
       });
     });
     addEmails(formatted_emails);
@@ -515,18 +548,6 @@ function EmailsInnerPage() {
           <Fieldset.Root>
             <Fieldset.Content>
               <Field.Root>
-                <Field.Label>Template variables:</Field.Label>
-                <Text fontSize="sm">
-                  {templateVariables.map((val) => {
-                    return `{${val}} `;
-                  })}
-                </Text>
-                <Field.HelperText>
-                  These variables can be referenced in brackets {"{}"} in the email subject or body, and will be filled
-                  in with the proper values when available
-                </Field.HelperText>
-              </Field.Root>
-              <Field.Root>
                 <Field.Label>Select audience</Field.Label>
                 <Select
                   onChange={(e) => {
@@ -602,10 +623,13 @@ function EmailsInnerPage() {
                 <Checkbox.Root
                   gap="4"
                   alignItems="flex-start"
+                  checked={ccSelf}
                   onCheckedChange={(e) => {
                     if (e.checked && myEmail) {
+                      setCcSelf(true);
                       setCcList([...ccList, { email: myEmail, user_id: enrollment.user_id }]);
                     } else {
+                      setCcSelf(false);
                       setCcList(ccList.filter((cc) => cc.email !== myEmail));
                     }
                   }}
@@ -618,7 +642,19 @@ function EmailsInnerPage() {
                 </Checkbox.Root>
                 <CreatableSelect
                   value={ccList.map((cc) => ({ label: cc.email, value: cc.user_id }))}
-                  onChange={(e) => setCcList(Array.from(e).map((elem) => ({ email: elem.label, user_id: elem.value })))}
+                  onChange={(e) => {
+                    if (
+                      myEmail &&
+                      Array.from(e)
+                        .map((item) => item.label)
+                        .includes(myEmail)
+                    ) {
+                      setCcSelf(true);
+                    } else {
+                      setCcSelf(false);
+                    }
+                    setCcList(Array.from(e).map((elem) => ({ email: elem.label, user_id: elem.value })));
+                  }}
                   isMulti={true}
                   options={users?.map((a) => ({ label: a.email, value: a.user_id }))}
                   placeholder="Select or type email addresses..."
@@ -627,16 +663,6 @@ function EmailsInnerPage() {
               <Field.Root>
                 <Flex gap="2">
                   <Field.Label>Reply-to</Field.Label>
-                  <Button
-                    width="fit-content"
-                    size="xs"
-                    variant="subtle"
-                    onClick={() => {
-                      setReplyEmail(myEmail);
-                    }}
-                  >
-                    Use my email
-                  </Button>
                 </Flex>
                 <Input
                   value={replyEmail || ""}
@@ -646,8 +672,7 @@ function EmailsInnerPage() {
                   }}
                 />
                 <Field.HelperText>
-                  Replies will be redirected to this email. If none specified, replies will be sent to general
-                  Pawtograder email
+                  Replies will be redirected to this email. If none specified, replies will be sent to the email associated with your Pawtograder account, {myEmail}
                 </Field.HelperText>
               </Field.Root>
               <Field.Root>
@@ -656,7 +681,29 @@ function EmailsInnerPage() {
               </Field.Root>
               <Field.Root>
                 <Field.Label>Body</Field.Label>
-                <Textarea value={body} onChange={(e) => setBody(e.target.value)} />
+                <MdEditor
+                  style={{ minWidth: "100%", width: "100%" }}
+                  onChange={(e) => {
+                    if (e) {
+                      setBody(e);
+                    }
+                  }}
+                  value={body}
+                />
+              </Field.Root>
+              <Field.Root>
+                <Field.Label>Template variables:</Field.Label>
+                <Text fontSize="sm">
+                  {choice?.value
+                    ? audienceTemplateVariables[choice.value].map((val) => {
+                        return `{${val}} `;
+                      })
+                    : "No template variales available"}
+                </Text>
+                <Field.HelperText>
+                  These variables can be referenced in brackets {"{}"} in the email subject or body, and will be filled
+                  in with the proper values when available
+                </Field.HelperText>
               </Field.Root>
               <Field.Root>
                 <Flex gap="2" alignItems="center">

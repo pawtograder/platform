@@ -1,99 +1,44 @@
-import { Course, Emails } from "@/utils/supabase/DatabaseTypes";
+import { Course, EmailBatches, Emails } from "@/utils/supabase/DatabaseTypes";
 import { Button, Card, Collapsible, Flex, Separator, Box, Heading } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { UserRoleWithUserDetails } from "./page";
 import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
-import _ from "lodash";
 
 export default function HistoryPage({ course, userRoles }: { course?: Course; userRoles?: UserRoleWithUserDetails[] }) {
-  const [displayNumber, setDisplayNumber] = useState<number>(10);
+  const [displayNumber, setDisplayNumber] = useState<number>(25);
 
-  const { data: emails } = useList<Emails>({
-    resource: "emails",
+  const { data: batches } = useList<EmailBatches & { emails: Emails[] }>({
+    resource: "email_batches",
     meta: {
-      select: "*"
+      select: "*, emails!emails_batch_id_fkey(*)"
     },
     filters: [{ field: "class_id", operator: "eq", value: course?.id }],
     sorters: [{ field: "created_at", order: "desc" }],
     liveMode: "auto",
+    pagination: {
+      pageSize: 1000
+    },
     queryOptions: {
       enabled: !!course
     }
   });
 
-  const createTimeKey = (dateString: string, bucketMinutes: number = 5) => {
-    const date = new Date(dateString);
-    const minutes = date.getMinutes();
-    const bucketedMinutes = Math.floor(minutes / bucketMinutes) * bucketMinutes;
-    const bucketedDate = new Date(date);
-    bucketedDate.setMinutes(bucketedMinutes, 0, 0);
-    const timezoneSuffix = bucketedDate.toISOString().substring(23);
-    return bucketedDate.toISOString().slice(0, 16) + timezoneSuffix;
-  };
-
-  const groupedByTime: _.Dictionary<Emails[]> = _.groupBy(
-    emails?.data || [],
-    (email) => createTimeKey(email.created_at, 5) // 5-minute buckets
-  );
-
-  const timeGroupsArray = Object.entries(groupedByTime).map(([timeKey, emailGroup]) => ({
-    timeKey,
-    emails: emailGroup,
-    count: emailGroup.length
-  }));
-
   return (
     <Flex flexDir={"column"}>
       <Heading size="lg">History</Heading>
-      {timeGroupsArray.map((group, key) => {
+      {batches?.data.map((group, key) => {
         if (key >= displayNumber) {
           return <Box key={key}></Box>;
         }
         return (
-          <Card.Root padding="2" size="sm" key={key} marginTop="2" marginBottom="2">
-            <Collapsible.Root>
-              <Collapsible.Trigger>
-                <Card.Title>
-                  {group.count} emails sent{" "}
-                  {formatInTimeZone(
-                    new TZDate(group.timeKey, course?.time_zone ?? "America/New_York"),
-                    course?.time_zone || "America/New_York",
-                    "MMM d h:mm aaa"
-                  )}{" "}
-                  ({course?.time_zone})
-                </Card.Title>
-              </Collapsible.Trigger>
-              <Collapsible.Content>
-                <Card.Body>
-                  {group.emails.map((recipient, key) => {
-                    return (
-                      <Box key={key} padding="1" fontSize="sm">
-                        <Box>Subject: {recipient.subject ?? recipient.subject}</Box>
-                        <Box>
-                          To:{" "}
-                          {
-                            userRoles?.find((user) => {
-                              return user.user_id === recipient.user_id;
-                            })?.users.email
-                          }
-                        </Box>
-                        <Box>Cc: {(recipient.cc_emails as { emails?: string[] })?.emails?.join(", ")}</Box>
-                        <Box>Reply to: {recipient.reply_to ?? "General Pawtograder email"}</Box>
-
-                        <Box paddingBottom="2">Body: {recipient.body ?? recipient.body}</Box>
-                        <Separator />
-                      </Box>
-                    );
-                  })}
-                </Card.Body>
-              </Collapsible.Content>
-            </Collapsible.Root>
-          </Card.Root>
+          <Box key={key}>
+            <EmailHistoryCard userRoles={userRoles} group={group} course={course} />{" "}
+          </Box>
         );
       })}
-      {displayNumber < timeGroupsArray.length && (
+      {batches?.data && displayNumber < batches.data.length && (
         <Button
           variant={"ghost"}
           onClick={() => {
@@ -107,3 +52,54 @@ export default function HistoryPage({ course, userRoles }: { course?: Course; us
     </Flex>
   );
 }
+
+export const EmailHistoryCard = memo(function EmailHistoryCard({
+  userRoles,
+  group,
+  course
+}: {
+  userRoles?: UserRoleWithUserDetails[];
+  group: EmailBatches & { emails: Emails[] };
+  course?: Course;
+}) {
+  return (
+    <Card.Root padding="2" size="sm" marginTop="2" marginBottom="2">
+      <Collapsible.Root>
+        <Collapsible.Trigger>
+          <Card.Title>
+            {group.emails.length} emails sent{" "}
+            {formatInTimeZone(
+              new TZDate(group.created_at, course?.time_zone ?? "America/New_York"),
+              course?.time_zone || "America/New_York",
+              "MMM d h:mm aaa"
+            )}{" "}
+            ({course?.time_zone})
+          </Card.Title>
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          <Card.Body>
+            {group.emails.map((recipient, key) => {
+              return (
+                <Box padding="1" fontSize="sm" key={key}>
+                  <Box>Subject: {recipient.subject ?? recipient.subject}</Box>
+                  <Box>
+                    To:{" "}
+                    {
+                      userRoles?.find((user) => {
+                        return user.user_id === recipient.user_id;
+                      })?.users.email
+                    }
+                  </Box>
+                  <Box>Cc: {(recipient.cc_emails as { emails?: string[] })?.emails?.join(", ")}</Box>
+                  <Box>Reply to: {recipient.reply_to}</Box>
+                  <Box paddingBottom="2">Body: {recipient.body ?? recipient.body}</Box>
+                  <Separator />
+                </Box>
+              );
+            })}
+          </Card.Body>
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </Card.Root>
+  );
+});
