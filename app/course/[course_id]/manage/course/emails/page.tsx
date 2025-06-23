@@ -672,7 +672,8 @@ function EmailsInnerPage() {
                   }}
                 />
                 <Field.HelperText>
-                  Replies will be redirected to this email. If none specified, replies will be sent to the email associated with your Pawtograder account, {myEmail}
+                  Replies will be redirected to this email. If none specified, replies will be sent to the email
+                  associated with your Pawtograder account, {myEmail}
                 </Field.HelperText>
               </Field.Root>
               <Field.Root>
