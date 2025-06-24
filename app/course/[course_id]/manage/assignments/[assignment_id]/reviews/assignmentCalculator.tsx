@@ -1,4 +1,3 @@
-import { UserRole } from "@/utils/supabase/DatabaseTypes";
 import { SubmissionWithGrading, UserRoleWithConflicts } from "./page";
 
 interface FlowEdge {
@@ -48,10 +47,10 @@ class NetworkFlow {
   buildResidualGraph(): void {
     this.residualGraph.clear();
 
-    for (let [node, edges] of this.graph) {
+    for (const [node, edges] of this.graph) {
       if (!this.residualGraph.has(node)) this.residualGraph.set(node, []);
 
-      for (let edge of edges) {
+      for (const edge of edges) {
         // Forward edge: remaining capacity
         if (edge.capacity - edge.flow > 0) {
           this.residualGraph.get(node)!.push({
@@ -89,7 +88,7 @@ class NetworkFlow {
       }
 
       if (this.residualGraph.has(node)) {
-        for (let edge of this.residualGraph.get(node)!) {
+        for (const edge of this.residualGraph.get(node)!) {
           if (!visited.has(edge.to)) {
             visited.add(edge.to);
             queue.push({
@@ -114,10 +113,10 @@ class NetworkFlow {
       if (!path) break;
 
       // Find bottleneck capacity
-      let pathFlow = Math.min(...path.map((edge) => edge.capacity));
+      const pathFlow = Math.min(...path.map((edge) => edge.capacity));
 
       // Update flows
-      for (let edge of path) {
+      for (const edge of path) {
         if (edge.isReverse) {
           edge.originalEdge.flow -= pathFlow;
         } else {
@@ -167,15 +166,15 @@ export class TAAssignmentSolver {
 
   buildNetwork(): void {
     // Layer 1: Source to TAs (infinite capacity)
-    for (let ta of this.tas) {
+    for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
       this.flow.addEdge(this.source, taNode, Number.MAX_SAFE_INTEGER);
     }
 
     // Layer 2: TAs to Students (capacity 1, only if no conflict)
-    for (let ta of this.tas) {
+    for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
-      for (let submission of this.submissions) {
+      for (const submission of this.submissions) {
         const studentNode = this.studentPrefix + submission.id;
         if (!this.hasConflict(ta, submission)) {
           this.flow.addEdge(taNode, studentNode, 1);
@@ -184,7 +183,7 @@ export class TAAssignmentSolver {
     }
 
     // Layer 3: Students to Sink (infinite capacity)
-    for (let submission of this.submissions) {
+    for (const submission of this.submissions) {
       const studentNode = this.studentPrefix + submission.id;
       this.flow.addEdge(studentNode, this.sink, Number.MAX_SAFE_INTEGER);
     }
@@ -209,14 +208,14 @@ export class TAAssignmentSolver {
     this.flow = new NetworkFlow(); // Reset
 
     // Rebuild with TA capacity constraints
-    for (let ta of this.tas) {
+    for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
       this.flow.addEdge(this.source, taNode, this.maxAssignments);
     }
 
-    for (let ta of this.tas) {
+    for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
-      for (let submission of this.submissions) {
+      for (const submission of this.submissions) {
         const studentNode = this.studentPrefix + submission.id;
         if (!this.hasConflict(ta, submission)) {
           this.flow.addEdge(taNode, studentNode, 1);
@@ -224,7 +223,7 @@ export class TAAssignmentSolver {
       }
     }
 
-    for (let submission of this.submissions) {
+    for (const submission of this.submissions) {
       const studentNode = this.studentPrefix + submission.id;
       this.flow.addEdge(studentNode, this.sink, 1); // Each student needs exactly 1 TA
     }
@@ -258,18 +257,18 @@ export class TAAssignmentSolver {
     const assignments = new Map<UserRoleWithConflicts, SubmissionWithGrading[]>();
 
     // Initialize assignment map
-    for (let ta of this.tas) {
+    for (const ta of this.tas) {
       assignments.set(ta, []);
     }
 
     // Extract from flow graph
-    for (let [node, edges] of this.flow.graph) {
+    for (const [node, edges] of this.flow.graph) {
       if (node.startsWith(this.taPrefix)) {
         const taId = node.substring(this.taPrefix.length);
         const ta = this.tas.find((t) => t.private_profile_id === taId);
 
         if (ta) {
-          for (let edge of edges) {
+          for (const edge of edges) {
             if (edge.to.startsWith(this.studentPrefix) && edge.flow > 0) {
               const submissionId = edge.to.substring(this.studentPrefix.length);
               const submission = this.submissions.find((s) => s.id.toString() === submissionId);
@@ -287,7 +286,7 @@ export class TAAssignmentSolver {
   }
 
   verifyBalance(assignments: Map<UserRoleWithConflicts, SubmissionWithGrading[]>): boolean {
-    for (let [ta, students] of assignments) {
+    for (const [ta, students] of assignments) {
       const count = students.length;
       if (count < this.minAssignments || count > this.maxAssignments) {
         console.warn(

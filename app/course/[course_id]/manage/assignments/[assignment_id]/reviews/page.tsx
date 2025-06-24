@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Card, Checkbox, Container, Dialog, Field, Fieldset, Flex, HStack, Heading, Text } from "@chakra-ui/react";
+import { Container, Dialog, Field, Fieldset, Flex, HStack, Heading, Input, Text } from "@chakra-ui/react";
 import { useCreate, useInvalidate, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { FaPlus } from "react-icons/fa";
@@ -13,9 +13,10 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Select } from "chakra-react-select";
 import { useEffect, useState } from "react";
 import { Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { LuCheck } from "react-icons/lu";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import { AssignmentResult, TAAssignmentSolver } from "./assignmentCalculator";
+import { useCourse } from "@/hooks/useAuthState";
+import DragAndDropExample from "./dragAndDrop";
 
 type RubricRow = Database["public"]["Tables"]["rubrics"]["Row"];
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -29,12 +30,15 @@ export type UserRoleWithConflicts = UserRole & {
   };
 };
 
-type DraftReviewAssignment = {
+export type DraftReviewAssignment = {
   assignee_profile_id: string;
   assignee_name: string;
   submission_id: number;
-  submission_owner: string;
+  submission_owner: UserRoleWithProfileName;
+  submission_review_id: number;
 };
+
+type UserRoleWithProfileName = UserRole & { profiles: { name: string } };
 
 // Main Page Component
 export default function ReviewAssignmentsPage() {
@@ -64,7 +68,7 @@ export default function ReviewAssignmentsPage() {
           }}
           variant="solid"
         >
-          <FaPlus style={{ marginRight: "8px" }} /> Assign Reviews
+          <FaPlus style={{ marginRight: "8px" }} /> Assign Single Review
         </Button>
       </HStack>
 
@@ -95,9 +99,12 @@ export function ReviewAssignmentBulkModal() {
   const { course_id, assignment_id } = useParams();
   const [selectedRubric, setSelectedRubric] = useState<RubricRow>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
-  const [role, setRole] = useState<String>();
-  const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>();
-const {mutateAsync} = useCreate();
+  const [role, setRole] = useState<string>();
+  const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>([]);
+  const [dueDate, setDueDate] = useState<string>("");
+  const { mutateAsync } = useCreate();
+  const course = useCourse();
+
   const { data: gradingRubrics } = useList<RubricRow>({
     resource: "rubrics",
     meta: {
@@ -107,7 +114,10 @@ const {mutateAsync} = useCreate();
       { field: "class_id", operator: "eq", value: course_id },
       { field: "assignment_id", operator: "eq", value: assignment_id },
       { field: "review_round", operator: "ne", value: "self-review" }
-    ]
+    ],
+    queryOptions: {
+      enabled: !!course_id && !!assignment_id
+    }
   });
 
   const { data: activeSubmissions } = useList<SubmissionWithGrading>({
@@ -140,7 +150,7 @@ const {mutateAsync} = useCreate();
     ]
   });
 
-  const { data: i } = useList<UserRole & { profiles: { name: string } }>({
+  const { data: userRolesWithProfiles } = useList<UserRoleWithProfileName>({
     resource: "user_roles",
     meta: {
       select: "*, profiles!user_roles_private_profile_id_fkey(name)"
@@ -148,38 +158,31 @@ const {mutateAsync} = useCreate();
     filters: [{ field: "class_id", operator: "eq", value: course_id }]
   });
 
+  /**
+   * Submissions to do haven't been assigned for this rubric and there's no completed submission review for it either.
+   */
   useEffect(() => {
-    console.log(activeSubmissions);
     if (selectedRubric && activeSubmissions) {
-      console.log("setting");
       setSubmissionsToDo(
         activeSubmissions.data.filter((sub) => {
-          return sub.review_assignments.length === 0;
+          return (
+            sub.review_assignments.length === 0 &&
+            !sub.submission_reviews.find((review) => {
+              return review.completed_at !== null && review.rubric_id === selectedRubric.id;
+            })
+          );
         })
       );
     }
   }, [selectedRubric, activeSubmissions]);
 
   /**
-   * options for assigning grading
-   * - split evenly between graders OR graders and instructors OR instructors
-   * - split between any of these combinations, but consider how many submissions they've already graded (for the course or for this assignment?)
-   * - some way to manually reallocate the numbers -> validation to ensure the total staged to be assigned is the right number at the end of these edits
-   * - should take grading conflicts into consideration
-   * - option to set a deadline for when grading should be completed by -> make sure instructor can change this in case TAs are late
-   *
-   * - eventually, be able to reallocate one person's grading in case of an emergency
-   *
-   * q? how might these be affected by late submissions
-   *
-   * select field: assign grading to : graders, instructors, instructors and graders
-   * checkbox field: consider how many submissions they've graded so far when splitting
-   * generate button: splits people to be assigned to each of the graders/instructors which were selected, considering grading conflicts
-   * preview: once generated, show each ta/instructor and their tentative assigned assignments to grade, along with the number of people in parentheses
-   * next to their name
-   * to edit -- potentially drag the students between tas? -> dnd - kit
-   *
-   *
+   * todo:
+   * - schedule assign setting => release date
+   * - consider previous splitting ?
+   * - error handling throughout
+   * - due date
+   * - better ui with more space for dragging across people
    */
 
   const generateReviews = () => {
@@ -188,66 +191,97 @@ const {mutateAsync} = useCreate();
         return staff.role === "grader";
       } else if (role === "instructors") {
         return staff.role === "instructor";
-      } else if (role === "instructors and graders") {
+      } else if (role == "instructors and graders") {
         return staff.role === "grader" || staff.role === "instructor";
       } else {
         return false;
       }
     });
-    if (!courseStaff || !submissionsToDo) {
+    if (!users || !submissionsToDo) {
       return;
     }
-    const solver = new TAAssignmentSolver(courseStaff.data, submissionsToDo);
+    const solver = new TAAssignmentSolver(users, submissionsToDo);
     const result = solver.solve();
-    console.log(result);
-    // transfer result to review assignment form
     toReview(result);
   };
 
+  /**
+   * Translates the result of the assignment calculator to a set of draft reviews with all the information necessary to then
+   * assign the reviews.
+   * @param result the result of the assignment calculator
+   */
   const toReview = (result: AssignmentResult) => {
     const reviewAssignments: DraftReviewAssignment[] = [];
     result.assignments?.entries().forEach((entry) => {
       const user: UserRoleWithConflicts = entry[0];
       const assignees: SubmissionWithGrading[] = entry[1];
       assignees.forEach((assignee) => {
-        const grader = i?.data.find((item) => {
+        const grader = userRolesWithProfiles?.data.find((item) => {
           return item.private_profile_id === user.private_profile_id;
         })?.profiles;
-        console.log(user);
-        const to = i?.data.find((item) => {
+        const to = userRolesWithProfiles?.data.find((item) => {
           return item.private_profile_id === assignee.profile_id;
-        })?.profiles;
+        });
+        if (!to) {
+          return;
+        }
         reviewAssignments.push({
           assignee_profile_id: user.private_profile_id,
           assignee_name: grader?.name ?? "",
           submission_id: assignee.id,
-          submission_owner: to?.name ?? ""
+          submission_owner: to,
+          submission_review_id: assignee.submission_reviews[0].id // todo error handling if not one
         });
       });
     });
     setDraftReviews(reviewAssignments);
   };
 
-  const assign = () => {
-    draftReviews?.forEach((review) => {
-      mutateAsync({
-        resource:"review_assignments",
-        values: {
-          assignee_profile_id:review.assignee_profile_id, // todo add due date
-          submission_id:review.submission_id,
-          assignment_id: assignment_id,
-          rubric_id:selectedRubric?.id, // todo handle if null
-          class_id:course_id,
-          submission_review_id:1 // TODO get actual
-        }
-      }) // todo clear afterwards
-    })
-  }
+  /**
+   * Creates the review assignments based on the draft reviews.
+   */
+  const assign = async () => {
+    if (!selectedRubric || !course_id) {
+      console.log("no selected rubric or course");
+      return;
+    }
+    const reviewAssignments: Omit<
+      ReviewAssignmentRow,
+      "id" | "created_at" | "max_allowable_late_tokens" | "release_date"
+    >[] = [];
+    for (const review of draftReviews ?? []) {
+      reviewAssignments.push({
+        assignee_profile_id: review.assignee_profile_id,
+        submission_id: review.submission_id,
+        assignment_id: Number(assignment_id),
+        rubric_id: selectedRubric.id,
+        class_id: Number(course_id),
+        submission_review_id: review.submission_review_id,
+        due_date: new Date().toISOString() // to do fix date including time zone handling
+      });
+    }
+    await mutateAsync({
+      resource: "review_assignments",
+      values: reviewAssignments
+    });
+    clearStateData();
+  };
+
+  /**
+   * Clear state data so the modal is fresh when reopened
+   */
+  const clearStateData = () => {
+    setSelectedRubric(undefined);
+    setSubmissionsToDo(undefined);
+    setRole(undefined);
+    setDraftReviews([]);
+    setDueDate("");
+  };
 
   return (
     <Dialog.Root size="lg" placement={"center"}>
       <Dialog.Trigger asChild>
-        <Button>Assign Grading</Button>
+        <Button>Open</Button>
       </Dialog.Trigger>
       <Dialog.Positioner>
         <Dialog.Backdrop />
@@ -276,43 +310,39 @@ const {mutateAsync} = useCreate();
                   <Select
                     onChange={(e) => setRole(e?.value)}
                     options={[
-                      { label: "Instructors", value: "instuctors" },
+                      { label: "Instructors", value: "instructors" },
                       { label: "Graders", value: "graders" },
-                      { label: "Instructors and graders", value: "instuctors and graders" }
+                      { label: "Instructors and graders", value: "instructors and graders" }
                     ]}
                   />
                 </Field.Root>
                 <Field.Root>
-                  <Flex gap="5">
-                    <Checkbox.Root onCheckedChange={(e) => {}}>
-                      <Checkbox.Control>
-                        <LuCheck />
-                      </Checkbox.Control>
+                  <Field.Label>Due Date ({course.classes.time_zone})</Field.Label>
+                  <Input
+                    type="datetime-local"
+                    value={(() => {
+                      const fieldValue = dueDate;
 
-                      <Checkbox.HiddenInput />
-                    </Checkbox.Root>
-                    <Field.Label>
-                      Consider the number of submissions each person has graded already when splitting
-                    </Field.Label>
-                  </Flex>
+                      return fieldValue.toString();
+                    })()}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
                 </Field.Root>
+
                 <Button onClick={generateReviews}>Generate Reviews</Button>
               </Fieldset.Content>
             </Fieldset.Root>
             <Flex flexDir={"column"} gap="3" padding="2">
-              {draftReviews?.map((review, key) => {
-                return (
-                  <Card.Root key={key} padding="2">
-                    <Box>Grader: {review.assignee_name}</Box>
-                    <Box>Submission: {review.submission_owner}</Box>
-                  </Card.Root>
-                );
-              })}
+              <DragAndDropExample
+                draftReviews={draftReviews}
+                setDraftReviews={setDraftReviews}
+                courseStaffWithConflicts={courseStaff?.data}
+              />
             </Flex>
             <Dialog.Footer>
-              <Button onClick={assign}>
-                Assign
-              </Button>
+              <Dialog.CloseTrigger asChild>
+                <Button onClick={() => assign()}>Assign</Button>
+              </Dialog.CloseTrigger>
             </Dialog.Footer>
           </Dialog.Body>
         </Dialog.Content>
