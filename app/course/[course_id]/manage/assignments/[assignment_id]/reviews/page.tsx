@@ -16,6 +16,7 @@ import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-co
 import { AssignmentResult, TAAssignmentSolver } from "./assignmentCalculator";
 import { useCourse } from "@/hooks/useAuthState";
 import DragAndDropExample from "./dragAndDrop";
+import { TZDate } from "@date-fns/tz";
 
 export type SubmissionWithGrading = Submission & {
   submission_reviews: SubmissionReview[];
@@ -226,7 +227,6 @@ export function ReviewAssignmentAccordion() {
    */
   const generateReviews = () => {
     const users = selectedGraders();
-    console.log(users);
     if (users.length === 0) {
       toaster.create({
         title: `Warning: no ${role}`,
@@ -333,7 +333,7 @@ export function ReviewAssignmentAccordion() {
         rubric_id: selectedRubric.id,
         class_id: Number(course_id),
         submission_review_id: submissionReviewId,
-        due_date: new Date(dueDate).toISOString()
+        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
       });
     }
     await mutateAsync({
@@ -403,8 +403,43 @@ export function ReviewAssignmentAccordion() {
           />
         </Field.Root>
         <Field.Root>
-          <Field.Label>Due Date ({course.classes.time_zone})</Field.Label>
-          <Input type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          <Field.Label>Due Date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
+          <Input
+            type="datetime-local"
+            value={
+              dueDate
+                ? new Date(dueDate)
+                    .toLocaleString("sv-SE", {
+                      timeZone: course.classes.time_zone ?? "America/New_York"
+                    })
+                    .replace(" ", "T")
+                : ""
+            }
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value) {
+                // Don't convert the input - treat it as native course timezone
+                const [date, time] = value.split("T");
+                const [year, month, day] = date.split("-");
+                const [hour, minute] = time.split(":");
+
+                // Create TZDate with these exact values in course timezone
+                const tzDate = new TZDate(
+                  parseInt(year),
+                  parseInt(month) - 1,
+                  parseInt(day),
+                  parseInt(hour),
+                  parseInt(minute),
+                  0,
+                  0,
+                  course.classes.time_zone ?? "America/New_York"
+                );
+                setDueDate(tzDate.toString());
+              } else {
+                setDueDate("");
+              }
+            }}
+          />
         </Field.Root>
         <Button
           onClick={generateReviews}
@@ -485,11 +520,3 @@ export function ReviewAssignmentAccordion() {
     </>
   );
 }
-
-/**
- * todo:
- * - schedule assign setting => release date
- * - consider previous splitting?
- * - manual timezone testing
- * - manual group testing
- */
