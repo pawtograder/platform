@@ -15,7 +15,7 @@ import {
 } from "@dnd-kit/core";
 import { Box, VStack, HStack, Text, Badge, Container, Card, Flex } from "@chakra-ui/react";
 import { CSS } from "@dnd-kit/utilities";
-import { DraftReviewAssignment, UserRoleWithConflicts } from "./page";
+import { DraftReviewAssignment, UserRoleWithConflictsAndName } from "./page";
 
 interface DraggableItemProps {
   item: DraftReviewAssignment;
@@ -32,7 +32,7 @@ interface DroppableAreaProps {
 // Draggable Item Component
 function DraggableItem({ item }: DraggableItemProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: item.submission_id
+    id: item.submission.id
   });
 
   const style = {
@@ -56,7 +56,7 @@ function DraggableItem({ item }: DraggableItemProps) {
     >
       <Card.Body>
         <HStack gap={3}>
-          <Text flex={1}>{item.submission_owner.profiles.name}</Text>
+          <Text flex={1}>{item.submitter.profiles.name}</Text>
         </HStack>
       </Card.Body>
     </Card.Root>
@@ -88,7 +88,8 @@ function DroppableArea({ id, title, items, children, hasConflict }: Omit<Droppab
     <Card.Root
       ref={setNodeRef}
       p={4}
-      width="75%"
+      size="sm"
+      width="xs"
       borderRadius="lg"
       border="2px dashed"
       borderColor={getBorderColor()}
@@ -121,15 +122,19 @@ export default function DragAndDropExample({
 }: {
   draftReviews: DraftReviewAssignment[];
   setDraftReviews: Dispatch<SetStateAction<DraftReviewAssignment[]>>;
-  courseStaffWithConflicts?: UserRoleWithConflicts[];
+  courseStaffWithConflicts: UserRoleWithConflictsAndName[];
 }) {
   // Fix 1: Create stable categories from courseStaffWithConflicts instead of draftReviews
-  const categories: { id: string; title: string }[] = Array.from(
+  const categories: { id: string; title: string }[] = courseStaffWithConflicts?.map((staff) => {
+    return { id: staff.private_profile_id, title: staff.profiles.name };
+  });
+
+  Array.from(
     draftReviews
       .reduce((map, item) => {
-        map.set(item.assignee_profile_id, {
-          id: item.assignee_profile_id,
-          title: item.assignee_name
+        map.set(item.assignee.private_profile_id, {
+          id: item.assignee.private_profile_id,
+          title: item.assignee.profiles.name
         });
         return map;
       }, new Map<string, { id: string; title: string }>())
@@ -149,22 +154,19 @@ export default function DragAndDropExample({
     setActiveId(null);
 
     if (over && active.id !== over.id) {
-      const draggedItem = draftReviews.find((item) => item.submission_id === active.id);
-
-      // Check for conflict before allowing the drop
-      if (hasConflict(over.id, draggedItem?.submission_owner.private_profile_id)) {
+      const draggedItem = draftReviews.find((item) => item.submission.id === active.id);
+      if (hasConflict(over.id, draggedItem)) {
         return false;
       }
-
       if (draggedItem && categories.some((cat) => cat.id === over.id)) {
         setDraftReviews(
           draftReviews.map((item) =>
-            item.submission_id === active.id
+            item.submission.id === active.id
               ? {
                   ...item,
-                  assignee_profile_id: over.id as DraftReviewAssignment["assignee_profile_id"],
-                  // Fix 1: Update assignee_name to match the new assignee
-                  assignee_name: categories.find((cat) => cat.id === over.id)?.title || item.assignee_name
+                  assignee: courseStaffWithConflicts.find(
+                    (staff) => staff.private_profile_id == over?.id
+                  ) as DraftReviewAssignment["assignee"] // HERE
                 }
               : item
           )
@@ -173,17 +175,24 @@ export default function DragAndDropExample({
     }
   }
 
-  function hasConflict(over_id: UniqueIdentifier, dragged_item_profile_id?: string) {
+  function hasConflict(over_id: UniqueIdentifier, draggedItem?: DraftReviewAssignment) {
     return !!courseStaffWithConflicts
       ?.find((staff) => staff.private_profile_id === over_id)
-      ?.profiles.grading_conflicts.find((conflict) => conflict.student_profile_id === dragged_item_profile_id);
+      ?.profiles.grading_conflicts.find((conflict) => {
+        return (
+          conflict.student_profile_id === draggedItem?.submitter.private_profile_id ||
+          draggedItem?.submission.assignment_groups?.assignment_groups_members
+            .map((member) => member.profile_id)
+            .includes(conflict.student_profile_id)
+        );
+      });
   }
 
   const getItemsByAssignee = (assignee_profile_id: string): DraftReviewAssignment[] => {
-    return draftReviews.filter((item) => item.assignee_profile_id === assignee_profile_id);
+    return draftReviews.filter((item) => item.assignee.private_profile_id === assignee_profile_id);
   };
 
-  const activeItem = activeId ? draftReviews.find((item) => item.submission_id === activeId) : null;
+  const activeItem = activeId ? draftReviews.find((item) => item.submission.id === activeId) : null;
 
   return (
     <Container maxW="6xl" py={8}>
@@ -194,29 +203,30 @@ export default function DragAndDropExample({
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <Flex flexDir={"column"} gap={6}>
-            {categories.map((category) => {
-              // Fix 2: Check if there's a conflict for this droppable area
-              const draggedItem = activeItem;
-              const hasConflictForThisArea = draggedItem
-                ? hasConflict(category.id, draggedItem.submission_owner.private_profile_id)
-                : false;
+          <Flex gap={6}>
+            {categories
+              .sort((a, b) => {
+                return a.title.localeCompare(b.title);
+              })
+              .map((category) => {
+                const draggedItem = activeItem;
+                const hasConflictForThisArea = draggedItem ? hasConflict(category.id, draggedItem) : false;
 
-              return (
-                <Box key={category.id} flex={1}>
-                  <DroppableArea
-                    id={category.id}
-                    title={category.title}
-                    items={getItemsByAssignee(category.id)}
-                    hasConflict={hasConflictForThisArea}
-                  >
-                    {getItemsByAssignee(category.id).map((item) => (
-                      <DraggableItem key={item.submission_id} item={item} />
-                    ))}
-                  </DroppableArea>
-                </Box>
-              );
-            })}
+                return (
+                  <Box key={category.id}>
+                    <DroppableArea
+                      id={category.id}
+                      title={category.title}
+                      items={getItemsByAssignee(category.id)}
+                      hasConflict={hasConflictForThisArea}
+                    >
+                      {getItemsByAssignee(category.id).map((item) => (
+                        <DraggableItem key={item.submission.id} item={item} />
+                      ))}
+                    </DroppableArea>
+                  </Box>
+                );
+              })}
           </Flex>
 
           <DragOverlay>{activeItem ? <DraggableItem item={activeItem} /> : null}</DragOverlay>

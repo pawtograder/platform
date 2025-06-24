@@ -1,4 +1,4 @@
-import { SubmissionWithGrading, UserRoleWithConflicts } from "./page";
+import { SubmissionWithGrading, UserRoleWithConflictsAndName } from "./page";
 
 interface FlowEdge {
   to: string;
@@ -21,7 +21,7 @@ interface PathNode {
 export interface AssignmentResult {
   success: boolean;
   error?: string;
-  assignments: Map<UserRoleWithConflicts, SubmissionWithGrading[]> | null;
+  assignments: Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]> | null;
   minAssignments?: number;
   maxAssignments?: number;
   totalFlow?: number;
@@ -132,7 +132,7 @@ class NetworkFlow {
 }
 
 export class TAAssignmentSolver {
-  tas: UserRoleWithConflicts[];
+  tas: UserRoleWithConflictsAndName[];
   submissions: SubmissionWithGrading[];
   flow: NetworkFlow;
   source: string;
@@ -142,7 +142,7 @@ export class TAAssignmentSolver {
   minAssignments: number;
   maxAssignments: number;
 
-  constructor(tas: UserRoleWithConflicts[], submissions: SubmissionWithGrading[]) {
+  constructor(tas: UserRoleWithConflictsAndName[], submissions: SubmissionWithGrading[]) {
     this.tas = tas;
     this.submissions = submissions;
     this.flow = new NetworkFlow();
@@ -156,12 +156,17 @@ export class TAAssignmentSolver {
     this.maxAssignments = Math.ceil(submissions.length / tas.length);
   }
 
-  hasConflict(ta: UserRoleWithConflicts, submission: SubmissionWithGrading): boolean {
-    return ta.profiles?.grading_conflicts.find((conflict) => {
-      return conflict.student_profile_id === submission.profile_id; // add group handling here
-    })
-      ? true
-      : false;
+  hasConflict(ta: UserRoleWithConflictsAndName, submission: SubmissionWithGrading): boolean {
+    return !!ta.profiles?.grading_conflicts.find((conflict) => {
+      return (
+        conflict.student_profile_id === submission.profile_id ||
+        submission.assignment_groups?.assignment_groups_members
+          .map((member) => {
+            return member.profile_id;
+          })
+          .includes(conflict.student_profile_id)
+      );
+    });
   }
 
   buildNetwork(): void {
@@ -253,8 +258,8 @@ export class TAAssignmentSolver {
     };
   }
 
-  extractAssignments(): Map<UserRoleWithConflicts, SubmissionWithGrading[]> {
-    const assignments = new Map<UserRoleWithConflicts, SubmissionWithGrading[]>();
+  extractAssignments(): Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]> {
+    const assignments = new Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]>();
 
     // Initialize assignment map
     for (const ta of this.tas) {
@@ -285,7 +290,7 @@ export class TAAssignmentSolver {
     return assignments;
   }
 
-  verifyBalance(assignments: Map<UserRoleWithConflicts, SubmissionWithGrading[]>): boolean {
+  verifyBalance(assignments: Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]>): boolean {
     for (const [ta, students] of assignments) {
       const count = students.length;
       if (count < this.minAssignments || count > this.maxAssignments) {
