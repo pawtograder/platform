@@ -29,7 +29,6 @@ interface DroppableAreaProps {
   hasConflict?: boolean;
 }
 
-// Draggable Item Component
 function DraggableItem({ item }: DraggableItemProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: item.submission.id
@@ -63,13 +62,11 @@ function DraggableItem({ item }: DraggableItemProps) {
   );
 }
 
-// Droppable Area Component
 function DroppableArea({ id, title, items, children, hasConflict }: Omit<DroppableAreaProps, "isOver">) {
   const { isOver, setNodeRef } = useDroppable({
     id
   });
 
-  // Determine border color based on conflict and hover state
   const getBorderColor = () => {
     if (isOver) {
       return hasConflict ? "red.400" : "green.400";
@@ -114,7 +111,6 @@ function DroppableArea({ id, title, items, children, hasConflict }: Omit<Droppab
   );
 }
 
-// Main Component
 export default function DragAndDropExample({
   draftReviews,
   setDraftReviews,
@@ -124,7 +120,6 @@ export default function DragAndDropExample({
   setDraftReviews: Dispatch<SetStateAction<DraftReviewAssignment[]>>;
   courseStaffWithConflicts: UserRoleWithConflictsAndName[];
 }) {
-  // Fix 1: Create stable categories from courseStaffWithConflicts instead of draftReviews
   const categories: { id: string; title: string }[] = courseStaffWithConflicts?.map((staff) => {
     return { id: staff.private_profile_id, title: staff.profiles.name };
   });

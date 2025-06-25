@@ -104,12 +104,14 @@ export function ReviewAssignmentAccordion() {
   const [role, setRole] = useState<string>();
   const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>([]);
   const [dueDate, setDueDate] = useState<string>("");
+  const [selectedUser, setSelectedUser] = useState<UserRoleWithConflictsAndName>();
+  const [currentSegment, setCurrentSegment] = useState<string>();
+
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
   const course = useCourse();
-  const [selectedUser, setSelectedUser] = useState<UserRoleWithConflictsAndName>();
   const invalidate = useInvalidate();
-  const [currentSegment, setCurrentSegment] = useState<string>();
+
   const { data: gradingRubrics } = useList<Rubric>({
     resource: "rubrics",
     meta: {
@@ -154,12 +156,10 @@ export function ReviewAssignmentAccordion() {
 
   function shuffle<T>(array: T[]): T[] {
     const shuffled = [...array];
-
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-
     return shuffled;
   }
 
@@ -172,7 +172,7 @@ export function ReviewAssignmentAccordion() {
   );
 
   /**
-   * Submissions to do haven't been assigned for this rubric and there's no completed submission review for it either.
+   * Populate submissions to do for assigning grading
    */
   useEffect(() => {
     if (selectedRubric && activeSubmissions && currentSegment === "assign grading") {
@@ -189,10 +189,17 @@ export function ReviewAssignmentAccordion() {
     }
   }, [selectedRubric, activeSubmissions]);
 
+  /**
+   * Populate submissions to do for reassigning grading
+   */
   useEffect(() => {
-    if (selectedUser && activeSubmissions && currentSegment === "reassign grading") {
-      const submissionsWithSelectedAssigned = activeSubmissions.data.filter((sub) =>
-        sub.review_assignments.map((assign) => assign.assignee_profile_id).includes(selectedUser.private_profile_id)
+    if (selectedUser && activeSubmissions && selectedRubric && currentSegment === "reassign grading") {
+      const submissionsWithSelectedAssigned = activeSubmissions.data.filter(
+        (sub) =>
+          !!sub.review_assignments.find(
+            (assign) =>
+              assign.assignee_profile_id === selectedUser.private_profile_id && assign.rubric_id === selectedRubric.id
+          )
       );
       const incompleteAssignments = submissionsWithSelectedAssigned.filter((sub) => {
         return !sub.submission_reviews.find((review) => {
@@ -225,7 +232,7 @@ export function ReviewAssignmentAccordion() {
   /**
    * Generates reviews based on the initial selected information and grading conflicts.
    */
-  const generateReviews = () => {
+  const generateReviews = useCallback(() => {
     const users = selectedGraders();
     if (users.length === 0) {
       toaster.create({
@@ -246,7 +253,7 @@ export function ReviewAssignmentAccordion() {
       toaster.error({ title: "Error drafting reviews", description: result.error });
     }
     toReview(result);
-  };
+  }, [submissionsToDo, toaster]);
 
   /**
    * Translates the result of the assignment calculator to a set of draft reviews with all the information necessary to then
@@ -279,7 +286,7 @@ export function ReviewAssignmentAccordion() {
       });
       setDraftReviews(reviewAssignments);
     },
-    [userRoles]
+    [userRoles, toaster]
   );
 
   /**
@@ -356,7 +363,7 @@ export function ReviewAssignmentAccordion() {
     setSelectedUser(undefined);
   }, []);
 
-  const clearIncompleteRolesForUser = async () => {
+  const clearIncompleteRolesForUser = useCallback(async () => {
     const valuesToDelete = submissionsToDo
       ?.flatMap((submission) => submission.review_assignments)
       .filter((review) => {
@@ -368,7 +375,7 @@ export function ReviewAssignmentAccordion() {
         id: value.id
       });
     }
-  };
+  }, [submissionsToDo, selectedUser]);
 
   /**
    * Fields used by both assign and reassign grading tabs
@@ -387,8 +394,10 @@ export function ReviewAssignmentAccordion() {
           />
         </Field.Root>
         <Text fontSize={"sm"}>
-          There are {submissionsToDo?.length ?? 0} active submissions that are unassigned and ungraded for this rubric
-          on this assignment.
+          {currentSegment === "assign grading"
+            ? `There are ${submissionsToDo?.length ?? 0} active submissions that are unassigned and ungraded for this rubric
+          on this assignment.`
+            : `There are ${submissionsToDo?.length ?? 0} active submissions assigned to ${selectedUser?.profiles.name ?? `[selected user]`} that are incomplete`}
         </Text>
         <Field.Root>
           <Field.Label>Select role to assign reviews to</Field.Label>
@@ -418,7 +427,7 @@ export function ReviewAssignmentAccordion() {
             onChange={(e) => {
               const value = e.target.value;
               if (value) {
-                // Don't convert the input - treat it as native course timezone
+                // Treat inputted date as course timezone regardless of user location
                 const [date, time] = value.split("T");
                 const [year, month, day] = date.split("-");
                 const [hour, minute] = time.split(":");
@@ -500,7 +509,7 @@ export function ReviewAssignmentAccordion() {
             <Fieldset.Root>
               <Fieldset.Content>
                 <Field.Root>
-                  <Field.Label>Select grader to reassign incomplete grading from</Field.Label>
+                  <Field.Label>Select grader whose remaining work you want to reassign</Field.Label>
                   <Select
                     value={{ label: selectedUser?.profiles.name, value: selectedUser }}
                     onChange={(e) => {
