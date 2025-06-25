@@ -12,6 +12,8 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import PersonName from "@/components/ui/person-name";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
+import { TZDate } from "@date-fns/tz";
+import { useCourse } from "@/hooks/useAuthState";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -46,6 +48,7 @@ interface ReviewsTableProps {
 
 export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAssignmentDeleted }: ReviewsTableProps) {
   const { mutate: deleteReviewAssignment } = useDelete();
+  const course = useCourse();
 
   const handleDelete = useCallback(
     (id: number) => {
@@ -187,11 +190,11 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       },
       {
         id: "due_date",
-        header: "Due Date",
+        header: `Due Date (${course.classes.time_zone ?? "America/New_York"})`,
         accessorKey: "due_date",
         cell: function render({ getValue }) {
           const dueDate = getValue<string>();
-          return dueDate ? format(new Date(dueDate), "P p") : "N/A"; // Added time with 'p'
+          return dueDate ? format(new TZDate(dueDate, course.classes.time_zone ?? "America/New_York"), "P p") : "N/A"; // Added time with 'p'
         }
       },
       {
