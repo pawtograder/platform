@@ -25,6 +25,7 @@ export interface AssignmentResult {
   minAssignments?: number;
   maxAssignments?: number;
   totalFlow?: number;
+  taCapacities?: Map<string, number>;
 }
 
 class NetworkFlow {
@@ -141,11 +142,22 @@ export class TAAssignmentSolver {
   studentPrefix: string;
   minAssignments: number;
   maxAssignments: number;
+  historicalWorkload: Map<string, number>;
+  workloadReductionFactor: number;
+  taCapacities: Map<string, number>;
 
-  constructor(tas: UserRoleWithConflictsAndName[], submissions: SubmissionWithGrading[]) {
+  constructor(
+    tas: UserRoleWithConflictsAndName[],
+    submissions: SubmissionWithGrading[],
+    historicalWorkload: Map<string, number> = new Map(),
+    workloadReductionFactor: number = 0.4
+  ) {
     this.tas = tas;
     this.submissions = submissions;
     this.flow = new NetworkFlow();
+    this.historicalWorkload = historicalWorkload;
+    this.workloadReductionFactor = workloadReductionFactor;
+    this.taCapacities = new Map();
 
     this.source = "SOURCE";
     this.sink = "SINK";
@@ -169,11 +181,41 @@ export class TAAssignmentSolver {
     });
   }
 
+  calculateTACapacity(taId: string): number {
+    const historicalCount = this.historicalWorkload.get(taId) || 0;
+    const reduction = Math.floor(historicalCount * this.workloadReductionFactor);
+    const adjustedCapacity = this.maxAssignments - reduction;
+
+    // Ensure minimum capacity of 1 and maximum of original maxAssignments
+    return Math.max(1, Math.min(adjustedCapacity, this.maxAssignments));
+  }
+
+  validateCapacityConstraints(): { isValid: boolean; error?: string } {
+    let totalCapacity = 0;
+
+    for (const ta of this.tas) {
+      const capacity = this.calculateTACapacity(ta.private_profile_id);
+      this.taCapacities.set(ta.private_profile_id, capacity);
+      totalCapacity += capacity;
+    }
+
+    if (totalCapacity < this.submissions.length) {
+      return {
+        isValid: false,
+        error: `Insufficient total capacity (${totalCapacity}) to handle all submissions (${this.submissions.length}). Consider reducing workload reduction factor.`
+      };
+    }
+
+    return { isValid: true };
+  }
+
   buildNetwork(): void {
-    // Layer 1: Source to TAs (infinite capacity)
+    // Layer 1: Source to TAs (with adjusted capacity based on historical workload)
     for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
-      this.flow.addEdge(this.source, taNode, Number.MAX_SAFE_INTEGER);
+      const capacity = this.calculateTACapacity(ta.private_profile_id);
+      this.taCapacities.set(ta.private_profile_id, capacity);
+      this.flow.addEdge(this.source, taNode, capacity);
     }
 
     // Layer 2: TAs to Students (capacity 1, only if no conflict)
@@ -187,14 +229,25 @@ export class TAAssignmentSolver {
       }
     }
 
-    // Layer 3: Students to Sink (infinite capacity)
+    // Layer 3: Students to Sink (capacity 1 - each student needs exactly 1 TA)
     for (const submission of this.submissions) {
       const studentNode = this.studentPrefix + submission.id;
-      this.flow.addEdge(studentNode, this.sink, Number.MAX_SAFE_INTEGER);
+      this.flow.addEdge(studentNode, this.sink, 1);
     }
   }
 
   solve(): AssignmentResult {
+    // Validate capacity constraints before building network
+    const validation = this.validateCapacityConstraints();
+    if (!validation.isValid) {
+      return {
+        success: false,
+        error: validation.error,
+        assignments: null,
+        taCapacities: this.taCapacities
+      };
+    }
+
     this.buildNetwork();
 
     // First, find maximum possible assignment
@@ -204,7 +257,8 @@ export class TAAssignmentSolver {
       return {
         success: false,
         error: `Cannot assign all students. Maximum possible assignments: ${maxPossibleFlow}`,
-        assignments: null
+        assignments: null,
+        taCapacities: this.taCapacities
       };
     }
 
@@ -215,7 +269,8 @@ export class TAAssignmentSolver {
     // Rebuild with TA capacity constraints
     for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
-      this.flow.addEdge(this.source, taNode, this.maxAssignments);
+      const capacity = this.taCapacities.get(ta.private_profile_id)!;
+      this.flow.addEdge(this.source, taNode, capacity);
     }
 
     for (const ta of this.tas) {
@@ -239,7 +294,8 @@ export class TAAssignmentSolver {
       return {
         success: false,
         error: `Cannot create balanced assignment. Achieved flow: ${finalFlow}`,
-        assignments: null
+        assignments: null,
+        taCapacities: this.taCapacities
       };
     }
 
@@ -254,7 +310,8 @@ export class TAAssignmentSolver {
       assignments: assignments,
       minAssignments: this.minAssignments,
       maxAssignments: this.maxAssignments,
-      totalFlow: finalFlow
+      totalFlow: finalFlow,
+      taCapacities: this.taCapacities
     };
   }
 
@@ -293,9 +350,16 @@ export class TAAssignmentSolver {
   verifyBalance(assignments: Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]>): boolean {
     for (const [ta, students] of assignments) {
       const count = students.length;
-      if (count < this.minAssignments || count > this.maxAssignments) {
+      const expectedCapacity = this.taCapacities.get(ta.private_profile_id) || this.maxAssignments;
+
+      // For TAs with reduced capacity, we expect them to be at or near their capacity
+      // For TAs with normal capacity, we use the original min/max range
+      const minExpected = Math.min(this.minAssignments, expectedCapacity);
+      const maxExpected = expectedCapacity;
+
+      if (count < minExpected || count > maxExpected) {
         console.warn(
-          `TA ${ta.private_profile_id} has ${count} assignments (expected ${this.minAssignments}-${this.maxAssignments})`
+          `TA ${ta.private_profile_id} has ${count} assignments (expected ${minExpected}-${maxExpected}, capacity: ${expectedCapacity})`
         );
         return false;
       }
