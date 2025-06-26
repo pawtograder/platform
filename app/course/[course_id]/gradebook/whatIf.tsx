@@ -7,7 +7,6 @@ import {
   useGradebookColumnStudent,
   useGradebookController,
   useLinkToAssignment,
-  useReferencedContent,
   useSubmissionIDForColumn
 } from "@/hooks/useGradebook";
 import {
@@ -34,11 +33,11 @@ import {
 } from "@chakra-ui/react";
 
 import { Alert } from "@/components/ui/alert";
+import pluralize from "pluralize";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaExclamationTriangle, FaMagic } from "react-icons/fa";
 import { FaPencil } from "react-icons/fa6";
 import { LuChevronDown, LuChevronRight, LuExternalLink } from "react-icons/lu";
-import pluralize from "pluralize";
 
 function WhatIfScoreCell({
   column,

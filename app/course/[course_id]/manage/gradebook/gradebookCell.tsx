@@ -32,7 +32,7 @@ import { useUpdate } from "@refinedev/core";
 import { memo, useEffect, useId, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaRobot } from "react-icons/fa6";
-import { LuCalculator, LuExternalLink } from "react-icons/lu";
+import { LuCalculator } from "react-icons/lu";
 
 export function OverrideScoreForm({
   studentGradebookColumn,
