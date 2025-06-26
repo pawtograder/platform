@@ -22,7 +22,7 @@ const ProtectedLayout = async ({
         <DynamicCourseNav />
         {/* <SidebarContent courseID={Number.parseInt(course_id)} /> */}
         {/* mobilenav */}
-        <Box pt="0" pl="4" pr="4">
+        <Box pt="0" ml="0" mr="0">
           {children}
         </Box>
       </CourseControllerProvider>

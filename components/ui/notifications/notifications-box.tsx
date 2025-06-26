@@ -1,5 +1,6 @@
+import { Tooltip } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
-import { Box, IconButton, Badge, Popover, VStack, Portal } from "@chakra-ui/react";
+import { Badge, Box, IconButton, Popover, Portal, VStack } from "@chakra-ui/react";
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser from "./notification-teaser";
 
@@ -10,16 +11,18 @@ export default function NotificationsBox() {
     <Box>
       <Popover.Root>
         <Popover.Trigger asChild>
-          <IconButton variant="outline" colorPalette="gray" size="sm">
-            {unreadCount > 0 && (
-              <Box position="absolute" top="0" right="0" transform="translate(50%,-50%)">
-                <Badge variant="solid" colorPalette="blue" size="xs">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </Badge>
-              </Box>
-            )}
-            <HiOutlineInbox width={5} height={5} />
-          </IconButton>
+          <Tooltip content="Notifications" showArrow>
+            <IconButton variant="outline" colorPalette="gray" size="sm">
+              {unreadCount > 0 && (
+                <Box position="absolute" top="0" right="0" transform="translate(50%,-50%)">
+                  <Badge variant="solid" colorPalette="blue" size="xs">
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </Badge>
+                </Box>
+              )}
+              <HiOutlineInbox width={5} height={5} />
+            </IconButton>
+          </Tooltip>
         </Popover.Trigger>
         <Portal>
           <Popover.Positioner>

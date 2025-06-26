@@ -1,6 +1,13 @@
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database, Json } from "./SupabaseTypes";
 export type { Json };
+
+export type GradebookColumnExternalData = {
+  source: "csv";
+  fileName: string;
+  date: string;
+  creator: string;
+};
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<
@@ -84,6 +91,13 @@ export type UserRole = GetResult<
   "user_roles",
   Database["public"]["Tables"]["user_roles"]["Relationships"],
   "*"
+>;
+export type UserRoleWithUser = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["user_roles"]["Row"],
+  "user_roles",
+  Database["public"]["Tables"]["user_roles"]["Relationships"],
+  "*, users(*)"
 >;
 
 export type UserRoleWithPrivateProfileAndUser = GetResult<
@@ -580,6 +594,32 @@ export type EmailDistributionItem = GetResult<
   Database["public"]["Tables"]["email_distribution_item"]["Relationships"],
   "*"
 >;
+
+export type GradebookColumnDependencies = {
+  assignments?: int[];
+  gradebook_columns?: int[];
+};
+export type GradebookWithAllData = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["gradebooks"]["Row"],
+  "gradebooks",
+  Database["public"]["Tables"]["gradebooks"]["Relationships"],
+  "*, gradebook_columns!gradebook_columns_gradebook_id_fkey(*, gradebook_column_students(*))"
+>;
+
+type _GradebookColumnWithEntries = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["gradebook_columns"]["Row"],
+  "gradebook_columns",
+  Database["public"]["Tables"]["gradebook_columns"]["Relationships"],
+  "*, gradebook_column_students(*)"
+>;
+export type GradebookColumnWithEntries = Omit<_GradebookColumnWithEntries, "dependencies"> & {
+  dependencies: GradebookColumnDependencies | null;
+};
+export type Gradebook = Database["public"]["Tables"]["gradebooks"]["Row"];
+export type GradebookColumn = Database["public"]["Tables"]["gradebook_columns"]["Row"];
+export type GradebookColumnStudent = Database["public"]["Tables"]["gradebook_column_students"]["Row"];
 
 /**
  * Flashcard Deck Types
