@@ -668,6 +668,7 @@ export class GradebookController {
           created_at: new Date().toISOString(),
           show_max_score: false,
           slug: "loading",
+          show_calculated_ranges: false,
           external_data: null
         };
         this.gradebook.gradebook_columns.push(newColumn);
