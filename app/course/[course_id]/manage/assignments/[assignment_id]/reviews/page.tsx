@@ -67,6 +67,7 @@ export default function ReviewAssignmentsPage() {
 
   const handleReviewAssignmentChange = () => {
     invalidate({ resource: "review_assignments", invalidates: ["list"] });
+    invalidate({ resource: "submissions", invalidates: ["list"] });
   };
 
   return (
@@ -85,7 +86,7 @@ export default function ReviewAssignmentsPage() {
         </Button>
       </HStack>
       <Separator></Separator>
-      <ReviewAssignmentAccordion />
+      <ReviewAssignmentAccordion handleReviewAssignmentChange={handleReviewAssignmentChange} />
 
       <ReviewsTable
         assignmentId={assignment_id as string}
@@ -110,7 +111,11 @@ export default function ReviewAssignmentsPage() {
   );
 }
 
-export function ReviewAssignmentAccordion() {
+export function ReviewAssignmentAccordion({
+  handleReviewAssignmentChange
+}: {
+  handleReviewAssignmentChange: () => void;
+}) {
   const { course_id, assignment_id } = useParams();
   const [selectedRubric, setSelectedRubric] = useState<Rubric>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
@@ -125,7 +130,6 @@ export function ReviewAssignmentAccordion() {
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
   const course = useCourse();
-  const invalidate = useInvalidate();
 
   const { data: gradingRubrics } = useList<Rubric>({
     resource: "rubrics",
@@ -241,7 +245,7 @@ export function ReviewAssignmentAccordion() {
   /**
    * Creates a list of the users who will be assigned submissions to grade based on category.
    */
-  const selectedGraders = () => {
+  const selectedGraders = useCallback(() => {
     const users =
       courseStaff?.filter((staff) => {
         if (role === "Graders") {
@@ -255,7 +259,7 @@ export function ReviewAssignmentAccordion() {
         }
       }) ?? [];
     return users.filter((user) => user.private_profile_id !== selectedUser?.private_profile_id);
-  };
+  }, [courseStaff, role, selectedUser]);
 
   /**
    * Generates reviews based on the initial selected information and grading conflicts.
@@ -292,6 +296,7 @@ export function ReviewAssignmentAccordion() {
     }
     const solver = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload);
     const result = solver.solve();
+    console.log(result);
     if (result.error) {
       toaster.error({ title: "Error drafting reviews", description: result.error });
     }
@@ -307,29 +312,32 @@ export function ReviewAssignmentAccordion() {
    *
    * @param historicalWorkload map to populate of assignee_private_profile_id -> number of relevant submissions
    */
-  const bothPreferences = (historicalWorkload: Map<string, number>) => {
-    for (const submission of activeSubmissions?.data ?? []) {
-      const completedReviews = submission.submission_reviews.filter(
-        (rev) => !!rev.completed_by && rev.rubric_id === selectedRubric?.id
-      );
-      for (const complete of completedReviews) {
-        if (complete.completed_by) {
-          historicalWorkload.set(complete.completed_by, (historicalWorkload.get(complete.completed_by) ?? 0) + 1);
+  const bothPreferences = useCallback(
+    (historicalWorkload: Map<string, number>) => {
+      for (const submission of activeSubmissions?.data ?? []) {
+        const completedReviews = submission.submission_reviews.filter(
+          (rev) => !!rev.completed_by && rev.rubric_id === selectedRubric?.id
+        );
+        for (const complete of completedReviews) {
+          if (complete.completed_by) {
+            historicalWorkload.set(complete.completed_by, (historicalWorkload.get(complete.completed_by) ?? 0) + 1);
+          }
+        }
+        const unfinishedReviewAssignments = submission.review_assignments.filter(
+          (rev) =>
+            !submission.submission_reviews.find((sub) => sub.id === rev.submission_review_id)?.completed_at &&
+            rev.rubric_id === selectedRubric?.id
+        );
+        for (const unfinished of unfinishedReviewAssignments) {
+          historicalWorkload.set(
+            unfinished.assignee_profile_id,
+            (historicalWorkload.get(unfinished.assignee_profile_id) ?? 0) + 1
+          );
         }
       }
-      const unfinishedReviewAssignments = submission.review_assignments.filter(
-        (rev) =>
-          !submission.submission_reviews.find((sub) => sub.id === rev.submission_review_id)?.completed_at &&
-          rev.rubric_id === selectedRubric?.id
-      );
-      for (const unfinished of unfinishedReviewAssignments) {
-        historicalWorkload.set(
-          unfinished.assignee_profile_id,
-          (historicalWorkload.get(unfinished.assignee_profile_id) ?? 0) + 1
-        );
-      }
-    }
-  };
+    },
+    [activeSubmissions, selectedGraders]
+  );
 
   /**
    * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them
@@ -337,18 +345,21 @@ export function ReviewAssignmentAccordion() {
    *
    * @param historicalWorkload map to populate of assignee_private_profile_id -> number of relevant submissions
    */
-  const preferGradedFewerCalculator = (historicalWorkload: Map<string, number>) => {
-    for (const submission of activeSubmissions?.data ?? []) {
-      const completedReviews = submission.submission_reviews.filter(
-        (rev) => !!rev.completed_by && rev.rubric_id === selectedRubric?.id
-      );
-      for (const complete of completedReviews) {
-        if (complete.completed_by) {
-          historicalWorkload.set(complete.completed_by, (historicalWorkload.get(complete.completed_by) ?? 0) + 1);
+  const preferGradedFewerCalculator = useCallback(
+    (historicalWorkload: Map<string, number>) => {
+      for (const submission of activeSubmissions?.data ?? []) {
+        const completedReviews = submission.submission_reviews.filter(
+          (rev) => !!rev.completed_by && rev.rubric_id === selectedRubric?.id
+        );
+        for (const complete of completedReviews) {
+          if (complete.completed_by) {
+            historicalWorkload.set(complete.completed_by, (historicalWorkload.get(complete.completed_by) ?? 0) + 1);
+          }
         }
       }
-    }
-  };
+    },
+    [activeSubmissions, selectedGraders]
+  );
 
   /**
    * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them more work.
@@ -356,16 +367,19 @@ export function ReviewAssignmentAccordion() {
    *
    * @param historicalWorkload map to populate of assignee_private_profile_id -> number of relevant submissions
    */
-  const preferAssignedFewerCalculator = (historicalWorkload: Map<string, number>) => {
-    for (const submission of activeSubmissions?.data ?? []) {
-      for (const review of submission.review_assignments.filter((rev) => rev.rubric_id === selectedRubric?.id)) {
-        historicalWorkload.set(
-          review.assignee_profile_id,
-          (historicalWorkload.get(review.assignee_profile_id) ?? 0) + 1
-        );
+  const preferAssignedFewerCalculator = useCallback(
+    (historicalWorkload: Map<string, number>) => {
+      for (const submission of activeSubmissions?.data ?? []) {
+        for (const review of submission.review_assignments.filter((rev) => rev.rubric_id === selectedRubric?.id)) {
+          historicalWorkload.set(
+            review.assignee_profile_id,
+            (historicalWorkload.get(review.assignee_profile_id) ?? 0) + 1
+          );
+        }
       }
-    }
-  };
+    },
+    [activeSubmissions, selectedGraders]
+  );
 
   /**
    * Translates the result of the assignment calculator to a set of draft reviews with all the information necessary to then
@@ -407,19 +421,47 @@ export function ReviewAssignmentAccordion() {
   const assignReviews = async () => {
     if (!selectedRubric) {
       toaster.error({ title: "Error creating review assignments", description: "Failed to find rubric" });
-      return;
+      return false;
     } else if (!course_id) {
       toaster.error({ title: "Error creating review assignments", description: "Failed to find current course" });
-      return;
-    }
-    if (selectedUser) {
-      clearIncompleteRolesForUser();
+      return false;
     }
     const reviewAssignments: Omit<
       ReviewAssignment,
       "id" | "created_at" | "max_allowable_late_tokens" | "release_date"
     >[] = [];
     for (const review of draftReviews ?? []) {
+      const submissionReviewId = await submissionReviewIdForReview(review);
+      if (!submissionReviewId) {
+        continue;
+      }
+      reviewAssignments.push({
+        assignee_profile_id: review.assignee.private_profile_id,
+        submission_id: review.submission.id,
+        assignment_id: Number(assignment_id),
+        rubric_id: selectedRubric.id,
+        class_id: Number(course_id),
+        submission_review_id: submissionReviewId,
+        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+      });
+    }
+    await clearIncompleteAssignmentsForUser();
+    await mutateAsync({
+      resource: "review_assignments",
+      values: reviewAssignments
+    });
+    handleReviewAssignmentChange();
+    clearStateData();
+  };
+
+  /**
+   * Seraches for the submission review id for this review assignment.  If none found, creates a new submission
+   * review to use.
+   * @param review draft assignment to search
+   * @returns submission review id for review assignment creation
+   */
+  const submissionReviewIdForReview = useCallback(
+    async (review: DraftReviewAssignment) => {
       let submissionReviewId: number;
       if (review.submission.submission_reviews.length > 0) {
         submissionReviewId = review.submission.submission_reviews[0].id;
@@ -431,8 +473,8 @@ export function ReviewAssignmentAccordion() {
             tweak: 0,
             class_id: course_id,
             submission_id: review.submission.id,
-            name: selectedRubric.name,
-            rubric_id: selectedRubric.id
+            name: selectedRubric?.name,
+            rubric_id: selectedRubric?.id
           }
         });
         submissionReviewId = Number(rev.id);
@@ -442,26 +484,11 @@ export function ReviewAssignmentAccordion() {
           title: "Error creating review assignments",
           description: `Failed to find or create submission review for ${review.submitter.profiles.name}`
         });
-        continue;
       }
-
-      reviewAssignments.push({
-        assignee_profile_id: review.assignee.private_profile_id,
-        submission_id: review.submission.id,
-        assignment_id: Number(assignment_id),
-        rubric_id: selectedRubric.id,
-        class_id: Number(course_id),
-        submission_review_id: submissionReviewId,
-        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
-      });
-    }
-    await mutateAsync({
-      resource: "review_assignments",
-      values: reviewAssignments
-    });
-    clearStateData();
-    invalidate({ resource: "review_assignments", invalidates: ["list"] });
-  };
+      return submissionReviewId;
+    },
+    [selectedRubric, toaster, course_id]
+  );
 
   /**
    * Clear state data so the modal is fresh when reopened
@@ -477,19 +504,28 @@ export function ReviewAssignmentAccordion() {
     setPreferGradedFewer(false);
   }, []);
 
-  const clearIncompleteRolesForUser = useCallback(async () => {
+  /**
+   * Deletes all of the review-assignments for the selected user that are incomplete for this
+   * rubric and assignment.  Used when review assignments are being reassigned.
+   */
+  const clearIncompleteAssignmentsForUser = useCallback(async () => {
+    if (currentSegment !== "reassign grading") {
+      return Promise.resolve();
+    }
     const valuesToDelete = submissionsToDo
       ?.flatMap((submission) => submission.review_assignments)
       .filter((review) => {
         return review.assignee_profile_id === selectedUser?.private_profile_id;
       });
-    for (const value of valuesToDelete ?? []) {
-      await deleteValues({
-        resource: "review_assignments",
-        id: value.id
-      });
-    }
-  }, [submissionsToDo, selectedUser]);
+    const deletePromises = (valuesToDelete ?? []).map(
+      async (value) =>
+        await deleteValues({
+          resource: "review_assignments",
+          id: value.id
+        })
+    );
+    return Promise.all(deletePromises);
+  }, [currentSegment, submissionsToDo, selectedUser]);
 
   /**
    * Fields used by both assign and reassign grading tabs
@@ -497,7 +533,7 @@ export function ReviewAssignmentAccordion() {
   function BaseFields() {
     return (
       <>
-        <Field.Root>
+        <Field.Root maxWidth={"md"}>
           <Field.Label>Choose rubric</Field.Label>
           <Select
             value={{ label: selectedRubric?.name, value: selectedRubric }}
@@ -507,13 +543,13 @@ export function ReviewAssignmentAccordion() {
             })}
           />
         </Field.Root>
-        <Text fontSize={"sm"}>
+        <Text fontSize={"sm"} maxWidth={"md"}>
           {currentSegment === "assign grading"
             ? `There are ${submissionsToDo?.length ?? 0} active submissions that are unassigned and ungraded for this rubric
           on this assignment.`
-            : `There are ${submissionsToDo?.length ?? 0} active submissions assigned to ${selectedUser?.profiles.name ?? `[selected user]`} that are incomplete`}
+            : `There are ${submissionsToDo?.length ?? 0} active submissions assigned to ${selectedUser?.profiles.name ?? `[selected user]`} that are incomplete for this rubric`}
         </Text>
-        <Field.Root>
+        <Field.Root maxWidth={"md"}>
           <Field.Label>Select role to assign reviews to</Field.Label>
           <Select
             onChange={(e) => {
@@ -530,7 +566,7 @@ export function ReviewAssignmentAccordion() {
             ]}
           />
         </Field.Root>
-        <Field.Root>
+        <Field.Root maxWidth={"md"}>
           <Checkbox.Root checked={preferGradedFewer} onCheckedChange={(e) => setPreferGradedFewer(!!e.checked)}>
             <Checkbox.Control>
               <Checkbox.HiddenInput />
@@ -539,7 +575,7 @@ export function ReviewAssignmentAccordion() {
             <Text fontSize="sm">Prefer those who have graded fewer submissions so far</Text>
           </Checkbox.Root>
         </Field.Root>
-        <Field.Root>
+        <Field.Root maxWidth={"md"}>
           <Checkbox.Root checked={preferFewerAssigned} onCheckedChange={(e) => setPreferFewerAssigned(!!e.checked)}>
             <Checkbox.Control>
               <Checkbox.HiddenInput />
@@ -549,7 +585,7 @@ export function ReviewAssignmentAccordion() {
           </Checkbox.Root>
         </Field.Root>
 
-        <Field.Root>
+        <Field.Root maxWidth={"md"}>
           <Field.Label>Due Date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
           <Input
             type="datetime-local"
@@ -589,6 +625,7 @@ export function ReviewAssignmentAccordion() {
           />
         </Field.Root>
         <Button
+          maxWidth={"md"}
           onClick={generateReviews}
           variant="subtle"
           disabled={!dueDate || !selectedRubric || !role || submissionsToDo?.length === 0}
@@ -603,7 +640,7 @@ export function ReviewAssignmentAccordion() {
               setDraftReviews={setDraftReviews}
               courseStaffWithConflicts={selectedGraders() ?? []}
             />
-            <Button variant="subtle" onClick={() => assignReviews()} float={"right"}>
+            <Button maxWidth={"md"} variant="subtle" onClick={() => assignReviews()} float={"right"}>
               Assign
             </Button>
           </Flex>
@@ -645,7 +682,7 @@ export function ReviewAssignmentAccordion() {
           <Accordion.ItemContent>
             <Fieldset.Root>
               <Fieldset.Content>
-                <Field.Root>
+                <Field.Root maxWidth={"md"}>
                   <Field.Label>Select grader whose remaining work you want to reassign</Field.Label>
                   <Select
                     value={{ label: selectedUser?.profiles.name, value: selectedUser }}

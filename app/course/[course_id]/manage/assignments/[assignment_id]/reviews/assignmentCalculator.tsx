@@ -190,19 +190,30 @@ export class TAAssignmentSolver {
     return Math.max(1, Math.min(adjustedCapacity, this.maxAssignments));
   }
 
+  /**
+   * Validates that based on the number of submissions to grade is >= sum of the max amount each grader can grade.
+   * Due to the nature of the maxAssignments calculation, this should always pass when workloadReductionFactor = 0.
+   * EFFECT: reductions can cause issues so in case of insufficient support, we gradually decrease workload factor.
+   */
   validateCapacityConstraints(): { isValid: boolean; error?: string } {
     let totalCapacity = 0;
-
-    for (const ta of this.tas) {
-      const capacity = this.calculateTACapacity(ta.private_profile_id);
-      this.taCapacities.set(ta.private_profile_id, capacity);
-      totalCapacity += capacity;
+    let success = false;
+    while (!success) {
+      for (const ta of this.tas) {
+        const capacity = this.calculateTACapacity(ta.private_profile_id);
+        this.taCapacities.set(ta.private_profile_id, capacity);
+        totalCapacity += capacity;
+      }
+      if (totalCapacity < this.submissions.length) {
+        this.workloadReductionFactor -= 0.1;
+      } else {
+        success = true;
+      }
     }
-
-    if (totalCapacity < this.submissions.length) {
+    if (this.workloadReductionFactor < 0) {
       return {
         isValid: false,
-        error: `Insufficient total capacity (${totalCapacity}) to handle all submissions (${this.submissions.length}). Consider reducing workload reduction factor.`
+        error: "Negative workload factor was needed in matching algorithm.  Check calculation of max assignments"
       };
     }
 
@@ -239,10 +250,10 @@ export class TAAssignmentSolver {
   solve(): AssignmentResult {
     // Validate capacity constraints before building network
     const validation = this.validateCapacityConstraints();
+    console.log(validation);
     if (!validation.isValid) {
       return {
         success: false,
-        error: validation.error,
         assignments: null,
         taCapacities: this.taCapacities
       };
