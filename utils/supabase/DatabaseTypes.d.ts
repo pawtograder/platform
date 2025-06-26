@@ -1,6 +1,13 @@
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database, Json } from "./SupabaseTypes";
 export type { Json };
+
+export type GradebookColumnExternalData = {
+  source: "csv";
+  fileName: string;
+  date: string;
+  creator: string;
+};
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<
