@@ -579,6 +579,22 @@ export type RubricCheckReference = GetResult<
   "*"
 >;
 
+export type EmailDistributionList = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_list"]["Row"],
+  "email_distribution_list",
+  Database["public"]["Tables"]["email_distribution_list"]["Relationships"],
+  "*"
+>;
+
+export type EmailDistributionItem = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_item"]["Row"],
+  "email_distribution_item",
+  Database["public"]["Tables"]["email_distribution_item"]["Relationships"],
+  "*"
+>;
+
 export type GradebookColumnDependencies = {
   assignments?: int[];
   gradebook_columns?: int[];
@@ -661,5 +677,29 @@ export type ReviewAssignments = GetResult<
   Database["public"]["Tables"]["review_assignments"]["Row"],
   "review_assignments",
   Database["public"]["Tables"]["review_assignments"]["Relationships"],
+  "*"
+>;
+
+export type Emails = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["emails"]["Row"],
+  "emails",
+  Database["public"]["Tables"]["emails"]["Relationships"],
+  "*"
+>;
+
+export type EmailBatches = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_batches"]["Row"],
+  "email_batches",
+  Database["public"]["Tables"]["email_batches"]["Relationships"],
+  "*"
+>;
+
+export type Course = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["classes"]["Row"],
+  "classes",
+  Database["public"]["Tables"]["classes"]["Relationships"],
   "*"
 >;

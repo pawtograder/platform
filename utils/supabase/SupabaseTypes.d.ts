@@ -1319,6 +1319,95 @@ export type Database = {
           }
         ];
       };
+      email_batches: {
+        Row: {
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at: string;
+          id: number;
+          reply_to: string | null;
+          subject: string;
+        };
+        Insert: {
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject: string;
+        };
+        Update: {
+          body?: string;
+          cc_emails?: Json;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "email_batches_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      emails: {
+        Row: {
+          batch_id: number;
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at: string;
+          id: number;
+          reply_to: string | null;
+          subject: string;
+          user_id: string;
+        };
+        Insert: {
+          batch_id: number;
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject: string;
+          user_id: string;
+        };
+        Update: {
+          batch_id?: number;
+          body?: string;
+          cc_emails?: Json;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "emails_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "emails_users_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       flashcard_decks: {
         Row: {
           class_id: number;
