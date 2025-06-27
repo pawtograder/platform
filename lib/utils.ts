@@ -19,18 +19,6 @@ export function dueDateAdvice(date: string | null, courseTimezone?: string) {
   return advice;
 }
 
-export function formatDueDate(date: string | null, courseTimezone?: string) {
-  if (!date) {
-    return "N/A";
-  }
-  return (
-    new Date(date).toLocaleDateString() +
-    " " +
-    new Date(date).toLocaleTimeString() +
-    dueDateAdvice(date, courseTimezone)
-  );
-}
-
 export function formatDueDateInTimezone(
   date: string | null,
   courseTimezone?: string,
