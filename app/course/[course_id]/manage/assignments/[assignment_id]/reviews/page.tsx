@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
-import { ReviewAssignment, Rubric, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
+import { ReviewAssignment, Rubric, Submission, SubmissionReview, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
 import {
   Accordion,
-  Checkbox,
+  Box,
   Container,
   Field,
   Fieldset,
@@ -22,16 +22,18 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
-import { Select } from "chakra-react-select";
+import { MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { FaPlus } from "react-icons/fa";
-import { LuCheck, LuChevronDown } from "react-icons/lu";
+import { LuChevronDown } from "react-icons/lu";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import { AssignmentResult, TAAssignmentSolver } from "./assignmentCalculator";
 import AssignReviewModal from "./assignReviewModal";
 import DragAndDropExample from "./dragAndDrop";
 import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
+import useTags from "@/hooks/useTags";
+import TagDisplay from "@/components/ui/tag";
 
 export type SubmissionWithGrading = Submission & {
   submission_reviews: SubmissionReview[];
@@ -124,8 +126,13 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
   const [dueDate, setDueDate] = useState<string>("");
   const [selectedUser, setSelectedUser] = useState<UserRoleWithConflictsAndName>();
   const [currentSegment, setCurrentSegment] = useState<"assign grading" | "reassign grading">();
-  const [preferGradedFewer, setPreferGradedFewer] = useState<boolean>(false);
-  const [preferFewerAssigned, setPreferFewerAssigned] = useState<boolean>(false);
+  const [baseOnAll, setBaseOnAll] = useState<boolean>(false);
+  const [selectedTags, setSelectedTags] = useState<
+    MultiValue<{
+      label: string;
+      value: Tag;
+    }>
+  >([]);
 
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
@@ -258,8 +265,24 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
           return false;
         }
       }) ?? [];
-    return users.filter((user) => user.private_profile_id !== selectedUser?.private_profile_id);
-  }, [courseStaff, role, selectedUser]);
+    if (selectedTags.length === 0) {
+      return users;
+    }
+    const matchingProfileIds = new Set(
+      tags
+        .filter((tag) =>
+          selectedTags.some(
+            (selectedTag) => selectedTag.value.color === tag.color && selectedTag.value.name === tag.name
+          )
+        )
+        .map((tag) => tag.profile_id)
+    );
+
+    return users.filter(
+      (user) =>
+        user.private_profile_id !== selectedUser?.private_profile_id && matchingProfileIds.has(user.private_profile_id)
+    );
+  }, [courseStaff, role, selectedUser, selectedTags]);
 
   /**
    * Generates reviews based on the initial selected information and grading conflicts.
@@ -269,7 +292,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
     if (users.length === 0) {
       toaster.create({
         title: `Warning: No ${role}`,
-        description: `Could not find any ${role} for this course to grade this assignment`
+        description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
       });
       return;
     } else if (!submissionsToDo) {
@@ -287,11 +310,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
       return;
     }
     const historicalWorkload = new Map<string, number>();
-    if (preferGradedFewer && preferFewerAssigned) {
-      bothPreferences(historicalWorkload);
-    } else if (preferGradedFewer) {
-      preferGradedFewerCalculator(historicalWorkload);
-    } else if (preferFewerAssigned) {
+    if (baseOnAll) {
       preferAssignedFewerCalculator(historicalWorkload);
     }
     const solver = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload);
@@ -301,64 +320,6 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
     }
     toReview(result);
   };
-
-  /**
-   * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them
-   * more work.  In this case, we consider submissions that they have graded with this rubric for this assignment as well as
-   * outstanding reviews they have been assigned to complete but have not completed yet.
-   * We only count the reviews they have not completed, as all completed review assignments will be linked to complete submission reviews
-   * (already counted).  We count submission reviews instead in case someone graded a submission they were not assigned to review.
-   *
-   * @param historicalWorkload map to populate of assignee_private_profile_id -> number of relevant submissions
-   */
-  const bothPreferences = useCallback(
-    (historicalWorkload: Map<string, number>) => {
-      for (const submission of activeSubmissions?.data ?? []) {
-        const completedReviews = submission.submission_reviews.filter(
-          (rev) => !!rev.completed_by && rev.rubric_id === selectedRubric?.id
-        );
-        for (const complete of completedReviews) {
-          if (complete.completed_by) {
-            historicalWorkload.set(complete.completed_by, (historicalWorkload.get(complete.completed_by) ?? 0) + 1);
-          }
-        }
-        const unfinishedReviewAssignments = submission.review_assignments.filter(
-          (rev) =>
-            !submission.submission_reviews.find((sub) => sub.id === rev.submission_review_id)?.completed_at &&
-            rev.rubric_id === selectedRubric?.id
-        );
-        for (const unfinished of unfinishedReviewAssignments) {
-          historicalWorkload.set(
-            unfinished.assignee_profile_id,
-            (historicalWorkload.get(unfinished.assignee_profile_id) ?? 0) + 1
-          );
-        }
-      }
-    },
-    [activeSubmissions, selectedRubric]
-  );
-
-  /**
-   * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them
-   * more work.  In this case, we consider only the submission reviews they have completed for this rubric on this assignment.
-   *
-   * @param historicalWorkload map to populate of assignee_private_profile_id -> number of relevant submissions
-   */
-  const preferGradedFewerCalculator = useCallback(
-    (historicalWorkload: Map<string, number>) => {
-      for (const submission of activeSubmissions?.data ?? []) {
-        const completedReviews = submission.submission_reviews.filter(
-          (rev) => !!rev.completed_by && rev.rubric_id === selectedRubric?.id
-        );
-        for (const complete of completedReviews) {
-          if (complete.completed_by) {
-            historicalWorkload.set(complete.completed_by, (historicalWorkload.get(complete.completed_by) ?? 0) + 1);
-          }
-        }
-      }
-    },
-    [activeSubmissions, selectedRubric]
-  );
 
   /**
    * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them more work.
@@ -508,6 +469,19 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
     }
   }, [gradingRubric, activeSubmissions]);
 
+  const { tags } = useTags();
+
+  const uniqueTags: Tag[] = Array.from(
+    tags
+      .reduce((map, tag) => {
+        if (!map.has(tag.name + tag.color + tag.visible)) {
+          map.set(tag.name + tag.color + tag.visible, tag);
+        }
+        return map;
+      }, new Map())
+      .values()
+  );
+
   /**
    * Clear state data so the modal is fresh when reopened
    */
@@ -518,8 +492,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
     setDraftReviews([]);
     setDueDate("");
     setSelectedUser(undefined);
-    setPreferFewerAssigned(false);
-    setPreferGradedFewer(false);
+    setBaseOnAll(false);
   }, [gradingRubric]);
 
   /**
@@ -587,28 +560,52 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
             ]}
           />
         </Field.Root>
-        <Heading size="sm">Load Balancing</Heading>
         <Field.Root>
-          <Checkbox.Root checked={preferGradedFewer} onCheckedChange={(e) => setPreferGradedFewer(!!e.checked)}>
-            <Checkbox.Control>
-              <Checkbox.HiddenInput />
-              <LuCheck />
-            </Checkbox.Control>
-            <Text fontSize="sm">Prefer those who have graded fewer submissions so far</Text>
-          </Checkbox.Root>
+          <Field.Label>Filter {role.toLowerCase()} by tag</Field.Label>
+          <Select
+            isMulti={true}
+            onChange={(e) => {
+              setSelectedTags(e);
+            }}
+            value={selectedTags}
+            options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
+            components={{
+              Option: ({ data, ...props }) => (
+                <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer" _hover={{ bg: "gray.100" }}>
+                  {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                </Box>
+              ),
+              MultiValue: ({ data, ...props }) => (
+                <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer">
+                  {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                </Box>
+              )
+            }}
+          />
+          <Field.HelperText>Only assign work to {role.toLowerCase()} with one of these tags</Field.HelperText>
         </Field.Root>
+        <Heading size="sm">Load balancing</Heading>
         <Field.Root>
-          <Checkbox.Root checked={preferFewerAssigned} onCheckedChange={(e) => setPreferFewerAssigned(!!e.checked)}>
-            <Checkbox.Control>
-              <Checkbox.HiddenInput />
-              <LuCheck />
-            </Checkbox.Control>
-            <Text fontSize="sm">Prefer those who have fewer submissions assigned to them so far</Text>
-          </Checkbox.Root>
+          <Select
+            value={
+              baseOnAll
+                ? { label: "Balance based on all assignments", value: true }
+                : { label: "Balance based on new assignments", value: false }
+            }
+            onChange={(e) => {
+              if (e) {
+                setBaseOnAll(e?.value);
+              }
+            }}
+            options={[
+              { label: "Balance based on new assignments", value: false },
+              { label: "Balance based on all assignments", value: true }
+            ]}
+          />
         </Field.Root>
 
         <Field.Root>
-          <Field.Label>Review Due Date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
+          <Field.Label>Review due date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
           <Input
             type="datetime-local"
             value={

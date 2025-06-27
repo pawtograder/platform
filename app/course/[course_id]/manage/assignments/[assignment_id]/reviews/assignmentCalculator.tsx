@@ -150,7 +150,7 @@ export class TAAssignmentSolver {
     tas: UserRoleWithConflictsAndName[],
     submissions: SubmissionWithGrading[],
     historicalWorkload: Map<string, number> = new Map(),
-    workloadReductionFactor: number = 0.4
+    workloadReductionFactor: number = 1 // reduced gradually if this makes assignment impossible
   ) {
     this.tas = tas;
     this.submissions = submissions;

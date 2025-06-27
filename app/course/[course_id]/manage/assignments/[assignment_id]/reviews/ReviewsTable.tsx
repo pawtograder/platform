@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useCallback } from "react";
-import { IconButton, HStack, Table, Text, Spinner, Input, NativeSelect, VStack } from "@chakra-ui/react";
+import { IconButton, HStack, Table, Text, Spinner, Input, NativeSelect, VStack, EmptyState } from "@chakra-ui/react";
 import { useDelete } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
@@ -14,6 +14,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 import { TZDate } from "@date-fns/tz";
 import { useCourse } from "@/hooks/useAuthState";
+import { MdOutlineAssignment } from "react-icons/md";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -366,6 +367,19 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           ))}
         </Table.Body>
       </Table.Root>
+      {currentRows.length === 0 && (
+        <EmptyState.Root size={"md"}>
+          <EmptyState.Content>
+            <EmptyState.Indicator>
+              <MdOutlineAssignment />
+            </EmptyState.Indicator>
+            <VStack textAlign="center">
+              <EmptyState.Title>No review assignments</EmptyState.Title>
+              <EmptyState.Description>There aren&apos;t any reviews for this assignment yet</EmptyState.Description>
+            </VStack>
+          </EmptyState.Content>
+        </EmptyState.Root>
+      )}
       <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
         <HStack gap={2}>
           <Button size="sm" onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
