@@ -1,5 +1,10 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { useCourse } from "@/hooks/useAuthState";
+import useModalManager from "@/hooks/useModalManager";
+import { ReviewAssignment, Rubric, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import {
   Accordion,
   Checkbox,
@@ -7,29 +12,26 @@ import {
   Field,
   Fieldset,
   Flex,
-  HStack,
   Heading,
+  HStack,
+  Icon,
   Input,
   Separator,
-  Text
+  Text,
+  VStack
 } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
 import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
-import { FaPlus } from "react-icons/fa";
-import { Button } from "@/components/ui/button";
-import { toaster, Toaster } from "@/components/ui/toaster";
-import useModalManager from "@/hooks/useModalManager";
-import AssignReviewModal from "./assignReviewModal";
-import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
 import { Select } from "chakra-react-select";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { ReviewAssignment, Rubric, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
+import { FaPlus } from "react-icons/fa";
+import { LuCheck, LuChevronDown } from "react-icons/lu";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import { AssignmentResult, TAAssignmentSolver } from "./assignmentCalculator";
-import { useCourse } from "@/hooks/useAuthState";
+import AssignReviewModal from "./assignReviewModal";
 import DragAndDropExample from "./dragAndDrop";
-import { TZDate } from "@date-fns/tz";
-import { LuCheck } from "react-icons/lu";
+import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
 
 export type SubmissionWithGrading = Submission & {
   submission_reviews: SubmissionReview[];
@@ -88,6 +90,8 @@ export default function ReviewAssignmentsPage() {
       <Separator></Separator>
       <ReviewAssignmentAccordion handleReviewAssignmentChange={handleReviewAssignmentChange} />
 
+      <Heading size="md">Current Assignments</Heading>
+      <Separator w="100%" mb={2} />
       <ReviewsTable
         assignmentId={assignment_id as string}
         openAssignModal={openAssignModal}
@@ -111,19 +115,15 @@ export default function ReviewAssignmentsPage() {
   );
 }
 
-export function ReviewAssignmentAccordion({
-  handleReviewAssignmentChange
-}: {
-  handleReviewAssignmentChange: () => void;
-}) {
+function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleReviewAssignmentChange: () => void }) {
   const { course_id, assignment_id } = useParams();
   const [selectedRubric, setSelectedRubric] = useState<Rubric>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
-  const [role, setRole] = useState<string>();
+  const [role, setRole] = useState<string>("Graders");
   const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>([]);
   const [dueDate, setDueDate] = useState<string>("");
   const [selectedUser, setSelectedUser] = useState<UserRoleWithConflictsAndName>();
-  const [currentSegment, setCurrentSegment] = useState<string>();
+  const [currentSegment, setCurrentSegment] = useState<"assign grading" | "reassign grading">();
   const [preferGradedFewer, setPreferGradedFewer] = useState<boolean>(false);
   const [preferFewerAssigned, setPreferFewerAssigned] = useState<boolean>(false);
 
@@ -145,7 +145,7 @@ export function ReviewAssignmentAccordion({
       enabled: !!course_id && !!assignment_id
     }
   });
-
+  const gradingRubric = gradingRubrics?.data.find((rubric) => rubric.review_round === "grading-review");
   const { data: activeSubmissions } = useList<SubmissionWithGrading>({
     resource: "submissions",
     meta: {
@@ -219,7 +219,7 @@ export function ReviewAssignmentAccordion({
         })
       );
     }
-  }, [selectedRubric, activeSubmissions]);
+  }, [selectedRubric, activeSubmissions, currentSegment]);
 
   /**
    * Populate submissions to do for reassigning grading
@@ -240,7 +240,7 @@ export function ReviewAssignmentAccordion({
       });
       setSubmissionsToDo(incompleteAssignments);
     }
-  }, [selectedUser, activeSubmissions, currentSegment]);
+  }, [selectedUser, activeSubmissions, currentSegment, selectedRubric]);
 
   /**
    * Creates a list of the users who will be assigned submissions to grade based on category.
@@ -296,7 +296,6 @@ export function ReviewAssignmentAccordion({
     }
     const solver = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload);
     const result = solver.solve();
-    console.log(result);
     if (result.error) {
       toaster.error({ title: "Error drafting reviews", description: result.error });
     }
@@ -336,7 +335,7 @@ export function ReviewAssignmentAccordion({
         }
       }
     },
-    [activeSubmissions, selectedGraders]
+    [activeSubmissions, selectedRubric]
   );
 
   /**
@@ -358,7 +357,7 @@ export function ReviewAssignmentAccordion({
         }
       }
     },
-    [activeSubmissions, selectedGraders]
+    [activeSubmissions, selectedRubric]
   );
 
   /**
@@ -378,7 +377,7 @@ export function ReviewAssignmentAccordion({
         }
       }
     },
-    [activeSubmissions, selectedGraders]
+    [activeSubmissions, selectedRubric]
   );
 
   /**
@@ -412,7 +411,7 @@ export function ReviewAssignmentAccordion({
       });
       setDraftReviews(reviewAssignments);
     },
-    [userRoles, toaster]
+    [userRoles]
   );
 
   /**
@@ -487,22 +486,41 @@ export function ReviewAssignmentAccordion({
       }
       return submissionReviewId;
     },
-    [selectedRubric, toaster, course_id]
+    [selectedRubric, course_id, mutateAsync]
   );
+
+  useEffect(() => {
+    if (gradingRubric) {
+      setSelectedRubric(gradingRubric);
+    }
+    if (activeSubmissions && gradingRubric) {
+      const submissionsToDo = activeSubmissions.data.filter((sub) => {
+        return (
+          sub.review_assignments.length === 0 &&
+          !sub.submission_reviews.find((review) => {
+            return review.completed_at !== null && review.rubric_id === gradingRubric.id;
+          })
+        );
+      });
+      if (submissionsToDo.length > 0) {
+        setCurrentSegment("assign grading");
+      }
+    }
+  }, [gradingRubric, activeSubmissions]);
 
   /**
    * Clear state data so the modal is fresh when reopened
    */
   const clearStateData = useCallback(() => {
-    setSelectedRubric(undefined);
+    setSelectedRubric(gradingRubric);
     setSubmissionsToDo(undefined);
-    setRole(undefined);
+    setRole("Graders");
     setDraftReviews([]);
     setDueDate("");
     setSelectedUser(undefined);
     setPreferFewerAssigned(false);
     setPreferGradedFewer(false);
-  }, []);
+  }, [gradingRubric]);
 
   /**
    * Deletes all of the review-assignments for the selected user that are incomplete for this
@@ -525,15 +543,15 @@ export function ReviewAssignmentAccordion({
         })
     );
     return Promise.all(deletePromises);
-  }, [currentSegment, submissionsToDo, selectedUser]);
+  }, [currentSegment, submissionsToDo, selectedUser, deleteValues]);
 
   /**
    * Fields used by both assign and reassign grading tabs
    */
   function BaseFields() {
     return (
-      <>
-        <Field.Root maxWidth={"md"}>
+      <VStack align="flex-start" maxW={"lg"} gap={0}>
+        <Field.Root>
           <Field.Label>Choose rubric</Field.Label>
           <Select
             value={{ label: selectedRubric?.name, value: selectedRubric }}
@@ -543,18 +561,21 @@ export function ReviewAssignmentAccordion({
             })}
           />
         </Field.Root>
-        <Text fontSize={"sm"} maxWidth={"md"}>
+        <Text fontSize={"sm"}>
           {currentSegment === "assign grading"
-            ? `There are ${submissionsToDo?.length ?? 0} active submissions that are unassigned and ungraded for this rubric
+            ? submissionsToDo && submissionsToDo.length > 0
+              ? `There are ${submissionsToDo.length} active submissions that are unassigned and ungraded for this rubric
           on this assignment.`
-            : `There are ${submissionsToDo?.length ?? 0} active submissions assigned to ${selectedUser?.profiles.name ?? `[selected user]`} that are incomplete for this rubric`}
+              : `All submissions have been assigned and graded for this rubric on this assignment.`
+            : `There are ${submissionsToDo?.length ?? 0} active submissions assigned ${
+                selectedUser?.profiles.name ? `to ${selectedUser?.profiles.name}` : ""
+              } that are incomplete for this rubric on this assignment.`}
         </Text>
-        <Field.Root maxWidth={"md"}>
+        <Field.Root>
           <Field.Label>Select role to assign reviews to</Field.Label>
           <Select
             onChange={(e) => {
               if (e?.value) {
-                console.log("setting role to " + e.value);
                 setRole(e.value.toString());
               }
             }}
@@ -566,7 +587,8 @@ export function ReviewAssignmentAccordion({
             ]}
           />
         </Field.Root>
-        <Field.Root maxWidth={"md"}>
+        <Heading size="sm">Load Balancing</Heading>
+        <Field.Root>
           <Checkbox.Root checked={preferGradedFewer} onCheckedChange={(e) => setPreferGradedFewer(!!e.checked)}>
             <Checkbox.Control>
               <Checkbox.HiddenInput />
@@ -575,7 +597,7 @@ export function ReviewAssignmentAccordion({
             <Text fontSize="sm">Prefer those who have graded fewer submissions so far</Text>
           </Checkbox.Root>
         </Field.Root>
-        <Field.Root maxWidth={"md"}>
+        <Field.Root>
           <Checkbox.Root checked={preferFewerAssigned} onCheckedChange={(e) => setPreferFewerAssigned(!!e.checked)}>
             <Checkbox.Control>
               <Checkbox.HiddenInput />
@@ -585,8 +607,8 @@ export function ReviewAssignmentAccordion({
           </Checkbox.Root>
         </Field.Root>
 
-        <Field.Root maxWidth={"md"}>
-          <Field.Label>Due Date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
+        <Field.Root>
+          <Field.Label>Review Due Date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
           <Input
             type="datetime-local"
             value={
@@ -645,7 +667,7 @@ export function ReviewAssignmentAccordion({
             </Button>
           </Flex>
         )}
-      </>
+      </VStack>
     );
   }
 
@@ -653,18 +675,23 @@ export function ReviewAssignmentAccordion({
     <>
       <Accordion.Root
         collapsible
+        value={currentSegment ? [currentSegment] : []}
         marginBottom={"2"}
         onValueChange={(e) => {
           clearStateData();
           if (e.value.length > 0) {
-            setCurrentSegment(e.value[0]);
+            setCurrentSegment(e.value[0] as "assign grading" | "reassign grading");
+          } else {
+            setCurrentSegment(undefined);
           }
         }}
       >
         <Accordion.Item key={1} value={"assign grading"}>
           <Accordion.ItemTrigger>
             <Heading size="md">Assign grading</Heading>
-            <Accordion.ItemIndicator />
+            <Accordion.ItemIndicator>
+              <Icon as={LuChevronDown} />
+            </Accordion.ItemIndicator>
           </Accordion.ItemTrigger>
           <Accordion.ItemContent>
             <Fieldset.Root>
@@ -677,12 +704,14 @@ export function ReviewAssignmentAccordion({
         <Accordion.Item key={2} value={"reassign grading"}>
           <Accordion.ItemTrigger>
             <Heading size="md">Reassign grading</Heading>
-            <Accordion.ItemIndicator />
+            <Accordion.ItemIndicator>
+              <Icon as={LuChevronDown} />
+            </Accordion.ItemIndicator>
           </Accordion.ItemTrigger>
           <Accordion.ItemContent>
-            <Fieldset.Root>
+            <Fieldset.Root maxW={"lg"}>
               <Fieldset.Content>
-                <Field.Root maxWidth={"md"}>
+                <Field.Root>
                   <Field.Label>Select grader whose remaining work you want to reassign</Field.Label>
                   <Select
                     value={{ label: selectedUser?.profiles.name, value: selectedUser }}

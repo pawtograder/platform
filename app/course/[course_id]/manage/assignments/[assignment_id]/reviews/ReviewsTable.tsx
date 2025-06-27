@@ -247,7 +247,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       }
     ],
-    [handleDelete, openAssignModal, getReviewStatus]
+    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
   );
 
   const table = useTable<PopulatedReviewAssignment>({

@@ -23,17 +23,17 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     href: `/course/${courseId}/manage/assignments/${assignmentId}/due-date-exceptions`,
     icon: FaCalendar
   },
+  {
+    label: "Grading Assignments",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/reviews`,
+    icon: FaSearch
+  },
   { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
   { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
   {
     label: "Rerun Autograder",
     href: `/course/${courseId}/manage/assignments/${assignmentId}/rerun-autograder`,
     icon: FaPooStorm
-  },
-  {
-    label: "Manage Reviews",
-    href: `/course/${courseId}/manage/assignments/${assignmentId}/reviews`,
-    icon: FaSearch
   }
 ];
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
