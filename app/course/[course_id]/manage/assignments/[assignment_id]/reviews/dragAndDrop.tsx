@@ -17,6 +17,10 @@ import { Box, VStack, HStack, Text, Badge, Container, Card, Flex } from "@chakra
 import { CSS } from "@dnd-kit/utilities";
 import { DraftReviewAssignment, UserRoleWithConflictsAndName } from "./page";
 
+function getDraggableId(item: DraftReviewAssignment): string {
+  return item.part ? `submission-${item.submission.id}-part-${item.part.id}` : `submission-${item.submission.id}`;
+}
+
 interface DraggableItemProps {
   item: DraftReviewAssignment;
 }
@@ -31,7 +35,7 @@ interface DroppableAreaProps {
 
 function DraggableItem({ item }: DraggableItemProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: item.submission.id
+    id: getDraggableId(item)
   });
 
   const style = {
@@ -55,7 +59,9 @@ function DraggableItem({ item }: DraggableItemProps) {
     >
       <Card.Body>
         <HStack gap={3}>
-          <Text flex={1}>{item.submitter.profiles.name}</Text>
+          <Text flex={1}>
+            {item.submitter.profiles.name} {item.part ? `(${item.part.name})` : ""}
+          </Text>
         </HStack>
       </Card.Body>
     </Card.Root>
@@ -124,24 +130,12 @@ export default function DragAndDropExample({
     return { id: staff.private_profile_id, title: staff.profiles.name };
   });
 
-  Array.from(
-    draftReviews
-      .reduce((map, item) => {
-        map.set(item.assignee.private_profile_id, {
-          id: item.assignee.private_profile_id,
-          title: item.assignee.profiles.name
-        });
-        return map;
-      }, new Map<string, { id: string; title: string }>())
-      .values()
-  );
-
-  const [activeId, setActiveId] = useState<number | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor));
 
   function handleDragStart(event: DragStartEvent) {
-    setActiveId(event.active.id as number);
+    setActiveId(event.active.id as string);
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -149,14 +143,14 @@ export default function DragAndDropExample({
     setActiveId(null);
 
     if (over && active.id !== over.id) {
-      const draggedItem = draftReviews.find((item) => item.submission.id === active.id);
+      const draggedItem = draftReviews.find((item) => getDraggableId(item) === active.id);
       if (hasConflict(over.id, draggedItem)) {
         return false;
       }
       if (draggedItem && categories.some((cat) => cat.id === over.id)) {
         setDraftReviews(
           draftReviews.map((item) =>
-            item.submission.id === active.id
+            getDraggableId(item) === active.id
               ? {
                   ...item,
                   assignee: courseStaffWithConflicts.find(
@@ -183,11 +177,23 @@ export default function DragAndDropExample({
       });
   }
 
+  Array.from(
+    draftReviews
+      .reduce((map, item) => {
+        map.set(item.assignee.private_profile_id, {
+          id: item.assignee.private_profile_id,
+          title: item.assignee.profiles.name
+        });
+        return map;
+      }, new Map<string, { id: string; title: string }>())
+      .values()
+  );
+
   const getItemsByAssignee = (assignee_profile_id: string): DraftReviewAssignment[] => {
     return draftReviews.filter((item) => item.assignee.private_profile_id === assignee_profile_id);
   };
 
-  const activeItem = activeId ? draftReviews.find((item) => item.submission.id === activeId) : null;
+  const activeItem = activeId ? draftReviews.find((item) => getDraggableId(item) === activeId) : null;
 
   return (
     <Container maxW="6xl" py={8}>
@@ -216,7 +222,7 @@ export default function DragAndDropExample({
                       hasConflict={hasConflictForThisArea}
                     >
                       {getItemsByAssignee(category.id).map((item) => (
-                        <DraggableItem key={item.submission.id} item={item} />
+                        <DraggableItem key={getDraggableId(item)} item={item} />
                       ))}
                     </DroppableArea>
                   </Box>

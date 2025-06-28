@@ -250,7 +250,6 @@ export class TAAssignmentSolver {
   solve(): AssignmentResult {
     // Validate capacity constraints before building network
     const validation = this.validateCapacityConstraints();
-    console.log(validation);
     if (!validation.isValid) {
       return {
         success: false,

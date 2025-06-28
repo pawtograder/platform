@@ -14,6 +14,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 import { TZDate } from "@date-fns/tz";
 import { useCourse } from "@/hooks/useAuthState";
+import { ReviewAssignmentRubricParts, RubricPart } from "@/utils/supabase/DatabaseTypes";
 import { MdOutlineAssignment } from "react-icons/md";
 
 // Type definitions
@@ -38,7 +39,7 @@ export type PopulatedReviewAssignment = ReviewAssignmentRow & {
   profiles?: ProfileRow;
   submissions?: PopulatedSubmission;
   rubrics?: RubricRow;
-  review_assignment_rubric_parts?: { rubric_part_id: number }[];
+  review_assignment_rubric_parts?: ReviewAssignmentRubricParts & { rubric_parts: RubricPart }[];
 };
 
 interface ReviewsTableProps {
@@ -213,6 +214,37 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       },
       {
+        id: "rubric-part",
+        header: "Rubric Part",
+        accessorFn: (row: PopulatedReviewAssignment) =>
+          row.review_assignment_rubric_parts?.reduce((past, part) => {
+            return past + part.rubric_parts.name + " ";
+          }, "") ?? "All",
+        cell: function render({ row }: { row: Row<PopulatedReviewAssignment> }) {
+          console.log(
+            row.original.review_assignment_rubric_parts?.reduce((past, part) => {
+              return past + part.rubric_parts.name + " ";
+            }, "")
+          );
+          return (
+            <Text>
+              {row.original.review_assignment_rubric_parts?.reduce((past, part) => {
+                return past + part.rubric_parts.name + " ";
+              }, "") ?? "All"}
+            </Text>
+          );
+        },
+        enableColumnFilter: true,
+        filterFn: (row: Row<PopulatedReviewAssignment>, id, filterValue: string) => {
+          const text =
+            row.original.review_assignment_rubric_parts?.reduce((past, part) => {
+              return past + part.rubric_parts.name + " ";
+            }, "") ?? "All";
+          const filterString = String(filterValue).toLowerCase();
+          return text.toLowerCase().includes(filterString);
+        }
+      },
+      {
         id: "actions",
         header: "Actions",
         accessorKey: "id",
@@ -276,7 +308,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       },
       meta: {
         select:
-          "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*)"
+          "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(name))"
       }
     },
     manualFiltering: false, // Using table's filterFns

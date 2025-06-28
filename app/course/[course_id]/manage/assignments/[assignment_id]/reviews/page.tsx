@@ -4,10 +4,20 @@ import { Button } from "@/components/ui/button";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
-import { ReviewAssignment, Rubric, Submission, SubmissionReview, Tag, UserRole } from "@/utils/supabase/DatabaseTypes";
+import {
+  ReviewAssignment,
+  ReviewAssignmentRubricParts,
+  Rubric,
+  RubricPart,
+  Submission,
+  SubmissionReview,
+  Tag,
+  UserRole
+} from "@/utils/supabase/DatabaseTypes";
 import {
   Accordion,
   Box,
+  Checkbox,
   Container,
   Field,
   Fieldset,
@@ -26,7 +36,7 @@ import { MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { FaPlus } from "react-icons/fa";
-import { LuChevronDown } from "react-icons/lu";
+import { LuCheck, LuChevronDown } from "react-icons/lu";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import { AssignmentResult, TAAssignmentSolver } from "./assignmentCalculator";
 import AssignReviewModal from "./assignReviewModal";
@@ -35,9 +45,11 @@ import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
 import useTags from "@/hooks/useTags";
 import TagDisplay from "@/components/ui/tag";
 
+type ReviewAssignmentsWithParts = ReviewAssignment & { review_assignment_rubric_parts: ReviewAssignmentRubricParts[] };
+
 export type SubmissionWithGrading = Submission & {
   submission_reviews: SubmissionReview[];
-  review_assignments: ReviewAssignment[];
+  review_assignments: ReviewAssignmentsWithParts[];
   assignment_groups: {
     assignment_groups_members: {
       profile_id: string;
@@ -56,7 +68,10 @@ export type DraftReviewAssignment = {
   assignee: UserRoleWithConflictsAndName;
   submitter: UserRoleWithConflictsAndName;
   submission: SubmissionWithGrading;
+  part?: RubricPart;
 };
+
+export type RubricWithParts = Rubric & { rubric_parts: RubricPart[] };
 
 // Main Page Component
 export default function ReviewAssignmentsPage() {
@@ -119,7 +134,7 @@ export default function ReviewAssignmentsPage() {
 
 function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleReviewAssignmentChange: () => void }) {
   const { course_id, assignment_id } = useParams();
-  const [selectedRubric, setSelectedRubric] = useState<Rubric>();
+  const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
   const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
   const [role, setRole] = useState<string>("Graders");
   const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>([]);
@@ -133,15 +148,16 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
       value: Tag;
     }>
   >([]);
+  const [selectedRubricParts, setSelectedRubricParts] = useState<boolean>();
 
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
   const course = useCourse();
 
-  const { data: gradingRubrics } = useList<Rubric>({
+  const { data: gradingRubrics } = useList<RubricWithParts>({
     resource: "rubrics",
     meta: {
-      select: "*"
+      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
     },
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
@@ -157,7 +173,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
     resource: "submissions",
     meta: {
       select:
-        "*, submission_reviews!submission_reviews_submission_id_fkey(*), review_assignments!review_assignments_submission_id_fkey(*), assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id))"
+        "*, submission_reviews!submission_reviews_submission_id_fkey(*), review_assignments!review_assignments_submission_id_fkey(*, review_assignment_rubric_parts!review_assignment_rubric_parts_review_assignment_id_fkey(*)), assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id))"
     },
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
@@ -218,7 +234,9 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
       setSubmissionsToDo(
         activeSubmissions.data.filter((sub) => {
           return (
-            sub.review_assignments.length === 0 &&
+            !sub.review_assignments.find(
+              (assign) => assign.rubric_id === selectedRubric.id // TODO
+            ) &&
             !sub.submission_reviews.find((review) => {
               return review.completed_at !== null && review.rubric_id === selectedRubric.id;
             })
@@ -266,7 +284,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
         }
       }) ?? [];
     if (selectedTags.length === 0) {
-      return users;
+      return users.filter((user) => user.private_profile_id !== selectedUser?.private_profile_id);
     }
     const matchingProfileIds = new Set(
       tags
@@ -277,7 +295,6 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
         )
         .map((tag) => tag.profile_id)
     );
-
     return users.filter(
       (user) =>
         user.private_profile_id !== selectedUser?.private_profile_id && matchingProfileIds.has(user.private_profile_id)
@@ -309,17 +326,72 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
       });
       return;
     }
+
     const historicalWorkload = new Map<string, number>();
     if (baseOnAll) {
-      preferAssignedFewerCalculator(historicalWorkload);
+      baseOnAllCalculator(historicalWorkload);
     }
-    const solver = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload);
-    const result = solver.solve();
+
+    if (selectedRubricParts) {
+      const reviewAssignments = generateReviewsByRubricPart(users, submissionsToDo, historicalWorkload);
+      setDraftReviews(reviewAssignments);
+    } else {
+      const reviewAssignments = generateReviewsByRubric(users, submissionsToDo, historicalWorkload);
+      setDraftReviews(reviewAssignments);
+    }
+  };
+
+  const generateReviewsByRubric = (
+    users: UserRoleWithConflictsAndName[],
+    submissionsToDo: SubmissionWithGrading[],
+    historicalWorkload: Map<string, number>
+  ) => {
+    const result = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload).solve();
     if (result.error) {
       toaster.error({ title: "Error drafting reviews", description: result.error });
     }
-    toReview(result);
+    return toReview(result);
   };
+
+  const generateReviewsByRubricPart = (
+    users: UserRoleWithConflictsAndName[],
+    submissionsToDo: SubmissionWithGrading[],
+    historicalWorkload: Map<string, number>
+  ) => {
+    if (!selectedRubric?.rubric_parts.length || selectedRubric?.rubric_parts.length === 0) {
+      toaster.error({
+        title: "Error drafting reviews",
+        description: "Unable to create assignments by part because rubric has no parts"
+      });
+      return [];
+    }
+    const groups = splitIntoGroups(users, selectedRubric?.rubric_parts.length);
+    const returnResult = [];
+    for (let x = 0; x < groups.length; x += 1) {
+      const result = new TAAssignmentSolver(groups[x], submissionsToDo, historicalWorkload).solve();
+      if (result.error) {
+        toaster.error({ title: "Error drafting reviews", description: result.error });
+      }
+      returnResult.push(toReview(result, selectedRubric?.rubric_parts[x]));
+    }
+    return returnResult.reduce((prev, cur) => {
+      return prev.concat(cur);
+    }, [] as DraftReviewAssignment[]);
+  };
+
+  function splitIntoGroups<T>(arr: T[], numGroups: number) {
+    if (numGroups <= 0 || arr.length === 0) return [];
+    if (numGroups >= arr.length) return arr.map((item) => [item]);
+
+    const baseSize = Math.floor(arr.length / numGroups);
+    const remainder = arr.length % numGroups;
+
+    return Array.from({ length: numGroups }, (_, i) => {
+      const start = i * baseSize + Math.min(i, remainder);
+      const size = baseSize + (i < remainder ? 1 : 0);
+      return arr.slice(start, start + size);
+    });
+  }
 
   /**
    * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them more work.
@@ -327,7 +399,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
    *
    * @param historicalWorkload map to populate of assignee_private_profile_id -> number of relevant submissions
    */
-  const preferAssignedFewerCalculator = useCallback(
+  const baseOnAllCalculator = useCallback(
     (historicalWorkload: Map<string, number>) => {
       for (const submission of activeSubmissions?.data ?? []) {
         for (const review of submission.review_assignments.filter((rev) => rev.rubric_id === selectedRubric?.id)) {
@@ -347,7 +419,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
    * @param result the result of the assignment calculator
    */
   const toReview = useCallback(
-    (result: AssignmentResult) => {
+    (result: AssignmentResult, part?: RubricPart) => {
       const reviewAssignments: DraftReviewAssignment[] = [];
       result.assignments?.entries().forEach((entry) => {
         const user: UserRoleWithConflictsAndName = entry[0];
@@ -366,11 +438,12 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
           reviewAssignments.push({
             assignee: user,
             submitter: to,
-            submission: submission
+            submission: submission,
+            part: part
           });
         });
       });
-      setDraftReviews(reviewAssignments);
+      return reviewAssignments;
     },
     [userRoles]
   );
@@ -386,34 +459,60 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
       toaster.error({ title: "Error creating review assignments", description: "Failed to find current course" });
       return false;
     }
-    const reviewAssignments: Omit<
-      ReviewAssignment,
-      "id" | "created_at" | "max_allowable_late_tokens" | "release_date"
-    >[] = [];
-    for (const review of draftReviews ?? []) {
-      const submissionReviewId = await submissionReviewIdForReview(review);
-      if (!submissionReviewId) {
-        continue;
-      }
-      reviewAssignments.push({
-        assignee_profile_id: review.assignee.private_profile_id,
-        submission_id: review.submission.id,
-        assignment_id: Number(assignment_id),
-        rubric_id: selectedRubric.id,
-        class_id: Number(course_id),
-        submission_review_id: submissionReviewId,
-        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
-      });
-    }
+
     await clearIncompleteAssignmentsForUser();
-    await mutateAsync({
-      resource: "review_assignments",
-      values: reviewAssignments
-    });
+
+    const submissionReviewPromises = (draftReviews ?? []).map(async (review) => ({
+      review,
+      submissionReviewId: await submissionReviewIdForReview(review)
+    }));
+
+    const reviewsWithSubmissionIds = await Promise.all(submissionReviewPromises);
+
+    const validReviews = reviewsWithSubmissionIds.filter(({ submissionReviewId }) => submissionReviewId);
+
+    if (validReviews.length === 0) {
+      toaster.error({ title: "Error", description: "No valid reviews to assign" });
+      return false;
+    }
+
+    const reviewAssignmentPromises = validReviews.map(({ review, submissionReviewId }) =>
+      mutateAsync({
+        resource: "review_assignments",
+        values: {
+          assignee_profile_id: review.assignee.private_profile_id,
+          submission_id: review.submission.id,
+          assignment_id: Number(assignment_id),
+          rubric_id: selectedRubric.id,
+          class_id: Number(course_id),
+          submission_review_id: submissionReviewId,
+          due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+        }
+      }).then((result) => ({ review, result }))
+    );
+
+    const createdAssignments = await Promise.all(reviewAssignmentPromises);
+
+    const rubricPartPromises = createdAssignments
+      .filter(({ review }) => review.part)
+      .map(({ review, result }) =>
+        mutateAsync({
+          resource: "review_assignment_rubric_parts",
+          values: {
+            review_assignment_id: result.data.id,
+            rubric_part_id: review.part?.id,
+            class_id: course_id
+          }
+        })
+      );
+
+    if (rubricPartPromises.length > 0) {
+      await Promise.all(rubricPartPromises);
+    }
+
     handleReviewAssignmentChange();
     clearStateData();
   };
-
   /**
    * Seraches for the submission review id for this review assignment.  If none found, creates a new submission
    * review to use.
@@ -493,6 +592,8 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
     setDueDate("");
     setSelectedUser(undefined);
     setBaseOnAll(false);
+    setSelectedRubricParts(false);
+    setSelectedTags([]);
   }, [gradingRubric]);
 
   /**
@@ -534,6 +635,15 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
             })}
           />
         </Field.Root>
+        <Field.Root>
+          <Checkbox.Root checked={selectedRubricParts} onCheckedChange={(e) => setSelectedRubricParts(!!e.checked)}>
+            <Checkbox.Control>
+              <Checkbox.HiddenInput />
+              <LuCheck />
+            </Checkbox.Control>
+            <Checkbox.Label fontSize="sm">Assign {role.toLowerCase()} by rubric part</Checkbox.Label>
+          </Checkbox.Root>
+        </Field.Root>
         <Text fontSize={"sm"}>
           {currentSegment === "assign grading"
             ? submissionsToDo && submissionsToDo.length > 0
@@ -560,6 +670,7 @@ function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleRev
             ]}
           />
         </Field.Root>
+
         <Field.Root>
           <Field.Label>Filter {role.toLowerCase()} by tag</Field.Label>
           <Select

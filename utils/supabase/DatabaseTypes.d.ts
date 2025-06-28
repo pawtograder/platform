@@ -574,3 +574,5 @@ export type SelfReviewSettings = GetResult<
 >;
 
 export type ReviewAssignment = Database["public"]["Tables"]["review_assignments"]["Row"];
+
+export type ReviewAssignmentRubricParts = Database["public"]["Tables"]["review_assignment_rubric_parts"]["Row"];
