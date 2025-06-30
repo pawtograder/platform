@@ -1,6 +1,6 @@
-import { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
+import type { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
 import { Spinner } from "@chakra-ui/react";
-import { all, create, FunctionNode, i, isArray, MathNode, Matrix } from "mathjs";
+import { all, create, FunctionNode, isArray, type MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
@@ -50,25 +50,25 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "column_slug" in value
   );
 }
-type UnreleasedGradebookColumnStudent = {
-  score: undefined;
-  score_override: undefined;
-  is_missing: true;
-  is_excused: true;
-  is_droppable: true;
-  is_released: false;
-  max_score: number;
-};
-function isUnreleasedGradebookColumnStudent(value: unknown): value is UnreleasedGradebookColumnStudent {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "is_missing" in value &&
-    value.is_missing === true &&
-    "is_excused" in value &&
-    value.is_excused === true
-  );
-}
+// type UnreleasedGradebookColumnStudent = {
+//   score: undefined;
+//   score_override: undefined;
+//   is_missing: true;
+//   is_excused: true;
+//   is_droppable: true;
+//   is_released: false;
+//   max_score: number;
+// };
+// function isUnreleasedGradebookColumnStudent(value: unknown): value is UnreleasedGradebookColumnStudent {
+//   return (
+//     typeof value === "object" &&
+//     value !== null &&
+//     "is_missing" in value &&
+//     value.is_missing === true &&
+//     "is_excused" in value &&
+//     value.is_excused === true
+//   );
+// }
 
 class GradebookWhatIfController {
   private _grades: GradebookWhatIfGradeMap = {};
@@ -214,7 +214,7 @@ class GradebookWhatIfController {
     console.log(allColumns.map((c) => c.slug));
     if (!column) return;
     if (column.score_expression) {
-      const math = create(all, {});
+      const math = create(all!, {});
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
       const imports: Record<string, (...args: any[]) => unknown> = {};
       imports["gradebook_columns"] = (context: ExpressionContext, columnSlug: string | string[]) => {
@@ -362,7 +362,7 @@ class GradebookWhatIfController {
             return ret;
           };
           if (matchingColumns.length === 1 && !slug.includes("*")) {
-            return scoreForColumnID(matchingColumns[0].id);
+            return scoreForColumnID(matchingColumns[0]!.id);
           } else {
             return matchingColumns.map((col) => scoreForColumnID(col.id));
           }
@@ -388,14 +388,14 @@ class GradebookWhatIfController {
           );
           if (!matchingAssignments.length) return null;
           // To find a temporary what-if, find a column that depends on only this assignment
-          const column = allColumns.find((c) => c.dependencies?.assignments?.includes(matchingAssignments[0].id));
+          const column = allColumns.find((c) => c.dependencies?.assignments?.includes(matchingAssignments[0]!.id));
           if (column) {
             const whatIfVal = this.getGrade(column.id);
             if (whatIfVal) return whatIfVal;
           }
           const submission = this.gradebookController.studentSubmissions
             .get(this.private_profile_id)
-            ?.find((s) => s.assignment_id === matchingAssignments[0].id);
+            ?.find((s) => s.assignment_id === matchingAssignments[0]!.id);
           if (!submission) return null;
           return submission.total_score;
         };

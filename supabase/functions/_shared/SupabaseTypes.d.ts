@@ -1393,6 +1393,13 @@ export type Database = {
         };
         Relationships: [
           {
+            foreignKeyName: "emails_batch_id_fkey";
+            columns: ["batch_id"];
+            isOneToOne: false;
+            referencedRelation: "email_batches";
+            referencedColumns: ["id"];
+          },
+          {
             foreignKeyName: "emails_class_id_fkey";
             columns: ["class_id"];
             isOneToOne: false;

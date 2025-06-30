@@ -1,5 +1,5 @@
 "use client";
-import { RubricCheckSelectOption, RubricCriteriaSelectGroupOption, RubricCheckSubOptions } from "./code-file";
+import type { RubricCheckSelectOption, RubricCriteriaSelectGroupOption, RubricCheckSubOptions } from "./code-file";
 import { Menu, MenuItem, SubMenu } from "@jonbell/react-radial-menu";
 import { Box } from "@chakra-ui/react";
 
@@ -85,7 +85,7 @@ function RubricCriteriaSubMenuOrItem({
   } else if (criterion.options.length === 1) {
     return RubricCheckSubMenuOrItem({
       criterion,
-      option: criterion.options[0],
+      option: criterion.options[0]!,
       handleItemClick,
       handleSubItemClick,
       handleDisplayClick
@@ -111,8 +111,8 @@ export function RubricMarkingMenu({
 }) {
   // You can also use separate handler for each item
   const handleItemClick = (
-    event: React.MouseEvent<SVGGElement, MouseEvent>,
-    index: number,
+    _event: React.MouseEvent<SVGGElement, MouseEvent>,
+    _index: number,
     data?: RubricCheckSelectOption
   ) => {
     setSelectedCheckOption(data!);
@@ -120,8 +120,8 @@ export function RubricMarkingMenu({
     setCurrentMode("select");
   };
   const handleSubItemClick = (
-    event: React.MouseEvent<SVGGElement, MouseEvent>,
-    index: number,
+    _event: React.MouseEvent<SVGGElement, MouseEvent>,
+    _index: number,
     data?: RubricCheckSubOptions
   ) => {
     //This is not very nice, but it works...
@@ -129,7 +129,8 @@ export function RubricMarkingMenu({
     setSelectedSubOption(data!);
     setCurrentMode("select");
   };
-  const handleDisplayClick = (event: React.MouseEvent<SVGGElement, MouseEvent>, position: string) => {
+  const handleDisplayClick = (_event: React.MouseEvent<SVGGElement, MouseEvent>, position: string) => {
+    // eslint-disable-next-line no-console
     console.log(`[Display] ${position} clicked`);
   };
 

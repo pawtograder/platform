@@ -1,7 +1,7 @@
 "use client";
 import data from "@emoji-mart/data";
 import { useCallback, useRef, useState } from "react";
-import { IGif } from "@giphy/js-types";
+import type { IGif } from "@giphy/js-types";
 import MDEditor from "@uiw/react-md-editor";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Box, Button, Field, HStack, Textarea, VStack, Text } from "@chakra-ui/react";
@@ -92,7 +92,7 @@ export default function MessageInput(props: MessageInputProps) {
       }
       const urlEncodedFilename = encodeURIComponent(fileName);
 
-      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
+      const url = `${process.env["NEXT_PUBLIC_SUPABASE_URL"]}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
       sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
       return url;
     },
@@ -249,13 +249,7 @@ export default function MessageInput(props: MessageInputProps) {
               </Button>
             </Tooltip>
             {enableFilePicker && (
-              <input
-                title="Attach a file"
-                type="file"
-                ref={fileInputRef}
-                style={{ display: "none" }}
-                onChange={attachFile}
-              />
+              <input title="Attach a file" type="file" ref={fileInputRef} className="hidden" onChange={attachFile} />
             )}
             {enableGiphyPicker && (
               <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
@@ -394,13 +388,7 @@ export default function MessageInput(props: MessageInputProps) {
             </Button>
           </Tooltip>
           {enableFilePicker && (
-            <input
-              title="Attach a file"
-              type="file"
-              ref={fileInputRef}
-              style={{ display: "none" }}
-              onChange={attachFile}
-            />
+            <input title="Attach a file" type="file" ref={fileInputRef} className="hidden" onChange={attachFile} />
           )}
           {enableGiphyPicker && (
             <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>

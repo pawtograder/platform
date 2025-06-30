@@ -5,13 +5,13 @@ import { Field } from "@/components/ui/field";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useGradersAndInstructors, useStudentRoster } from "@/hooks/useClassProfiles";
-import { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
+import type { Database, TablesInsert } from "@/utils/supabase/SupabaseTypes";
 import { Dialog, HStack, Portal, Text, Textarea, VStack } from "@chakra-ui/react";
-import { HttpError, useCreate } from "@refinedev/core";
+import { type HttpError, useCreate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { Select as ChakraReactSelect, type OptionBase } from "chakra-react-select";
 import { useEffect, useMemo } from "react";
-import { Controller, SubmitHandler } from "react-hook-form";
+import { Controller, type SubmitHandler } from "react-hook-form";
 
 type GradingConflict = Database["public"]["Tables"]["grading_conflicts"]["Row"];
 

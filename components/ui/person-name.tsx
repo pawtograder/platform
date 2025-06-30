@@ -1,5 +1,5 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { Avatar, HStack, Text, TextProps, VStack } from "@chakra-ui/react";
+import { Avatar, HStack, Text, type TextProps, VStack } from "@chakra-ui/react";
 import { memo } from "react";
 
 const MemoizedPersonName = memo(PersonName);

@@ -3,13 +3,13 @@ import { useCreate, useInvalidate } from "@refinedev/core";
 import { Box, Button, Card, Editable, Flex, Heading, HStack, Spacer, Text } from "@chakra-ui/react";
 import { IoMdClose } from "react-icons/io";
 import { useParams } from "next/navigation";
-import { SetStateAction, useMemo, useState } from "react";
+import { type SetStateAction, useMemo, useState } from "react";
 import { CreatableSelect, Select } from "chakra-react-select";
-import { UserRoleWithUserDetails } from "./page";
+import type { UserRoleWithUserDetails } from "./page";
 import { ToggleTip } from "@/components/ui/toggle-tip";
 import { LuInfo } from "react-icons/lu";
 import { toaster } from "@/components/ui/toaster";
-import { Emails } from "@/utils/supabase/DatabaseTypes";
+import type { Emails } from "@/utils/supabase/DatabaseTypes";
 
 export default function EmailPreviewAndSend({ userRoles }: { userRoles?: UserRoleWithUserDetails[] }) {
   const { course_id } = useParams();
@@ -125,10 +125,11 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
     setCurrentPage(1); // Reset to first page
   };
 
-  // Generate page numbers for navigation
-  const getPageNumbers = () => {
-    const pages = [];
+  // Memoized list of visible page numbers (derived from currentPage & totalPages)
+  const pageNumbers = useMemo(() => {
+    const pages: number[] = [];
     const maxVisiblePages = 5;
+
     if (totalPages <= maxVisiblePages) {
       for (let i = 1; i <= totalPages; i++) {
         pages.push(i);
@@ -141,8 +142,9 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
         pages.push(i);
       }
     }
+
     return pages;
-  };
+  }, [totalPages, currentPage]);
 
   return (
     <Box>
@@ -265,17 +267,17 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
           {/* Page Numbers */}
           <HStack>
             {/* First page if not visible */}
-            {getPageNumbers()[0] > 1 && (
+            {pageNumbers.length > 0 && pageNumbers[0]! > 1 && (
               <>
                 <Button size="sm" variant={1 === currentPage ? "solid" : "outline"} onClick={() => handlePageChange(1)}>
                   1
                 </Button>
-                {getPageNumbers()[0] > 2 && <Text>...</Text>}
+                {pageNumbers[0]! > 2 && <Text>...</Text>}
               </>
             )}
 
             {/* Visible page numbers */}
-            {getPageNumbers().map((page) => (
+            {pageNumbers.map((page) => (
               <Button
                 key={page}
                 size="sm"
@@ -288,9 +290,9 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
             ))}
 
             {/* Last page if not visible */}
-            {getPageNumbers()[getPageNumbers().length - 1] < totalPages && (
+            {pageNumbers.length > 0 && pageNumbers[pageNumbers.length - 1]! < totalPages && (
               <>
-                {getPageNumbers()[getPageNumbers().length - 1] < totalPages - 1 && <Text>...</Text>}
+                {pageNumbers[pageNumbers.length - 1]! < totalPages - 1 && <Text>...</Text>}
                 <Button
                   size="sm"
                   variant={totalPages === currentPage ? "solid" : "outline"}

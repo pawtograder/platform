@@ -1,4 +1,4 @@
-import { Stack, StackProps } from "@chakra-ui/react";
+import { Stack, type StackProps } from "@chakra-ui/react";
 
 export const ChatMessages = (props: StackProps) => {
   return (

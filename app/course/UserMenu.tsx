@@ -30,10 +30,10 @@ import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState, { useCourse } from "@/hooks/useAuthState";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
-import { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Avatar } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
-import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import { HiOutlineSupport } from "react-icons/hi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
@@ -128,7 +128,7 @@ const DropBoxAvatar = ({
         });
       } else {
         setAvatarLink(
-          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
+          `${process.env["NEXT_PUBLIC_SUPABASE_URL"]}/storage/v1/object/public/avatars/${user?.id}/${course_id}/${uuid}.${fileExtension}`
         );
       }
     },
@@ -144,6 +144,9 @@ const DropBoxAvatar = ({
         return;
       }
       const file = files[0];
+      if (!file) {
+        return;
+      }
       if (file.type === "image/jpeg" || file.type === "image/png") {
         completeAvatarUpload(file);
       } else {
@@ -436,8 +439,8 @@ function UserSettingsMenu() {
   });
 
   useEffect(() => {
-    if (dbUser) {
-      setGitHubUsername(dbUser.data[0].github_username);
+    if (dbUser && dbUser.data.length > 0) {
+      setGitHubUsername(dbUser.data[0]?.github_username ?? null);
     }
   }, [dbUser]);
 

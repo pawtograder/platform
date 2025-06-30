@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Input, VStack, Text, Dialog, Portal, Box } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
-import { useForm, SubmitHandler } from "react-hook-form";
+import { useForm, type SubmitHandler } from "react-hook-form";
 import { parse } from "csv-parse/browser/esm/sync";
 import { useParams } from "next/navigation";
 import { useInvalidate } from "@refinedev/core";
