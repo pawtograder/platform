@@ -9,7 +9,7 @@ import { LiveMeetingForHelpRequestRequest } from "../_shared/FunctionTypes.d.ts"
 
 async function handleRequest(req: Request) {
   const { courseId, helpRequestId } = (await req.json()) as LiveMeetingForHelpRequestRequest;
-  const supabase = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
+  const { supabase, enrollment } = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
   const {
     data: { user }
   } = await supabase.auth.getUser();
@@ -51,7 +51,7 @@ async function handleRequest(req: Request) {
   }
   const Attendee = await chime.createAttendee({
     MeetingId: Meeting.Meeting?.MeetingId,
-    ExternalUserId: user.id,
+    ExternalUserId: enrollment.private_profile_id,
     Capabilities: {
       Audio: "SendReceive",
       Video: "SendReceive",

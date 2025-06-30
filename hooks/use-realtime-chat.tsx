@@ -23,6 +23,9 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
     resource: "help_request_messages"
   });
 
+  // TODO: Use channels + persistence, turn off real-time updates for the database tables
+  // RLS on the channel https://supabase.com/docs/guides/realtime/authorization#broadcast
+
   useEffect(() => {
     const newChannel = supabase.channel(roomName, {
       config: {

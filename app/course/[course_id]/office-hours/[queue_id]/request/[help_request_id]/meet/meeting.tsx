@@ -50,6 +50,7 @@ function HelpMeeting() {
 
   useEffect(() => {
     meetingManager.getAttendee = async (chimeAttendeeId: string, externalUserId?: string) => {
+      console.log("Getting attendee", chimeAttendeeId, externalUserId);
       const user = users.find((user) => user.id === externalUserId);
       if (!user) {
         throw new Error("User not found");
