@@ -1,13 +1,16 @@
 {
-  "version": "4",
+  "version": "5",
   "specifiers": {
     "jsr:@supabase/functions-js@*": "2.4.4",
+    "npm:@supabase/postgrest-js@^1.19.4": "1.19.4",
+    "npm:@supabase/supabase-js@*": "2.50.0",
     "npm:@supabase/supabase-js@^2.50.0": "2.50.0",
     "npm:@types/mathjs@^9.4.2": "9.4.2",
     "npm:@types/node@*": "22.12.0",
     "npm:mathjs@^14.5.2": "14.5.2",
     "npm:minimatch@^10.0.3": "10.0.3",
-    "npm:openai@^4.52.5": "4.87.3"
+    "npm:openai@^4.52.5": "4.87.3",
+    "npm:pgmq@*": "0.0.5"
   },
   "jsr": {
     "@supabase/functions-js@2.4.4": {
@@ -84,7 +87,8 @@
       "integrity": "sha512-GF5g1vJmvKdWIWsE53XX7EDAyCaZ9p6gaYm1xhlXn5JjrY/NJrOfJN3fBxS3wyZpVh3QqKoMkS2WjFwxWMHOTw==",
       "dependencies": [
         "mathjs"
-      ]
+      ],
+      "deprecated": true
     },
     "@types/node-fetch@2.6.12": {
       "integrity": "sha512-8nneRWKCg3rMtF69nLQJnOYUcbafYeFSjqkw3jCRLsqkWFlHaoQrr5mXmofFGOx3DKn7UfmBMyov8ySvLRVldA==",
@@ -128,6 +132,9 @@
     },
     "asynckit@0.4.0": {
       "integrity": "sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q=="
+    },
+    "buffer-writer@2.0.0": {
+      "integrity": "sha512-a7ZpuTZU1TRtnwyCNW3I5dc0wWNC3VR9S++Ewyk2HHZdrO3CQJqSpd+95Us590V6AL7JqUAH2IwZ/398PmNFgw=="
     },
     "call-bind-apply-helpers@1.0.2": {
       "integrity": "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==",
@@ -275,7 +282,8 @@
         "seedrandom",
         "tiny-emitter",
         "typed-function"
-      ]
+      ],
+      "bin": true
     },
     "mime-db@1.52.0": {
       "integrity": "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg=="
@@ -296,7 +304,8 @@
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
     },
     "node-domexception@1.0.0": {
-      "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ=="
+      "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
+      "deprecated": true
     },
     "node-fetch@2.7.0": {
       "integrity": "sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==",
@@ -314,10 +323,93 @@
         "form-data-encoder",
         "formdata-node",
         "node-fetch"
+      ],
+      "bin": true
+    },
+    "packet-reader@1.0.0": {
+      "integrity": "sha512-HAKu/fG3HpHFO0AA8WE8q2g+gBJaZ9MG7fcKk+IJPLTGAD6Psw4443l+9DGRbOIh3/aXr7Phy0TjilYivJo5XQ=="
+    },
+    "pg-connection-string@0.1.3": {
+      "integrity": "sha512-i0NV/CrSkFTaiOQs9AGy3tq0dkSjtTd4d7DfsjeDVZAA4aIHInwfFEmriNYGGJUfZ5x6IAC/QddoUpUJjQAi0w=="
+    },
+    "pg-ears@1.2.3": {
+      "integrity": "sha512-fw9jB0qFRocK1T0P9sndGWiq4aIMuYurb6zfVTZITs0akRM4EcF0sj/+E6rtYQt19xgy2hY1JTsBNeSDoldr4A==",
+      "dependencies": [
+        "pg"
+      ]
+    },
+    "pg-int8@1.0.1": {
+      "integrity": "sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw=="
+    },
+    "pg-packet-stream@1.1.0": {
+      "integrity": "sha512-kRBH0tDIW/8lfnnOyTwKD23ygJ/kexQVXZs7gEyBljw4FYqimZFxnMMx50ndZ8In77QgfGuItS5LLclC2TtjYg=="
+    },
+    "pg-pool@2.0.10_pg@7.18.2": {
+      "integrity": "sha512-qdwzY92bHf3nwzIUcj+zJ0Qo5lpG/YxchahxIN8+ZVmXqkahKXsnl2aiJPHLYN9o5mB/leG+Xh6XKxtP7e0sjg==",
+      "dependencies": [
+        "pg"
+      ]
+    },
+    "pg-types@2.2.0": {
+      "integrity": "sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==",
+      "dependencies": [
+        "pg-int8",
+        "postgres-array",
+        "postgres-bytea",
+        "postgres-date",
+        "postgres-interval"
+      ]
+    },
+    "pg@7.18.2": {
+      "integrity": "sha512-Mvt0dGYMwvEADNKy5PMQGlzPudKcKKzJds/VbOeZJpb6f/pI3mmoXX0JksPgI3l3JPP/2Apq7F36O63J7mgveA==",
+      "dependencies": [
+        "buffer-writer",
+        "packet-reader",
+        "pg-connection-string",
+        "pg-packet-stream",
+        "pg-pool",
+        "pg-types",
+        "pgpass",
+        "semver"
+      ]
+    },
+    "pgmq@0.0.5": {
+      "integrity": "sha512-EvXzzEg6csrwHiBX/TOuyw/eC6oHYwk/uJAz5+71lo3N74Aj6HfOXgyS/YiJVCYu/QogNi9P1gePmAV+7IiGlg==",
+      "dependencies": [
+        "pg",
+        "pg-ears"
+      ]
+    },
+    "pgpass@1.0.5": {
+      "integrity": "sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug==",
+      "dependencies": [
+        "split2"
+      ]
+    },
+    "postgres-array@2.0.0": {
+      "integrity": "sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA=="
+    },
+    "postgres-bytea@1.0.0": {
+      "integrity": "sha512-xy3pmLuQqRBZBXDULy7KbaitYqLcmxigw14Q5sj8QBVLqEwXfeybIKVWiqAXTlcvdvb0+xkOtDbfQMOf4lST1w=="
+    },
+    "postgres-date@1.0.7": {
+      "integrity": "sha512-suDmjLVQg78nMK2UZ454hAG+OAW+HQPZ6n++TNDUX+L0+uUlLywnoxJKDou51Zm+zTCjrCl0Nq6J9C5hP9vK/Q=="
+    },
+    "postgres-interval@1.2.0": {
+      "integrity": "sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==",
+      "dependencies": [
+        "xtend"
       ]
     },
     "seedrandom@3.0.5": {
       "integrity": "sha512-8OwmbklUNzwezjGInmZ+2clQmExQPvomqjL7LFqOYqtmuxRgQYqOD3mHaU+MvZn5FLUeVxVfQjwLZW/n/JFuqg=="
+    },
+    "semver@4.3.2": {
+      "integrity": "sha512-VyFUffiBx8hABJ9HYSTXLRwyZtdDHMzMtFmID1aiNAD2BZppBmJm0Hqw3p2jkgxP9BNt1pQ9RnC49P0EcXf6cA==",
+      "bin": true
+    },
+    "split2@4.2.0": {
+      "integrity": "sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg=="
     },
     "tiny-emitter@2.1.0": {
       "integrity": "sha512-NB6Dk1A9xgQPMoGqC5CVXn123gWyte215ONT5Pp5a0yt4nlEoO1ZWeCwpncaekPHXO60i47ihFnZPiRPjRMq4Q=="
@@ -349,6 +441,9 @@
     },
     "ws@8.18.2": {
       "integrity": "sha512-DMricUmwGZUVr++AEAe2uiVM7UoO9MAVZMDu05UQOaUII0lp+zOzLLU4Xqh/JvTqklB1T4uELaaPBKyjE1r4fQ=="
+    },
+    "xtend@4.0.2": {
+      "integrity": "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ=="
     }
   },
   "redirects": {
@@ -363,6 +458,7 @@
     "https://esm.sh/escape-latex@^1.2.0?target=denonext": "https://esm.sh/escape-latex@1.2.0?target=denonext",
     "https://esm.sh/fraction.js@^5.2.1?target=denonext": "https://esm.sh/fraction.js@5.2.2?target=denonext",
     "https://esm.sh/javascript-natural-sort@^0.7.1?target=denonext": "https://esm.sh/javascript-natural-sort@0.7.1?target=denonext",
+    "https://esm.sh/mathjs": "https://esm.sh/mathjs@14.5.2",
     "https://esm.sh/node-gyp-build@^4.3.0?target=denonext": "https://esm.sh/node-gyp-build@4.8.4?target=denonext",
     "https://esm.sh/seedrandom@^3.0.5?target=denonext": "https://esm.sh/seedrandom@3.0.5?target=denonext",
     "https://esm.sh/tiny-emitter@^2.1.0?target=denonext": "https://esm.sh/tiny-emitter@2.1.0?target=denonext",
@@ -424,6 +520,7 @@
   },
   "workspace": {
     "dependencies": [
+      "npm:@supabase/postgrest-js@^1.19.4",
       "npm:@supabase/supabase-js@^2.50.0",
       "npm:@types/mathjs@^9.4.2",
       "npm:mathjs@^14.5.2",

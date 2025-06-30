@@ -9,12 +9,12 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useCourse } from "./useAuthState";
 import { CourseController } from "./useCourseController";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { all, ConstantNode, create, FunctionNode } from "mathjs";
+import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 
 // --- Types ---
@@ -39,7 +39,9 @@ export function useGradebookColumns() {
 
 export function useGradebookColumn(column_id: number) {
   const gradebookController = useGradebookController();
-  const [column, setColumn] = useState<GradebookColumn | undefined>(gradebookController.getGradebookColumn(column_id));
+  const [column, setColumn] = useState<GradebookColumnWithEntries | undefined>(
+    gradebookController.getGradebookColumn(column_id) as GradebookColumnWithEntries
+  );
   useEffect(() => {
     return gradebookController.getColumnWithSubscription(column_id, setColumn);
   }, [gradebookController, column_id]);
@@ -47,6 +49,16 @@ export function useGradebookColumn(column_id: number) {
     throw new Error(`Column ${column_id} not found`);
   }
   return column;
+}
+
+export function useGradebookColumnGrades(column_id: number) {
+  const gradebookController = useGradebookController();
+  const column = useGradebookColumn(column_id);
+  const [grades, setGrades] = useState<GradebookColumnStudent[]>(column.gradebook_column_students);
+  useEffect(() => {
+    return gradebookController.subscribeColumnStudentList(setGrades);
+  }, [gradebookController]);
+  return grades;
 }
 
 export function useGradebookColumnStudent(column_id: number, student_id: string) {
@@ -67,14 +79,52 @@ export function getScore(gradebookColumnStudent: GradebookColumnStudent | undefi
     ? gradebookColumnStudent?.score_override
     : gradebookColumnStudent?.score;
 }
-export function useReferencedContent(column_id: number, student_id: string) {
+export function useSubmissionIDForColumn(column_id: number, student_id: string) {
+  const gradebookController = useGradebookController();
+  const submissionID = useMemo(() => {
+    const assignment = gradebookController.assignments.find((a) => a.gradebook_column_id === column_id);
+    if (!assignment) return { status: "not-an-assignment" };
+    const submissions = gradebookController.studentSubmissions.get(student_id);
+    if (!submissions) return { status: "no-submission" };
+    const submission = submissions.find((s) => s.assignment_id === assignment.id);
+    if (!submission) return { status: "no-submission" };
+    return { status: "found", submission_id: submission.activesubmissionid };
+  }, [gradebookController.assignments, gradebookController.studentSubmissions, column_id, student_id]);
+  return submissionID;
+}
+export function useLinkToAssignment(column_id: number, student_id: string) {
+  const gradebookController = useGradebookController();
+  const column = useGradebookColumn(column_id);
+  const dependencies = column?.dependencies as { gradebook_columns?: number[]; assignments?: number[] };
+  const assignmentLink = useMemo(() => {
+    if (!dependencies) return null;
+    const gradesForStudent = gradebookController.studentSubmissions.get(student_id);
+    for (const assignment_id of dependencies.assignments ?? []) {
+      const assignment = gradesForStudent?.find((s) => s.assignment_id === assignment_id);
+      if (assignment) {
+        if (assignment.activesubmissionid) {
+          return `/course/${column?.class_id}/assignments/${assignment.assignment_id}/submissions/${assignment.activesubmissionid}`;
+        } else {
+          return undefined;
+        }
+      }
+    }
+    return null;
+  }, [gradebookController, column, dependencies, student_id]);
+  return assignmentLink;
+}
+export function useReferencedContent(
+  column_id: number,
+  student_id: string,
+  inclusions: { assignments?: boolean; gradebook_columns?: boolean } = { assignments: true, gradebook_columns: true }
+) {
   const gradebookController = useGradebookController();
   const column = useGradebookColumn(column_id);
   const dependencies = column?.dependencies as { gradebook_columns?: number[]; assignments?: number[] };
   const referencedContent = useMemo(() => {
     if (!dependencies) return null;
     const links: React.ReactNode[] = [];
-    if (dependencies.assignments && dependencies.assignments.length > 0) {
+    if (inclusions.assignments && dependencies.assignments && dependencies.assignments.length > 0) {
       const gradesForStudent = gradebookController.studentSubmissions.get(student_id);
       for (const assignment_id of dependencies.assignments) {
         const assignment = gradesForStudent?.find((s) => s.assignment_id === assignment_id);
@@ -100,7 +150,7 @@ export function useReferencedContent(column_id: number, student_id: string) {
         }
       }
     }
-    if (dependencies.gradebook_columns) {
+    if (inclusions.gradebook_columns && dependencies.gradebook_columns) {
       for (const column_id of dependencies.gradebook_columns) {
         const column = gradebookController.getGradebookColumn(column_id);
         if (column) {
@@ -117,24 +167,111 @@ export function useReferencedContent(column_id: number, student_id: string) {
   }, [gradebookController, column, student_id, dependencies]);
   return referencedContent;
 }
+
+/**
+ * Hook to check if all dependencies of a column have been released
+ * Sets up subscriptions to watch for changes in grades and release status
+ */
+export function useAreAllDependenciesReleased(columnId: number): boolean {
+  const gradebookController = useGradebookController();
+  const column = gradebookController.getGradebookColumn(columnId);
+  const [dependenciesReleased, setDependenciesReleased] = useState(false);
+
+  // Get all dependency column IDs recursively
+  const allDependencyColumnIds = useMemo(() => {
+    const visited = new Set<number>();
+    const dependencies: number[] = [];
+
+    const collectDependencies = (colId: number) => {
+      if (visited.has(colId)) return;
+      visited.add(colId);
+
+      const col = gradebookController.getGradebookColumn(colId);
+      if (!col?.dependencies) return;
+
+      const deps = col.dependencies as GradebookColumnDependencies;
+      if (deps.gradebook_columns) {
+        for (const depId of deps.gradebook_columns) {
+          dependencies.push(depId);
+          collectDependencies(depId);
+        }
+      }
+    };
+
+    collectDependencies(columnId);
+    return [...new Set(dependencies)];
+  }, [columnId, gradebookController]);
+
+  // Function to check all dependencies
+  const checkDependencies = useCallback(() => {
+    if (!column?.dependencies) {
+      setDependenciesReleased(true);
+      return;
+    }
+
+    const allReleased = allDependencyColumnIds.every((depId) => {
+      return gradebookController.isColumnEffectivelyReleased(depId);
+    });
+
+    setDependenciesReleased(allReleased);
+  }, [column, allDependencyColumnIds, gradebookController]);
+
+  // Initial check
+  useEffect(() => {
+    checkDependencies();
+  }, [checkDependencies]);
+
+  // Set up subscriptions for dependency columns using gradebookController
+  useEffect(() => {
+    if (allDependencyColumnIds.length === 0) return;
+
+    const unsubscribers: (() => void)[] = [];
+
+    // Subscribe to column changes for each dependency
+    allDependencyColumnIds.forEach((depId) => {
+      const unsubscribeColumn = gradebookController.getColumnWithSubscription(depId, () => {
+        checkDependencies();
+      });
+      unsubscribers.push(unsubscribeColumn);
+    });
+
+    // Subscribe to column student changes for each dependency
+    allDependencyColumnIds.forEach((depId) => {
+      const unsubscribeColumnStudent = gradebookController.subscribeColumnStudent(depId, () => {
+        checkDependencies();
+      });
+      unsubscribers.push(unsubscribeColumnStudent);
+    });
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [columnId, allDependencyColumnIds, gradebookController, checkDependencies]);
+
+  return dependenciesReleased;
+}
 class StudentGradebookController {
   private _columnsForStudent: GradebookColumnStudent[] = [];
   private _profile_id: string;
   private _columnStudentSubscribers: Map<number, ((item: GradebookColumnStudent | undefined) => void)[]> = new Map();
-
-  constructor(gradebook: GradebookWithAllData, profile_id: string) {
+  private _isInstructorOrGrader: boolean;
+  constructor(gradebook: GradebookWithAllData, profile_id: string, isInstructorOrGrader: boolean) {
     this._profile_id = profile_id;
     gradebook.gradebook_columns.forEach((col) => {
       col.gradebook_column_students.forEach((s) => {
-        if (s.student_id === profile_id) {
+        if (s.student_id === profile_id && (s.is_private || !isInstructorOrGrader)) {
           this._columnsForStudent.push(s);
         }
       });
     });
+    this._isInstructorOrGrader = isInstructorOrGrader;
   }
   setColumnForStudent(updatedColumn: GradebookColumnStudent) {
     if (updatedColumn.student_id !== this._profile_id) {
       throw new Error("Column is not for this student");
+    }
+    if (!updatedColumn.is_private && this._isInstructorOrGrader) {
+      return;
     }
     const index = this._columnsForStudent.findIndex((s) => s.id === updatedColumn.id);
     if (index === -1) {
@@ -189,6 +326,7 @@ type SubmissionWithGrades = Omit<Database["public"]["Views"]["submissions_with_g
 
 type RendererParams = {
   score: number | null;
+  max_score: number | null;
   score_override: number | null;
   is_missing: boolean;
   is_excused: boolean;
@@ -215,6 +353,11 @@ export class GradebookController {
   public studentSubmissions: Map<string, SubmissionWithGrades[]> = new Map();
 
   private _assignments?: Assignment[];
+  private _isInstructorOrGrader: boolean;
+
+  public constructor(isInstructorOrGrader: boolean) {
+    this._isInstructorOrGrader = isInstructorOrGrader;
+  }
 
   public get assignments() {
     if (!this._assignments) throw new Error("Assignments not loaded");
@@ -233,7 +376,7 @@ export class GradebookController {
     };
   }
 
-  getColumnWithSubscription(column_id: number, cb: (column: GradebookColumn) => void) {
+  getColumnWithSubscription(column_id: number, cb: (column: GradebookColumnWithEntries) => void) {
     const arr = this.columnSubscribersByColumnId.get(column_id) || [];
     this.columnSubscribersByColumnId.set(column_id, [...arr, cb]);
     return () => {
@@ -276,7 +419,9 @@ export class GradebookController {
   getGradebookColumnStudent(column_id: number, student_id: string) {
     return this.gradebook.gradebook_columns
       .find((c) => c.id === column_id)
-      ?.gradebook_column_students.find((s) => s.student_id === student_id);
+      ?.gradebook_column_students.find(
+        (s) => s.student_id === student_id && (s.is_private || !this._isInstructorOrGrader)
+      );
   }
 
   public getRendererForColumn(column_id: number) {
@@ -290,7 +435,7 @@ export class GradebookController {
   public extractAndValidateDependencies(expr: string, column_id: number) {
     const math = create(all);
     const exprNode = math.parse(expr);
-    const dependencies: Record<string, number[]> = {};
+    const dependencies: Record<string, Set<number>> = {};
     const errors: string[] = [];
     const availableDependencies = {
       assignments: this._assignments || [],
@@ -310,9 +455,9 @@ export class GradebookController {
               );
               if (matching.length > 0) {
                 if (!(functionName in dependencies)) {
-                  dependencies[functionName] = [];
+                  dependencies[functionName] = new Set();
                 }
-                dependencies[functionName].push(...matching.map((d) => d.id));
+                matching.forEach((d) => dependencies[functionName].add(d.id));
               } else {
                 errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
               }
@@ -321,17 +466,20 @@ export class GradebookController {
         }
       }
     });
-    if (dependencies.gradebook_columns) {
+    //Flatten the dependencies
+    const flattenedDependencies: Record<string, number[]> = {};
+    for (const [functionName, ids] of Object.entries(dependencies)) {
+      flattenedDependencies[functionName] = Array.from(ids);
+    }
+    if (flattenedDependencies.gradebook_columns) {
       //Check for cycles between the columns
-      const visited = new Set<number>();
-      const checkForCycles = (column_id: number) => {
+      const checkForCycles = (visited_column_id: number) => {
         if (errors.length > 0) return;
-        if (visited.has(column_id)) {
+        if (column_id === visited_column_id) {
           errors.push(`Cycle detected in score expression`);
           return;
         }
-        visited.add(column_id);
-        const column = this.getGradebookColumn(column_id);
+        const column = this.getGradebookColumn(visited_column_id);
         if (column) {
           const deps = column.dependencies as { gradebook_columns?: number[] };
           if (deps && deps.gradebook_columns) {
@@ -341,18 +489,17 @@ export class GradebookController {
           }
         }
       };
-      visited.add(column_id);
-      for (const dependentColumn of dependencies.gradebook_columns) {
+      for (const dependentColumn of flattenedDependencies.gradebook_columns) {
         checkForCycles(dependentColumn);
       }
     }
     if (errors.length > 0) {
       throw new Error(errors.join("\n"));
     }
-    if (Object.keys(dependencies).length === 0) {
+    if (Object.keys(flattenedDependencies).length === 0) {
       return null;
     }
-    return dependencies;
+    return flattenedDependencies;
   }
 
   createRendererForColumn(column: GradebookColumn): (cell: RendererParams) => React.ReactNode {
@@ -375,10 +522,21 @@ export class GradebookController {
       { score: 60, letter: "D-" },
       { score: 0, letter: "F" }
     ];
-    imports["letter"] = (score: number | undefined) => {
-      if (score === undefined) return "(Missing)";
-      const letter = letterBreakpoints.find((b) => score >= b.score);
+    imports["letter"] = (score: number | undefined, max_score: number | undefined) => {
+      if (score === undefined) return "(N/A)";
+      const normalizedScore = 100 * (score / (max_score ?? 100));
+      const letter = letterBreakpoints.find((b) => normalizedScore >= b.score);
       return letter ? letter.letter : "F";
+    };
+    imports["customLabel"] = (value: number | undefined, breakpoints: Matrix<unknown>) => {
+      if (value === undefined) return "(N/A)";
+      const breakpointsArray = breakpoints.toArray();
+      for (const [score, letter] of breakpointsArray as [number, string][]) {
+        if (value >= score) {
+          return letter;
+        }
+      }
+      return "Error";
     };
     const checkBreakpoints = [
       { score: 90, mark: "✔️+" },
@@ -386,9 +544,15 @@ export class GradebookController {
       { score: 70, mark: "✔️-" },
       { score: 0, mark: "❌" }
     ];
-    imports["check"] = (score: number | undefined) => {
-      if (score === undefined) return "(Missing)";
-      const check = checkBreakpoints.find((b) => score >= b.score);
+    imports["checkOrX"] = (score: number | undefined, max_score: number | undefined) => {
+      if (score === undefined) return "(N/A)";
+      const normalizedScore = 100 * (score / (max_score ?? 1));
+      return normalizedScore > 0 ? "✔️" : "❌";
+    };
+    imports["check"] = (score: number | undefined, max_score: number | undefined) => {
+      if (score === undefined) return "(N/A)";
+      const normalizedScore = 100 * (score / (max_score ?? 100));
+      const check = checkBreakpoints.find((b) => normalizedScore >= b.score);
       return check ? check.mark : "❌";
     };
     for (const functionName of securityFunctions) {
@@ -398,27 +562,46 @@ export class GradebookController {
     }
     math.import(imports, { override: true });
     try {
-      const expr = math.parse(column.render_expression ?? "round(score, 2)");
+      const theRenderExpression =
+        this.gradebook.expression_prefix + "\n" + (column.render_expression ?? "round(score, 2)");
+      const expr = math.parse(theRenderExpression);
       const compiled = expr.compile();
-      const renderer = (cell: RendererParams) => {
+      const cache = new Map<string, string>();
+      const Renderer = (cell: RendererParams) => {
         try {
-          const context = {
-            score: cell.score_override ?? cell.score
-          };
-          if (context.score === null || context.score === undefined) {
-            return <Text>(Missing)</Text>;
+          if (cell.is_missing) {
+            return "Missing";
           }
-          return <Text>{compiled.evaluate(context)}</Text>;
-        } catch {
-          return <Text>Expression evaluation error</Text>;
+          if ((cell.score_override ?? cell.score) === null || (cell.score_override ?? cell.score) === undefined) {
+            return "-";
+          }
+          const key = JSON.stringify(cell);
+          if (cache.has(key)) {
+            return cache.get(key)!;
+          }
+          const ret = compiled.evaluate({
+            score: cell.score_override ?? cell.score,
+            max_score: cell.max_score
+          });
+          let renderedVal: string;
+          if (typeof ret === "object" && "entries" in ret) {
+            //Return just the last result
+            renderedVal = ret.entries[ret.entries.length - 1];
+          } else {
+            renderedVal = ret;
+          }
+          cache.set(key, renderedVal);
+          return renderedVal;
+        } catch (e) {
+          console.error(e);
+          return "Expression evaluation error";
         }
       };
-      return renderer;
+      return Renderer;
     } catch {
-      const renderer = () => {
-        return <Text>Expression parse error</Text>;
+      return () => {
+        return "Expression parse error";
       };
-      return renderer;
     }
   }
 
@@ -430,9 +613,12 @@ export class GradebookController {
       ...body,
       gradebook_column_students: column?.gradebook_column_students || []
     };
+    if (column?.render_expression !== newColumn.render_expression) {
+      this.cellRenderersByColumnId.set(column_id, this.createRendererForColumn(newColumn));
+    }
     if (newColumn.sort_order !== column?.sort_order) {
       const newColumns = this.gradebook.gradebook_columns.map((c) => (c.id === column_id ? newColumn : c));
-      newColumns.sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
+      newColumns.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
       this.gradebook.gradebook_columns = newColumns;
     } else {
       //update in place
@@ -448,6 +634,10 @@ export class GradebookController {
     const body = event.payload as GradebookColumnStudent;
     const column_id = body.gradebook_column_id;
     if (event.type === "created" || event.type === "updated") {
+      if (!body.is_private && this._isInstructorOrGrader) {
+        //Instructors and graders only work on private columns
+        return;
+      }
       // Update or add the mapping in the column
       const column = this.getGradebookColumn(column_id);
       if (column) {
@@ -477,7 +667,9 @@ export class GradebookController {
           gradebook_column_students: [body],
           created_at: new Date().toISOString(),
           show_max_score: false,
-          slug: "loading"
+          slug: "loading",
+          show_calculated_ranges: false,
+          external_data: null
         };
         this.gradebook.gradebook_columns.push(newColumn);
         this.columnStudentSubscribers.get(column_id)?.forEach((cb) => cb(body));
@@ -488,7 +680,7 @@ export class GradebookController {
       if (!this.studentGradebookControllers.has(body.student_id)) {
         this.studentGradebookControllers.set(
           body.student_id,
-          new StudentGradebookController(this.gradebook, body.student_id)
+          new StudentGradebookController(this.gradebook, body.student_id, this._isInstructorOrGrader)
         );
       } else {
         this.studentGradebookControllers.get(body.student_id)!.setColumnForStudent(body);
@@ -500,7 +692,10 @@ export class GradebookController {
 
   getStudentGradebookController(student_id: string) {
     if (!this.studentGradebookControllers.has(student_id)) {
-      this.studentGradebookControllers.set(student_id, new StudentGradebookController(this.gradebook, student_id));
+      this.studentGradebookControllers.set(
+        student_id,
+        new StudentGradebookController(this.gradebook, student_id, this._isInstructorOrGrader)
+      );
     }
     return this.studentGradebookControllers.get(student_id)!;
   }
@@ -511,10 +706,14 @@ export class GradebookController {
     this.gradebook.gradebook_columns.forEach((col) => {
       this.cellRenderersByColumnId.set(col.id, this.createRendererForColumn(col));
       col.gradebook_column_students.forEach((s) => {
+        if (!s.is_private && this._isInstructorOrGrader) {
+          //Instructors and graders only work on private columns
+          return;
+        }
         if (!this.studentGradebookControllers.has(s.student_id)) {
           this.studentGradebookControllers.set(
             s.student_id,
-            new StudentGradebookController(this.gradebook, s.student_id)
+            new StudentGradebookController(this.gradebook, s.student_id, this._isInstructorOrGrader)
           );
         }
       });
@@ -531,7 +730,7 @@ export class GradebookController {
   exportGradebook(courseController: CourseController) {
     const roster = courseController.getRoster();
     const columns = this.gradebook.gradebook_columns;
-    columns.sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
+    columns.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
     const result = [];
     result.push(["Name", "Email", "Canvas ID", "SID", ...columns.map((col) => col.name)]);
     roster.forEach((student) => {
@@ -552,6 +751,27 @@ export class GradebookController {
   }
   get columns() {
     return this.gradebook.gradebook_columns;
+  }
+
+  /**
+   * Check if a column is effectively released (either released or all grades are null)
+   */
+  isColumnEffectivelyReleased(columnId: number): boolean {
+    const column = this.getGradebookColumn(columnId);
+    if (!column) return false;
+
+    // If the column is released, it's effectively released
+    if (column.released) return true;
+
+    // If the column is not released, check if all grades are null
+    // If all grades are null, students see the same thing regardless of release status
+    const allGradesNull = column.gradebook_column_students.every((student) => {
+      const score = student.score_override ?? student.score;
+      const ret = score === null || score === undefined || student.is_missing || !student.is_private;
+      return ret;
+    });
+
+    return allGradesNull;
   }
 
   get studentDetailView() {
@@ -595,7 +815,8 @@ export function GradebookProvider({ children }: { children: React.ReactNode }) {
   const course = useCourse();
   const gradebook_id = course.classes.gradebook_id;
   const class_id = course.classes.id;
-  const controller = useRef<GradebookController>(new GradebookController());
+  const isInstructorOrGrader = course.role === "instructor" || course.role === "grader";
+  const controller = useRef<GradebookController>(new GradebookController(isInstructorOrGrader));
   const [ready, setReady] = useState(false);
 
   if (!gradebook_id || isNaN(Number(gradebook_id))) {
