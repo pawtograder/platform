@@ -11,8 +11,8 @@ import {
   useGradebookController,
   useLinkToAssignment
 } from "@/hooks/useGradebook";
-import { IncompleteValuesAdvice } from "@/hooks/useGradebookWhatIf";
-import { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
+import type { IncompleteValuesAdvice } from "@/hooks/useGradebookWhatIf";
+import type { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Button,

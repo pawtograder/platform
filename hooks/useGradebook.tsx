@@ -8,12 +8,12 @@ import type {
   GradebookWithAllData
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, HStack, Link, Spinner, Text, VStack } from "@chakra-ui/react";
-import { LiveEvent, useList, useShow } from "@refinedev/core";
+import { type LiveEvent, useList, useShow } from "@refinedev/core";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useCourse } from "./useAuthState";
 import { CourseController } from "./useCourseController";
 
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 
@@ -164,7 +164,7 @@ export function useReferencedContent(
         <VStack align="left">{links}</VStack>
       </HStack>
     ) : null;
-  }, [gradebookController, column, student_id, dependencies]);
+  }, [gradebookController, column, student_id, dependencies, inclusions.assignments, inclusions.gradebook_columns]);
   return referencedContent;
 }
 
@@ -456,7 +456,7 @@ export class GradebookController {
                 if (!(functionName in dependencies)) {
                   dependencies[functionName] = new Set();
                 }
-                matching.forEach((d) => dependencies[functionName].add(d.id));
+                matching.forEach((d) => dependencies[functionName]!.add(d.id));
               } else {
                 errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
               }
@@ -470,7 +470,7 @@ export class GradebookController {
     for (const [functionName, ids] of Object.entries(dependencies)) {
       flattenedDependencies[functionName] = Array.from(ids);
     }
-    if (flattenedDependencies.gradebook_columns) {
+    if (flattenedDependencies["gradebook_columns"]) {
       //Check for cycles between the columns
       const checkForCycles = (visited_column_id: number) => {
         if (errors.length > 0) return;
@@ -488,7 +488,7 @@ export class GradebookController {
           }
         }
       };
-      for (const dependentColumn of flattenedDependencies.gradebook_columns) {
+      for (const dependentColumn of flattenedDependencies["gradebook_columns"]) {
         checkForCycles(dependentColumn);
       }
     }

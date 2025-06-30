@@ -1,6 +1,6 @@
 import type { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
 import { Spinner } from "@chakra-ui/react";
-import { all, create, FunctionNode, i, isArray, MathNode, Matrix } from "mathjs";
+import { all, create, FunctionNode, isArray, type MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
@@ -50,25 +50,25 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "column_slug" in value
   );
 }
-type UnreleasedGradebookColumnStudent = {
-  score: undefined;
-  score_override: undefined;
-  is_missing: true;
-  is_excused: true;
-  is_droppable: true;
-  is_released: false;
-  max_score: number;
-};
-function isUnreleasedGradebookColumnStudent(value: unknown): value is UnreleasedGradebookColumnStudent {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "is_missing" in value &&
-    value.is_missing === true &&
-    "is_excused" in value &&
-    value.is_excused === true
-  );
-}
+// type UnreleasedGradebookColumnStudent = {
+//   score: undefined;
+//   score_override: undefined;
+//   is_missing: true;
+//   is_excused: true;
+//   is_droppable: true;
+//   is_released: false;
+//   max_score: number;
+// };
+// function isUnreleasedGradebookColumnStudent(value: unknown): value is UnreleasedGradebookColumnStudent {
+//   return (
+//     typeof value === "object" &&
+//     value !== null &&
+//     "is_missing" in value &&
+//     value.is_missing === true &&
+//     "is_excused" in value &&
+//     value.is_excused === true
+//   );
+// }
 
 class GradebookWhatIfController {
   private _grades: GradebookWhatIfGradeMap = {};

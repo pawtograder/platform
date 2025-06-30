@@ -1,5 +1,5 @@
 "use client";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroupMembersWithGroup,
@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import useTags from "@/hooks/useTags";
 import { useParams } from "next/navigation";
 import TagDisplay from "@/components/ui/tag";
-import { EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
+import { type EmailCreateDataWithoutId, EmailManagementProvider, useEmailManagement } from "./EmailManagementContext";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import EmailPreviewAndSend from "./previewAndSend";
 import { TZDate } from "@date-fns/tz";

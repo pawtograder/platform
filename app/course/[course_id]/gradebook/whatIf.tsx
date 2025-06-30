@@ -11,11 +11,11 @@ import {
 } from "@/hooks/useGradebook";
 import {
   GradebookWhatIfProvider,
-  IncompleteValuesAdvice,
+  type IncompleteValuesAdvice,
   useGradebookWhatIf,
   useWhatIfGrade
 } from "@/hooks/useGradebookWhatIf";
-import { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
+import type { GradebookColumn } from "@/utils/supabase/DatabaseTypes";
 import {
   Accordion,
   Box,
@@ -385,40 +385,32 @@ function CollapsedGroupColumn({
   groupColumns: GradebookColumn[];
   private_profile_id: string;
 }) {
-  // For now, let's use a simpler approach that checks just the first and last columns
-  // to avoid React hooks rule violations with dynamic loops
-  const firstGrade = useGradebookColumnStudent(groupColumns[0].id, private_profile_id);
-  const lastGrade = useGradebookColumnStudent(
-    groupColumns.length > 1 ? groupColumns[groupColumns.length - 1].id : groupColumns[0].id,
-    private_profile_id
-  );
+  // We expect at least one column; non-null assertions are therefore safe.
+  const firstColumn = groupColumns[0]!;
+  const lastColumn = groupColumns[groupColumns.length - 1]!;
 
-  // Determine which column to show: first if no grades anywhere, otherwise last
+  const firstGrade = useGradebookColumnStudent(firstColumn.id, private_profile_id);
+  const lastGrade = useGradebookColumnStudent(lastColumn.id, private_profile_id);
+
   const selectedColumn = useMemo(() => {
-    // Check if any of the checked columns have grades
+    // Check if either sampled column has a score
     const firstScore = firstGrade?.score_override ?? firstGrade?.score;
     const lastScore = lastGrade?.score_override ?? lastGrade?.score;
 
     const hasFirstGrade = firstScore !== null && firstScore !== undefined;
     const hasLastGrade = lastScore !== null && lastScore !== undefined;
 
-    // If either has a grade, show the last column (preferred when grades exist)
-    if (hasFirstGrade || hasLastGrade) {
-      return groupColumns[groupColumns.length - 1];
-    }
+    return hasFirstGrade || hasLastGrade ? lastColumn : firstColumn;
+  }, [firstGrade, lastGrade, firstColumn, lastColumn]);
 
-    // No grades found in sampled columns, show first column
-    return groupColumns[0];
-  }, [groupColumns, firstGrade, lastGrade]);
-
-  return (
+  return selectedColumn ? (
     <GradebookCard
       key={selectedColumn.id}
       column={selectedColumn}
       private_profile_id={private_profile_id}
       isCollapsedGroupItem={true}
     />
-  );
+  ) : null;
 }
 
 export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
@@ -475,8 +467,8 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
 
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
   useEffect(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
+    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key]!.columns.length > 1);
+    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key]!.groupName))];
 
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
@@ -517,8 +509,8 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
+    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key]!.columns.length > 1);
+    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key]!.groupName))];
     setCollapsedGroups(new Set(baseGroupNames));
   }, [groupedColumns]);
 
@@ -531,7 +523,7 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
     Object.entries(groupedColumns).forEach(([groupKey, group]) => {
       if (group.columns.length === 1) {
         // Single column - no need for group header
-        const column = group.columns[0];
+        const column = group.columns[0]!;
         items.push(<GradebookCard key={column.id} column={column} private_profile_id={private_profile_id} />);
       } else {
         // Multiple columns - handle collapsed state using base group name
@@ -573,7 +565,7 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
     <GradebookWhatIfProvider private_profile_id={private_profile_id}>
       <VStack minW="md" maxW="xl" align="flex-start" aria-label="Gradebook Entry List" gap={0}>
         {/* Expand/Collapse All Buttons */}
-        {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
+        {Object.keys(groupedColumns).filter((key) => groupedColumns[key]!.columns.length > 1).length > 0 && (
           <HStack gap={2} justifyContent="flex-end" w="100%" px={2} py={2}>
             <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
               <Icon as={LuChevronDown} mr={2} /> Expand All

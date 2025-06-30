@@ -21,7 +21,7 @@ import {
   useAreAllDependenciesReleased
 } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   GradebookColumn,
   GradebookColumnExternalData,
   GradebookColumnStudent,
@@ -63,12 +63,12 @@ import {
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
-  Header,
-  RowModel,
+  type Header,
+  type RowModel,
   useReactTable
 } from "@tanstack/react-table";
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { FieldValues } from "react-hook-form";
+import type { FieldValues } from "react-hook-form";
 import { FiDownload, FiPlus, FiFilter, FiChevronDown } from "react-icons/fi";
 import {
   LuArrowDown,
@@ -291,7 +291,7 @@ function AddColumnDialog() {
                     placeholder="Score Expression"
                     rows={4}
                   />
-                  {errors.scoreExpression && (
+                  {errors["scoreExpression"] && (
                     <Text color="red.500" fontSize="sm">
                       {errors["scoreExpression"].message as string}
                     </Text>
@@ -393,13 +393,13 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         resource: "gradebook_columns",
         id: columnId,
         values: {
-          name: data.name,
-          description: data.description,
-          max_score: data.maxScore,
-          slug: data.slug,
-          score_expression: data.scoreExpression?.length ? data.scoreExpression : null,
-          render_expression: data.renderExpression?.length ? data.renderExpression : null,
-          show_calculated_ranges: data.showCalculatedRanges ?? false,
+          name: data["name"],
+          description: data["description"],
+          max_score: data["maxScore"],
+          slug: data["slug"],
+          score_expression: data["scoreExpression"]?.length ? data["scoreExpression"] : null,
+          render_expression: data["renderExpression"]?.length ? data["renderExpression"] : null,
+          show_calculated_ranges: data["showCalculatedRanges"] ?? false,
           dependencies
         }
       });
@@ -496,7 +496,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     placeholder="Score Expression"
                     rows={4}
                   />
-                  {errors.scoreExpression && (
+                  {errors["scoreExpression"] && (
                     <Text color="red.500" fontSize="sm">
                       {errors["scoreExpression"].message as string}
                     </Text>
@@ -508,9 +508,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     <Checkbox {...register("showCalculatedRanges")} checked={watch("showCalculatedRanges") ?? false}>
                       Show calculated grade range predictions to students
                     </Checkbox>
-                    {errors.showCalculatedRanges && (
+                    {errors["showCalculatedRanges"] && (
                       <Text color="red.500" fontSize="sm">
-                        {errors.showCalculatedRanges.message as string}
+                        {errors["showCalculatedRanges"].message as string}
                       </Text>
                     )}
                   </Box>
@@ -525,9 +525,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   )}
                   <RenderExprDocs />
                 </Box>
-                {errors.root && (
+                {errors["root"] && (
                   <Text color="red.500" fontSize="sm">
-                    {errors.root.message as string}
+                    {errors["root"].message as string}
                   </Text>
                 )}
                 <HStack justifyContent="flex-end">
@@ -1098,7 +1098,7 @@ function GradebookColumnHeader({
         ))}
       </VStack>
     );
-  }, [column, gradebookController, column_id, areAllDependenciesReleased]);
+  }, [column, areAllDependenciesReleased]);
 
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px" height="100%">
@@ -1457,8 +1457,13 @@ export default function GradebookTable() {
 
   // Initialize all groups as collapsed by default, but preserve existing collapsed state
   useEffect(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
+    const baseGroupNames = [
+      ...new Set(
+        Object.values(groupedColumns)
+          .filter((g) => g.columns.length > 1)
+          .map((g) => g.groupName)
+      )
+    ];
 
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
@@ -1499,8 +1504,13 @@ export default function GradebookTable() {
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
-    const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
-    const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
+    const baseGroupNames = [
+      ...new Set(
+        Object.values(groupedColumns)
+          .filter((g) => g.columns.length > 1)
+          .map((g) => g.groupName)
+      )
+    ];
     setCollapsedGroups(new Set(baseGroupNames));
   }, [groupedColumns]);
 
@@ -1509,7 +1519,7 @@ export default function GradebookTable() {
     (columns: typeof columnsForGrouping) => {
       // Start from the last column and work backwards
       for (let i = columns.length - 1; i >= 0; i--) {
-        const col = columns[i];
+        const col = columns[i]!;
         let hasNonMissingValues = false;
 
         // Check if this column has any non-missing values
@@ -1530,7 +1540,7 @@ export default function GradebookTable() {
       }
 
       // If no column has non-missing values, return the last column
-      return columns[columns.length - 1];
+      return columns[columns.length - 1]!;
     },
     [students, gradebookController]
   );
@@ -1561,7 +1571,7 @@ export default function GradebookTable() {
     Object.entries(groupedColumns).forEach(([groupKey, group]) => {
       if (group.columns.length === 1) {
         // Single column - no need for group header
-        const col = group.columns[0];
+        const col = group.columns[0]!;
         cols.push({
           id: `grade_${col.id}`,
           header: col.name,
@@ -1641,7 +1651,6 @@ export default function GradebookTable() {
   const nextPage = table.nextPage;
   const getCanPreviousPage = table.getCanPreviousPage;
   const getCanNextPage = table.getCanNextPage;
-  const columnModel = table.getAllColumns();
 
   const rows = useMemo(() => {
     return rowModel.rows.map((row, idx) => (
@@ -1712,7 +1721,7 @@ export default function GradebookTable() {
         })}
       </Table.Row>
     ));
-  }, [rowModel.rows, columnModel, toggleGroup, collapsedGroups]);
+  }, [rowModel.rows, toggleGroup]);
 
   if (!students || !gradebook || !gradebookController.isReady) {
     return <Spinner />;
@@ -1759,7 +1768,7 @@ export default function GradebookTable() {
       )}
       <Box overflowX="auto" maxW="calc(100vw - 20px)" maxH="calc(100vh - 200px)" overflowY="auto">
         {/* Expand/Collapse All Buttons */}
-        {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
+        {Object.values(groupedColumns).filter((g) => g.columns.length > 1).length > 0 && (
           <HStack gap={2} justifyContent="flex-end" px={4} py={2}>
             <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
               <Icon as={LuChevronDown} mr={2} /> Expand All
@@ -1773,7 +1782,7 @@ export default function GradebookTable() {
           <Table.Header>
             {/* Single row with all grouped headers */}
             <Table.Row>
-              {headerGroups[0].headers.map((header, colIdx) => {
+              {headerGroups[0]!.headers.map((header, colIdx) => {
                 if (header.column.id.startsWith("grade_")) {
                   // Find which group this column belongs to
                   const columnId = Number(header.column.id.slice(6));
@@ -1792,7 +1801,7 @@ export default function GradebookTable() {
                     if (groupEntry && groupEntry[1].columns.length > 1) {
                       // Check if this is the first column in its group
                       const groupColumns = groupEntry[1].columns;
-                      const isFirstInGroup = groupColumns[0].id === columnId;
+                      const isFirstInGroup = groupColumns[0]!.id === columnId;
                       const isCollapsed = collapsedGroups.has(groupEntry[1].groupName);
 
                       // When collapsed, check if this is the column that was selected to be shown
@@ -1804,7 +1813,7 @@ export default function GradebookTable() {
                       if (isFirstInGroup || (isCollapsed && isVisibleInCollapsedGroup)) {
                         // Create group header spanning all columns in this group
                         const groupColumnIds = groupColumns.map((col) => `grade_${col.id}`);
-                        const groupHeaders = headerGroups[0].headers.filter((h) => groupColumnIds.includes(h.id));
+                        const groupHeaders = headerGroups[0]!.headers.filter((h) => groupColumnIds.includes(h.id));
 
                         // When collapsed, only span 1 column (the visible one)
                         const colSpan = isCollapsed ? 1 : groupHeaders.length;
