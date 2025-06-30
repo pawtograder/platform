@@ -2773,6 +2773,54 @@ export type Database = {
         };
         Relationships: [];
       };
+      notification_preferences: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          email_digest_frequency: Database["public"]["Enums"]["email_digest_frequency"];
+          help_request_message_notifications: Database["public"]["Enums"]["notification_type"];
+          help_request_notifications: Database["public"]["Enums"]["notification_type"];
+          id: number;
+          updated_at: string | null;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
+          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
+          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
+          id?: number;
+          updated_at?: string | null;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
+          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
+          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
+          id?: number;
+          updated_at?: string | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "notification_preferences_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "notification_preferences_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       notifications: {
         Row: {
           body: Json;
@@ -5743,6 +5791,40 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      create_help_request_message_notification: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_message_id: number;
+          p_author_profile_id: string;
+          p_author_name: string;
+          p_message_preview: string;
+          p_help_request_creator_profile_id: string;
+          p_help_request_creator_name: string;
+          p_is_private?: boolean;
+        };
+        Returns: undefined;
+      };
+      create_help_request_notification: {
+        Args: {
+          p_class_id: number;
+          p_notification_type: string;
+          p_help_request_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_creator_profile_id: string;
+          p_creator_name: string;
+          p_assignee_profile_id?: string;
+          p_assignee_name?: string;
+          p_status?: Database["public"]["Enums"]["help_request_status"];
+          p_request_preview?: string;
+          p_is_private?: boolean;
+          p_action?: string;
+        };
+        Returns: undefined;
+      };
       custom_access_token_hook: {
         Args: { event: Json };
         Returns: Json;
@@ -5811,6 +5893,7 @@ export type Database = {
       app_role: "admin" | "instructor" | "grader" | "student";
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
+      email_digest_frequency: "daily" | "weekly" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -5825,6 +5908,7 @@ export type Database = {
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban" | "message_deleted" | "message_edited";
+      notification_type: "immediate" | "digest" | "disabled";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
       student_help_activity_type:
@@ -5946,6 +6030,7 @@ export const Constants = {
       app_role: ["admin", "instructor", "grader", "student"],
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
+      email_digest_frequency: ["daily", "weekly", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",
@@ -5961,6 +6046,7 @@ export const Constants = {
       help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban", "message_deleted", "message_edited"],
+      notification_type: ["immediate", "digest", "disabled"],
       review_round: ["self-review", "grading-review", "meta-grading-review"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
       student_help_activity_type: [

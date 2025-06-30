@@ -2,9 +2,8 @@ import { DataList, Flex, Icon, IconButton } from "@chakra-ui/react";
 
 import { Box } from "@chakra-ui/react";
 import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { HelpRequestChatChannelProvider } from "@/lib/chat";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
+import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
 import { BsCameraVideo } from "react-icons/bs";
 import { useList } from "@refinedev/core";
 
@@ -73,10 +72,8 @@ export default function CurrentRequest({ queue, request }: { queue: HelpQueue; r
       </DataList.Root>
 
       <Flex height="100vh" overflow="hidden" width="100%">
-        <HelpRequestChatChannelProvider help_request={request}>
-          <HelpRequestChat request={request} />
-          <HelpRequestStudentActions request={request} />
-        </HelpRequestChatChannelProvider>
+        <HelpRequestChat request={request} />
+        <HelpRequestStudentActions request={request} />
       </Flex>
     </Box>
   );

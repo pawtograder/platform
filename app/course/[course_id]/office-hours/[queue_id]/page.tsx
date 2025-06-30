@@ -1,14 +1,14 @@
 "use client";
 
-import { EphemeralChatChannelProvider } from "@/lib/chat";
 import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Heading, Tabs } from "@chakra-ui/react";
 import { useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import CurrentRequest from "./currentRequest";
 import HelpRequestForm from "./newRequestForm";
-import HelpRequestHistory from "./resolvedRequests";
+import HelpRequestHistory from "./requestList";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 
 export default function HelpQueuePage() {
   const { queue_id, course_id } = useParams();
@@ -59,12 +59,25 @@ export default function HelpQueuePage() {
     sorters: [{ field: "resolved_at", order: "desc" }]
   });
 
+  // Fetch all currently open requests in this queue (for queue status)
+  const { data: queueRequests } = useList<HelpRequest>({
+    resource: "help_requests",
+    pagination: { pageSize: 100 },
+    filters: [
+      { field: "help_queue", operator: "eq", value: Number.parseInt(queue_id as string) },
+      { field: "resolved_by", operator: "null", value: null }
+    ],
+    sorters: [{ field: "created_at", order: "asc" }]
+  });
+
   if (
     queue.isLoading ||
     !allRequests ||
     allRequests?.isLoading ||
     !currentRequestData ||
-    currentRequestData?.isLoading
+    currentRequestData?.isLoading ||
+    !queueRequests ||
+    queueRequests?.isLoading
   ) {
     return <div>Loading...</div>;
   }
@@ -74,31 +87,39 @@ export default function HelpQueuePage() {
 
   const currentRequest = currentRequestData?.data?.[0] || null;
   const resolvedRequests = allRequests?.data?.filter((request) => request.resolved_by) || [];
+  const pendingRequests = queueRequests?.data || [];
+
+  // Use only resolved public requests for "similar questions" to avoid duplication with queue status
   const recentPublicRequests = publicRequests?.data || [];
+  const similarQuestions = recentPublicRequests.filter((request) => request.creator !== private_profile_id); // Don't show user's own requests
 
   return (
-    <Box>
-      <EphemeralChatChannelProvider queue_id={queue.data?.data.id} class_id={queue.data?.data.class_id}>
+    <ModerationBanNotice classId={Number(course_id)}>
+      <Box m={4}>
         <Heading>Help Queue: {queue.data?.data.name}</Heading>
-        <Tabs.Root size="md" orientation="vertical" defaultValue="current">
+        <Tabs.Root size="md" orientation="vertical" defaultValue="queue">
           <Tabs.List>
-            <Tabs.Trigger value="current">Current Request</Tabs.Trigger>
-            <Tabs.Trigger value="similar">Similar Questions</Tabs.Trigger>
-            <Tabs.Trigger value="past">Previous Requests</Tabs.Trigger>
+            <Tabs.Trigger value="queue">Queue Status ({pendingRequests.length})</Tabs.Trigger>
+            <Tabs.Trigger value="current">{currentRequest ? "My Request" : "Submit Request"}</Tabs.Trigger>
+            <Tabs.Trigger value="similar">Resolved Public Requests ({similarQuestions.length})</Tabs.Trigger>
+            <Tabs.Trigger value="past">My History ({resolvedRequests.length})</Tabs.Trigger>
           </Tabs.List>
+          <Tabs.Content width="100%" value="queue">
+            <HelpRequestHistory requests={pendingRequests} />
+          </Tabs.Content>
           <Tabs.Content width="100%" value="current">
             {currentRequest && <CurrentRequest queue={queue.data?.data} request={currentRequest} />}
             {!currentRequest && <HelpRequestForm />}
           </Tabs.Content>
           <Tabs.Content width="100%" value="similar">
-            <HelpRequestHistory requests={recentPublicRequests} />
+            <HelpRequestHistory requests={similarQuestions} />
           </Tabs.Content>
           <Tabs.Content width="100%" value="past">
             <HelpRequestHistory requests={resolvedRequests} />
           </Tabs.Content>
           <Tabs.Indicator />
         </Tabs.Root>
-      </EphemeralChatChannelProvider>
-    </Box>
+      </Box>
+    </ModerationBanNotice>
   );
 }

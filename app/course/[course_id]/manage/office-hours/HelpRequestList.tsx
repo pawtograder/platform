@@ -1,7 +1,7 @@
 "use client";
-import { ChatGroupHeader } from "@/components/ui/help-queue/ChatGroupHeader";
-import { HelpRequestTeaser } from "@/components/ui/help-queue/HelpRequestTeaser";
-import { SearchInput } from "@/components/ui/help-queue/SearchInput";
+import { ChatGroupHeader } from "@/components/ui/help-queue/chat-group-header";
+import { HelpRequestTeaser } from "@/components/ui/help-queue/help-request-teaser";
+import { SearchInput } from "@/components/ui/help-queue/search-input";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Stack, Text } from "@chakra-ui/react";

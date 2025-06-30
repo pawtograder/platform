@@ -3,7 +3,7 @@ import { useList } from "@refinedev/core";
 import { HelpQueue as HelpQueueType } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { Box } from "@chakra-ui/react";
-import HelpQueuesDashboard from "./HelpQueuesDashboard";
+import OfficeHoursAdminPage from "./adminPage";
 
 export default function HelpManagePage() {
   const { course_id } = useParams();
@@ -19,7 +19,7 @@ export default function HelpManagePage() {
   }
   return (
     <Box>
-      <HelpQueuesDashboard />
+      <OfficeHoursAdminPage />
     </Box>
   );
 }

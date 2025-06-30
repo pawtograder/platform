@@ -1,5 +1,4 @@
-import HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
-import { HelpRequestChatChannelProvider } from "@/lib/chat";
+import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Stack, Text, Card, Badge, Button, Icon } from "@chakra-ui/react";
 import { useState } from "react";
@@ -13,9 +12,7 @@ export default function HelpRequestHistory({ requests }: { requests: HelpRequest
     return (
       <Card.Root>
         <Card.Body>
-          <Text textAlign="center" color="fg.muted">
-            No previous help requests found.
-          </Text>
+          <Text textAlign="center">No public help requests found.</Text>
         </Card.Body>
       </Card.Root>
     );
@@ -24,11 +21,16 @@ export default function HelpRequestHistory({ requests }: { requests: HelpRequest
   return (
     <Stack spaceY={4}>
       <Text fontSize="lg" fontWeight="medium">
-        Your Previous Requests
+        Public Help Requests ({requests.length})
       </Text>
       <Stack spaceY={4}>
         {requests
-          .sort((a, b) => new Date(b.resolved_at!).getTime() - new Date(a.resolved_at!).getTime())
+          .sort((a, b) => {
+            // Sort by resolved_at if available, otherwise by created_at
+            const dateA = new Date(a.resolved_at || a.created_at).getTime();
+            const dateB = new Date(b.resolved_at || b.created_at).getTime();
+            return dateB - dateA;
+          })
           .map((request) => (
             <Card.Root
               key={request.id}
@@ -43,7 +45,18 @@ export default function HelpRequestHistory({ requests }: { requests: HelpRequest
                       {request.request.length > 100 ? `${request.request.substring(0, 100)}...` : request.request}
                     </Text>
                     <HStack mt={2} gap={2}>
-                      <Badge colorPalette="green" size="sm">
+                      <Badge
+                        colorPalette={
+                          request.status === "resolved"
+                            ? "green"
+                            : request.status === "in_progress"
+                              ? "orange"
+                              : request.status === "closed"
+                                ? "gray"
+                                : "blue"
+                        }
+                        size="sm"
+                      >
                         {request.status}
                       </Badge>
                       {request.location_type && (
@@ -59,8 +72,8 @@ export default function HelpRequestHistory({ requests }: { requests: HelpRequest
                     </HStack>
                   </Box>
                   <Stack align="end" spaceY={1}>
-                    <Text fontSize="xs" color="fg.muted">
-                      {formatDistanceToNow(new Date(request.resolved_at!), { addSuffix: true })}
+                    <Text fontSize="xs">
+                      {formatDistanceToNow(new Date(request.resolved_at || request.created_at), { addSuffix: true })}
                     </Text>
                     <Button
                       size="xs"
@@ -78,9 +91,7 @@ export default function HelpRequestHistory({ requests }: { requests: HelpRequest
 
                 {expandedRequest === request.id && (
                   <Box mt={4} pt={4} borderTopWidth="1px">
-                    <HelpRequestChatChannelProvider help_request={request}>
-                      <HelpRequestChat request={request} />
-                    </HelpRequestChatChannelProvider>
+                    <HelpRequestChat request={request} />
                   </Box>
                 )}
               </Card.Body>

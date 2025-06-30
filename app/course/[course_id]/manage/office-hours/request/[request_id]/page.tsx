@@ -4,10 +4,9 @@ import { useParams } from "next/navigation";
 import { useShow } from "@refinedev/core";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { BsClipboardCheck, BsClipboardCheckFill, BsCheckCircle, BsXCircle } from "react-icons/bs";
-import { HelpRequestChatChannelProvider } from "@/lib/chat";
 import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/react";
 import { Alert } from "@/components/ui/alert";
-import HelpRequestChat from "@/components/ui/help-queue/HelpRequestChat";
+import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
 
 /**
  * Component for displaying status-specific visual indicators and information
@@ -95,9 +94,7 @@ export default function HelpRequestPage() {
         <HelpRequestStatusIndicator status={request.status} />
       </VStack>
 
-      <HelpRequestChatChannelProvider help_request={request}>
-        <HelpRequestChat request={request} />
-      </HelpRequestChatChannelProvider>
+      <HelpRequestChat request={request} />
     </Box>
   );
 }

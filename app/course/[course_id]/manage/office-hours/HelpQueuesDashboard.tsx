@@ -97,11 +97,9 @@ export default function HelpQueuesDashboard() {
             <Box>
               <Text fontWeight="medium">{queue.name}</Text>
               <HStack spaceX="2" mt="1">
-                <Text fontSize="sm" color="fg.subtle">
-                  Mode:
-                </Text>
+                <Text fontSize="sm">Mode:</Text>
                 <Text fontSize="sm">{queue.queue_type}</Text>
-                <Text fontSize="sm" color="fg.subtle">
+                <Text fontSize="sm">
                   · Open Requests: {unresolvedRequests.filter((r) => r.help_queue === queue.id).length}
                 </Text>
               </HStack>

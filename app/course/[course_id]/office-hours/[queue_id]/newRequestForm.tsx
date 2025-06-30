@@ -1,25 +1,40 @@
 import { createClient } from "@/utils/supabase/client";
 import { useCallback } from "react";
 import { useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
-import { RadioCardRoot, RadioCardItem } from "@/components/ui/radio-card";
 import { Fieldset, Button, Heading, Text } from "@chakra-ui/react";
-import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import {
+  HelpRequest,
+  HelpRequestTemplate,
+  HelpQueue,
+  Submission,
+  SubmissionFile,
+  HelpRequestLocationType
+} from "@/utils/supabase/DatabaseTypes";
 import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
-import { useRouter } from "next/navigation";
 import MdEditor from "@/components/ui/md-editor";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "chakra-react-select";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { useList as useListForFollowup } from "@refinedev/core";
+import { toaster } from "@/components/ui/toaster";
 
 type TemplateOption = { label: string; value: string };
+type SubmissionOption = { label: string; value: string };
+type FileOption = { label: string; value: string };
+type QueueOption = { label: string; value: string };
+
+// Form state for file references
+type FileReference = {
+  submission_file_id: number;
+  line_number?: number;
+};
+
+const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
 export default function HelpRequestForm() {
-  const { course_id } = useParams();
+  const { course_id, queue_id } = useParams();
   const supabase = createClient();
   const router = useRouter();
   const {
@@ -27,29 +42,43 @@ export default function HelpRequestForm() {
     setValue,
     control,
     getValues,
+    watch,
     formState: { errors, isSubmitting },
     handleSubmit,
     refineCore: { onFinish }
-  } = useForm<HelpRequest>({
+  } = useForm<HelpRequest & { file_references?: FileReference[] }>({
     defaultValues: async () => {
-      const { data: queues } = await supabase.from("help_queues").select("*");
-      return { help_queue: queues?.[0]?.id.toString() || "" };
+      return {
+        help_queue: Number.parseInt(queue_id as string),
+        file_references: [],
+        location_type: "remote" as HelpRequestLocationType
+      };
     },
     refineCoreProps: {
       resource: "help_requests",
       action: "create",
-      onMutationSuccess: (data) => {
-        router.push(`/course/${course_id}/office-hours/${data.data.help_queue}`);
+      onMutationSuccess: async (data) => {
+        // After creating the help request, create file references if any
+        const fileReferences = getValues("file_references") || [];
+        if (fileReferences.length > 0) {
+          for (const ref of fileReferences) {
+            await supabase.from("help_request_file_references").insert({
+              help_request_id: data.data.id,
+              class_id: Number.parseInt(course_id as string),
+              submission_file_id: ref.submission_file_id,
+              submission_id: getValues("referenced_submission_id"),
+              line_number: ref.line_number
+            });
+          }
+        }
+        router.push(`/course/${course_id}/office-hours/${queue_id}`);
       }
     }
   });
-  const { data: queues, error: queuesError } = useList<HelpQueue>({
-    resource: "help_queues",
-    meta: { select: "*" },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
+
   const { private_profile_id } = useClassProfiles();
-  const { data: previousRequests } = useListForFollowup<HelpRequest>({
+
+  const { data: previousRequests } = useList<HelpRequest>({
     resource: "help_requests",
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
@@ -59,9 +88,8 @@ export default function HelpRequestForm() {
     sorters: [{ field: "resolved_at", order: "desc" }],
     pagination: { pageSize: 20 }
   });
-  const { data: templates, error: templatesError } = useList<
-    Database["public"]["Tables"]["help_request_templates"]["Row"]
-  >({
+
+  const { data: templates, error: templatesError } = useList<HelpRequestTemplate>({
     resource: "help_request_templates",
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
@@ -69,25 +97,70 @@ export default function HelpRequestForm() {
     ]
   });
 
+  // Fetch available help queues for the class
+  const { data: helpQueues } = useList<HelpQueue>({
+    resource: "help_queues",
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "is_active", operator: "eq", value: true },
+      { field: "available", operator: "eq", value: true }
+    ]
+  });
+
+  // Fetch student's submissions for file/submission references
+  const { data: submissions } = useList<Submission>({
+    resource: "submissions",
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "profile_id", operator: "eq", value: private_profile_id }
+    ],
+    sorters: [{ field: "created_at", order: "desc" }],
+    pagination: { pageSize: 50 }
+  });
+
+  // Watch the selected submission to fetch its files
+  const selectedSubmissionId = watch("referenced_submission_id");
+  const { data: submissionFiles } = useList<SubmissionFile>({
+    resource: "submission_files",
+    filters: [{ field: "submission_id", operator: "eq", value: selectedSubmissionId }],
+    queryOptions: {
+      enabled: !!selectedSubmissionId
+    }
+  });
+
+  // TODO: Fix RLS violation for help_requests table
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       async function populate() {
-        setValue("creator", private_profile_id!);
+        if (!private_profile_id) {
+          toaster.error({
+            title: "Error",
+            description: "You must be logged in to submit a help request"
+          });
+          return;
+        }
+        setValue("creator", private_profile_id);
+        setValue("assignee", null);
         setValue("class_id", Number.parseInt(course_id as string));
-        const hqStr = getValues("help_queue") as unknown as string;
-        if (typeof hqStr === "string") setValue("help_queue", Number.parseInt(hqStr) as unknown as number);
-        handleSubmit(onFinish)();
+
+        // Create a custom onFinish function that excludes file_references
+        const customOnFinish = (values: Record<string, unknown>) => {
+          // Exclude file_references from the submission data since it's not a column in help_requests table
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { file_references, ...helpRequestData } = values;
+          return onFinish(helpRequestData);
+        };
+
+        handleSubmit(customOnFinish)();
       }
       populate();
     },
-    [handleSubmit, onFinish, private_profile_id, course_id, setValue, getValues]
+    [handleSubmit, onFinish, private_profile_id, course_id, setValue]
   );
+
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;
-  }
-  if (queuesError) {
-    return <div>Error: {queuesError.message}</div>;
   }
   if (templatesError) {
     return <div>Error: {templatesError.message}</div>;
@@ -104,39 +177,47 @@ export default function HelpRequestForm() {
       <Fieldset.Root size="lg" maxW="100%">
         <Fieldset.Content>
           <Field
-            label="Queue"
+            label="Help Queue"
             required={true}
             errorText={errors.help_queue?.message?.toString()}
-            invalid={errors.help_queue ? true : false}
+            invalid={!!errors.help_queue}
+            helperText="Select which help queue to submit your request to"
           >
             <Controller
               name="help_queue"
               control={control}
+              defaultValue={Number.parseInt(queue_id as string)}
               render={({ field }) => (
-                <RadioCardRoot
-                  orientation="vertical"
-                  align="center"
-                  justify="start"
-                  maxW="4xl"
-                  name={field.name}
-                  value={field.value}
-                  onChange={field.onChange}
-                >
-                  {queues?.data?.map((queue) => (
-                    <RadioCardItem
-                      key={queue.id}
-                      label={queue.name}
-                      colorPalette={queue.color || "gray"}
-                      indicator={true}
-                      description={queue.description}
-                      value={queue.id.toString()}
-                    />
-                  ))}
-                </RadioCardRoot>
+                <Select
+                  isMulti={false}
+                  placeholder="Select a help queue"
+                  options={
+                    helpQueues?.data?.map(
+                      (queue) =>
+                        ({
+                          label: `${queue.name} - ${queue.description}`,
+                          value: queue.id.toString()
+                        }) as QueueOption
+                    ) ?? []
+                  }
+                  value={
+                    field.value
+                      ? ({
+                          label: helpQueues?.data?.find((q) => q.id === field.value)?.name || "Unknown",
+                          value: field.value.toString()
+                        } as QueueOption)
+                      : null
+                  }
+                  onChange={(option: QueueOption | null) => {
+                    const val = option?.value ?? "";
+                    field.onChange(val === "" ? undefined : Number.parseInt(val));
+                  }}
+                />
               )}
             />
           </Field>
         </Fieldset.Content>
+
         <Fieldset.Content>
           <Field
             label="Message"
@@ -153,20 +234,111 @@ export default function HelpRequestForm() {
             />
           </Field>
         </Fieldset.Content>
+
+        {/* Code/Submission Reference Section */}
         <Fieldset.Content>
-          <Field label="Privacy" helperText="Private requests are only visible to staff." optionalText="Optional">
+          <Field
+            label="Reference Submission "
+            optionalText="(Optional)"
+            helperText="Reference a specific submission for context"
+          >
+            <Controller
+              name="referenced_submission_id"
+              control={control}
+              render={({ field }) => (
+                <Select
+                  isMulti={false}
+                  isClearable={true}
+                  placeholder="Select a submission to reference"
+                  options={
+                    submissions?.data?.map(
+                      (submission) =>
+                        ({
+                          label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
+                          value: submission.id.toString()
+                        }) as SubmissionOption
+                    ) ?? []
+                  }
+                  value={
+                    field.value
+                      ? ({
+                          label: submissions?.data?.find((s) => s.id === field.value)?.repository || "Unknown",
+                          value: field.value.toString()
+                        } as SubmissionOption)
+                      : null
+                  }
+                  onChange={(option: SubmissionOption | null) => {
+                    const val = option?.value ?? "";
+                    field.onChange(val === "" ? undefined : Number.parseInt(val));
+                  }}
+                />
+              )}
+            />
+          </Field>
+        </Fieldset.Content>
+
+        {/* File References Section - Show only when a submission is selected */}
+        {selectedSubmissionId && submissionFiles?.data && submissionFiles.data.length > 0 && (
+          <Fieldset.Content>
+            <Field
+              label="Reference Specific Files "
+              optionalText="(Optional)"
+              helperText="Reference specific files and line numbers from your submission"
+            >
+              <Controller
+                name="file_references"
+                control={control}
+                defaultValue={[]}
+                render={({ field }) => (
+                  <Select
+                    isMulti={true}
+                    isClearable={true}
+                    placeholder="Select files to reference"
+                    options={submissionFiles.data.map(
+                      (file) =>
+                        ({
+                          label: file.name,
+                          value: file.id.toString()
+                        }) as FileOption
+                    )}
+                    value={
+                      field.value?.map((ref: FileReference) => ({
+                        label: submissionFiles.data.find((f) => f.id === ref.submission_file_id)?.name || "Unknown",
+                        value: ref.submission_file_id.toString()
+                      })) || []
+                    }
+                    onChange={(options) => {
+                      if (!options) {
+                        field.onChange([]);
+                        return;
+                      }
+                      const newRefs = Array.from(options).map((option: FileOption) => ({
+                        submission_file_id: Number.parseInt(option.value)
+                      }));
+                      field.onChange(newRefs);
+                    }}
+                  />
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+        )}
+
+        <Fieldset.Content>
+          <Field label="Privacy " helperText="Private requests are only visible to staff." optionalText="(Optional)">
             <Controller
               name="is_private"
               control={control}
               defaultValue={false}
               render={({ field }) => (
-                <Checkbox checked={field.value} onCheckedChange={field.onChange}>
+                <Checkbox checked={field.value} onCheckedChange={({ checked }) => field.onChange(!!checked)}>
                   Private
                 </Checkbox>
               )}
             />
           </Field>
         </Fieldset.Content>
+
         <Fieldset.Content>
           <Field
             label="Location"
@@ -179,17 +351,33 @@ export default function HelpRequestForm() {
               control={control}
               defaultValue="remote"
               render={({ field }) => (
-                <RadioCardRoot orientation="horizontal" name={field.name} value={field.value} onChange={field.onChange}>
-                  <RadioCardItem value="remote" label="Remote (Text)" />
-                  <RadioCardItem value="in_person" label="In-Person" />
-                </RadioCardRoot>
+                <Select
+                  isMulti={false}
+                  placeholder="Select location type"
+                  options={locationTypeOptions.map((location) => ({
+                    label: location.charAt(0).toUpperCase() + location.slice(1).replace("_", " "),
+                    value: location
+                  }))}
+                  value={
+                    field.value
+                      ? {
+                          label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
+                          value: field.value
+                        }
+                      : null
+                  }
+                  onChange={(option: { label: string; value: string } | null) => {
+                    field.onChange(option?.value || null);
+                  }}
+                />
               )}
             />
           </Field>
         </Fieldset.Content>
+
         {templates?.data && templates.data.length > 0 && (
           <Fieldset.Content>
-            <Field label="Template" optionalText="Optional">
+            <Field label="Template " optionalText="(Optional)">
               <Controller
                 name="template_id"
                 control={control}
@@ -223,9 +411,10 @@ export default function HelpRequestForm() {
             </Field>
           </Fieldset.Content>
         )}
+
         {previousRequests?.data && previousRequests.data.length > 0 && (
           <Fieldset.Content>
-            <Field label="Follow-up to previous request" optionalText="Optional">
+            <Field label="Follow-up to previous request " optionalText="(Optional)">
               <Controller
                 name="followup_to"
                 control={control}
@@ -262,7 +451,7 @@ export default function HelpRequestForm() {
           </Fieldset.Content>
         )}
       </Fieldset.Root>
-      <Button type="submit" loading={isSubmitting}>
+      <Button type="submit" loading={isSubmitting} mt={4}>
         Submit Request
       </Button>
     </form>

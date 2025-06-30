@@ -61,12 +61,112 @@ export type AssignmentGroupJoinRequestNotification = NotificationEnvelope & {
   decision_maker_name?: string;
 };
 
+export type HelpRequestNotification = NotificationEnvelope & {
+  type: "help_request";
+  action: "created" | "status_changed" | "assigned";
+  help_request_id: number;
+  help_queue_id: number;
+  help_queue_name: string;
+  creator_profile_id: string;
+  creator_name: string;
+  assignee_profile_id?: string;
+  assignee_name?: string;
+  status?: "open" | "in_progress" | "resolved" | "closed";
+  request_preview: string;
+  is_private: boolean;
+};
+
+export type HelpRequestMessageNotification = NotificationEnvelope & {
+  type: "help_request_message";
+  help_request_id: number;
+  help_queue_id: number;
+  help_queue_name: string;
+  message_id: number;
+  author_profile_id: string;
+  author_name: string;
+  message_preview: string;
+  help_request_creator_profile_id: string;
+  help_request_creator_name: string;
+  is_private: boolean;
+};
+
 // function truncateString(str: string, maxLength: number) {
 //   if (str.length <= maxLength) {
 //     return str;
 //   }
 //   return str.substring(0, maxLength) + "...";
 // }
+function HelpRequestNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as HelpRequestNotification;
+  const { course_id } = useParams();
+
+  let message: React.ReactNode;
+
+  if (body.action === "created") {
+    message = (
+      <Text>
+        {body.creator_name} created a new help request in {body.help_queue_name}
+        {body.is_private && " (private)"}
+      </Text>
+    );
+  } else if (body.action === "assigned") {
+    message = (
+      <Text>
+        {body.assignee_name} is now working on {body.creator_name}&apos;s help request in {body.help_queue_name}
+      </Text>
+    );
+  } else if (body.action === "status_changed") {
+    message = (
+      <Text>
+        Help request by {body.creator_name} in {body.help_queue_name} was marked as {body.status}
+      </Text>
+    );
+  }
+
+  return (
+    <Link href={`/course/${course_id}/office-hours/${body.help_queue_id}`}>
+      <HStack align="flex-start" color="text.muted">
+        <VStack align="flex-start">
+          {message}
+          <Text fontSize="sm" color="fg.muted">
+            {body.request_preview}
+          </Text>
+        </VStack>
+      </HStack>
+    </Link>
+  );
+}
+
+function HelpRequestMessageNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as HelpRequestMessageNotification;
+  const author = useUserProfile(body.author_profile_id);
+  const { course_id } = useParams();
+
+  if (!author) {
+    return <Skeleton boxSize="4" />;
+  }
+
+  return (
+    <Link href={`/course/${course_id}/office-hours/${body.help_queue_id}`}>
+      <HStack align="flex-start" color="text.muted">
+        <Avatar.Root size="sm">
+          <Avatar.Image src={author.avatar_url} />
+          <Avatar.Fallback>{author.name?.charAt(0)}</Avatar.Fallback>
+        </Avatar.Root>
+        <VStack align="flex-start">
+          <Text>
+            {author.name} replied to {body.help_request_creator_name}&apos;s help request in {body.help_queue_name}
+            {body.is_private && " (private)"}
+          </Text>
+          <Text fontSize="sm" color="fg.muted">
+            {body.message_preview}
+          </Text>
+        </VStack>
+      </HStack>
+    </Link>
+  );
+}
+
 function AssignmentGroupMemberNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupMemberNotification;
   return (
@@ -144,7 +244,7 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
       <HStack align="flex-start" color="text.muted">
         <Avatar.Root size="sm">
           <Avatar.Image src={author.avatar_url} />
-          <Avatar.Fallback>{author.name.charAt(0)}</Avatar.Fallback>
+          <Avatar.Fallback>{author.name?.charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
         <VStack align="flex-start">
           <Text>
@@ -191,6 +291,10 @@ export default function NotificationTeaser({
     teaser = <AssignmentGroupInvitationNotificationTeaser notification={notification} />;
   } else if (body.type === "assignment_group_join_request") {
     teaser = <AssignmentGroupJoinRequestNotificationTeaser notification={notification} />;
+  } else if (body.type === "help_request") {
+    teaser = <HelpRequestNotificationTeaser notification={notification} />;
+  } else if (body.type === "help_request_message") {
+    teaser = <HelpRequestMessageNotificationTeaser notification={notification} />;
   } else {
     teaser = <Text>Unknown notification type: {body.type}</Text>;
   }

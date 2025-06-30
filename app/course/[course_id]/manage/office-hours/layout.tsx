@@ -1,5 +1,5 @@
 import { Box, Flex } from "@chakra-ui/react";
-import HelpRequestList from "./HelpRequestList";
+import HelpRequestList from "./helpRequestList";
 export default function HelpManageLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <Box>

@@ -57,6 +57,13 @@ export type Notification = GetResult<
   Database["public"]["Tables"]["notifications"]["Relationships"],
   "*"
 >;
+export type NotificationPreferences = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["notification_preferences"]["Row"],
+  "notification_preferences",
+  Database["public"]["Tables"]["notification_preferences"]["Relationships"],
+  "*"
+>;
 export type Submission = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
@@ -316,6 +323,16 @@ export type HelpRequest = GetResult<
   "*"
 >;
 
+export type HelpRequestLocationType = Database["public"]["Enums"]["location_type"];
+
+export type HelpRequestTemplate = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_templates"]["Row"],
+  "help_request_templates",
+  Database["public"]["Tables"]["help_request_templates"]["Relationships"],
+  "*"
+>;
+
 export type UserProfile = GetResult<
   Database["public"],
   Database["public"]["Tables"]["profiles"]["Row"],
@@ -343,6 +360,16 @@ export type HelpRequestMessage = GetResult<
   Database["public"]["Tables"]["help_request_messages"]["Row"],
   "help_request_messages",
   Database["public"]["Tables"]["help_request_messages"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestMessageWithoutId = Omit<HelpRequestMessage, "id">;
+
+export type HelpRequestFileReference = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_file_references"]["Row"],
+  "help_request_file_references",
+  Database["public"]["Tables"]["help_request_file_references"]["Relationships"],
   "*"
 >;
 

@@ -18,9 +18,7 @@ import {
 import { FaCircleUser } from "react-icons/fa6";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
-
 import { useInvalidate, useList, useOne } from "@refinedev/core";
-
 import { ColorModeButton } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
@@ -37,6 +35,8 @@ import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } fr
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import { HiOutlineSupport } from "react-icons/hi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
+import NotificationPreferences from "@/components/ui/notifications/notification-preferences";
+import { IoNotificationsCircle } from "react-icons/io5";
 
 function SupportMenu() {
   return (
@@ -407,6 +407,40 @@ const ProfileChangesMenu = () => {
   );
 };
 
+/**
+ * Dialog component to allow users to manage their notification preferences.
+ */
+const NotificationPreferencesMenu = () => {
+  return (
+    <Dialog.Root size={"md"} placement={"center"}>
+      <Dialog.Trigger asChild>
+        <Button variant="ghost" colorPalette="gray" w="100%" justifyContent="flex-start" size="sm" py={0}>
+          <IoNotificationsCircle />
+          Notification Settings
+        </Button>
+      </Dialog.Trigger>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content maxHeight="80vh" overflowY="auto">
+            <Dialog.Header>
+              <Dialog.Title>Notification Settings</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <NotificationPreferences />
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline">Close</Button>
+              </Dialog.ActionTrigger>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
+  );
+};
+
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
   const supabase = createClient();
@@ -543,6 +577,7 @@ function UserSettingsMenu() {
                   </>
                 )}
                 <ProfileChangesMenu />
+                <NotificationPreferencesMenu />
                 <Button
                   variant="ghost"
                   pl={0}
