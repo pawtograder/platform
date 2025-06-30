@@ -1099,7 +1099,7 @@ function GradebookColumnHeader({
         ))}
       </VStack>
     );
-  }, [column, gradebookController, column_id, areAllDependenciesReleased]);
+  }, [column, areAllDependenciesReleased]);
 
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px" height="100%">
@@ -1642,7 +1642,6 @@ export default function GradebookTable() {
   const nextPage = table.nextPage;
   const getCanPreviousPage = table.getCanPreviousPage;
   const getCanNextPage = table.getCanNextPage;
-  const columnModel = table.getAllColumns();
 
   const rows = useMemo(() => {
     return rowModel.rows.map((row, idx) => (
@@ -1713,7 +1712,7 @@ export default function GradebookTable() {
         })}
       </Table.Row>
     ));
-  }, [rowModel.rows, columnModel, toggleGroup, collapsedGroups]);
+  }, [rowModel.rows, toggleGroup]);
 
   if (!students || !gradebook || !gradebookController.isReady) {
     return <Spinner />;
