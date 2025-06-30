@@ -13,8 +13,8 @@ import {
   useMissingRubricChecksForActiveReview,
   useSetActiveSubmissionReviewId
 } from "@/hooks/useSubmissionReview";
-import { formatDueDate } from "@/lib/utils";
-import type { SubmissionReviewWithRubric } from "@/utils/supabase/DatabaseTypes";
+import { formatDueDateInTimezone } from "@/lib/utils";
+import { SubmissionReviewWithRubric } from "@/utils/supabase/DatabaseTypes";
 import { useUpdate } from "@refinedev/core";
 import { formatDate } from "date-fns";
 import { FaRegCheckCircle } from "react-icons/fa";
@@ -186,8 +186,8 @@ function ReviewAssignmentActions() {
       {activeReviewAssignment && (
         <Text textAlign="left">
           Your {activeSubmissionReview?.rubrics.name} review is required by{" "}
-          {formatDueDate(activeReviewAssignment.due_date, time_zone || "America/New_York")}. When you are done, click
-          &quot;Complete Review&quot;.
+          {formatDueDateInTimezone(activeReviewAssignment.due_date, time_zone || "America/New_York", false, true)}. When
+          you are done, click &quot;Complete Review&quot;.
         </Text>
       )}
       {activeSubmissionReview && <CompleteReviewButton />}

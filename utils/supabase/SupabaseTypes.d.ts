@@ -608,6 +608,7 @@ export type Database = {
           created_at: string;
           description: string | null;
           due_date: string;
+          gradebook_column_id: number | null;
           grading_rubric_id: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline: string | null;
@@ -636,6 +637,7 @@ export type Database = {
           created_at?: string;
           description?: string | null;
           due_date: string;
+          gradebook_column_id?: number | null;
           grading_rubric_id?: number | null;
           group_config: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -664,6 +666,7 @@ export type Database = {
           created_at?: string;
           description?: string | null;
           due_date?: string;
+          gradebook_column_id?: number | null;
           grading_rubric_id?: number | null;
           group_config?: Database["public"]["Enums"]["assignment_group_mode"];
           group_formation_deadline?: string | null;
@@ -1316,6 +1319,95 @@ export type Database = {
           }
         ];
       };
+      email_batches: {
+        Row: {
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at: string;
+          id: number;
+          reply_to: string | null;
+          subject: string;
+        };
+        Insert: {
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject: string;
+        };
+        Update: {
+          body?: string;
+          cc_emails?: Json;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "email_batches_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      emails: {
+        Row: {
+          batch_id: number;
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at: string;
+          id: number;
+          reply_to: string | null;
+          subject: string;
+          user_id: string;
+        };
+        Insert: {
+          batch_id: number;
+          body: string;
+          cc_emails: Json;
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject: string;
+          user_id: string;
+        };
+        Update: {
+          batch_id?: number;
+          body?: string;
+          cc_emails?: Json;
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          reply_to?: string | null;
+          subject?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "emails_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "emails_users_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       flashcard_decks: {
         Row: {
           class_id: number;
@@ -1501,9 +1593,12 @@ export type Database = {
           gradebook_column_id: number;
           gradebook_id: number;
           id: number;
+          incomplete_values: Json | null;
           is_droppable: boolean;
           is_excused: boolean;
           is_missing: boolean;
+          is_private: boolean;
+          is_recalculating: boolean;
           released: boolean;
           score: number | null;
           score_override: number | null;
@@ -1516,9 +1611,12 @@ export type Database = {
           gradebook_column_id: number;
           gradebook_id: number;
           id?: number;
+          incomplete_values?: Json | null;
           is_droppable?: boolean;
           is_excused?: boolean;
           is_missing?: boolean;
+          is_private: boolean;
+          is_recalculating?: boolean;
           released?: boolean;
           score?: number | null;
           score_override?: number | null;
@@ -1531,9 +1629,12 @@ export type Database = {
           gradebook_column_id?: number;
           gradebook_id?: number;
           id?: number;
+          incomplete_values?: Json | null;
           is_droppable?: boolean;
           is_excused?: boolean;
           is_missing?: boolean;
+          is_private?: boolean;
+          is_recalculating?: boolean;
           released?: boolean;
           score?: number | null;
           score_override?: number | null;
@@ -1598,6 +1699,7 @@ export type Database = {
           created_at: string;
           dependencies: Json | null;
           description: string | null;
+          external_data: Json | null;
           gradebook_id: number;
           id: number;
           max_score: number | null;
@@ -1605,15 +1707,17 @@ export type Database = {
           released: boolean;
           render_expression: string | null;
           score_expression: string | null;
+          show_calculated_ranges: boolean;
           show_max_score: boolean;
           slug: string;
-          sort_order: number;
+          sort_order: number | null;
         };
         Insert: {
           class_id: number;
           created_at?: string;
           dependencies?: Json | null;
           description?: string | null;
+          external_data?: Json | null;
           gradebook_id: number;
           id?: number;
           max_score?: number | null;
@@ -1621,15 +1725,17 @@ export type Database = {
           released?: boolean;
           render_expression?: string | null;
           score_expression?: string | null;
+          show_calculated_ranges?: boolean;
           show_max_score?: boolean;
           slug: string;
-          sort_order: number;
+          sort_order?: number | null;
         };
         Update: {
           class_id?: number;
           created_at?: string;
           dependencies?: Json | null;
           description?: string | null;
+          external_data?: Json | null;
           gradebook_id?: number;
           id?: number;
           max_score?: number | null;
@@ -1637,9 +1743,10 @@ export type Database = {
           released?: boolean;
           render_expression?: string | null;
           score_expression?: string | null;
+          show_calculated_ranges?: boolean;
           show_max_score?: boolean;
           slug?: string;
-          sort_order?: number;
+          sort_order?: number | null;
         };
         Relationships: [
           {
@@ -1663,6 +1770,7 @@ export type Database = {
           class_id: number;
           created_at: string;
           description: string | null;
+          expression_prefix: string | null;
           final_grade_column: number | null;
           id: number;
           name: string;
@@ -1671,6 +1779,7 @@ export type Database = {
           class_id: number;
           created_at?: string;
           description?: string | null;
+          expression_prefix?: string | null;
           final_grade_column?: number | null;
           id?: number;
           name: string;
@@ -1679,6 +1788,7 @@ export type Database = {
           class_id?: number;
           created_at?: string;
           description?: string | null;
+          expression_prefix?: string | null;
           final_grade_column?: number | null;
           id?: number;
           name?: string;
@@ -5297,6 +5407,10 @@ export type Database = {
       };
       reset_all_flashcard_progress: {
         Args: { p_class_id: number; p_student_id: string; p_card_ids: number[] };
+        Returns: undefined;
+      };
+      send_gradebook_recalculation_messages: {
+        Args: { messages: Json[] };
         Returns: undefined;
       };
       submission_set_active: {

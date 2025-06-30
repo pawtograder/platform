@@ -6,15 +6,13 @@ import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { getScore, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import type {
-  GradebookColumn,
-  GradebookColumnStudent,
-  GradebookColumnWithEntries
-} from "@/utils/supabase/DatabaseTypes";
-import { Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
+import { GradebookColumn, GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
+import { useInvalidate } from "@refinedev/core";
 import { parse } from "csv-parse/browser/esm/sync";
 import { useCallback, useEffect, useState } from "react";
 import { FiUpload } from "react-icons/fi";
+import { MdWarning } from "react-icons/md";
 
 type ImportJob = {
   rows: string[][];
@@ -40,6 +38,7 @@ type PreviewCol = {
   newGradebookColumnStudents?: GradebookColumnStudent[];
   existingCol: GradebookColumn | null;
   students: PreviewStudent[];
+  maxScore?: number;
 };
 
 type PreviewData = {
@@ -59,10 +58,12 @@ export default function ImportGradebookColumns() {
   const [studentIdentifierCol, setStudentIdentifierCol] = useState<number | null>(null);
   const [studentIdentifierType, setStudentIdentifierType] = useState<"email" | "sid">("email");
   const [columnMappings, setColumnMappings] = useState<Record<number, number | "new" | "ignore">>({}); // import col idx -> existing col id or 'new'
+  const [newColumnMaxScores, setNewColumnMaxScores] = useState<Record<number, number>>({}); // import col idx -> max score for new columns
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const studentRoster = useStudentRoster();
   const [importing, setImporting] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const invalidate = useInvalidate();
   const importFile = useCallback((file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -105,6 +106,7 @@ export default function ImportGradebookColumns() {
           setStudentIdentifierCol(null);
           setStudentIdentifierType("email");
           setColumnMappings({});
+          setNewColumnMaxScores({});
           setPreviewData(null);
           setImporting(false);
         }
@@ -176,31 +178,67 @@ export default function ImportGradebookColumns() {
                       </Text>
                       {(importJob?.rows?.[0] ?? []).map((col, idx) =>
                         idx === studentIdentifierCol ? null : (
-                          <HStack key={idx}>
-                            <Text minW="120px">{col}</Text>
-                            <NativeSelect.Root>
-                              <NativeSelect.Field
-                                value={columnMappings[idx] ?? ""}
-                                onChange={(e) =>
-                                  setColumnMappings((m) => ({
-                                    ...m,
-                                    [idx]:
+                          <VStack key={idx} align="stretch" gap={1}>
+                            <HStack>
+                              <Text minW="120px">{col}</Text>
+                              <NativeSelect.Root>
+                                <NativeSelect.Field
+                                  value={columnMappings[idx] ?? ""}
+                                  onChange={(e) => {
+                                    const newMapping =
                                       e.target.value === "new" || e.target.value === "ignore"
                                         ? e.target.value
-                                        : Number(e.target.value)
-                                  }))
-                                }
-                              >
-                                <option value="ignore">Ignore column</option>
-                                <option value="new">Create new column</option>
-                                {existingColumns.map((ec) => (
-                                  <option key={ec.id} value={ec.id}>
-                                    {ec.name}
-                                  </option>
-                                ))}
-                              </NativeSelect.Field>
-                            </NativeSelect.Root>
-                          </HStack>
+                                        : Number(e.target.value);
+                                    setColumnMappings((m) => ({
+                                      ...m,
+                                      [idx]: newMapping
+                                    }));
+                                    // Set default max score when selecting "new"
+                                    if (e.target.value === "new") {
+                                      setNewColumnMaxScores((scores) => ({
+                                        ...scores,
+                                        [idx]: scores[idx] ?? 100
+                                      }));
+                                    }
+                                  }}
+                                >
+                                  <option value="ignore">Ignore column</option>
+                                  <option value="new">Create new column</option>
+                                  {existingColumns.map((ec) => (
+                                    <option key={ec.id} value={ec.id}>
+                                      {ec.name}
+                                    </option>
+                                  ))}
+                                </NativeSelect.Field>
+                              </NativeSelect.Root>
+                            </HStack>
+                            {columnMappings[idx] === "new" && (
+                              <HStack ml="120px">
+                                <Text fontSize="sm" color="gray.600" minW="80px">
+                                  Max Score:
+                                </Text>
+                                <input
+                                  type="number"
+                                  value={newColumnMaxScores[idx] ?? 100}
+                                  onChange={(e) => {
+                                    const value = Number(e.target.value);
+                                    setNewColumnMaxScores((scores) => ({
+                                      ...scores,
+                                      [idx]: value
+                                    }));
+                                  }}
+                                  style={{
+                                    width: "80px",
+                                    padding: "4px 8px",
+                                    border: "1px solid #ccc",
+                                    borderRadius: "4px"
+                                  }}
+                                  min="0"
+                                  step="0.01"
+                                />
+                              </HStack>
+                            )}
+                          </VStack>
                         )
                       )}
                     </VStack>
@@ -261,7 +299,8 @@ export default function ImportGradebookColumns() {
                               name: col.name,
                               isNew: col.mapping === "new",
                               existingCol,
-                              students
+                              students,
+                              maxScore: col.mapping === "new" ? (newColumnMaxScores[col.idx] ?? 100) : undefined
                             };
                           });
                           setPreviewData({
@@ -332,6 +371,23 @@ export default function ImportGradebookColumns() {
                                   <span style={{ color: col.isNew ? "green" : "blue" }}>
                                     {col.existingCol ? `Update: ${col.existingCol.name}` : `New: ${col.name}`}
                                   </span>
+                                  {col.existingCol?.score_expression && (
+                                    <Box
+                                      color="fg.warning"
+                                      fontSize="md"
+                                      maxW="300px"
+                                      border="1px solid"
+                                      borderColor="fg.warning"
+                                      borderRadius="md"
+                                      p={1}
+                                      mt={1}
+                                      bg="bg.warning"
+                                    >
+                                      <Icon as={MdWarning} />
+                                      Update will override calculated score. Only do this if you really are sure you
+                                      want to do this!
+                                    </Box>
+                                  )}
                                 </Table.ColumnHeader>
                               ))}
                             </Table.Row>
@@ -410,7 +466,7 @@ export default function ImportGradebookColumns() {
                               return importIdentifiers
                                 .filter((id) => !rosterIdentifiers.includes(id))
                                 .map((identifier, idx) => (
-                                  <Table.Row key={"import-missing-" + idx} bg="#F8D7DA">
+                                  <Table.Row key={"import-missing-" + idx} bg="bg.warning">
                                     <Table.Cell>{identifier}</Table.Cell>
                                     {filteredPreviewCols.map((col, colIdx) => {
                                       const s = col.students.find((s) => s.identifier === identifier);
@@ -474,12 +530,19 @@ export default function ImportGradebookColumns() {
                                     .replace(/(^-|-$)/g, "") +
                                   "-" +
                                   randomChars;
+                                const maxScore = col.maxScore ?? 100;
+
                                 const insertObj = {
                                   name: col.name + ` (Imported ${new Date().toLocaleDateString()} #${randomChars})`,
                                   gradebook_id: gradebookController.gradebook.id,
                                   class_id: gradebookController.gradebook.class_id,
-                                  expression: `importCSV('{"fileName":"${importJob?.filename}.csv", "date":"${new Date().toLocaleDateString()}", "creator":"${private_profile_id}"}')`,
-                                  max_score: null,
+                                  external_data: {
+                                    source: "csv",
+                                    fileName: importJob?.filename,
+                                    date: new Date().toLocaleDateString(),
+                                    creator: private_profile_id
+                                  },
+                                  max_score: maxScore,
                                   description: null,
                                   dependencies: null,
                                   slug,
@@ -498,7 +561,8 @@ export default function ImportGradebookColumns() {
                                   await supabase
                                     .from("gradebook_column_students")
                                     .select("*")
-                                    .eq("gradebook_column_id", data.id);
+                                    .eq("gradebook_column_id", data.id)
+                                    .eq("is_private", true);
                                 if (newGradebookColumnStudentsError) {
                                   throw new Error(newGradebookColumnStudentsError.message);
                                 }
@@ -511,13 +575,21 @@ export default function ImportGradebookColumns() {
                                 .filter(
                                   (c) =>
                                     previewData.previewCols.some((pc) => pc.existingCol?.id === c.id) &&
-                                    (!c.score_expression || c.score_expression?.startsWith("importCSV"))
+                                    c.external_data &&
+                                    typeof c.external_data === "object" &&
+                                    "source" in c.external_data &&
+                                    c.external_data["source"] === "csv"
                                 )
                                 .map(async (col) => {
                                   const { error } = await supabase
                                     .from("gradebook_columns")
                                     .update({
-                                      score_expression: `importCSV('{"fileName":"${importJob?.filename}.csv", "date":"${new Date().toLocaleDateString()}", "creator":"${private_profile_id}"}')`
+                                      external_data: {
+                                        source: "csv",
+                                        fileName: importJob?.filename,
+                                        date: new Date().toLocaleDateString(),
+                                        creator: private_profile_id
+                                      }
                                     })
                                     .eq("id", col.id);
                                   if (error) {
@@ -559,10 +631,10 @@ export default function ImportGradebookColumns() {
                                     );
                                     const gcs = col.isNew
                                       ? col.newGradebookColumnStudents?.find(
-                                          (g) => g.student_id === studentPrivateProfileId
+                                          (g) => g.student_id === studentPrivateProfileId && g.is_private
                                         )
                                       : column?.gradebook_column_students?.find(
-                                          (g) => g.student_id === studentPrivateProfileId
+                                          (g) => g.student_id === studentPrivateProfileId && g.is_private
                                         );
                                     if (!gcs) return null;
                                     let score: number | undefined = undefined;
@@ -578,7 +650,7 @@ export default function ImportGradebookColumns() {
                                       id: number;
                                       update: { score?: number; score_override?: number };
                                     } | null = null;
-                                    if (column?.score_expression && !column.score_expression.startsWith("importCSV")) {
+                                    if (column?.score_expression) {
                                       // Only update score_override
                                       updateObj = {
                                         id: gcs.id,
@@ -588,7 +660,7 @@ export default function ImportGradebookColumns() {
                                       // Update score, clear any overrides
                                       updateObj = {
                                         id: gcs.id,
-                                        update: { score: score, score_override: undefined }
+                                        update: { score: score }
                                       };
                                     }
                                     return updateObj;
@@ -610,6 +682,7 @@ export default function ImportGradebookColumns() {
                                 return true;
                               })
                             );
+                            invalidate({ resource: "gradebook_columns", invalidates: ["all"] });
                             toaster.success({
                               title: "Import successful!",
                               description: "Gradebook columns and scores have been imported."

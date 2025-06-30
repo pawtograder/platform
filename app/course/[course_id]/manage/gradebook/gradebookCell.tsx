@@ -3,39 +3,61 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { useColorMode } from "@/components/ui/color-mode";
 import { Field } from "@/components/ui/field";
-import PersonName from "@/components/ui/person-name";
-import { toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useCanShowGradeFor } from "@/hooks/useCourseController";
 import {
   useGradebookColumn,
   useGradebookColumnStudent,
   useGradebookController,
-  useReferencedContent
+  useLinkToAssignment
 } from "@/hooks/useGradebook";
-import type { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
-import { Alert, Box, Button, Code, HStack, Icon, Input, Popover, Portal, Text, VStack } from "@chakra-ui/react";
+import { IncompleteValuesAdvice } from "@/hooks/useGradebookWhatIf";
+import { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
+import {
+  Box,
+  Button,
+  Float,
+  HStack,
+  Heading,
+  Icon,
+  Input,
+  Link,
+  Popover,
+  Portal,
+  Separator,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 import { memo, useEffect, useId, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaRobot } from "react-icons/fa6";
+import { LuCalculator } from "react-icons/lu";
 
 export function OverrideScoreForm({
   studentGradebookColumn,
   onSuccess,
-  isAutoCalculated
+  isAutoCalculated,
+  showWarning
 }: {
   studentGradebookColumn: GradebookColumnStudent;
   onSuccess?: () => void;
   isAutoCalculated?: boolean;
+  showWarning?: boolean;
 }) {
   const { mutateAsync: updateStudentGradebookColumn } = useUpdate<GradebookColumnStudent>({
     resource: "gradebook_column_students"
   });
+  const linkToAssignment = useLinkToAssignment(
+    studentGradebookColumn.gradebook_column_id,
+    studentGradebookColumn.student_id
+  );
+
   const {
     register,
     setFocus,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting }
   } = useForm<Partial<GradebookColumnStudent>>({
     defaultValues: {
@@ -47,6 +69,12 @@ export function OverrideScoreForm({
     }
   });
 
+  // Watch form values for checkboxes
+  const watchedValues = watch();
+  const gradebookController = useGradebookController();
+  const column = gradebookController.getGradebookColumn(studentGradebookColumn.gradebook_column_id);
+  const renderer = gradebookController.getRendererForColumn(studentGradebookColumn.gradebook_column_id);
+
   useEffect(() => {
     if (isAutoCalculated) {
       setFocus("score_override");
@@ -56,9 +84,18 @@ export function OverrideScoreForm({
   }, [isAutoCalculated, setFocus]);
 
   const onSubmit = async (values: Partial<GradebookColumnStudent>) => {
+    const forceMissingOff =
+      (values.score !== undefined || values.score_override !== undefined) &&
+      !studentGradebookColumn.score &&
+      !studentGradebookColumn.score_override &&
+      studentGradebookColumn.is_missing;
     await updateStudentGradebookColumn({
       id: studentGradebookColumn.id,
-      values: values
+      values: {
+        ...values,
+        score: values.is_missing && !forceMissingOff ? null : values.score,
+        is_missing: forceMissingOff ? false : values.is_missing
+      }
     });
     if (onSuccess) onSuccess();
   };
@@ -66,32 +103,112 @@ export function OverrideScoreForm({
   return (
     <Box as="form" onSubmit={handleSubmit(onSubmit)} minW="300px">
       <VStack gap={2} align="stretch">
+        {!isAutoCalculated && (
+          <HStack gap={2} align="stretch">
+            <Field label="Score" errorText={errors.score?.message?.toString()} flexGrow={1}>
+              <Input type="number" step="any" {...register("score", { valueAsNumber: true })} />
+            </Field>
+            {renderer && (
+              <Field label="New Score" flexGrow={0} flexShrink={1}>
+                {renderer({
+                  ...studentGradebookColumn,
+                  score: watchedValues.score ?? 0,
+                  max_score: column?.max_score ?? 0
+                })}
+              </Field>
+            )}
+          </HStack>
+        )}
         {isAutoCalculated && (
-          <Box fontSize="sm" color="fg.muted" mb={1}>
-            Original Score: {studentGradebookColumn.score ?? "N/A"}
+          <Box w="100%" border="1px solid" borderColor="border.warning" p={1} borderRadius="md">
+            <HStack>
+              <Separator flex="1" />
+              <Heading size="sm" color="fg.warning">
+                Override score from {studentGradebookColumn.score ?? "N/A"}
+              </Heading>
+              <Separator flex="1" />
+            </HStack>
+            {showWarning && (
+              <Heading size="sm" color="fg.warning">
+                This column is automatically calculated{" "}
+                {linkToAssignment && (
+                  <Link href={linkToAssignment} target="_blank" color="fg.info">
+                    (View Submission)
+                  </Link>
+                )}
+              </Heading>
+            )}
+            <Text fontSize="sm" color="fg.warning">
+              {showWarning
+                ? "There are very, very few cases where you should override the score. However, you CAN do so here. Note that other instructors and graders, AS WELL AS THE STUDENT will see that it was overriden from the default calculated value. Your override will persist through recalculation."
+                : "This score was imported from an external source and you are overriding it. You and other graders will be able to see that it was overriden from the import, but students will not. Your override will persist through re-imports."}
+            </Text>
+            <HStack gap={0}>
+              <Field label="Score" errorText={errors.score_override?.message?.toString()} flex={1} minW="5em">
+                <Input
+                  type="number"
+                  {...register("score_override", { valueAsNumber: true })}
+                  placeholder={studentGradebookColumn.score?.toString()}
+                />
+              </Field>
+              {renderer && (
+                <Field label="New Score" flexGrow={0} flexShrink={1}>
+                  {renderer({
+                    ...studentGradebookColumn,
+                    score:
+                      watchedValues.score_override === undefined || Number.isNaN(watchedValues.score_override)
+                        ? (watchedValues.score ?? 0)
+                        : watchedValues.score_override,
+                    max_score: column?.max_score ?? 0
+                  })}
+                </Field>
+              )}
+              <Field label="Note" errorText={errors.score_override_note?.message?.toString()} flexGrow={20}>
+                <Input type="text" {...register("score_override_note")} />
+              </Field>
+            </HStack>
           </Box>
         )}
-        {isAutoCalculated && (
-          <Field label="Score Override" errorText={errors.score_override?.message?.toString()} flex={1}>
-            <Input type="number" step="any" {...register("score_override", { valueAsNumber: true })} />
-          </Field>
-        )}
-        {!isAutoCalculated && (
-          <Field label="Score" errorText={errors.score?.message?.toString()} flex={1}>
-            <Input type="number" step="any" {...register("score", { valueAsNumber: true })} />
-          </Field>
-        )}
-        <Field label="Score Override Note" errorText={errors.score_override_note?.message?.toString()}>
-          <Input type="text" {...register("score_override_note")} />
-        </Field>
-        <HStack gap={4} align="center">
-          <Checkbox {...register("is_droppable")}>Droppable</Checkbox>
-          <Checkbox {...register("is_excused")}>Excused</Checkbox>
-          <Checkbox {...register("is_missing")}>Missing</Checkbox>
+        <HStack justify="space-between">
+          {!showWarning && (
+            <HStack gap={4}>
+              <Checkbox {...register("is_droppable")} checked={watchedValues.is_droppable ?? false}>
+                Droppable
+              </Checkbox>
+              <Checkbox {...register("is_excused")} checked={watchedValues.is_excused ?? false}>
+                Excused
+              </Checkbox>
+              <Checkbox {...register("is_missing")} checked={watchedValues.is_missing ?? false}>
+                Missing
+              </Checkbox>
+            </HStack>
+          )}
+          <Button
+            type="submit"
+            loading={isSubmitting}
+            colorPalette={showWarning ? "orange" : "green"}
+            size="sm"
+            alignSelf="end"
+          >
+            {showWarning ? "Save Override" : "Update"}
+          </Button>
+          {showWarning && (
+            <Button
+              size="sm"
+              colorPalette="orange"
+              variant="surface"
+              onClick={() => {
+                updateStudentGradebookColumn({
+                  id: studentGradebookColumn.id,
+                  values: { score_override: null }
+                });
+                if (onSuccess) onSuccess();
+              }}
+            >
+              Clear Override
+            </Button>
+          )}
         </HStack>
-        <Button type="submit" loading={isSubmitting} colorPalette="green" size="sm" alignSelf="end">
-          Update
-        </Button>
       </VStack>
     </Box>
   );
@@ -116,13 +233,36 @@ export const GradeCellOverlay = memo(function GradeCellOverlay({ studentId }: { 
   }
   return null;
 });
+export function GradebookColumnExpression() {
+  return (
+    <VStack gap={1} w="100%" p={1} borderRadius="md" mb={2} align="flex-start">
+      <HStack gap={2} w="100%" p={0} borderRadius="md">
+        <Icon as={FaRobot} color="fg.info" />
+        <Heading size="sm">This column is automatically calculated</Heading>
+      </HStack>
+      <Text fontSize="sm" color="fg.muted">
+        Your override will persist through recalculation
+      </Text>
+    </VStack>
+  );
+}
+
+export function IncompleteValuesList(incompleteValues: IncompleteValuesAdvice) {
+  const allKeys: string[] = [];
+  if (incompleteValues.missing?.gradebook_columns) {
+    allKeys.push(...incompleteValues.missing.gradebook_columns);
+  }
+  if (incompleteValues.not_released?.gradebook_columns) {
+    allKeys.push(...incompleteValues.not_released.gradebook_columns);
+  }
+  return allKeys.join(", ");
+}
 export default function GradebookCell({ columnId, studentId }: { columnId: number; studentId: string }) {
   const gradebookController = useGradebookController();
   const column = useGradebookColumn(columnId);
   const [isEditing, setIsEditing] = useState(false);
   const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
   const triggerId = useId();
-  const referencedContent = useReferencedContent(column.id, studentId);
 
   let scoreAdvice: string | undefined = undefined;
   if (column.score_expression && !studentGradebookColumn) {
@@ -138,142 +278,120 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
     }
   }
   if (column.render_expression && !scoreAdvice) {
-    scoreAdvice = `Raw score: ${studentGradebookColumn?.score_override ?? studentGradebookColumn?.score}`;
+    scoreAdvice = `Raw score: ${studentGradebookColumn?.score_override ?? studentGradebookColumn?.score ?? "Missing"}`;
   }
   const isSpecial = studentGradebookColumn?.score_override || studentGradebookColumn?.is_excused;
+
+  if (studentGradebookColumn?.incomplete_values) {
+    scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}This calculated column is missing these values: ${IncompleteValuesList(studentGradebookColumn.incomplete_values as IncompleteValuesAdvice)}`;
+  }
   return (
-    <Box
-      w="100%"
-      textAlign="right"
-      border="1px solid"
-      borderColor="border.muted"
-      position="relative"
-      _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
-    >
-      <Popover.Root
-        positioning={{
-          placement: "bottom",
-          strategy: "fixed"
-        }}
-        open={isEditing}
-        ids={{ trigger: triggerId }}
-        onOpenChange={(details) => {
-          setIsEditing(details.open);
-        }}
+    <>
+      <style>
+        {`
+          .pulse-animation {
+            animation: pulse 2s ease-in-out infinite;
+          }
+          @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+          }
+        `}
+      </style>
+      <Box
+        w="100%"
+        textAlign="right"
+        border="1px solid"
+        borderColor="border.muted"
+        position="relative"
+        _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
       >
-        <Tooltip
-          content={scoreAdvice}
-          positioning={{ placement: "top" }}
-          showArrow={true}
+        <Popover.Root
+          positioning={{
+            placement: "bottom",
+            strategy: "fixed"
+          }}
+          lazyMount
+          unmountOnExit
+          open={isEditing}
           ids={{ trigger: triggerId }}
-          disabled={!scoreAdvice}
+          onOpenChange={(details) => {
+            setIsEditing(details.open);
+          }}
         >
-          <Popover.Trigger asChild>
-            <Box
-              cursor="pointer"
-              w="100%"
-              h="100%"
-              py={1}
-              px={4}
-              border="1px solid"
-              borderColor={isEditing ? "border.info" : "border.subtle"}
-              _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
-              _active={{ border: "2px solid border.info", borderColor: "border.info" }}
-              position="relative"
-            >
-              {isSpecial && (
-                <Box
-                  position="absolute"
-                  top={1}
-                  right={1}
-                  zIndex={1}
-                  pointerEvents="none"
-                  color="red.500"
-                  fontWeight="bold"
-                  fontSize="lg"
-                >
-                  *
-                </Box>
-              )}
-              {studentGradebookColumn &&
-              (studentGradebookColumn?.score !== undefined || studentGradebookColumn?.score_override !== undefined)
-                ? gradebookController.getRendererForColumn(column.id)(studentGradebookColumn)
-                : "(Missing)"}
-            </Box>
-          </Popover.Trigger>
-        </Tooltip>
-        <Portal>
-          <Popover.Positioner>
-            <Popover.Content w="lg" maxH="80vh" overflowY="auto">
-              <Popover.Arrow />
-              <Popover.Body p={1} m={2}>
-                {column.score_expression &&
-                  (() => {
-                    const isImportCSV = column.score_expression?.startsWith("importCSV");
-                    if (isImportCSV) {
-                      //Parse the quoted string in the expression
-                      const quotedString = column.score_expression.match(/'([^']+)'/)?.[1];
-                      if (quotedString) {
-                        try {
-                          const json = JSON.parse(quotedString);
-                          return (
-                            <VStack gap={0}>
-                              <Alert.Root status="warning" direction="column" p={1}>
-                                <Alert.Indicator>
-                                  <Icon as={FaRobot} />
-                                </Alert.Indicator>
-                                <Alert.Content p={1}>
-                                  <Alert.Title>This column was imported from a CSV file</Alert.Title>
-                                  <Alert.Description>
-                                    <Text>File: {json.fileName}</Text>
-                                    <Text>Date: {json.date}</Text>
-                                    <HStack gap={1}>
-                                      <Text>By:</Text>
-                                      <PersonName uid={json.creator} showAvatar={false} />
-                                    </HStack>
-                                  </Alert.Description>
-                                </Alert.Content>
-                              </Alert.Root>
-                            </VStack>
-                          );
-                        } catch (e) {
-                          toaster.error({
-                            title: "Error parsing CSV import",
-                            description: `Error parsing CSV import: ${e instanceof Error ? e.message : String(e)}`
-                          });
-                        }
-                      }
-                    }
-                    return (
-                      <VStack gap={0}>
-                        <Alert.Root status="warning" direction="column" p={1}>
-                          <Alert.Indicator>
-                            <Icon as={FaRobot} />
-                          </Alert.Indicator>
-                          <Alert.Content p={1}>
-                            <Alert.Title>This column is automatically calculated</Alert.Title>
-                            <Alert.Description>
-                              Using the expression: <Code>{column.score_expression}</Code>
-                              {referencedContent}
-                            </Alert.Description>
-                          </Alert.Content>
-                        </Alert.Root>
-                      </VStack>
-                    );
-                  })()}
-                {studentGradebookColumn && (
-                  <OverrideScoreForm
-                    studentGradebookColumn={studentGradebookColumn}
-                    onSuccess={() => setIsEditing(false)}
-                    isAutoCalculated={column.score_expression !== null}
-                  />
+          <Tooltip
+            content={scoreAdvice}
+            positioning={{ placement: "top" }}
+            showArrow={true}
+            ids={{ trigger: triggerId }}
+            disabled={!scoreAdvice}
+          >
+            <Popover.Trigger asChild>
+              <Box
+                cursor="pointer"
+                w="100%"
+                h="100%"
+                py={1}
+                px={4}
+                border="1px solid"
+                borderColor={isEditing ? "border.info" : "border.subtle"}
+                _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
+                _active={{ border: "2px solid border.info", borderColor: "border.info" }}
+                position="relative"
+              >
+                {isSpecial && (
+                  <Float placement="top-end" offset={3}>
+                    <Box color="red.500" fontWeight="bold" fontSize="lg" pointerEvents="none">
+                      *
+                    </Box>
+                  </Float>
                 )}
-              </Popover.Body>
-            </Popover.Content>
-          </Popover.Positioner>
-        </Portal>
-      </Popover.Root>
-      <GradeCellOverlay studentId={studentId} />
-    </Box>
+                {studentGradebookColumn?.is_recalculating && (
+                  <Float placement="bottom-end" offset={2}>
+                    <Box color="fg.info" pointerEvents="none" className="pulse-animation">
+                      <Icon as={LuCalculator} size="sm" />
+                    </Box>
+                  </Float>
+                )}
+                {studentGradebookColumn?.incomplete_values && (
+                  <Float placement="top-end" offset={3}>
+                    <Box color="blue.500" fontWeight="bold" fontSize="lg" pointerEvents="none">
+                      *
+                    </Box>
+                  </Float>
+                )}
+                <Text>
+                  {studentGradebookColumn &&
+                  (studentGradebookColumn?.score !== undefined || studentGradebookColumn?.score_override !== undefined)
+                    ? gradebookController.getRendererForColumn(column.id)({
+                        ...studentGradebookColumn,
+                        max_score: column.max_score
+                      })
+                    : "(N/A)"}
+                </Text>
+              </Box>
+            </Popover.Trigger>
+          </Tooltip>
+          <Portal>
+            <Popover.Positioner>
+              <Popover.Content w="lg" maxH="80vh" bg={column.score_expression ? "bg.warning" : "bg.panel"}>
+                <Popover.Arrow />
+                <Popover.Body p={1} m={2}>
+                  {studentGradebookColumn && (
+                    <OverrideScoreForm
+                      studentGradebookColumn={studentGradebookColumn}
+                      onSuccess={() => setIsEditing(false)}
+                      isAutoCalculated={column.score_expression !== null || column.external_data !== null}
+                      showWarning={column.score_expression !== null}
+                    />
+                  )}
+                </Popover.Body>
+              </Popover.Content>
+            </Popover.Positioner>
+          </Portal>
+        </Popover.Root>
+        <GradeCellOverlay studentId={studentId} />
+      </Box>
+    </>
   );
 }

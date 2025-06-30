@@ -1,14 +1,36 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { isArray, isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
-import { Database } from "../../_shared/SupabaseTypes.d.ts";
-import { Assignment, GradebookColumn, GradebookColumnStudent } from "./types.d.ts";
+import type { Database } from "../../_shared/SupabaseTypes.d.ts";
+import type {
+  Assignment,
+  GradebookColumn,
+  GradebookColumnStudent,
+  GradebookColumnStudentWithMaxScore
+} from "./types.d.ts";
 
 export type PrivateProfileId = string;
 
+export type ExpressionContext = {
+  student_id: PrivateProfileId;
+  is_private_calculation: boolean;
+  incomplete_values: IncompleteValuesAdvice | null;
+  incomplete_values_policy: "assume_max" | "assume_zero" | "report_only";
+};
+//TODO: Move this to a shared file
+//See also in hooks/useGradebookWhatIf.tsx
+export type IncompleteValuesAdvice = {
+  missing?: {
+    gradebook_columns?: string[];
+  };
+  not_released?: {
+    gradebook_columns?: string[];
+  };
+};
+
 export type ResolvedExprDependencyInstance = ExprDependencyInstance & {
-  display: string;
   value: unknown;
+  is_private: boolean;
 };
 export type ExprDependencyInstance = {
   class_id: number;
@@ -55,18 +77,18 @@ export interface DependencySource {
    * Execute the function with the given parameters.
    *
    * @param function_name
-   * @param student_id
+   * @param context
    * @param key
    * @returns
    */
   execute: ({
     function_name,
-    student_id,
+    context,
     key,
     class_id
   }: {
     function_name: string;
-    student_id: string;
+    context: ExpressionContext;
     key: string | string[];
     class_id: number;
   }) => unknown;
@@ -108,22 +130,54 @@ abstract class DependencySourceBase implements DependencySource {
   }
 
   abstract expandKey({ key, class_id }: { key: string; class_id: number }): string[];
+
   execute({
-    student_id,
+    context,
     key,
     class_id
   }: {
     function_name: string;
-    student_id: string;
+    context: ExpressionContext;
     key: string | string[];
     class_id: number;
   }): unknown {
     if (typeof key === "object") {
-      return key.map(
-        (k) => this.valuesMap.get(student_id)?.find((value) => value.key === k && value.class_id === class_id)?.value
-      );
+      if (Array.isArray(key)) {
+        const ret = key.map(
+          (k) =>
+            this.valuesMap
+              .get(context.student_id)
+              ?.find(
+                (value) =>
+                  value.key === k && value.class_id === class_id && value.is_private === context.is_private_calculation
+              )?.value
+        );
+        return ret;
+      }
+      if (isDenseMatrix(key)) {
+        const ret = (key as Matrix<string>)
+          .toArray()
+          .map(
+            (k) =>
+              this.valuesMap
+                .get(context.student_id)
+                ?.find(
+                  (value) =>
+                    value.key === k &&
+                    value.class_id === class_id &&
+                    value.is_private === context.is_private_calculation
+                )?.value
+          );
+        return ret;
+      }
+      throw new Error(`Unsupported key type: ${typeof key}`);
     }
-    return this.valuesMap.get(student_id)?.find((value) => value.key === key && value.class_id === class_id)?.value;
+    return this.valuesMap
+      .get(context.student_id)
+      ?.find(
+        (value) =>
+          value.key === key && value.class_id === class_id && value.is_private === context.is_private_calculation
+      )?.value;
   }
 }
 
@@ -148,35 +202,92 @@ class AssignmentsDependencySource extends DependencySourceBase {
     class_id: number;
     supabase: SupabaseClient<Database>;
   }): Promise<ResolvedExprDependencyInstance[]> {
-    const { data: assignments, error: assignmentsFetchError } = await supabase
-      .from("assignments")
-      .select("*")
-      .eq("class_id", class_id);
-    if (assignmentsFetchError) {
-      throw assignmentsFetchError;
+    // Fetch all assignments with pagination
+    const allAssignments: Assignment[] = [];
+    let from = 0;
+    const pageSize = 1000;
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data: assignments, error: assignmentsFetchError } = await supabase
+        .from("assignments")
+        .select("*")
+        .eq("class_id", class_id)
+        .range(from, to);
+
+      if (assignmentsFetchError) {
+        throw assignmentsFetchError;
+      }
+
+      if (!assignments || assignments.length === 0) {
+        break;
+      }
+
+      allAssignments.push(...assignments);
+
+      if (assignments.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
     }
-    for (const assignment of assignments) {
+
+    for (const assignment of allAssignments) {
       this.assignmentMap.set(assignment.id, assignment);
     }
+
     const students = new Set<string>(keys.map((key) => key.student_id));
     const assignmentIds = keys.map((key) => Number(key.key));
-    const { data: submissions, error: submissionsFetchError } = await supabase
-      .from("submissions_with_grades_for_assignment")
-      .select("*")
-      .in("assignment_id", assignmentIds)
-      .eq("class_id", class_id);
-    if (submissionsFetchError) {
-      throw submissionsFetchError;
+
+    // Fetch all submissions with pagination
+    const allSubmissions: any[] = [];
+    from = 0;
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data: submissions, error: submissionsFetchError } = await supabase
+        .from("submissions_with_grades_for_assignment")
+        .select("*")
+        .in("assignment_id", assignmentIds)
+        .eq("class_id", class_id)
+        .range(from, to);
+
+      if (submissionsFetchError) {
+        throw submissionsFetchError;
+      }
+
+      if (!submissions || submissions.length === 0) {
+        break;
+      }
+
+      allSubmissions.push(...submissions);
+
+      if (submissions.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
     }
-    return submissions
+
+    const private_results = allSubmissions
       .filter((submission) => students.has(submission.student_id!))
       .map((submission) => ({
         key: submission.assignment_slug ?? "",
         student_id: submission.student_id!,
         value: submission.total_score,
-        display: submission.total_score?.toString() ?? "",
-        class_id: submission.class_id!
+        class_id: submission.class_id!,
+        is_private: true
       }));
+    const public_results = allSubmissions
+      .filter((submission) => students.has(submission.student_id!))
+      .map((submission) => ({
+        key: submission.assignment_slug ?? "",
+        student_id: submission.student_id!,
+        value: submission.released ? submission.total_score : undefined,
+        class_id: submission.class_id!,
+        is_private: false
+      }));
+    return [...private_results, ...public_results];
   }
 }
 
@@ -185,6 +296,61 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     return ["gradebook_columns"];
   }
   private gradebookColumnMap: Map<number, GradebookColumn> = new Map();
+  execute({
+    function_name,
+    context,
+    key,
+    class_id
+  }: {
+    function_name: string;
+    context: ExpressionContext;
+    key: string | string[];
+    class_id: number;
+  }): unknown {
+    const ret = super.execute({ function_name, context, key, class_id }) as GradebookColumnStudentWithMaxScore;
+    if (!ret || ret.is_missing || (ret.score === null && ret.score_override === null)) {
+      if (!context.incomplete_values) {
+        context.incomplete_values = {
+          missing: {
+            gradebook_columns: []
+          }
+        };
+      }
+      if (!context.incomplete_values.missing) {
+        context.incomplete_values.missing = {
+          gradebook_columns: []
+        };
+      }
+      if (!context.incomplete_values.missing.gradebook_columns) {
+        context.incomplete_values.missing.gradebook_columns = [];
+      }
+      context.incomplete_values.missing.gradebook_columns.push(ret.column_slug);
+    }
+    if (
+      ret.incomplete_values !== null &&
+      typeof ret.incomplete_values === "object" &&
+      "missing" in ret.incomplete_values
+    ) {
+      const missing = ret.incomplete_values.missing as { gradebook_columns?: string[] };
+      if (!context.incomplete_values) {
+        context.incomplete_values = {
+          missing: {
+            gradebook_columns: []
+          }
+        };
+      }
+      if (!context.incomplete_values.missing) {
+        context.incomplete_values.missing = {
+          gradebook_columns: []
+        };
+      }
+      if (!context.incomplete_values.missing.gradebook_columns) {
+        context.incomplete_values.missing.gradebook_columns = [];
+      }
+      context.incomplete_values.missing.gradebook_columns.push(...(missing.gradebook_columns ?? []));
+    }
+    return ret;
+  }
   async _retrieveValues({
     keys,
     class_id,
@@ -197,33 +363,85 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     const students = new Set<string>(keys.map((key) => key.student_id));
     const gradebookColumnIds = new Set(keys.map((key) => Number(key.key)));
     const uniqueGradebookColumnIds = Array.from(gradebookColumnIds);
-    const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await supabase
-      .from("gradebook_column_students")
-      .select("*")
-      .in("gradebook_column_id", uniqueGradebookColumnIds)
-      .eq("class_id", class_id);
-    if (gradebookColumnsFetchError) {
-      throw gradebookColumnsFetchError;
+
+    // Fetch all gradebook column students with pagination
+    const allGradebookColumnStudents: GradebookColumnStudent[] = [];
+    let from = 0;
+    const pageSize = 1000;
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data: gradebookColumnStudents, error: gradebookColumnsFetchError } = await supabase
+        .from("gradebook_column_students")
+        .select("*")
+        .in("gradebook_column_id", uniqueGradebookColumnIds)
+        .eq("class_id", class_id)
+        .range(from, to);
+
+      if (gradebookColumnsFetchError) {
+        throw gradebookColumnsFetchError;
+      }
+
+      if (!gradebookColumnStudents || gradebookColumnStudents.length === 0) {
+        break;
+      }
+
+      allGradebookColumnStudents.push(...gradebookColumnStudents);
+
+      if (gradebookColumnStudents.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
     }
-    const { data: gradebookColumns, error: gradebookColumnsError } = await supabase
-      .from("gradebook_columns")
-      .select("*")
-      .in("id", uniqueGradebookColumnIds)
-      .eq("class_id", class_id);
-    if (gradebookColumnsError) {
-      throw gradebookColumnsError;
+
+    // Fetch all gradebook columns with pagination
+    const allGradebookColumns: GradebookColumn[] = [];
+    from = 0;
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data: gradebookColumns, error: gradebookColumnsError } = await supabase
+        .from("gradebook_columns")
+        .select("*")
+        .in("id", uniqueGradebookColumnIds)
+        .eq("class_id", class_id)
+        .range(from, to);
+
+      if (gradebookColumnsError) {
+        throw gradebookColumnsError;
+      }
+
+      if (!gradebookColumns || gradebookColumns.length === 0) {
+        break;
+      }
+
+      allGradebookColumns.push(...gradebookColumns);
+
+      if (gradebookColumns.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
     }
-    for (const gradebookColumn of gradebookColumns) {
+
+    for (const gradebookColumn of allGradebookColumns) {
       this.gradebookColumnMap.set(gradebookColumn.id, gradebookColumn);
     }
-    return gradebookColumnStudents
+    return allGradebookColumnStudents
       .filter((studentRecord) => students.has(studentRecord.student_id!))
       .map((studentRecord) => ({
         key: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.slug ?? "unknown",
         student_id: studentRecord.student_id!,
-        value: studentRecord,
+        value: {
+          ...studentRecord,
+          score: studentRecord.score_override ?? studentRecord.score ?? 0,
+          max_score: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.max_score ?? 0,
+          column_slug: this.gradebookColumnMap.get(studentRecord.gradebook_column_id!)?.slug ?? "unknown"
+        },
         display: studentRecord.score?.toString() ?? "",
-        class_id: studentRecord.class_id
+        class_id: studentRecord.class_id,
+        is_private: studentRecord.is_private
       }));
   }
   expandKey({ key, class_id }: { key: string; class_id: number }): string[] {
@@ -232,44 +450,15 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     );
     return matchingColumns.map((column) => column.slug);
   }
-
-  override execute({
-    function_name,
-    student_id,
-    key,
-    class_id
-  }: {
-    function_name: string;
-    student_id: string;
-    key: string | string[];
-    class_id: number;
-  }): unknown {
-    if (key === undefined) {
-      throw new Error(`Key is undefined for ${function_name} for ${student_id} with class_id ${class_id}`);
-    }
-    const ret = super.execute({ function_name, student_id, key, class_id });
-    if (ret) {
-      //If we return a single value, unwrap it to a score
-      if (typeof ret === "object" && "score_override" in ret) {
-        const val = ret as GradebookColumnStudent;
-        if (val.score_override) {
-          return val.score_override;
-        }
-        return val.score;
-      } else if (isDenseMatrix(ret)) {
-        //If we return an ARRAY of values, keep the whole object to allow for further processing of its fields
-        return ret;
-      }
-    }
-    return ret;
-  }
 }
 export const DependencySourceMap = {
   assignments: new AssignmentsDependencySource(),
   gradebook_columns: new GradebookColumnsDependencySource()
 };
+//These functions should be called with a context object as the first argument
+export const ContextFunctions = ["mean", "countif", "sum", "drop_lowest"];
 
-function isGradebookColumnStudent(value: unknown): value is GradebookColumnStudent {
+function isGradebookColumnStudent(value: unknown): value is GradebookColumnStudentWithMaxScore {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -277,7 +466,9 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "score_override" in value &&
     "is_droppable" in value &&
     "is_excused" in value &&
-    "is_missing" in value
+    "is_missing" in value &&
+    "max_score" in value &&
+    "column_slug" in value
   );
 }
 
@@ -303,10 +494,10 @@ export async function addDependencySourceFunctions({
   for (const dependencySourceProvider of Object.values(DependencySourceMap)) {
     const functionNames = dependencySourceProvider.getFunctionNames();
     for (const functionName of functionNames) {
-      imports[functionName] = (student_id: string, key: string) => {
+      imports[functionName] = (context: ExpressionContext, key: string) => {
         return dependencySourceProvider.execute({
           function_name: functionName,
-          student_id,
+          context,
           key,
           class_id: keys[0].class_id
         });
@@ -314,9 +505,6 @@ export async function addDependencySourceFunctions({
     }
   }
 
-  imports["importCSV"] = () => {
-    return undefined;
-  };
   imports["multiply"] = (a: number, b: number) => {
     if (a === undefined || b === undefined) {
       return undefined;
@@ -329,30 +517,175 @@ export async function addDependencySourceFunctions({
     }
     return a + b;
   };
-  imports["mean"] = (value: number | number[] | Matrix) => {
-    if (isDenseMatrix(value)) {
-      const valuesToAverage = value.toArray().map((v) => {
-        if (isGradebookColumnStudent(v)) {
-          if (v.is_missing || (v.score === undefined && v.score_override === undefined)) {
-            if (v.is_excused) {
-              return undefined;
-            }
-            return 0;
+  imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+    if (Array.isArray(value)) {
+      const values = value
+        .map((v) => {
+          if (isGradebookColumnStudent(v)) {
+            return v.score ?? 0;
           }
-          return v.score_override ?? v.score ?? undefined;
+          if (typeof v === "number") {
+            return v;
+          }
+          throw new Error(
+            `Unsupported value type for sum. Sum can only be applied to gradebook columns or numbers. Got: ${JSON.stringify(v, null, 2)}`
+          );
+        })
+        .filter((v) => v !== undefined);
+      if (values.length === 0) {
+        return undefined;
+      }
+      return values.reduce((a, b) => a + b, 0);
+    }
+    throw new Error(`Sum called with non-array value: ${JSON.stringify(value, null, 2)}`);
+  };
+  imports["equal"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
+    if (isGradebookColumnStudent(value)) {
+      return value.score === threshold ? 1 : 0;
+    }
+    return value === threshold ? 1 : 0;
+  };
+  imports["unequal"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
+    if (isGradebookColumnStudent(value)) {
+      return value.score !== threshold ? 1 : 0;
+    }
+    return value !== threshold ? 1 : 0;
+  };
+  imports["largerEq"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
+    if (isGradebookColumnStudent(value)) {
+      return value.score >= threshold ? 1 : 0;
+    }
+    return value >= threshold ? 1 : 0;
+  };
+  imports["smallerEq"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
+    if (isGradebookColumnStudent(value)) {
+      return value.score <= threshold ? 1 : 0;
+    }
+    return value <= threshold ? 1 : 0;
+  };
+  imports["min"] = (...values: (number | GradebookColumnStudentWithMaxScore)[]) => {
+    const validValues = values
+      .filter((v) => {
+        if (isGradebookColumnStudent(v)) {
+          return v.score !== undefined;
+        }
+        return v !== undefined;
+      })
+      .map((v) => {
+        if (isGradebookColumnStudent(v)) {
+          return v.score;
+        }
+        return v;
+      });
+    if (validValues.length === 0) {
+      return undefined;
+    }
+    return Math.min(...validValues);
+  };
+  imports["larger"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
+    if (isGradebookColumnStudent(value)) {
+      return value.score > threshold ? 1 : 0;
+    }
+    return value > threshold ? 1 : 0;
+  };
+  imports["smaller"] = (value: number | GradebookColumnStudentWithMaxScore, threshold: number) => {
+    if (isGradebookColumnStudent(value)) {
+      return value.score < threshold ? 1 : 0;
+    }
+    return value < threshold ? 1 : 0;
+  };
+  imports["countif"] = (
+    context: ExpressionContext,
+    value: GradebookColumnStudentWithMaxScore[],
+    condition: (value: GradebookColumnStudentWithMaxScore) => boolean
+  ) => {
+    if (Array.isArray(value)) {
+      const values = value.map((v) => {
+        const ret = condition(v) ? 1 : 0;
+        return ret;
+      });
+      const validValues = values.filter((v) => v !== undefined);
+      if (validValues.length === 0) {
+        return undefined;
+      }
+      return validValues.filter((v) => v === 1).length;
+    }
+    throw new Error("Countif called with non-array value");
+  };
+
+  imports["mean"] = (
+    context: ExpressionContext,
+    value: GradebookColumnStudentWithMaxScore[],
+    weighted: boolean = true
+  ) => {
+    if (Array.isArray(value)) {
+      const valuesToAverage = value.map((v) => {
+        if (isGradebookColumnStudent(v)) {
+          if (!v.released && !v.is_private) {
+            return undefined;
+          } else if (v.is_missing) {
+            if (v.is_excused) {
+              return { score: undefined, max_score: v.max_score };
+            }
+            return { score: 0, max_score: v.max_score };
+          }
+          return { score: v.score, max_score: v.max_score };
         }
         if (isArray(v)) {
           throw new Error("Unsupported nesting of arrays");
         }
-        return Number(v);
+        throw new Error(
+          `Unsupported value type for mean. Mean can only be applied to gradebook columns because it expects a max_score for each value. Got: ${JSON.stringify(v, null, 2)}`
+        );
       });
-      const validValues = valuesToAverage.filter((v) => v !== undefined);
+      const validValues = valuesToAverage.filter(
+        (v) => v !== undefined && v.score !== undefined && v.max_score !== undefined
+      );
       if (validValues.length === 0) {
         return undefined;
       }
-      return validValues.reduce((a, b) => a + b, 0) / validValues.length;
+      if (weighted) {
+        const totalPoints = validValues.reduce((a, b) => a + (b?.max_score ?? 0), 0);
+        const totalScore = validValues.reduce((a, b) => a + (b?.score ?? 0), 0);
+        if (totalPoints === 0) {
+          return undefined;
+        }
+        const ret = (100 * totalScore) / totalPoints;
+        return ret;
+      } else {
+        const ret =
+          (100 * validValues.reduce((a, b) => a + (b && b.score ? b.score / b.max_score : 0), 0)) / validValues.length;
+        return ret;
+      }
     }
+    console.log("Mean called with non-matrix value", value);
     throw new Error("Mean called with non-matrix value");
+  };
+  imports["drop_lowest"] = (context: ExpressionContext, value: GradebookColumnStudentWithMaxScore[], count: number) => {
+    if (Array.isArray(value)) {
+      const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
+      const ret: GradebookColumnStudentWithMaxScore[] = [];
+      let numDropped = 0;
+      for (const v of sorted) {
+        if (numDropped < count && v.is_droppable) {
+          numDropped++;
+          continue;
+        }
+        ret.push(v);
+      }
+      return ret;
+    }
+    throw new Error("Drop_lowest called with non-matrix value");
+  };
+  imports["case_when"] = (conditions: Matrix<unknown>) => {
+    const conditionValues = conditions.toArray();
+    for (const condition of conditionValues) {
+      const [value, result] = condition as [boolean, number];
+      if (value) {
+        return result;
+      }
+    }
+    return undefined;
   };
   //Remove access to security-sensitive functions
   const securityFunctions = ["import", "createUnit", "reviver", "resolve"];

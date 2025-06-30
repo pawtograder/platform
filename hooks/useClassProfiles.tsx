@@ -35,7 +35,7 @@ export function useStudentRoster() {
   const studentRoster = useMemo(() => {
     const users = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
     return profiles.profiles.filter((p) => users.includes(p.id));
-  }, [profiles]);
+  }, [profiles.allVisibleRoles, profiles.profiles]);
   return studentRoster;
 }
 export function useClassProfiles() {

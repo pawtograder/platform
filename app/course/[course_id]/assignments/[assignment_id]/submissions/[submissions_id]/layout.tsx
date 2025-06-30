@@ -33,8 +33,8 @@ import { activateSubmission } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { type CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
-import { format, formatRelative } from "date-fns";
+import { CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type ElementType as ReactElementType, useRef, useState } from "react";
@@ -48,6 +48,7 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import type { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
+import { formatDueDateInTimezone } from "@/lib/utils";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -438,6 +439,7 @@ function RubricView() {
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const scrollRootRef = useRef<HTMLDivElement>(null);
+  const course = useCourse();
 
   const {
     reviewAssignment,
@@ -472,11 +474,25 @@ function RubricView() {
             </Heading>
             <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
             <Text fontSize="sm">
-              Due: {reviewAssignment.due_date ? format(new TZDate(reviewAssignment.due_date), "Pp") : "N/A"}
+              Due:{" "}
+              {reviewAssignment.due_date
+                ? formatDueDateInTimezone(
+                    reviewAssignment.due_date,
+                    course.time_zone ?? "America/New_York",
+                    false,
+                    false
+                  )
+                : "N/A"}
             </Text>
             {reviewAssignment.release_date && (
               <Text fontSize="sm">
-                Grading visible to student after: {format(new TZDate(reviewAssignment.release_date), "Pp")}
+                Grading visible to student after:{" "}
+                {formatDueDateInTimezone(
+                  reviewAssignment.release_date,
+                  course.time_zone ?? "America/New_York",
+                  false,
+                  false
+                )}
               </Text>
             )}
           </Box>

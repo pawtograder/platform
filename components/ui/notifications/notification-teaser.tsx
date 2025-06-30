@@ -1,10 +1,11 @@
-import { Avatar, Box, Button, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
-import type { Notification } from "@/utils/supabase/DatabaseTypes";
+import { Avatar, Box, Button, Flex, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import Link from "next/link";
 import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams } from "next/navigation";
+import { LucideMail } from "lucide-react";
 // type NotificationTextProps = {
 //   notification: Notification;
 // } & TextProps;
@@ -59,6 +60,15 @@ export type AssignmentGroupJoinRequestNotification = NotificationEnvelope & {
   assignment_group_id: number;
   decision_maker?: string;
   decision_maker_name?: string;
+};
+
+export type EmailNotification = NotificationEnvelope & {
+  type: "email";
+  action: "create";
+  subject: string;
+  body: string;
+  cc_emails: { emails: string[] };
+  reply_to?: string;
 };
 
 // function truncateString(str: string, maxLength: number) {
@@ -157,6 +167,19 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
   );
 }
 
+function EmailNotificationTeaser({ notification }: { notification: Notification }) {
+  const body = notification.body as EmailNotification;
+  return (
+    <Flex gap="2" alignItems={"center"}>
+      <LucideMail />
+      <Box>
+        <Text>Subject: {body.subject}</Text>
+        <Text fontSize="xs">Check your email</Text>
+      </Box>
+    </Flex>
+  );
+}
+
 export default function NotificationTeaser({
   notification_id,
   markAsRead,
@@ -191,6 +214,8 @@ export default function NotificationTeaser({
     teaser = <AssignmentGroupInvitationNotificationTeaser notification={notification} />;
   } else if (body.type === "assignment_group_join_request") {
     teaser = <AssignmentGroupJoinRequestNotificationTeaser notification={notification} />;
+  } else if (body.type === "email") {
+    teaser = <EmailNotificationTeaser notification={notification} />;
   } else {
     teaser = <Text>Unknown notification type: {body.type}</Text>;
   }
