@@ -66,6 +66,15 @@ export type AssignmentGroupJoinRequestNotification = NotificationEnvelope & {
   decision_maker_name?: string;
 };
 
+export type EmailNotification = NotificationEnvelope & {
+  type: "email";
+  action: "create";
+  subject: string;
+  body: string;
+  cc_emails: { emails: string[] };
+  reply_to?: string;
+};
+
 async function sendEmail(params: {
   adminSupabase: SupabaseClient<Database>;
   transporter: nodemailer.Transporter;
@@ -80,6 +89,12 @@ async function sendEmail(params: {
     return;
   }
   const body = notification.message.body as NotificationEnvelope;
+  const cc_emails: string[] = [];
+  if ("cc_emails" in body) {
+    const data = body.cc_emails as { emails: string[] };
+    data.emails.forEach((email) => cc_emails.push(email));
+  }
+
   let emailTemplate = emailTemplates[body.type as keyof typeof emailTemplates];
   if (!emailTemplate) {
     console.error(`No email template found for notification type ${body.type}`);
@@ -100,6 +115,12 @@ async function sendEmail(params: {
   let emailBody = emailTemplate.body as string;
   //Fill in the variables using the keys of body
   const variables = Object.keys(body);
+  if ("subject" in body) {
+    emailSubject = emailBody.replace("{subject}", body["subject" as keyof NotificationEnvelope]);
+  }
+  if ("body" in body) {
+    emailBody = emailBody.replace("{body}", body["body" as keyof NotificationEnvelope]);
+  }
   for (const variable of variables) {
     emailSubject = emailSubject.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
     emailBody = emailBody.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
@@ -137,7 +158,8 @@ async function sendEmail(params: {
     await transporter.sendMail({
       from: "Pawtograder <" + Deno.env.get("SMTP_FROM") + ">",
       to: recipient.email,
-      replyTo: Deno.env.get("SMTP_REPLY_TO"),
+      cc: cc_emails,
+      replyTo: body["reply_to" as keyof NotificationEnvelope] ?? Deno.env.get("SMTP_REPLY_TO"),
       subject: emailSubject,
       text: emailBody
     });

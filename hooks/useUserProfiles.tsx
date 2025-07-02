@@ -27,7 +27,9 @@ export function useUserProfile(
   | { flair?: string; flair_color?: string; id: string; name: string; avatar_url: string; real_name?: string }
   | undefined {
   const controller = useCourseController();
-  const [profile, setProfile] = useState<UserProfileWithPrivateProfile | undefined>(undefined);
+  const [profile, setProfile] = useState<UserProfileWithPrivateProfile | undefined>(
+    id ? controller.getUserProfile(id).data : undefined
+  );
   useEffect(() => {
     if (id) {
       const { data, unsubscribe } = controller.getUserProfile(id, (data) => {

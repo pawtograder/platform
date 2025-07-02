@@ -26,7 +26,9 @@ import Link from "@/components/ui/link";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState, { useCourse } from "@/hooks/useAuthState";
+import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Avatar } from "@chakra-ui/react";
@@ -34,14 +36,17 @@ import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import { HiOutlineSupport } from "react-icons/hi";
+import { TbSpy, TbSpyOff } from "react-icons/tb";
 
 function SupportMenu() {
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
-        <IconButton variant="outline" colorPalette="gray" size="sm">
-          <HiOutlineSupport />
-        </IconButton>
+        <Tooltip content="Support & Documentation" showArrow>
+          <IconButton variant="outline" colorPalette="gray" size="sm">
+            <HiOutlineSupport />
+          </IconButton>
+        </Tooltip>
       </Menu.Trigger>
       <Portal>
         <Menu.Positioner>
@@ -470,28 +475,33 @@ function UserSettingsMenu() {
         <Drawer.Backdrop />
         <Drawer.Positioner>
           <Drawer.Content pt={2} pl={2} borderTopLeftRadius="md" borderWidth={1} borderColor="border.emphasized">
-            <Drawer.CloseTrigger asChild>
-              <CloseButton size="sm" position="absolute" right={4} top={4} />
-            </Drawer.CloseTrigger>
             <Drawer.Body p={2}>
               <VStack alignItems="flex-start" gap={0}>
-                <HStack pb={2}>
-                  <Avatar.Root size="sm" colorPalette="gray">
-                    <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
-                    <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
-                  </Avatar.Root>{" "}
-                  <VStack alignItems="flex-start" gap={0}>
-                    <Text fontWeight="bold">{privateProfile?.data.name}</Text>
-                    {gitHubUsername && (
-                      <Text fontSize="sm">
-                        GitHub:{" "}
-                        <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
-                          {gitHubUsername}
-                        </Link>
+                <HStack justifyContent="space-between" alignItems="flex-start" width="100%" pb={2}>
+                  <HStack flex={1} minWidth={0}>
+                    <Avatar.Root size="sm" colorPalette="gray">
+                      <Avatar.Fallback name={privateProfile?.data.name?.charAt(0) ?? "?"} />
+                      <Avatar.Image src={privateProfile?.data.avatar_url ?? undefined} />
+                    </Avatar.Root>
+                    <VStack alignItems="flex-start" gap={0} flex={1} minWidth={0}>
+                      <Text fontWeight="bold" wordBreak="break-word" lineHeight="1.2">
+                        {privateProfile?.data.name}
                       </Text>
-                    )}
-                  </VStack>
+                      {gitHubUsername && (
+                        <Text fontSize="sm">
+                          GitHub:{" "}
+                          <Link href={`https://github.com/${gitHubUsername}`} target="_blank">
+                            {gitHubUsername}
+                          </Link>
+                        </Text>
+                      )}
+                    </VStack>
+                  </HStack>
+                  <Drawer.CloseTrigger asChild>
+                    <CloseButton size="sm" />
+                  </Drawer.CloseTrigger>
                 </HStack>
+
                 {!gitHubUsername && (
                   <Button
                     onClick={linkGitHub}
@@ -552,12 +562,30 @@ function UserSettingsMenu() {
     </Drawer.Root>
   );
 }
+function ObfuscatedGradesModePicker() {
+  const isObfuscated = useObfuscatedGradesMode();
+  const setIsObfuscated = useSetObfuscatedGradesMode();
+  return (
+    <Tooltip content={isObfuscated ? "Show all grades" : "Obfuscate grades in UI"} showArrow>
+      <IconButton
+        variant="outline"
+        size="sm"
+        onClick={() => setIsObfuscated(!isObfuscated)}
+        aria-label="Toggle obfuscated grades mode"
+        css={{ _icon: { width: "5", height: "5" } }}
+      >
+        <Icon as={isObfuscated ? TbSpyOff : TbSpy} />
+      </IconButton>
+    </Tooltip>
+  );
+}
 export default function UserMenu() {
   return (
-    <HStack>
+    <HStack minWidth={0}>
       <SupportMenu />
       <ColorModeButton colorPalette="gray" variant="outline" />
       <NotificationsBox />
+      <ObfuscatedGradesModePicker />
       <UserSettingsMenu />
     </HStack>
   );

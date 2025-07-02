@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CourseWithFeatures, UserProfile, UserRole, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
 import { CrudFilter, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import useAuthState from "./useAuthState";
 type ClassProfileContextType = {
   role: UserRoleWithCourse;
@@ -20,16 +20,22 @@ const ClassProfileContext = createContext<ClassProfileContextType | undefined>(u
 
 export function useGradersAndInstructors() {
   const profiles = useClassProfiles();
-  const staff = profiles.allVisibleRoles
-    .filter((r) => r.role === "grader" || r.role === "instructor")
-    .map((r) => r.private_profile_id);
-  return profiles.profiles.filter((p) => staff.includes(p.id));
+  const staffRoster = useMemo(() => {
+    const staff = profiles.allVisibleRoles
+      .filter((r) => r.role === "grader" || r.role === "instructor")
+      .map((r) => r.private_profile_id);
+    return profiles.profiles.filter((p) => staff.includes(p.id));
+  }, [profiles]);
+  return staffRoster;
 }
 
 export function useStudentRoster() {
   const profiles = useClassProfiles();
-  const users = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
-  return profiles.profiles.filter((p) => users.includes(p.id));
+  const studentRoster = useMemo(() => {
+    const users = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
+    return profiles.profiles.filter((p) => users.includes(p.id));
+  }, [profiles.allVisibleRoles, profiles.profiles]);
+  return studentRoster;
 }
 export function useClassProfiles() {
   const context = useContext(ClassProfileContext);
@@ -48,6 +54,11 @@ export function useFeatureEnabled(feature: string) {
 export function useIsGrader() {
   const { role } = useClassProfiles();
   return role.role === "grader";
+}
+
+export function useIsInstructor() {
+  const { role } = useClassProfiles();
+  return role.role === "instructor";
 }
 
 export function useIsGraderOrInstructor() {

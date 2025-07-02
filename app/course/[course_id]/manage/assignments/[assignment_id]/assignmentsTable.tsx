@@ -1,8 +1,9 @@
 "use client";
 import { Checkbox } from "@/components/ui/checkbox";
-import Link from "@/components/ui/link";
+import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
+import { useCanShowGradeFor, useObfuscatedGradesMode, useSetOnlyShowGradesFor } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
@@ -10,7 +11,20 @@ import {
   RubricCheck
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Box, Button, HStack, Icon, Input, NativeSelect, Popover, Table, Text, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  HStack,
+  Icon,
+  IconButton,
+  Input,
+  Link,
+  NativeSelect,
+  Popover,
+  Table,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate } from "@refinedev/core";
 import { useTable } from "@refinedev/react-table";
@@ -24,9 +38,56 @@ import {
 } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
-import { useEffect, useMemo, useState } from "react";
-import { FaCheck, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
+import { TbEye, TbEyeOff } from "react-icons/tb";
 
+function StudentNameCell({
+  course_id,
+  assignment_id,
+  uid,
+  activeSubmissionId
+}: {
+  course_id: string;
+  assignment_id: string;
+  uid: string;
+  activeSubmissionId: number | null;
+}) {
+  const isObfuscated = useObfuscatedGradesMode();
+  const canShowGradeFor = useCanShowGradeFor(uid);
+  const setOnlyShowGradesFor = useSetOnlyShowGradesFor();
+  const toggleOnlyShowGradesFor = useCallback(() => {
+    setOnlyShowGradesFor(canShowGradeFor ? "" : uid);
+  }, [setOnlyShowGradesFor, uid, canShowGradeFor]);
+
+  return (
+    <HStack w="100%">
+      <PersonName uid={uid} size="2xs" />
+      <Box flex="1" display="flex" justifyContent="flex-end">
+        {isObfuscated && (
+          <IconButton variant="ghost" colorPalette="gray" size="sm" onClick={toggleOnlyShowGradesFor}>
+            <Icon as={canShowGradeFor ? TbEyeOff : TbEye} />
+          </IconButton>
+        )}
+        {activeSubmissionId && (
+          <IconButton
+            variant="ghost"
+            colorPalette="gray"
+            size="sm"
+            onClick={() => {
+              window.open(
+                `/course/${course_id}/assignments/${assignment_id}/submissions/${activeSubmissionId}`,
+                "_blank"
+              );
+            }}
+          >
+            <Icon as={FaExternalLinkAlt} />
+          </IconButton>
+        )}
+      </Box>
+    </HStack>
+  );
+}
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
   const course = useCourse();
@@ -52,7 +113,15 @@ export default function AssignmentsTable() {
           if (!row.original.name) return false;
           const filterString = String(filterValue).toLowerCase();
           return row.original.name.toLowerCase().includes(filterString);
-        }
+        },
+        cell: ({ row }) => (
+          <StudentNameCell
+            course_id={course_id as string}
+            assignment_id={assignment_id as string}
+            uid={row.original.student_private_profile_id!}
+            activeSubmissionId={row.original.activesubmissionid}
+          />
+        )
       },
       {
         id: "groupname",
@@ -82,12 +151,38 @@ export default function AssignmentsTable() {
       {
         id: "autograder_score",
         accessorKey: "autograder_score",
-        header: "Autograder Score"
+        header: "Autograder Score",
+        cell: (props) => {
+          if (props.row.original.activesubmissionid) {
+            return (
+              <Link
+                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
+                target="_blank"
+              >
+                {props.getValue() as number}
+              </Link>
+            );
+          }
+          return props.getValue();
+        }
       },
       {
         id: "total_score",
         accessorKey: "total_score",
-        header: "Total Score"
+        header: "Total Score",
+        cell: (props) => {
+          if (props.row.original.activesubmissionid) {
+            return (
+              <Link
+                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
+                target="_blank"
+              >
+                {props.getValue() as number}
+              </Link>
+            );
+          }
+          return props.getValue();
+        }
       },
       {
         id: "tweak",
@@ -101,6 +196,16 @@ export default function AssignmentsTable() {
         cell: (props) => {
           if (props.getValue() === null) {
             return <Text></Text>;
+          }
+          if (props.row.original.activesubmissionid) {
+            return (
+              <Link
+                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
+                target="_blank"
+              >
+                {new TZDate(props.getValue() as string, timeZone).toLocaleString()}
+              </Link>
+            );
           }
           return <Text>{new TZDate(props.getValue() as string, timeZone).toLocaleString()}</Text>;
         },
@@ -130,7 +235,7 @@ export default function AssignmentsTable() {
         }
       }
     ],
-    [timeZone]
+    [timeZone, course_id, assignment_id]
   );
   const {
     getHeaderGroups,
@@ -238,15 +343,26 @@ export default function AssignmentsTable() {
             <ExportGradesButton assignment_id={Number(assignment_id)} class_id={Number(course_id)} />
           </HStack>
         )}
-        <Table.Root striped>
-          <Table.Header>
-            {getHeaderGroups().map((headerGroup) => (
-              <Table.Row bg="bg.subtle" key={headerGroup.id}>
-                {headerGroup.headers
-                  .filter((h) => h.id !== "assignment_id")
-                  .map((header) => {
-                    return (
-                      <Table.ColumnHeader key={header.id}>
+        <Box overflowX="auto" maxW="100vw" maxH="100vh" overflowY="auto">
+          <Table.Root minW="0">
+            <Table.Header>
+              {getHeaderGroups().map((headerGroup) => (
+                <Table.Row key={headerGroup.id}>
+                  {headerGroup.headers
+                    .filter((h) => h.id !== "assignment_id")
+                    .map((header, colIdx) => (
+                      <Table.ColumnHeader
+                        key={header.id}
+                        bg="bg.muted"
+                        style={{
+                          position: "sticky",
+                          top: 0,
+                          left: colIdx === 0 ? 0 : undefined,
+                          zIndex: colIdx === 0 ? 21 : 20,
+                          minWidth: colIdx === 0 ? 180 : undefined,
+                          width: colIdx === 0 ? 180 : undefined
+                        }}
+                      >
                         {header.isPlaceholder ? null : (
                           <>
                             <Text onClick={header.column.getToggleSortingHandler()}>
@@ -278,43 +394,59 @@ export default function AssignmentsTable() {
                           </>
                         )}
                       </Table.ColumnHeader>
-                    );
-                  })}
-              </Table.Row>
-            ))}
-          </Table.Header>
-          <Table.Body>
-            {getRowModel()
-              .rows //.filter(row => row.getValue("profiles.name") !== undefined)
-              .map((row) => {
-                return (
-                  <Table.Row key={row.id}>
-                    {row
-                      .getVisibleCells()
-                      .filter((c) => c.column.id !== "assignment_id")
-                      .map((cell) => {
-                        if (row.original.activesubmissionid === null) {
-                          return (
-                            <Table.Cell key={cell.id}>
-                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            </Table.Cell>
-                          );
-                        }
-                        return (
-                          <Table.Cell key={cell.id}>
-                            <Link
-                              href={`/course/${course_id}/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}
-                            >
-                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            </Link>
+                    ))}
+                </Table.Row>
+              ))}
+            </Table.Header>
+            <Table.Body>
+              {getRowModel()
+                .rows //.filter(row => row.getValue("profiles.name") !== undefined)
+                .map((row, idx) => {
+                  const linkToSubmission = (linkContent: string) => {
+                    if (row.original.activesubmissionid) {
+                      return (
+                        <Link
+                          href={`/course/${course_id}/manage/assignments/${assignment_id}/submissions/${row.original.activesubmissionid}`}
+                        >
+                          {linkContent}
+                        </Link>
+                      );
+                    }
+                    return linkContent;
+                  };
+                  return (
+                    <Table.Row key={row.id} bg={idx % 2 === 0 ? "bg.subtle" : undefined} _hover={{ bg: "bg.info" }}>
+                      {row
+                        .getVisibleCells()
+                        .filter((c) => c.column.id !== "assignment_id")
+                        .map((cell, colIdx) => (
+                          <Table.Cell
+                            key={cell.id}
+                            p={0}
+                            style={
+                              colIdx === 0
+                                ? {
+                                    position: "sticky",
+                                    left: 0,
+                                    zIndex: 1,
+                                    background: "bg.subtle",
+                                    borderRight: "1px solid",
+                                    borderColor: "border.muted"
+                                  }
+                                : {}
+                            }
+                          >
+                            {cell.column.columnDef.cell
+                              ? flexRender(cell.column.columnDef.cell, cell.getContext())
+                              : linkToSubmission(String(cell.getValue()))}
                           </Table.Cell>
-                        );
-                      })}
-                  </Table.Row>
-                );
-              })}
-          </Table.Body>
-        </Table.Root>
+                        ))}
+                    </Table.Row>
+                  );
+                })}
+            </Table.Body>
+          </Table.Root>
+        </Box>
         <HStack>
           <Button onClick={() => setPageIndex(0)} disabled={!getCanPreviousPage()}>
             {"<<"}
@@ -366,21 +498,6 @@ export default function AssignmentsTable() {
         </HStack>
         <div>{getRowCount()} Rows</div>
       </VStack>
-      <Box
-        p="2"
-        border="1px solid"
-        borderColor="border.muted"
-        backgroundColor="bg.subtle"
-        height="55px"
-        style={{
-          position: "fixed",
-          bottom: 0,
-          right: 0,
-          width: "100%"
-        }}
-      >
-        <HStack></HStack>
-      </Box>
     </VStack>
   );
 }

@@ -13,39 +13,52 @@ import {
   SubmissionFileComment,
   SubmissionReview
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Heading, HStack, Menu, Popover, Portal, RadioGroup, Skeleton, Tag, Text, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  Heading,
+  HStack,
+  Menu,
+  NativeSelectField,
+  NativeSelectRoot,
+  Portal,
+  RadioGroup,
+  Separator,
+  Tag,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 
 import { linkToSubPage } from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/[submissions_id]/utils";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
-import { useRubricCheck, useRubrics } from "@/hooks/useAssignment";
+import { useAssignmentController, useRubricCheck, useRubrics } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
-  useReviewAssignment,
   useRubricCheckInstances,
   useRubricCriteriaInstances,
   useSubmissionMaybe,
-  useSubmissionReview,
-  useSubmissionRubric,
-  useWritableReferencingRubricChecks,
-  useWritableSubmissionReviews
+  useSubmissionReviewForRubric,
+  useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
+import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase, Select } from "chakra-react-select";
+import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import path from "path";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsFileEarmarkImageFill, BsThreeDots } from "react-icons/bs";
-import { FaCheckCircle, FaGraduationCap, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
-import { formatPoints, isRubricCheckDataWithOptions, RubricCheckSubOption, RubricCheckSubOptions } from "./code-file";
+import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
+import { isRubricCheckDataWithOptions, RubricCheckSubOption } from "./code-file";
 import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
 
@@ -59,7 +72,7 @@ interface CheckOptionType extends OptionBase {
 /**
  * Inline reference management component for preview mode
  */
-function InlineReferenceManager({
+const InlineReferenceManager = memo(function InlineReferenceManager({
   check,
   assignmentId,
   classId,
@@ -236,6 +249,7 @@ function InlineReferenceManager({
             value={selectedCheckOption}
             onChange={(option) => setSelectedCheckOption(option || undefined)}
             placeholder="Select check to reference..."
+            aria-label="Select check to reference"
             isLoading={false}
             formatOptionLabel={(option) => (
               <VStack alignItems="flex-start" gap={0}>
@@ -276,234 +290,7 @@ function InlineReferenceManager({
       )}
     </Box>
   );
-}
-
-function AddReferencingFeedbackPopover({
-  selectedCheckToReference,
-  commentToReference,
-  close
-}: {
-  selectedCheckToReference: number;
-  commentToReference: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
-  close: () => void;
-}) {
-  const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
-  const check = useRubricCheck(selectedCheckToReference);
-  const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const targetSubmissionReviewId = useWritableSubmissionReviews(check?.criteria?.rubric_id);
-  const { mutateAsync: createComment } = useCreate({
-    resource: "submission_file_comments"
-  });
-
-  return (
-    <Popover.Root open={selectedCheckToReference !== undefined} positioning={{ placement: "top" }}>
-      <Popover.Trigger></Popover.Trigger>
-      <Portal>
-        <Popover.Positioner>
-          <Popover.Content>
-            <Popover.Arrow />
-            <Popover.Body bg="bg.subtle" p={3} boxShadow="lg">
-              <Heading size="md">Add check: {check?.name}</Heading>
-              <Markdown>{check?.description}</Markdown>
-              {isRubricCheckDataWithOptions(check) && (
-                <Select
-                  options={check.options.map(
-                    (option: RubricCheckSubOption, index: number) =>
-                      ({
-                        label: option.label,
-                        comment: option.label,
-                        value: index.toString(),
-                        index: index.toString(),
-                        points: option.points,
-                        check: {
-                          label: check.name,
-                          value: check.id.toString(),
-                          check,
-                          criteria: check.criteria,
-                          options: []
-                        }
-                      }) as RubricCheckSubOptions
-                  )}
-                  value={selectedSubOption}
-                  onChange={(e: RubricCheckSubOptions | null) => {
-                    setSelectedSubOption(e);
-                  }}
-                  placeholder="Select an option for this check..."
-                  size="sm"
-                />
-              )}
-              {!selectedSubOption && check && check.points !== undefined && (
-                <Text fontSize="sm" color="fg.muted" mt={1} textAlign="left">
-                  {formatPoints({
-                    check,
-                    criteria: check.criteria,
-                    points: check.points
-                  })}
-                </Text>
-              )}
-              {selectedSubOption && check && (
-                <Text fontSize="sm" color="fg.muted" mt={1} textAlign="left">
-                  {formatPoints({
-                    check,
-                    criteria: check.criteria,
-                    points: selectedSubOption.points
-                  })}
-                </Text>
-              )}
-              <MessageInput
-                textAreaRef={messageInputRef}
-                enableGiphyPicker={true}
-                placeholder={
-                  !check
-                    ? "Add a comment about this line and press enter to submit..."
-                    : check.is_comment_required
-                      ? "Add a comment about this check and press enter to submit..."
-                      : "Optionally add a comment, or just press enter to submit..."
-                }
-                allowEmptyMessage={check && !check.is_comment_required}
-                defaultSingleLine={true}
-                sendMessage={async (message, profile_id) => {
-                  if (!check || !targetSubmissionReviewId || targetSubmissionReviewId.length === 0) {
-                    toaster.error({
-                      title: "Error",
-                      description: "Cannot save rubric annotation."
-                    });
-                    return;
-                  }
-                  let points = check?.points;
-                  if (selectedSubOption !== null) {
-                    points = selectedSubOption.points;
-                  }
-                  let comment = message || "";
-                  if (selectedSubOption) {
-                    comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
-                  }
-
-                  const value = {
-                    comment,
-                    rubric_check_id: check.id,
-                    class_id: check.class_id,
-                    submission_id: targetSubmissionReviewId[0].submission_id,
-                    eventually_visible: false,
-                    author: profile_id,
-                    released: false,
-                    points,
-                    submission_review_id: targetSubmissionReviewId[0].id
-                  };
-                  if (isLineComment(commentToReference)) {
-                    await createComment({
-                      resource: "submission_file_comments",
-                      values: {
-                        ...value,
-                        line: commentToReference.line,
-                        submission_file_id: commentToReference.submission_file_id
-                      }
-                    });
-                  } else if (isArtifactComment(commentToReference)) {
-                    await createComment({
-                      resource: "submission_artifact_comments",
-                      values: {
-                        ...value,
-                        submission_artifact_id: commentToReference.submission_artifact_id
-                      }
-                    });
-                  } else {
-                    await createComment({
-                      resource: "submission_comments",
-                      values: {
-                        ...value
-                      }
-                    });
-                  }
-                  close();
-                }}
-              />
-            </Popover.Body>
-          </Popover.Content>
-        </Popover.Positioner>
-      </Portal>
-    </Popover.Root>
-  );
-}
-
-function AddReferencingFeedbackMenu({
-  comment
-}: {
-  comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
-}) {
-  const writableReferencingChecks = useWritableReferencingRubricChecks(comment.rubric_check_id);
-  const rubrics = useRubrics();
-  const [selectedCheckToReference, setSelectedCheckToReference] = useState<number | undefined>(undefined);
-
-  const closePopover = useCallback(() => {
-    setSelectedCheckToReference(undefined);
-  }, []);
-
-  if (!writableReferencingChecks || writableReferencingChecks.length === 0) {
-    return null;
-  }
-  const writableReferencingChecksByRubricId = writableReferencingChecks.reduce(
-    (acc, check) => {
-      const rubricId = check.criteria?.rubric_id;
-      if (rubricId) {
-        if (!acc[rubricId]) {
-          acc[rubricId] = [];
-        }
-        acc[rubricId].push(check);
-      }
-      return acc;
-    },
-    {} as Record<string, typeof writableReferencingChecks>
-  );
-  return (
-    <>
-      {selectedCheckToReference && (
-        <AddReferencingFeedbackPopover
-          commentToReference={comment}
-          selectedCheckToReference={selectedCheckToReference}
-          close={closePopover}
-        />
-      )}
-      <Menu.Root
-        onSelect={(value) => {
-          if (value.value) {
-            setSelectedCheckToReference(Number(value.value));
-          }
-        }}
-      >
-        <Menu.Trigger asChild>
-          <Button p={0} m={0} colorPalette="green" variant="solid" size="2xs">
-            <Icon as={FaGraduationCap} />
-          </Button>
-        </Menu.Trigger>
-        <Portal>
-          <Menu.Positioner>
-            <Menu.Content>
-              {Object.keys(writableReferencingChecksByRubricId).map((rubricId) => (
-                <Menu.ItemGroup key={rubricId}>
-                  <Menu.ItemGroupLabel>
-                    {rubrics.find((r) => r.id === Number(rubricId))?.review_round}
-                  </Menu.ItemGroupLabel>
-                  {writableReferencingChecksByRubricId[rubricId].map((check) => (
-                    <Menu.Item key={check.check.id} value={check.check.id.toString()}>
-                      {check.check.name}{" "}
-                      {check.check.points && (
-                        <>
-                          ({check.criteria?.is_additive ? "+" : "-"}
-                          {check.check.points})
-                        </>
-                      )}
-                    </Menu.Item>
-                  ))}
-                </Menu.ItemGroup>
-              ))}
-            </Menu.Content>
-          </Menu.Positioner>
-        </Portal>
-      </Menu.Root>
-    </>
-  );
-}
+});
 
 export function CommentActions({
   comment,
@@ -525,7 +312,6 @@ export function CommentActions({
 
   return (
     <HStack gap={1}>
-      <AddReferencingFeedbackMenu comment={comment} />
       <Menu.Root
         onSelect={async (value) => {
           if (value.value === "edit") {
@@ -572,10 +358,6 @@ export function isArtifactComment(
 export function SubmissionArtifactCommentLink({ comment }: { comment: SubmissionArtifactComment }) {
   const submission = useSubmissionMaybe();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const currentSelectedRubricId = searchParams.get("selected_rubric_id");
-  // Use current selected rubric if available, otherwise fall back to comment's rubric check ID
-  const rubricIdToUse = currentSelectedRubricId || comment.rubric_check_id?.toString();
   const artifact = submission?.submission_artifacts.find((artifact) => artifact.id === comment.submission_artifact_id);
   if (!artifact || !submission) {
     return <></>;
@@ -585,9 +367,6 @@ export function SubmissionArtifactCommentLink({ comment }: { comment: Submission
   const baseUrl = linkToSubPage(pathname, "files");
   const queryParams = new URLSearchParams();
   queryParams.set("artifact_id", comment.submission_artifact_id.toString());
-  if (rubricIdToUse) {
-    queryParams.set("selected_rubric_id", rubricIdToUse);
-  }
 
   return <Link href={`${baseUrl}?${queryParams.toString()}`}>@ {shortFileName}</Link>;
 }
@@ -595,10 +374,6 @@ export function SubmissionArtifactCommentLink({ comment }: { comment: Submission
 export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFileComment }) {
   const submission = useSubmissionMaybe();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const currentSelectedRubricId = searchParams.get("selected_rubric_id");
-  // Use current selected rubric if available, otherwise fall back to comment's rubric check ID
-  const rubricIdToUse = currentSelectedRubricId || comment.rubric_check_id?.toString();
   const file = submission?.submission_files.find((file) => file.id === comment.submission_file_id);
   if (!file || !submission) {
     return <></>;
@@ -608,9 +383,6 @@ export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFile
   const baseUrl = linkToSubPage(pathname, "files");
   const queryParams = new URLSearchParams();
   queryParams.set("file_id", comment.submission_file_id.toString());
-  if (rubricIdToUse) {
-    queryParams.set("selected_rubric_id", rubricIdToUse);
-  }
 
   return (
     <Link href={`${baseUrl}?${queryParams.toString()}#L${comment.line}`}>
@@ -750,7 +522,7 @@ function ReferencedFeedbackHeader({ check_id }: { check_id: number }) {
   const rubricCheck = useRubricCheck(check_id);
   return (
     <Tooltip content={rubricCheck?.description || "No description"} showArrow>
-      <Text fontSize="xs" fontWeight="bold" truncate>
+      <Text fontSize="xs" fontWeight="bold" wordBreak="break-word">
         {rubricCheck?.name}
       </Text>
     </Tooltip>
@@ -758,7 +530,7 @@ function ReferencedFeedbackHeader({ check_id }: { check_id: number }) {
 }
 
 export function ReviewRoundTag({ submission_review_id }: { submission_review_id: number }) {
-  const submissionReview = useSubmissionReview(submission_review_id);
+  const submissionReview = useSubmissionReviewOrGradingReview(submission_review_id);
   if (!submissionReview) {
     return null;
   }
@@ -810,27 +582,109 @@ function ReferencedFeedbackDisplay({ referencing_check_id }: { referencing_check
   );
 }
 
+export function StudentVisibilityIndicator({
+  check,
+  isApplied,
+  isReleased
+}: {
+  check: HydratedRubricCheck;
+  isApplied: boolean;
+  isReleased: boolean;
+}) {
+  const isGrader = useIsGraderOrInstructor();
+
+  // Only show indicators to graders/instructors
+  if (!isGrader) {
+    return null;
+  }
+
+  const getVisibilityInfo = () => {
+    switch (check.student_visibility) {
+      case "never":
+        return {
+          text: "This will never be visible to students",
+          color: "red",
+          icon: "🔴"
+        };
+      case "if_applied":
+        return {
+          text: isApplied
+            ? "This will be visible to the student when released their submission is released"
+            : "This will only be visible to the student after it has been applied to their submission and the review is released",
+          color: isApplied && isReleased ? "green" : "orange",
+          icon: isApplied && isReleased ? "🟢" : isApplied && !isReleased ? "⏳" : "🟠"
+        };
+      case "if_released":
+        return {
+          text: isReleased
+            ? "This will be visible to the student now that their review is released"
+            : "This will only be visible to the student after the review is released",
+          color: isReleased ? "green" : "orange",
+          icon: isReleased ? "🟢" : "⏳"
+        };
+      case "always":
+      default:
+        return {
+          text: "This will be visible to all students with this assignment",
+          color: "green",
+          icon: "🟢"
+        };
+    }
+  };
+
+  const { text, icon } = getVisibilityInfo();
+
+  return (
+    <Tooltip content={text}>
+      <Badge variant="outline" style={{ fontSize: "10px", padding: "2px 4px" }}>
+        {icon}
+      </Badge>
+    </Tooltip>
+  );
+}
+
 export function RubricCheckAnnotation({
   check,
   criteria,
-  activeSubmissionReviewId,
   assignmentId,
   classId,
   currentRubricId
 }: {
   check: HydratedRubricCheck;
   criteria: HydratedRubricCriteria;
-  activeSubmissionReviewId?: number;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
 }) {
-  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, activeSubmissionReviewId);
+  const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
+  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, reviewForThisRubric?.id);
   const isGrader = useIsGraderOrInstructor();
   const gradingIsRequired = isGrader && check.is_required && rubricCheckComments.length == 0;
   const annotationTarget = check.annotation_target || "file";
   const submission = useSubmissionMaybe();
   const isPreviewMode = !submission;
+  const activeAssignmentReview = useActiveReviewAssignment();
+  const gradingIsPermitted =
+    isGrader ||
+    (activeAssignmentReview &&
+      reviewForThisRubric &&
+      activeAssignmentReview.submission_review_id === reviewForThisRubric.id);
+
+  // Check if this check should be visible to the current user
+  const shouldShowCheck = useShouldShowRubricCheck({
+    check,
+    rubricCheckComments,
+    reviewForThisRubric,
+    isGrader,
+    isPreviewMode
+  });
+
+  if (!shouldShowCheck) {
+    return null;
+  }
+
+  const isApplied = rubricCheckComments.length > 0;
+  const isReleased = reviewForThisRubric?.released || false;
 
   return (
     <Box
@@ -840,17 +694,20 @@ export function RubricCheckAnnotation({
       p={1}
       w="100%"
     >
-      <HStack>
-        <Tooltip
-          content={`This check is an annotation, it can only be applied by ${
-            annotationTarget === "file" || annotationTarget === null
-              ? "clicking on a specific line of code"
-              : "clicking on an artifact"
-          }`}
-        >
-          <Icon as={annotationTarget === "file" ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
-        </Tooltip>
-        <Text>{check.name}</Text>
+      <HStack justify="space-between">
+        <HStack>
+          <Tooltip
+            content={`This check is an annotation, it can only be applied by ${
+              annotationTarget === "file" || annotationTarget === null
+                ? "clicking on a specific line of code"
+                : "clicking on an artifact"
+            }`}
+          >
+            <Icon as={annotationTarget === "file" ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
+          </Tooltip>
+          <Text>{check.name}</Text>
+        </HStack>
+        <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
       </HStack>
       <Markdown
         style={{
@@ -876,7 +733,7 @@ export function RubricCheckAnnotation({
       )}
 
       {/* Show referenced feedback for grading mode */}
-      {!isPreviewMode && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
+      {!isPreviewMode && gradingIsPermitted && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
     </Box>
   );
 }
@@ -885,8 +742,6 @@ export function RubricCheckGlobal({
   check,
   criteria,
   isSelected,
-  activeSubmissionReviewId,
-  submissionReview,
   assignmentId,
   classId,
   currentRubricId
@@ -894,19 +749,32 @@ export function RubricCheckGlobal({
   check: HydratedRubricCheck;
   criteria: HydratedRubricCriteria;
   isSelected: boolean;
-  activeSubmissionReviewId?: number;
-  submissionReview?: SubmissionReview;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
 }) {
-  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, activeSubmissionReviewId);
+  const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
+  const rubricCheckComments = useRubricCheckInstances(check as RubricChecks, reviewForThisRubric?.id);
   const criteriaCheckComments = useRubricCriteriaInstances({
     criteria: criteria as RubricCriteriaWithRubricChecks,
-    review_id: activeSubmissionReviewId
+    review_id: reviewForThisRubric?.id
   });
+
+  // Move all useState calls before any early returns
   const [selected, setSelected] = useState<boolean>(rubricCheckComments.length > 0);
   const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
+  const hasOptions = isRubricCheckDataWithOptions(check.data) && check.data.options.length > 0;
+  const _selectedOptionIndex =
+    hasOptions && rubricCheckComments.length == 1 && isRubricCheckDataWithOptions(check.data)
+      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
+      : undefined;
+  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
+  useEffect(() => {
+    if (_selectedOptionIndex !== undefined) {
+      setSelectedOptionIndex(_selectedOptionIndex);
+    }
+  }, [_selectedOptionIndex]);
+
   const submission = useSubmissionMaybe();
   const isGrader = useIsGraderOrInstructor();
   const pathname = usePathname();
@@ -917,6 +785,16 @@ export function RubricCheckGlobal({
   const linkedFileId = check.file
     ? submission?.submission_files.find((file) => file.name === check.file)?.id
     : undefined;
+  const activeAssignmentReview = useActiveReviewAssignment();
+
+  // Check if this check should be visible to the current user
+  const shouldShowCheck = useShouldShowRubricCheck({
+    check,
+    rubricCheckComments,
+    reviewForThisRubric,
+    isGrader,
+    isPreviewMode
+  });
 
   useEffect(() => {
     setSelected(rubricCheckComments.length > 0);
@@ -929,128 +807,52 @@ export function RubricCheckGlobal({
     );
   }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
 
-  const points = criteria.is_additive ? `+${check.points}` : `-${check.points}`;
+  if (!shouldShowCheck) {
+    return null;
+  }
+
+  const points = check.points === 0 ? "" : criteria.is_additive ? `+${check.points}` : `-${check.points}`;
   const format = criteria.max_checks_per_submission != 1 ? "checkbox" : "radio";
-  const hasOptions = isRubricCheckDataWithOptions(check.data) && check.data.options.length > 0;
   const showOptions = isGrader && hasOptions;
-  const _selectedOptionIndex =
-    hasOptions && rubricCheckComments.length == 1 && isRubricCheckDataWithOptions(check.data)
-      ? check.data.options.findIndex((option: RubricCheckSubOption) => option.points === rubricCheckComments[0].points)
-      : undefined;
-  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | undefined>(_selectedOptionIndex);
-  const gradingIsRequired = submissionReview && check.is_required && rubricCheckComments.length == 0;
+  const gradingIsRequired = reviewForThisRubric && check.is_required && rubricCheckComments.length == 0;
   const gradingIsPermitted =
-    isGrader &&
-    submissionReview &&
+    (isGrader ||
+      (activeAssignmentReview &&
+        reviewForThisRubric &&
+        activeAssignmentReview.submission_review_id === reviewForThisRubric.id)) &&
+    reviewForThisRubric &&
     (criteria.max_checks_per_submission === null ||
       criteriaCheckComments.length < (criteria.max_checks_per_submission || 1000));
+
+  const isApplied = rubricCheckComments.length > 0;
+  const isReleased = reviewForThisRubric?.released || false;
+
   return (
     <Box position="relative" width="100%">
-      <HStack>
-        {showOptions && (
-          <VStack
-            align="flex-start"
-            w="100%"
-            gap={0}
-            borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
-            borderWidth={gradingIsRequired ? "1px" : "0px"}
-            borderRadius="md"
-            p={1}
-            wordBreak="break-all"
-          >
-            <Text fontSize="sm">{check.name}</Text>
-            {linkedFileId && submission && (
-              <Link
-                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
-              >
-                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                  In: {check.file}
-                </Text>
-              </Link>
-            )}
-            {linkedAritfactId && submission && (
-              <Link
-                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
-              >
-                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                  In: {check.artifact}
-                </Text>
-              </Link>
-            )}
-            {gradingIsRequired && (
-              <Text fontSize="xs" color="fg.error">
-                Select one:
-              </Text>
-            )}
-            <RadioGroup.Root
+      <HStack justify="space-between" align="flex-start">
+        <Box flex="1">
+          {showOptions && (
+            <VStack
+              align="flex-start"
               w="100%"
-              value={selectedOptionIndex?.toString()}
-              onValueChange={(value) => {
-                if (isRubricCheckDataWithOptions(check.data)) {
-                  const selectedOption = check.data.options[parseInt(value.value)];
-                  if (selectedOption) {
-                    setSelectedOptionIndex(parseInt(value.value));
-                    if (gradingIsPermitted) {
-                      setIsEditing(true);
-                    }
-                  }
-                }
-              }}
+              gap={0}
+              borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+              borderWidth={gradingIsRequired ? "1px" : "0px"}
+              borderRadius="md"
+              p={1}
+              wordBreak="break-word"
             >
-              {isRubricCheckDataWithOptions(check.data) &&
-                check.data.options.map((option: RubricCheckSubOption, index: number) => (
-                  <Radio
-                    disabled={rubricCheckComments.length > 0 || !submissionReview || !gradingIsPermitted}
-                    key={option.label + "-" + index}
-                    value={index.toString()}
-                  >
-                    {criteria.is_additive ? "+" : "-"}
-                    {option.points} {option.label}
-                  </Radio>
-                ))}
-            </RadioGroup.Root>
-          </VStack>
-        )}
-        {!hasOptions && format == "checkbox" && (
-          <Checkbox
-            disabled={rubricCheckComments.length > 0 || !submissionReview || !gradingIsPermitted}
-            checked={selected}
-            onCheckedChange={(newState) => {
-              if (newState.checked) {
-                setIsEditing(true);
-              } else {
-                setIsEditing(false);
-              }
-              setSelected(newState.checked ? true : false);
-            }}
-          >
-            <Text>
-              {points} {check.name}
-            </Text>
-            {linkedFileId && submission && (
-              <Link
-                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+              <HStack justify="space-between" w="100%">
+                <Text fontSize="sm">{check.name}</Text>
+                <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
+              </HStack>
+              <Markdown
+                style={{
+                  fontSize: "0.8rem"
+                }}
               >
-                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                  In: {check.file}
-                </Text>
-              </Link>
-            )}
-            {linkedAritfactId && submission && (
-              <Link
-                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
-              >
-                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                  In: {check.artifact}
-                </Text>
-              </Link>
-            )}
-          </Checkbox>
-        )}
-        {!hasOptions && format == "radio" && (
-          <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !submissionReview}>
-            <Text>
-              {points} {check.name}
+                {check.description}
+              </Markdown>
               {linkedFileId && submission && (
                 <Link
                   href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
@@ -1069,24 +871,134 @@ export function RubricCheckGlobal({
                   </Text>
                 </Link>
               )}
-            </Text>
-          </Radio>
-        )}
+              {gradingIsRequired && (
+                <Text fontSize="xs" color="fg.error">
+                  Select one:
+                </Text>
+              )}
+              <RadioGroup.Root
+                w="100%"
+                value={selectedOptionIndex?.toString()}
+                onValueChange={(value) => {
+                  if (isRubricCheckDataWithOptions(check.data)) {
+                    const selectedOption = check.data.options[parseInt(value.value)];
+                    if (selectedOption) {
+                      setSelectedOptionIndex(parseInt(value.value));
+                      if (gradingIsPermitted) {
+                        setIsEditing(true);
+                      }
+                    }
+                  }
+                }}
+              >
+                {isRubricCheckDataWithOptions(check.data) &&
+                  check.data.options.map((option: RubricCheckSubOption, index: number) => (
+                    <Radio
+                      disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
+                      key={option.label + "-" + index}
+                      value={index.toString()}
+                    >
+                      {option.points ? `${criteria.is_additive ? "+" : "-"} ${option.points} ` : ""}
+                      {option.label}
+                    </Radio>
+                  ))}
+              </RadioGroup.Root>
+            </VStack>
+          )}
+          {!hasOptions && format == "checkbox" && (
+            <VStack align="flex-start" w="100%">
+              <HStack justify="space-between" w="100%">
+                <Checkbox
+                  disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
+                  checked={selected}
+                  onCheckedChange={(newState) => {
+                    if (newState.checked) {
+                      setIsEditing(true);
+                    } else {
+                      setIsEditing(false);
+                    }
+                    setSelected(newState.checked ? true : false);
+                  }}
+                >
+                  <Text>
+                    {points} {check.name}
+                  </Text>
+                  <Markdown
+                    style={{
+                      fontSize: "0.8rem"
+                    }}
+                  >
+                    {check.description}
+                  </Markdown>
+                </Checkbox>
+                <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
+              </HStack>
+
+              {linkedFileId && submission && (
+                <Link
+                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+                >
+                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                    In: {check.file}
+                  </Text>
+                </Link>
+              )}
+              {linkedAritfactId && submission && (
+                <Link
+                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
+                >
+                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                    In: {check.artifact}
+                  </Text>
+                </Link>
+              )}
+            </VStack>
+          )}
+          {!hasOptions && format == "radio" && (
+            <VStack align="flex-start" w="100%">
+              <HStack justify="space-between" w="100%">
+                <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
+                  <Text>
+                    {points} {check.name}
+                  </Text>
+                  <Markdown
+                    style={{
+                      fontSize: "0.8rem"
+                    }}
+                  >
+                    {check.description}
+                  </Markdown>
+                </Radio>
+                <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
+              </HStack>
+              {linkedFileId && submission && (
+                <Link
+                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+                >
+                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                    In: {check.file}
+                  </Text>
+                </Link>
+              )}
+              {linkedAritfactId && submission && (
+                <Link
+                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
+                >
+                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                    In: {check.artifact}
+                  </Text>
+                </Link>
+              )}
+            </VStack>
+          )}
+        </Box>
       </HStack>
-      <Markdown
-        style={{
-          fontSize: "0.8rem"
-        }}
-      >
-        {check.description}
-      </Markdown>
       {isEditing && (
         <SubmissionCommentForm
           check={check}
+          submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
-          activeSubmissionReviewId={activeSubmissionReviewId}
-          submissionReview={submissionReview}
         />
       )}
       {rubricCheckComments.map((comment) => (
@@ -1104,23 +1016,21 @@ export function RubricCheckGlobal({
       )}
 
       {/* Show referenced feedback for grading mode */}
-      {!isPreviewMode && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
+      {!isPreviewMode && gradingIsPermitted && <ReferencedFeedbackDisplay referencing_check_id={check.id} />}
     </Box>
   );
 }
 
 function SubmissionCommentForm({
   check,
+  submissionReview,
   selectedOptionIndex,
-  linkedArtifactId,
-  activeSubmissionReviewId,
-  submissionReview
+  linkedArtifactId
 }: {
   check: HydratedRubricCheck;
+  submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
-  activeSubmissionReviewId?: number;
-  submissionReview?: SubmissionReview;
 }) {
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
@@ -1179,7 +1089,7 @@ function SubmissionCommentForm({
             author: profile_id,
             points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
             released: submissionReview?.released,
-            submission_review_id: activeSubmissionReviewId,
+            submission_review_id: submissionReview?.id,
             ...artifactInfo
           };
           await createComment({ values });
@@ -1195,8 +1105,6 @@ function RubricCheck({
   criteria,
   check,
   isSelected,
-  activeSubmissionReviewId,
-  submissionReview,
   assignmentId,
   classId,
   currentRubricId
@@ -1204,8 +1112,6 @@ function RubricCheck({
   criteria: HydratedRubricCriteria;
   check: HydratedRubricCheck;
   isSelected: boolean;
-  activeSubmissionReviewId?: number;
-  submissionReview?: SubmissionReview;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
@@ -1216,7 +1122,6 @@ function RubricCheck({
         <RubricCheckAnnotation
           check={check}
           criteria={criteria}
-          activeSubmissionReviewId={activeSubmissionReviewId}
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
@@ -1226,8 +1131,6 @@ function RubricCheck({
           check={check}
           criteria={criteria}
           isSelected={isSelected}
-          activeSubmissionReviewId={activeSubmissionReviewId}
-          submissionReview={submissionReview}
           assignmentId={assignmentId}
           classId={classId}
           currentRubricId={currentRubricId}
@@ -1239,38 +1142,34 @@ function RubricCheck({
 
 export function RubricCriteria({
   criteria,
-  activeSubmissionReviewId,
-  submissionReview,
   assignmentId,
   classId,
   currentRubricId
 }: {
   criteria: HydratedRubricCriteria;
-  activeSubmissionReviewId?: number;
-  submissionReview?: SubmissionReview;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
 }) {
+  const reviewForThisRubric = useSubmissionReviewForRubric(currentRubricId);
   const comments = useRubricCriteriaInstances({
     criteria: criteria as RubricCriteriaWithRubricChecks,
-    review_id: activeSubmissionReviewId
+    review_id: reviewForThisRubric?.id
   });
   const totalPoints = comments.reduce((acc, comment) => acc + (comment.points || 0), 0);
   const isAdditive = criteria.is_additive;
   const [selectedCheck, setSelectedCheck] = useState<HydratedRubricCheck>();
   let pointsText = "";
-  if (isAdditive) {
-    pointsText = `${totalPoints}/${criteria.total_points}`;
-  } else {
-    pointsText = `${criteria.total_points - totalPoints}/${criteria.total_points}`;
+  if (criteria.total_points) {
+    if (isAdditive) {
+      pointsText = `${totalPoints}/${criteria.total_points}`;
+    } else {
+      pointsText = `${criteria.total_points - totalPoints}/${criteria.total_points}`;
+    }
   }
   const isGrader = useIsGraderOrInstructor();
   const gradingIsRequired =
-    isGrader &&
-    submissionReview &&
-    activeSubmissionReviewId &&
-    comments.length < (criteria.min_checks_per_submission || 0);
+    isGrader && reviewForThisRubric && comments.length < (criteria.min_checks_per_submission || 0);
   let instructions = "";
   if (criteria.min_checks_per_submission) {
     if (criteria.max_checks_per_submission) {
@@ -1289,6 +1188,7 @@ export function RubricCriteria({
     criteria.max_checks_per_submission === 1 && comments.length === 1
       ? comments[0].rubric_check_id?.toString()
       : undefined;
+  criteria.rubric_checks.sort((a, b) => a.ordinal - b.ordinal);
   return (
     <Box
       border="1px solid"
@@ -1325,8 +1225,6 @@ export function RubricCriteria({
               criteria={criteria}
               check={check}
               isSelected={selectedCheck?.id === check.id}
-              activeSubmissionReviewId={activeSubmissionReviewId}
-              submissionReview={submissionReview}
               assignmentId={assignmentId}
               classId={classId}
               currentRubricId={currentRubricId}
@@ -1340,21 +1238,17 @@ export function RubricCriteria({
 
 export function RubricPart({
   part,
-  activeSubmissionReviewId,
-  submissionReview,
   assignmentId,
   classId,
   currentRubricId
 }: {
   part: HydratedRubricPart;
-  activeSubmissionReviewId?: number;
-  submissionReview?: SubmissionReview;
   assignmentId?: number;
   classId?: number;
   currentRubricId?: number;
 }) {
   return (
-    <Box>
+    <Box w="100%">
       <Heading size="md">{part.name}</Heading>
       <Markdown>{part.description}</Markdown>
       <VStack align="start" w="100%" gap={2}>
@@ -1364,8 +1258,6 @@ export function RubricPart({
             <RubricCriteria
               key={`criteria-${criteria.id}-${index}`}
               criteria={criteria}
-              activeSubmissionReviewId={activeSubmissionReviewId}
-              submissionReview={submissionReview}
               assignmentId={assignmentId}
               classId={classId}
               currentRubricId={currentRubricId}
@@ -1375,66 +1267,178 @@ export function RubricPart({
     </Box>
   );
 }
+function RubricMenu() {
+  const { activeRubricId, setScrollToRubricId } = useActiveRubricId();
+  const rubrics = useRubrics();
+  const options = rubrics.map((rubric) => ({ value: rubric.id, label: rubric.name }));
+  if (rubrics.length === 1) {
+    return <></>;
+  }
 
-export default function RubricSidebar({
-  initialRubric,
-  reviewAssignmentId,
-  submissionReview,
-  assignmentId,
-  classId
-}: {
-  initialRubric?: HydratedRubric;
-  reviewAssignmentId?: number;
-  submissionReview?: SubmissionReview;
-  assignmentId?: number;
-  classId?: number;
-}) {
-  const {
-    reviewAssignment,
-    isLoading: isLoadingReviewAssignment,
-    error: reviewAssignmentErrorObj
-  } = useReviewAssignment(reviewAssignmentId);
+  return (
+    <Box w="100%" position="sticky" top={0} zIndex={1} bg="bg.muted" pb={2}>
+      <NativeSelectRoot>
+        <NativeSelectField
+          aria-label="Select active rubric"
+          title="Select active rubric"
+          value={activeRubricId}
+          onChange={(e) => {
+            setScrollToRubricId(Number(e.target.value));
+          }}
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              Active Rubric: {option.label}
+            </option>
+          ))}
+        </NativeSelectField>
+      </NativeSelectRoot>
+    </Box>
+  );
+}
+export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React.RefObject<HTMLDivElement> }) {
+  const unsortedRubrics = useRubrics();
+  const { activeRubricId, setActiveRubricId, scrollToRubricId, setScrollToRubricId } = useActiveRubricId();
+  const activeReviewAssignment = useActiveReviewAssignment();
+  const rubrics = useMemo(() => {
+    return unsortedRubrics.sort((a, b) => {
+      if (a.id === activeReviewAssignment?.rubric_id) {
+        return -1;
+      }
+      if (b.id === activeReviewAssignment?.rubric_id) {
+        return 1;
+      }
+      return a.id - b.id;
+    });
+  }, [unsortedRubrics, activeReviewAssignment]);
+  // Refs for each rubric box
+  const rubricRefs = useRef<{ [id: number]: HTMLDivElement | null }>({});
 
-  const { rubric: fetchedRubricFromHook, isLoading: isLoadingFetchedRubricFromHook } =
-    useSubmissionRubric(reviewAssignmentId);
+  // Scroll event logic for active rubric
+  useEffect(() => {
+    const handleScroll = () => {
+      if (!scrollRootRef.current) return;
+      let bestId: number | undefined = undefined;
+      let bestTop: number | undefined = undefined;
+      for (const rubric of rubrics) {
+        const ref = rubricRefs.current[rubric.id];
+        if (ref && scrollRootRef.current) {
+          const containerRect = scrollRootRef.current.getBoundingClientRect();
+          const boxRect = ref.getBoundingClientRect();
+          const relativeTop = boxRect.top - containerRect.top;
+          if (bestTop === undefined || Math.abs(relativeTop) < Math.abs(bestTop)) {
+            bestTop = relativeTop;
+            bestId = rubric.id;
+          }
+        }
+      }
+      if (bestId !== undefined && bestId !== activeRubricId) {
+        setActiveRubricId(bestId);
+      }
+    };
+    const container = scrollRootRef.current;
+    if (container) {
+      container.addEventListener("scroll", handleScroll, { passive: true });
+      handleScroll();
+    }
+    return () => {
+      if (container) {
+        container.removeEventListener("scroll", handleScroll);
+      }
+    };
+  }, [rubrics, setActiveRubricId, scrollRootRef, activeRubricId]);
 
-  const displayRubric = !reviewAssignmentId && initialRubric ? initialRubric : fetchedRubricFromHook;
-  const isLoadingEffectiveRubric = !reviewAssignmentId && initialRubric ? false : isLoadingFetchedRubricFromHook;
+  // Scroll to active rubric when it changes
+  useEffect(() => {
+    if (scrollToRubricId && rubricRefs.current[scrollToRubricId] && scrollToRubricId !== activeRubricId) {
+      const container = scrollRootRef.current;
+      const target = rubricRefs.current[scrollToRubricId];
+      if (!container || !target) return;
 
-  const isLoading = isLoadingEffectiveRubric || (reviewAssignmentId && isLoadingReviewAssignment);
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const offset = 30;
+      const scrollTop = container.scrollTop + (targetRect.top - containerRect.top) - offset;
+      container.scrollTo({ top: scrollTop, behavior: "smooth" });
 
-  const combinedError = reviewAssignmentId ? reviewAssignmentErrorObj : null;
+      setScrollToRubricId(undefined);
+    }
+  }, [scrollToRubricId, scrollRootRef, activeRubricId, setScrollToRubricId]);
+
+  // Callback to set refs
+  const setRubricRef = useCallback(
+    (id: number) => (el: HTMLDivElement | null) => {
+      rubricRefs.current[id] = el;
+    },
+    []
+  );
+
+  return (
+    <VStack w="100%">
+      <RubricMenu />
+      {rubrics.map((rubric, index) => (
+        <Box
+          key={rubric.id}
+          id={`rubric-${rubric.id}`}
+          data-rubric-id={rubric.id}
+          ref={setRubricRef(rubric.id)}
+          pt="40px"
+          w="100%"
+        >
+          <RubricSidebar key={rubric.id} rubricId={rubric.id} />
+          {index < rubrics.length - 1 && (
+            <Separator orientation="horizontal" borderTopWidth="4px" borderColor="border.emphasized" my={2} mt="50px" />
+          )}
+          {index === rubrics.length - 1 && rubrics.length > 1 && <Box w="100%" h="100vh" />}
+        </Box>
+      ))}
+    </VStack>
+  );
+}
+
+export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: HydratedRubric; rubricId?: number }) {
+  if (!rubricId && !initialRubric) {
+    throw new Error("RubricSidebar must be given either a rubricId or an initialRubric");
+  }
+  /*
+  What this sidebar should show:
+    - If there is an initialRubric passed, show that. Always
+    - If not:
+      - If we are an instructor, show all rubrics, with a focus on the grading rubric
+      - If we are a grader, show the grading rubric, and if we have an assigned rubric, focus on that.
+      - If we are a student and have an active (unsubmitted) assigned review, show that. If we have a graded review, show that ALSO
+  */
+
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const assignmentController = useAssignmentController();
+  const activeAssignmentReview = assignmentController.assignment.review_assignments.find(
+    (review) => review.id === activeReviewAssignmentId
+  );
+  const fetchedRubric = assignmentController.assignment.rubrics.find((rubric) => rubric.id === rubricId);
+  const isGrader = useIsGraderOrInstructor();
+  const reviewForThisRubric = useSubmissionReviewForRubric(rubricId);
+  const viewOnly = !isGrader && !reviewForThisRubric;
+
+  const displayRubric = !rubricId && initialRubric ? initialRubric : fetchedRubric;
 
   let partsToDisplay: HydratedRubricPart[] = [];
   if (displayRubric) {
     if (
-      reviewAssignmentId &&
-      reviewAssignment?.review_assignment_rubric_parts &&
-      reviewAssignment.review_assignment_rubric_parts.length > 0
+      activeAssignmentReview &&
+      activeAssignmentReview.rubric_id === rubricId &&
+      activeAssignmentReview.review_assignment_rubric_parts &&
+      activeAssignmentReview.review_assignment_rubric_parts.length > 0
     ) {
-      partsToDisplay = reviewAssignment.review_assignment_rubric_parts
-        .map((linkedPart) => linkedPart.rubric_parts as HydratedRubricPart)
-        .filter((part): part is HydratedRubricPart => !!part)
+      partsToDisplay = displayRubric.rubric_parts
+        .filter((part) =>
+          activeAssignmentReview.review_assignment_rubric_parts.some(
+            (linkedPart) => linkedPart.rubric_part_id === part.id
+          )
+        )
         .sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
     } else if (displayRubric.rubric_parts) {
       partsToDisplay = [...displayRubric.rubric_parts].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
     }
-  }
-
-  if (isLoading) {
-    return (
-      <Box p={2} maxW="lg" key="loading-sidebar">
-        <Skeleton height="100vh" />
-      </Box>
-    );
-  }
-
-  if (combinedError) {
-    return (
-      <Box p={2} key="error-sidebar">
-        <Text color="red.500">Error loading review details: {combinedError.message}</Text>
-      </Box>
-    );
   }
 
   if (!displayRubric) {
@@ -1447,7 +1451,7 @@ export default function RubricSidebar({
 
   if (partsToDisplay.length === 0) {
     return (
-      <Box borderLeftWidth="1px" borderColor="border.emphasized" p={2} ml={0} height="100vh" key="empty-parts-sidebar">
+      <Box borderLeftWidth="1px" borderColor="border.emphasized" p={2} ml={0} key="empty-parts-sidebar">
         <VStack align="start" w="100%">
           <Heading size="xl">Grading Rubric</Heading>
           <Text fontSize="lg" fontWeight="semibold">
@@ -1461,18 +1465,26 @@ export default function RubricSidebar({
   }
 
   return (
-    <Box p={0} ml={0} height="100vh">
+    <Box p={0} ml={0}>
       <VStack align="start" w="100%">
         <Text fontSize="lg" fontWeight="semibold">
           {displayRubric.name}
         </Text>
-        {reviewAssignment && (
+        {viewOnly && (
+          <Text fontSize="sm" color="text.muted" mb={2}>
+            This rubric is informational only. Your submission has not been graded yet. Once it is graded, you will see
+            how this rubric was applied to grade your submission.
+          </Text>
+        )}
+        {activeAssignmentReview && (
           <Box fontSize="sm" color="text.muted" mb={2}>
-            {reviewAssignment.due_date && (
-              <Text>Due: {format(new Date(reviewAssignment.due_date), "MMM d, yyyy 'at' h:mm a")}</Text>
+            {activeAssignmentReview.due_date && (
+              <Text>Due: {format(new Date(activeAssignmentReview.due_date), "MMM d, yyyy 'at' h:mm a")}</Text>
             )}
-            {reviewAssignment.release_date && (
-              <Text>Grades Release: {format(new Date(reviewAssignment.release_date), "MMM d, yyyy 'at' h:mm a")}</Text>
+            {activeAssignmentReview.release_date && (
+              <Text>
+                Grades Release: {format(new Date(activeAssignmentReview.release_date), "MMM d, yyyy 'at' h:mm a")}
+              </Text>
             )}
           </Box>
         )}
@@ -1480,10 +1492,8 @@ export default function RubricSidebar({
           <RubricPart
             key={part.name + "-" + part.id}
             part={part}
-            activeSubmissionReviewId={submissionReview?.id}
-            submissionReview={submissionReview}
-            assignmentId={assignmentId}
-            classId={classId}
+            assignmentId={assignmentController.assignment.id}
+            classId={assignmentController.assignment.class_id}
             currentRubricId={displayRubric?.id}
           />
         ))}

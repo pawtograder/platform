@@ -1,6 +1,13 @@
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database, Json } from "./SupabaseTypes";
 export type { Json };
+
+export type GradebookColumnExternalData = {
+  source: "csv";
+  fileName: string;
+  date: string;
+  creator: string;
+};
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<
@@ -8,7 +15,7 @@ export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, review_assignments!review_assignments_assignment_id_fkey(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
+  "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
 >;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
@@ -84,6 +91,13 @@ export type UserRole = GetResult<
   "user_roles",
   Database["public"]["Tables"]["user_roles"]["Relationships"],
   "*"
+>;
+export type UserRoleWithUser = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["user_roles"]["Row"],
+  "user_roles",
+  Database["public"]["Tables"]["user_roles"]["Relationships"],
+  "*, users(*)"
 >;
 
 export type UserRoleWithPrivateProfileAndUser = GetResult<
@@ -168,7 +182,7 @@ export type SubmissionReviewWithRubric = GetResult<
   Database["public"]["Tables"]["submission_reviews"]["Row"],
   "submission_reviews",
   Database["public"]["Tables"]["submission_reviews"]["Relationships"],
-  "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
+  "*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))"
 >;
 export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"],
@@ -450,8 +464,12 @@ export type HydratedRubricCriteria = Omit<Database["public"]["Tables"]["rubric_c
   data?: RubricCriteriaDataType;
 };
 export type RubricCriteriaDataType = Json;
-export type HydratedRubricCheck = Omit<Database["public"]["Tables"]["rubric_checks"]["Row"], "data"> & {
+export type HydratedRubricCheck = Omit<
+  Database["public"]["Tables"]["rubric_checks"]["Row"],
+  "data" | "student_visibility"
+> & {
   data?: Json;
+  student_visibility?: Database["public"]["Enums"]["rubric_check_student_visibility"];
 };
 export type RubricChecksDataType = {
   options: {
@@ -518,6 +536,7 @@ export type YmlRubricChecksType = Omit<
   | "max_annotations"
   | "artifact"
   | "annotation_target"
+  | "data"
 > & {
   id?: number;
   description?: string;
@@ -525,6 +544,7 @@ export type YmlRubricChecksType = Omit<
   artifact?: string;
   max_annotations?: number;
   annotation_target?: "file" | "artifact";
+  data?: RubricChecksDataType;
 };
 
 export type AssignmentDueDateException = GetResult<
@@ -556,5 +576,130 @@ export type RubricCheckReference = GetResult<
   Database["public"]["Tables"]["rubric_check_references"]["Row"],
   "rubric_check_references",
   Database["public"]["Tables"]["rubric_check_references"]["Relationships"],
+  "*"
+>;
+
+export type EmailDistributionList = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_list"]["Row"],
+  "email_distribution_list",
+  Database["public"]["Tables"]["email_distribution_list"]["Relationships"],
+  "*"
+>;
+
+export type EmailDistributionItem = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_item"]["Row"],
+  "email_distribution_item",
+  Database["public"]["Tables"]["email_distribution_item"]["Relationships"],
+  "*"
+>;
+
+export type GradebookColumnDependencies = {
+  assignments?: int[];
+  gradebook_columns?: int[];
+};
+export type GradebookWithAllData = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["gradebooks"]["Row"],
+  "gradebooks",
+  Database["public"]["Tables"]["gradebooks"]["Relationships"],
+  "*, gradebook_columns!gradebook_columns_gradebook_id_fkey(*, gradebook_column_students(*))"
+>;
+
+type _GradebookColumnWithEntries = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["gradebook_columns"]["Row"],
+  "gradebook_columns",
+  Database["public"]["Tables"]["gradebook_columns"]["Relationships"],
+  "*, gradebook_column_students(*)"
+>;
+export type GradebookColumnWithEntries = Omit<_GradebookColumnWithEntries, "dependencies"> & {
+  dependencies: GradebookColumnDependencies | null;
+};
+export type Gradebook = Database["public"]["Tables"]["gradebooks"]["Row"];
+export type GradebookColumn = Database["public"]["Tables"]["gradebook_columns"]["Row"];
+export type GradebookColumnStudent = Database["public"]["Tables"]["gradebook_column_students"]["Row"];
+
+/**
+ * Flashcard Deck Types
+ */
+export type FlashcardDeck = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_decks"]["Row"],
+  "flashcard_decks",
+  Database["public"]["Tables"]["flashcard_decks"]["Relationships"],
+  "*"
+>;
+
+export type Flashcard = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcards"]["Row"],
+  "flashcards",
+  Database["public"]["Tables"]["flashcards"]["Relationships"],
+  "*"
+>;
+
+export type FlashcardDeckWithCards = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_decks"]["Row"],
+  "flashcard_decks",
+  Database["public"]["Tables"]["flashcard_decks"]["Relationships"],
+  "*, flashcards(*)"
+>;
+
+export type StudentFlashcardDeckProgress = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["student_flashcard_deck_progress"]["Row"],
+  "student_flashcard_deck_progress",
+  Database["public"]["Tables"]["student_flashcard_deck_progress"]["Relationships"],
+  "*"
+>;
+
+export type FlashcardInteractionLog = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["flashcard_interaction_logs"]["Row"],
+  "flashcard_interaction_logs",
+  Database["public"]["Tables"]["flashcard_interaction_logs"]["Relationships"],
+  "*"
+>;
+
+export type SelfReviewSettings = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Row"],
+  "self_review_settings",
+  Database["public"]["Tables"]["assignment_self_review_settings"]["Relationships"],
+  "*"
+>;
+
+export type ReviewAssignments = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["review_assignments"]["Row"],
+  "review_assignments",
+  Database["public"]["Tables"]["review_assignments"]["Relationships"],
+  "*"
+>;
+
+export type Emails = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["emails"]["Row"],
+  "emails",
+  Database["public"]["Tables"]["emails"]["Relationships"],
+  "*"
+>;
+
+export type EmailBatches = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_batches"]["Row"],
+  "email_batches",
+  Database["public"]["Tables"]["email_batches"]["Relationships"],
+  "*"
+>;
+
+export type Course = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["classes"]["Row"],
+  "classes",
+  Database["public"]["Tables"]["classes"]["Relationships"],
   "*"
 >;

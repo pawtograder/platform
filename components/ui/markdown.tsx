@@ -10,7 +10,7 @@ import "katex/dist/katex.min.css";
 export type MarkdownProps = Parameters<typeof ReactMarkdown>[0] & { style?: React.CSSProperties };
 export default function Markdown(props: MarkdownProps) {
   return (
-    <div style={props.style}>
+    <div style={props.style} className="embedded-markdown">
       <ReactMarkdown
         remarkPlugins={[remarkMath, remarkGfm, remarkBreaks, remarkGemoji, ...(props.remarkPlugins || [])]}
         rehypePlugins={[rehypeKatex, rehypeHighlight, ...(props.rehypePlugins || [])]}

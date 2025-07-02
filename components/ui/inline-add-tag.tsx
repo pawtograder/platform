@@ -2,11 +2,13 @@
 
 import { TagColor } from "@/app/course/[course_id]/manage/course/enrollments/TagColors";
 import TagDisplay from "@/components/ui/tag";
-import useTags from "@/hooks/useTags";
+import useTags, { useTagsForProfile } from "@/hooks/useTags";
 import { Tag } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Grid, Heading, Icon, SegmentGroup } from "@chakra-ui/react";
+import { useCreate, useInvalidate } from "@refinedev/core";
 import { Select } from "chakra-react-select";
-import { useEffect, useRef, useState } from "react";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaPlus } from "react-icons/fa6";
 
 interface TagOption {
@@ -49,7 +51,7 @@ function KeyboardAwareSegmentGroup({
   );
 }
 
-export default function InlineAddTag({
+export function TagAddForm({
   addTag,
   currentTags,
   allowExpand
@@ -258,4 +260,37 @@ export default function InlineAddTag({
       )}
     </Flex>
   );
+}
+
+export default function InlineAddTag({ profile_id, allowExpand }: { profile_id: string; allowExpand: boolean }) {
+  const currentTags = useTagsForProfile(profile_id).tags;
+  const { course_id } = useParams();
+  const invalidate = useInvalidate();
+  const mutationOptions = useMemo(
+    () => ({
+      onSuccess: () => {
+        invalidate({ resource: "tags", invalidates: ["list"] });
+      }
+    }),
+    [invalidate]
+  );
+  const { mutateAsync } = useCreate<Tag>({
+    resource: "tags",
+    mutationOptions
+  });
+  const addTag = useCallback(
+    async (name: string, color: string) => {
+      await mutateAsync({
+        values: {
+          name,
+          color,
+          visible: !name.startsWith("~"),
+          profile_id,
+          class_id: course_id as string
+        }
+      });
+    },
+    [mutateAsync, profile_id, course_id]
+  );
+  return <TagAddForm addTag={addTag} currentTags={currentTags} allowExpand={allowExpand} />;
 }

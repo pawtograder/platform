@@ -1,12 +1,8 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useRubricCheck, useRubricCriteria, useRubrics } from "@/hooks/useAssignment";
+import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import {
-  useSubmission,
-  useSubmissionFileComments,
-  useSubmissionReviewByAssignmentId,
-  useSubmissionRubric
-} from "@/hooks/useSubmission";
+import { useSubmission, useSubmissionFileComments, useSubmissionReviewByAssignmentId } from "@/hooks/useSubmission";
+import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   HydratedRubricCheck,
@@ -39,13 +35,12 @@ import {
 } from "react";
 import { FaCheckCircle, FaComments, FaEyeSlash, FaRegComment, FaRegEyeSlash, FaTimesCircle } from "react-icons/fa";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-import { Checkbox } from "./checkbox";
 import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
-import { CommentActions, ReviewRoundTag } from "./rubric-sidebar";
+import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
 
@@ -101,25 +96,12 @@ export type LineActionPopupDynamicProps = {
 
 type LineActionPopupComponentProps = LineActionPopupDynamicProps & {
   file: SubmissionFile;
-  submissionReviewId?: number;
-  reviewAssignmentId?: number;
-  selectedRubricId?: number;
 };
 
-export default function CodeFile({
-  file,
-  submissionReviewId,
-  reviewAssignmentId,
-  selectedRubricId
-}: {
-  file: SubmissionFile;
-  submissionReviewId?: number;
-  reviewAssignmentId?: number;
-  selectedRubricId?: number;
-}) {
-  const isGraderOrInstructor = useIsGraderOrInstructor();
+export default function CodeFile({ file }: { file: SubmissionFile }) {
   const submission = useSubmission();
-  const showCommentsFeature = submission.released !== null || isGraderOrInstructor;
+  const submissionReview = useActiveSubmissionReview();
+  const showCommentsFeature = true; //submission.released !== null || submissionReview !== undefined;
 
   const [starryNight, setStarryNight] = useState<Awaited<ReturnType<typeof createStarryNight>> | undefined>(undefined);
   const [lineActionPopupProps, setLineActionPopupProps] = useState<LineActionPopupDynamicProps>(() => ({
@@ -272,13 +254,7 @@ export default function CodeFile({
         </HStack>
       </Flex>
       {/* Pass dynamic props from state, and other props directly */}
-      <LineActionPopup
-        {...lineActionPopupProps}
-        file={file}
-        submissionReviewId={submissionReviewId}
-        reviewAssignmentId={reviewAssignmentId}
-        selectedRubricId={selectedRubricId}
-      />
+      <LineActionPopup {...lineActionPopupProps} file={file} />
       <CodeLineCommentContext.Provider
         value={{
           submission,
@@ -297,7 +273,7 @@ export default function CodeFile({
             setExpanded((prev) => prev.filter((l) => l !== line));
           },
           showCommentsFeature,
-          submissionReviewId: submissionReviewId
+          submissionReviewId: submissionReview?.id
         }}
       >
         <VStack
@@ -407,8 +383,6 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
     resource: "submission_file_comments"
   });
 
-  const { submissionReview } = useSubmissionReviewByAssignmentId(comment.submission_review_id);
-
   const rubricCheck = useRubricCheck(comment.rubric_check_id);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
 
@@ -419,22 +393,33 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
   const hasPoints = comment.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
 
+  // Determine if this comment will be visible to students
+  const getStudentVisibilityInfo = () => {
+    if (!rubricCheck.student_visibility || rubricCheck.student_visibility === "always") {
+      return { isVisible: true, reason: "Always visible to students" };
+    }
+    if (rubricCheck.student_visibility === "never") {
+      return { isVisible: false, reason: "Never visible to students" };
+    }
+    if (rubricCheck.student_visibility === "if_applied") {
+      return { isVisible: true, reason: "Visible to students when grades are released (check was applied)" };
+    }
+    if (rubricCheck.student_visibility === "if_released") {
+      return { isVisible: true, reason: "Visible to students when grades are released" };
+    }
+    return { isVisible: true, reason: "Visible to students" };
+  };
+
+  const { isVisible: willBeVisibleToStudents } = getStudentVisibilityInfo();
+
   return (
     <Box m={0} p={0} w="100%" pb={1}>
       <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
         <PersonAvatar size="2xs" uid={comment.author} />
-        <VStack
-          alignItems="flex-start"
-          spaceY={0}
-          gap={0}
-          w="100%"
-          border="1px solid"
-          borderColor="border.info"
-          borderRadius="md"
-        >
-          <Box bg="bg.info" pl={1} pr={1} borderRadius="md" w="100%">
+        <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
+          <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
             <Flex w="100%" justifyContent="space-between">
-              <HStack>
+              <HStack flexGrow={10}>
                 {!comment.eventually_visible && (
                   <Tooltip content="This comment will never be visible to the student">
                     <Icon as={FaRegEyeSlash} color="fg.muted" />
@@ -460,7 +445,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
               </HStack>
               <HStack gap={0} flexWrap="wrap">
                 <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                  {`${commentAuthor?.name} ${submissionReview ? submissionReview?.name : ""}`}
+                  {commentAuthor?.name}
                 </Text>
                 {comment.submission_review_id && <ReviewRoundTag submission_review_id={comment.submission_review_id} />}
               </HStack>
@@ -613,29 +598,9 @@ export function formatPoints(option: {
   return ``;
 }
 
-function LineActionPopup({
-  lineNumber,
-  top,
-  left,
-  visible,
-  close,
-  mode,
-  file,
-  submissionReviewId,
-  reviewAssignmentId,
-  selectedRubricId
-}: LineActionPopupComponentProps) {
+function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
   const submission = useSubmission();
-  const { submissionReview: review } = useSubmissionReviewByAssignmentId(submissionReviewId);
-  const { rubric: selectedRubric } = useSubmissionRubric(reviewAssignmentId);
-
-  // Use the cached rubrics from useAssignment hook instead of making a separate API call
-  const allRubrics = useRubrics();
-  const manuallySelectedRubric = selectedRubricId
-    ? allRubrics.find((rubric) => rubric.id === selectedRubricId)
-    : undefined;
-
-  const effectiveRubric = selectedRubricId ? manuallySelectedRubric : selectedRubric;
+  const review = useActiveSubmissionReview();
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -643,8 +608,6 @@ function LineActionPopup({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
-  const isGraderOrInstructor = useIsGraderOrInstructor();
-  const [eventuallyVisible, setEventuallyVisible] = useState(true);
 
   const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
     resource: "submission_file_comments"
@@ -708,9 +671,9 @@ function LineActionPopup({
   // Only show criteria that have annotation checks
   let criteriaWithAnnotationChecks: HydratedRubricCriteria[] = [];
 
-  if (effectiveRubric?.rubric_parts) {
+  if (review?.rubrics?.rubric_parts) {
     // Using the effective rubric (either manually selected or default)
-    criteriaWithAnnotationChecks = effectiveRubric.rubric_parts
+    criteriaWithAnnotationChecks = review.rubrics.rubric_parts
       .flatMap((part: HydratedRubricPart) => part.rubric_criteria || [])
       .filter((criteria: HydratedRubricCriteria) =>
         criteria.rubric_checks.some(
@@ -718,13 +681,6 @@ function LineActionPopup({
             check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
         )
       );
-  } else if (submission.assignments.rubrics?.rubric_criteria) {
-    // Fallback to submission's rubric (different structure)
-    criteriaWithAnnotationChecks = submission.assignments.rubrics.rubric_criteria.filter((criteria) =>
-      criteria.rubric_checks.some(
-        (check) => check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-      )
-    );
   }
   const criteria: RubricCriteriaSelectGroupOption[] =
     (criteriaWithAnnotationChecks?.map((criteria) => ({
@@ -786,7 +742,8 @@ function LineActionPopup({
         <chakraComponents.GroupHeading {...props}>
           {props.data.criteria ? (
             <>
-              Criteria: {props.data.label} ({props.data.criteria.total_points} points total)
+              Criteria: {props.data.label}
+              {props.data.criteria.total_points ? ` (${props.data.criteria.total_points} points total)` : ""}
             </>
           ) : (
             <>
@@ -799,20 +756,24 @@ function LineActionPopup({
     SingleValue: (props) => {
       const points =
         props.data.criteria &&
+        props.data.check?.points &&
         "(" + (props.data.criteria.is_additive ? "+" : "-" + props.data.check?.points?.toString()) + ")";
       return (
         <chakraComponents.SingleValue {...props}>
           {props.data.criteria && props.data.criteria.name + " > "} {props.data.label}{" "}
           {isRubricCheckDataWithOptions(props.data.check?.data)
             ? `(Select an option)`
-            : points !== undefined && `${points} aa points`}
+            : points
+              ? `${points} points`
+              : ""}
         </chakraComponents.SingleValue>
       );
     },
     Option: (props) => {
       const points =
-        props.data.criteria &&
-        "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")";
+        props.data.criteria && props.data.check?.points
+          ? "(" + ((props.data.criteria.is_additive ? "+" : "-") + props.data.check?.points?.toString()) + ")"
+          : "";
       return (
         <chakraComponents.Option {...props}>
           {props.data.label} {points}
@@ -841,21 +802,30 @@ function LineActionPopup({
           Annotate line {lineNumber} with a check:
         </Text>
 
-        <Select
-          ref={selectRef}
-          options={criteria}
-          defaultMenuIsOpen={selectedCheckOption === null}
-          escapeClearsValue={true}
-          components={components}
-          value={selectedCheckOption}
-          onChange={(e: RubricCheckSelectOption | null) => {
-            if (e) {
-              setSelectedCheckOption(e);
-            }
-          }}
-          placeholder="Select a rubric check or leave a comment..."
-          size="sm"
-        />
+        <HStack>
+          <Select
+            ref={selectRef}
+            options={criteria}
+            defaultMenuIsOpen={selectedCheckOption === null}
+            escapeClearsValue={true}
+            components={components}
+            value={selectedCheckOption}
+            onChange={(e: RubricCheckSelectOption | null) => {
+              if (e) {
+                setSelectedCheckOption(e);
+              }
+            }}
+            placeholder="Select a rubric check or leave a comment..."
+            size="sm"
+          />
+          {selectedCheckOption && selectedCheckOption.check && (
+            <StudentVisibilityIndicator
+              check={selectedCheckOption.check}
+              isApplied={true}
+              isReleased={review?.released ?? true}
+            />
+          )}
+        </HStack>
         {selectedCheckOption && (
           <>
             {isRubricCheckDataWithOptions(selectedCheckOption.check?.data) && (
@@ -879,7 +849,7 @@ function LineActionPopup({
                 size="sm"
               />
             )}
-            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points !== undefined && (
+            {!selectedSubOption && selectedCheckOption.check && selectedCheckOption.check.points ? (
               <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
                 {formatPoints({
                   check: selectedCheckOption.check,
@@ -887,8 +857,10 @@ function LineActionPopup({
                   points: selectedCheckOption.check.points
                 })}
               </Text>
+            ) : (
+              <></>
             )}
-            {selectedSubOption && selectedCheckOption.check && (
+            {selectedSubOption && selectedCheckOption.check ? (
               <Text fontSize="sm" color="fg.muted" mt={1} textAlign="center">
                 {formatPoints({
                   check: selectedCheckOption.check,
@@ -896,17 +868,8 @@ function LineActionPopup({
                   points: selectedSubOption.points
                 })}
               </Text>
-            )}
-            {isGraderOrInstructor && (
-              <HStack justifyContent="flex-start" w="full" pl={1} mt={1} mb={1}>
-                <Checkbox
-                  checked={eventuallyVisible}
-                  onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
-                  size="sm"
-                >
-                  Visible to student when submission is released
-                </Checkbox>
-              </HStack>
+            ) : (
+              <></>
             )}
             <MessageInput
               textAreaRef={messageInputRef}
@@ -929,8 +892,8 @@ function LineActionPopup({
                 if (selectedSubOption) {
                   comment = selectedSubOption.comment + (comment ? "\n" + comment : "");
                 }
-                const finalSubmissionReviewId = submissionReviewId ?? review?.id;
-                if (!finalSubmissionReviewId && selectedCheckOption.check?.id) {
+                const submissionReviewId = review?.id;
+                if (!submissionReviewId && selectedCheckOption.check?.id) {
                   toaster.error({
                     title: "Error saving comment",
                     description: "Submission review ID is missing, cannot save rubric annotation."
@@ -947,12 +910,21 @@ function LineActionPopup({
                   author: profile_id,
                   released: review ? review.released : true,
                   points,
-                  submission_review_id: finalSubmissionReviewId,
-                  eventually_visible: eventuallyVisible
+                  submission_review_id: submissionReviewId,
+                  eventually_visible: selectedCheckOption.check
+                    ? selectedCheckOption.check.student_visibility !== "never"
+                    : true
                 };
-                await createComment({ values });
-                setCurrentMode(mode);
-                close();
+                try {
+                  await createComment({ values });
+                  setCurrentMode(mode);
+                  close();
+                } catch (e) {
+                  toaster.error({
+                    title: "Error saving annotation",
+                    description: e instanceof Error ? e.message : "Unknown error"
+                  });
+                }
               }}
             />
           </>
