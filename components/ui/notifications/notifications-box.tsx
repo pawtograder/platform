@@ -1,37 +1,67 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
-import { Badge, Box, IconButton, Popover, Portal, VStack } from "@chakra-ui/react";
+import { Badge, Box, IconButton, VStack, Text } from "@chakra-ui/react";
+import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/components/ui/popover";
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser from "./notification-teaser";
+import { useState } from "react";
 
 export default function NotificationsBox() {
   const { notifications, set_read, dismiss } = useNotifications();
+  const [isOpen, setIsOpen] = useState(false);
   const unreadCount = notifications?.filter((n) => !n.viewed_at).length || 0;
+
   return (
     <Box>
-      <Popover.Root>
-        <Popover.Trigger asChild>
+      <PopoverRoot closeOnInteractOutside={true} open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
+        <PopoverTrigger asChild>
           <Tooltip content="Notifications" showArrow>
-            <IconButton variant="outline" colorPalette="gray" size="sm">
+            <IconButton
+              variant="outline"
+              colorPalette="gray"
+              size="sm"
+              onClick={() => setIsOpen(!isOpen)}
+              position="relative"
+            >
               {unreadCount > 0 && (
-                <Box position="absolute" top="0" right="0" transform="translate(50%,-50%)">
-                  <Badge variant="solid" colorPalette="blue" size="xs">
-                    {unreadCount > 9 ? "9+" : unreadCount}
-                  </Badge>
-                </Box>
+                <Badge
+                  variant="solid"
+                  colorPalette="blue"
+                  size="xs"
+                  position="absolute"
+                  top="-1"
+                  right="-1"
+                  borderRadius="full"
+                  minW="18px"
+                  h="18px"
+                  fontSize="10px"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                >
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </Badge>
               )}
-              <HiOutlineInbox width={5} height={5} />
+              <HiOutlineInbox size={18} />
             </IconButton>
           </Tooltip>
-        </Popover.Trigger>
-        <Portal>
-          <Popover.Positioner>
-            <Popover.Content>
-              <Popover.Arrow />
-              <Popover.Body overflowY="auto">
-                <Popover.Title fontWeight="medium">Notifications</Popover.Title>
-                <VStack align="stretch" spaceY={0}>
-                  {notifications?.map((n) => (
+        </PopoverTrigger>
+        <PopoverContent shadow="lg" borderRadius="lg" borderWidth="1px">
+          <PopoverBody p="0">
+            <Box p="4" borderBottom="1px" borderColor="border.muted">
+              <Text fontWeight="semibold" fontSize="lg" color="fg.default">
+                Notifications
+              </Text>
+              {unreadCount > 0 && (
+                <Text fontSize="sm" color="fg.muted" mt="1">
+                  {unreadCount} unread
+                </Text>
+              )}
+            </Box>
+            <Box maxHeight="500px" overflowY="auto">
+              {notifications && notifications.length > 0 ? (
+                <VStack align="stretch" gap="0">
+                  {notifications.map((n) => (
                     <NotificationTeaser
                       key={n.id}
                       notification_id={n.id}
@@ -40,11 +70,16 @@ export default function NotificationsBox() {
                     />
                   ))}
                 </VStack>
-              </Popover.Body>
-            </Popover.Content>
-          </Popover.Positioner>
-        </Portal>
-      </Popover.Root>
+              ) : (
+                <Box textAlign="center" color="fg.muted" py="12">
+                  <HiOutlineInbox size={32} style={{ margin: "0 auto 8px" }} />
+                  <Text fontSize="sm">No notifications</Text>
+                </Box>
+              )}
+            </Box>
+          </PopoverBody>
+        </PopoverContent>
+      </PopoverRoot>
     </Box>
   );
 }
