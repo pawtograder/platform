@@ -31,6 +31,7 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   textAreaRef?: React.RefObject<HTMLTextAreaElement>;
   onClose?: () => void;
   closeButtonText?: string;
+  ariaLabel?: string;
 };
 export default function MessageInput(props: MessageInputProps) {
   const {
@@ -48,6 +49,7 @@ export default function MessageInput(props: MessageInputProps) {
     onClose,
     closeButtonText,
     value: initialValue,
+    ariaLabel,
     ...editorProps
   } = props;
   const { course_id } = useParams();
@@ -142,6 +144,7 @@ export default function MessageInput(props: MessageInputProps) {
         <Textarea
           p="2"
           width="100%"
+          aria-label={ariaLabel ?? placeholder ?? "Reply..."}
           placeholder={placeholder ?? "Reply..."}
           m="0"
           ref={textAreaRef}
@@ -311,7 +314,7 @@ export default function MessageInput(props: MessageInputProps) {
             </Button>
           )}
           <Button
-            aria-label="Send message"
+            aria-label={props.sendButtonText ? props.sendButtonText : "Send message"}
             onClick={() => {
               if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
                 toaster.create({

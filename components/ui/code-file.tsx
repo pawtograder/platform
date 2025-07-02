@@ -601,6 +601,7 @@ export function formatPoints(option: {
 function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
   const submission = useSubmission();
   const review = useActiveSubmissionReview();
+  const [selectOpen, setSelectOpen] = useState(true);
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -612,6 +613,12 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
     resource: "submission_file_comments"
   });
+
+  useEffect(() => {
+    if (!selectedCheckOption) {
+      setSelectOpen(true);
+    }
+  }, [selectedCheckOption]);
 
   useEffect(() => {
     if (!visible) {
@@ -804,9 +811,16 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
 
         <HStack>
           <Select
+            aria-label="Select a rubric check or leave a comment"
             ref={selectRef}
             options={criteria}
-            defaultMenuIsOpen={selectedCheckOption === null}
+            menuIsOpen={selectOpen}
+            onMenuOpen={() => {
+              setSelectOpen(true);
+            }}
+            onMenuClose={() => {
+              setSelectOpen(false);
+            }}
             escapeClearsValue={true}
             components={components}
             value={selectedCheckOption}
@@ -874,6 +888,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
+              sendButtonText={selectedCheckOption.check ? "Add Check" : "Add Comment"}
               placeholder={
                 !selectedCheckOption.check
                   ? "Add a comment about this line and press enter to submit..."

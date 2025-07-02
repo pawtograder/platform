@@ -15,6 +15,8 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
+  Field,
+  Fieldset,
   Heading,
   HStack,
   Menu,
@@ -697,11 +699,10 @@ export function RubricCheckAnnotation({
       <HStack justify="space-between">
         <HStack>
           <Tooltip
-            content={`This check is an annotation, it can only be applied by ${
-              annotationTarget === "file" || annotationTarget === null
-                ? "clicking on a specific line of code"
-                : "clicking on an artifact"
-            }`}
+            content={`This check is an annotation, it can only be applied by ${annotationTarget === "file" || annotationTarget === null
+              ? "clicking on a specific line of code"
+              : "clicking on an artifact"
+              }`}
           >
             <Icon as={annotationTarget === "file" ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
           </Tooltip>
@@ -801,9 +802,14 @@ export function RubricCheckGlobal({
   }, [rubricCheckComments.length]);
   useEffect(() => {
     setIsEditing(
-      isSelected &&
-        rubricCheckComments.length === 0 &&
-        criteria.max_checks_per_submission != criteriaCheckComments.length
+      (old) => {
+        if (old) {
+          return true; //Async race: user clicked the checkbox to edit before we fired this effect
+        }
+        return isSelected &&
+          rubricCheckComments.length === 0 &&
+          criteria.max_checks_per_submission != criteriaCheckComments.length
+      }
     );
   }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
 
@@ -829,170 +835,177 @@ export function RubricCheckGlobal({
 
   return (
     <Box position="relative" width="100%">
-      <HStack justify="space-between" align="flex-start">
-        <Box flex="1">
-          {showOptions && (
-            <VStack
-              align="flex-start"
-              w="100%"
-              gap={0}
-              borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
-              borderWidth={gradingIsRequired ? "1px" : "0px"}
-              borderRadius="md"
-              p={1}
-              wordBreak="break-word"
-            >
-              <HStack justify="space-between" w="100%">
-                <Text fontSize="sm">{check.name}</Text>
-                <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
-              </HStack>
-              <Markdown
-                style={{
-                  fontSize: "0.8rem"
-                }}
-              >
-                {check.description}
-              </Markdown>
-              {linkedFileId && submission && (
-                <Link
-                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
-                >
-                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                    In: {check.file}
-                  </Text>
-                </Link>
-              )}
-              {linkedAritfactId && submission && (
-                <Link
-                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
-                >
-                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                    In: {check.artifact}
-                  </Text>
-                </Link>
-              )}
-              {gradingIsRequired && (
-                <Text fontSize="xs" color="fg.error">
-                  Select one:
-                </Text>
-              )}
-              <RadioGroup.Root
+      <Field.Root>
+        <HStack justify="space-between" align="flex-start">
+          <Box flex="1">
+            {showOptions && (
+              <VStack
+                align="flex-start"
                 w="100%"
-                value={selectedOptionIndex?.toString()}
-                onValueChange={(value) => {
-                  if (isRubricCheckDataWithOptions(check.data)) {
-                    const selectedOption = check.data.options[parseInt(value.value)];
-                    if (selectedOption) {
-                      setSelectedOptionIndex(parseInt(value.value));
-                      if (gradingIsPermitted) {
-                        setIsEditing(true);
-                      }
-                    }
-                  }
-                }}
+                gap={0}
+                borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+                borderWidth={gradingIsRequired ? "1px" : "0px"}
+                borderRadius="md"
+                p={1}
+                wordBreak="break-word"
               >
-                {isRubricCheckDataWithOptions(check.data) &&
-                  check.data.options.map((option: RubricCheckSubOption, index: number) => (
-                    <Radio
-                      disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
-                      key={option.label + "-" + index}
-                      value={index.toString()}
-                    >
-                      {option.points ? `${criteria.is_additive ? "+" : "-"} ${option.points} ` : ""}
-                      {option.label}
-                    </Radio>
-                  ))}
-              </RadioGroup.Root>
-            </VStack>
-          )}
-          {!hasOptions && format == "checkbox" && (
-            <VStack align="flex-start" w="100%">
-              <HStack justify="space-between" w="100%">
-                <Checkbox
-                  disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
-                  checked={selected}
-                  onCheckedChange={(newState) => {
-                    if (newState.checked) {
-                      setIsEditing(true);
-                    } else {
-                      setIsEditing(false);
-                    }
-                    setSelected(newState.checked ? true : false);
+                <HStack justify="space-between" w="100%">
+                  <Field.Label><Text fontSize="sm">{check.name}</Text></Field.Label>
+                  <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
+                </HStack>
+                <Markdown
+                  style={{
+                    fontSize: "0.8rem"
                   }}
                 >
-                  <Text>
-                    {points} {check.name}
+                  {check.description}
+                </Markdown>
+                {linkedFileId && submission && (
+                  <Link
+                    href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+                  >
+                    <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                      In: {check.file}
+                    </Text>
+                  </Link>
+                )}
+                {linkedAritfactId && submission && (
+                  <Link
+                    href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
+                  >
+                    <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                      In: {check.artifact}
+                    </Text>
+                  </Link>
+                )}
+                {gradingIsRequired && (
+                  <Text fontSize="xs" color="fg.error">
+                    Select one:
                   </Text>
-                  <Markdown
-                    style={{
-                      fontSize: "0.8rem"
+                )}
+                <RadioGroup.Root
+                  w="100%"
+                  value={selectedOptionIndex?.toString()}
+                  onValueChange={(value) => {
+                    if (isRubricCheckDataWithOptions(check.data)) {
+                      const selectedOption = check.data.options[parseInt(value.value)];
+                      if (selectedOption) {
+                        setSelectedOptionIndex(parseInt(value.value));
+                        if (gradingIsPermitted) {
+                          setIsEditing(true);
+                        }
+                      }
+                    }
+                  }}
+                >
+                  {isRubricCheckDataWithOptions(check.data) &&
+                    check.data.options.map((option: RubricCheckSubOption, index: number) => (
+                      <Radio
+                        disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
+                        key={option.label + "-" + index}
+                        value={index.toString()}
+                      >
+                        {option.points ? `${criteria.is_additive ? "+" : "-"} ${option.points} ` : ""}
+                        {option.label}
+                      </Radio>
+                    ))}
+                </RadioGroup.Root>
+              </VStack>
+            )}
+            {!hasOptions && format == "checkbox" && (
+              <VStack align="flex-start" w="100%">
+                <HStack justify="space-between" w="100%">
+                  <Checkbox
+                    disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
+                    checked={selected}
+                    aria-label={`${check.name} (${points})`}
+                    onCheckedChange={(newState) => {
+                      if (newState.checked) {
+                        setIsEditing(true);
+                      } else {
+                        setIsEditing(false);
+                      }
+                      setSelected(newState.checked ? true : false);
                     }}
                   >
-                    {check.description}
-                  </Markdown>
-                </Checkbox>
-                <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
-              </HStack>
+                    <Field.Label>
+                      <Text>
+                        {points} {check.name}
+                      </Text>
+                    </Field.Label>
+                    <Markdown
+                      style={{
+                        fontSize: "0.8rem"
+                      }}
+                    >
+                      {check.description}
+                    </Markdown>
+                  </Checkbox>
+                  <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
+                </HStack>
 
-              {linkedFileId && submission && (
-                <Link
-                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
-                >
-                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                    In: {check.file}
-                  </Text>
-                </Link>
-              )}
-              {linkedAritfactId && submission && (
-                <Link
-                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
-                >
-                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                    In: {check.artifact}
-                  </Text>
-                </Link>
-              )}
-            </VStack>
-          )}
-          {!hasOptions && format == "radio" && (
-            <VStack align="flex-start" w="100%">
-              <HStack justify="space-between" w="100%">
-                <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
-                  <Text>
-                    {points} {check.name}
-                  </Text>
-                  <Markdown
-                    style={{
-                      fontSize: "0.8rem"
-                    }}
+                {linkedFileId && submission && (
+                  <Link
+                    href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
                   >
-                    {check.description}
-                  </Markdown>
-                </Radio>
-                <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
-              </HStack>
-              {linkedFileId && submission && (
-                <Link
-                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
-                >
-                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                    In: {check.file}
-                  </Text>
-                </Link>
-              )}
-              {linkedAritfactId && submission && (
-                <Link
-                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
-                >
-                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                    In: {check.artifact}
-                  </Text>
-                </Link>
-              )}
-            </VStack>
-          )}
-        </Box>
-      </HStack>
+                    <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                      In: {check.file}
+                    </Text>
+                  </Link>
+                )}
+                {linkedAritfactId && submission && (
+                  <Link
+                    href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
+                  >
+                    <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                      In: {check.artifact}
+                    </Text>
+                  </Link>
+                )}
+              </VStack>
+            )}
+            {!hasOptions && format == "radio" && (
+              <VStack align="flex-start" w="100%">
+                <HStack justify="space-between" w="100%">
+                  <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
+                    <Field.Label>
+                      <Text>
+                        {points} {check.name}
+                      </Text>
+                    </Field.Label>
+                    <Markdown
+                      style={{
+                        fontSize: "0.8rem"
+                      }}
+                    >
+                      {check.description}
+                    </Markdown>
+                  </Radio>
+                  <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
+                </HStack>
+                {linkedFileId && submission && (
+                  <Link
+                    href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+                  >
+                    <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                      In: {check.file}
+                    </Text>
+                  </Link>
+                )}
+                {linkedAritfactId && submission && (
+                  <Link
+                    href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedAritfactId.toString() }).toString()}`}
+                  >
+                    <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                      In: {check.artifact}
+                    </Text>
+                  </Link>
+                )}
+              </VStack>
+            )}
+          </Box>
+        </HStack>
+      </Field.Root>
       {isEditing && (
         <SubmissionCommentForm
           check={check}
@@ -1068,6 +1081,7 @@ function SubmissionCommentForm({
         </Text>
       </Box>
       <MessageInput
+        ariaLabel={check.is_comment_required ? `Required: comment on check ${check.name}` : `Optional: comment on check ${check.name}`}
         placeholder={"Comment"}
         sendButtonText="Add Check"
         sendMessage={async (message, profile_id) => {
@@ -1077,8 +1091,8 @@ function SubmissionCommentForm({
           }
           const artifactInfo = check.artifact
             ? {
-                submission_artifact_id: linkedArtifactId
-              }
+              submission_artifact_id: linkedArtifactId
+            }
             : {};
 
           const values = {
@@ -1197,41 +1211,49 @@ export function RubricCriteria({
       p={1}
       w="100%"
     >
-      <Heading size="sm">
-        {criteria.name} {pointsText}
-      </Heading>
-      <Markdown
-        style={{
-          fontSize: "0.8rem"
-        }}
-      >
-        {criteria.description}
-      </Markdown>
-      <VStack align="flex-start" w="100%" gap={0}>
-        <Heading size="sm">Checks</Heading>
-        <Text fontSize="sm" color={gradingIsRequired ? "fg.error" : "fg.muted"}>
-          {instructions}
-        </Text>
-        <RadioGroup.Root
-          w="100%"
-          value={singleCheck}
-          onValueChange={(value) => {
-            setSelectedCheck(criteria.rubric_checks.find((check) => check.id.toString() === value.value));
-          }}
-        >
-          {criteria.rubric_checks.map((check, index) => (
-            <RubricCheck
-              key={`check-${check.id}-${index}`}
-              criteria={criteria}
-              check={check}
-              isSelected={selectedCheck?.id === check.id}
-              assignmentId={assignmentId}
-              classId={classId}
-              currentRubricId={currentRubricId}
-            />
-          ))}
-        </RadioGroup.Root>
-      </VStack>
+      <Fieldset.Root>
+
+        <Heading size="sm">
+          <HStack gap={1}><Fieldset.Legend>{criteria.name}</Fieldset.Legend> {pointsText}</HStack>
+        </Heading>
+
+        <Fieldset.HelperText>
+          <Markdown
+            style={{
+              fontSize: "0.8rem"
+            }}
+          >
+            {criteria.description}
+          </Markdown>
+        </Fieldset.HelperText>
+        <Fieldset.Content>
+          <VStack align="flex-start" w="100%" gap={0}>
+            <Heading size="sm">Checks</Heading>
+            <Text fontSize="sm" color={gradingIsRequired ? "fg.error" : "fg.muted"}>
+              {instructions}
+            </Text>
+            <RadioGroup.Root
+              w="100%"
+              value={singleCheck}
+              onValueChange={(value) => {
+                setSelectedCheck(criteria.rubric_checks.find((check) => check.id.toString() === value.value));
+              }}
+            >
+              {criteria.rubric_checks.map((check, index) => (
+                <RubricCheck
+                  key={`check-${check.id}-${index}`}
+                  criteria={criteria}
+                  check={check}
+                  isSelected={selectedCheck?.id === check.id}
+                  assignmentId={assignmentId}
+                  classId={classId}
+                  currentRubricId={currentRubricId}
+                />
+              ))}
+            </RadioGroup.Root>
+          </VStack>
+        </Fieldset.Content>
+      </Fieldset.Root>
     </Box>
   );
 }
@@ -1384,6 +1406,8 @@ export function ListOfRubricsInSidebar({ scrollRootRef }: { scrollRootRef: React
           ref={setRubricRef(rubric.id)}
           pt="40px"
           w="100%"
+          role="region"
+          aria-label={`Rubric: ${rubric.name}`}
         >
           <RubricSidebar key={rubric.id} rubricId={rubric.id} />
           {index < rubrics.length - 1 && (
