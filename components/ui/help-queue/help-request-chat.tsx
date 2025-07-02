@@ -8,7 +8,16 @@ import type {
   HelpRequestFileReference
 } from "@/utils/supabase/DatabaseTypes";
 import { Flex, HStack, Stack, Text, AvatarGroup, Box, Button, Icon, IconButton, Card, Badge } from "@chakra-ui/react";
-import { BsCheck, BsClipboardCheckFill, BsClipboardCheck, BsXCircle, BsFileEarmark, BsCode } from "react-icons/bs";
+import {
+  BsCheck,
+  BsClipboardCheckFill,
+  BsClipboardCheck,
+  BsXCircle,
+  BsFileEarmark,
+  BsCode,
+  BsShield,
+  BsStar
+} from "react-icons/bs";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useUpdate, useList } from "@refinedev/core";
 import { PopConfirm } from "../popconfirm";
@@ -17,6 +26,12 @@ import { toaster } from "../toaster";
 import { RealtimeChat } from "@/components/realtime-chat";
 import PersonAvatar from "../person-avatar";
 import VideoCallControls from "./video-call-controls";
+import useModalManager from "@/hooks/useModalManager";
+import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
+import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
+
+// TODO: Fix moderation and karma button visibility
+// TODO: The modals should be different from the manage OH page, they should autofill help request specific fields
 
 /**
  * Component for managing help request assignment status and actions
@@ -48,7 +63,7 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
         <IconButton
           aria-label="Drop Assignment"
           size="sm"
-          disabled={isRequestInactive}
+          visibility={request.status === "open" || request.status === "in_progress" ? "visible" : "hidden"}
           opacity={isRequestInactive ? 0.5 : 1}
           onClick={() => updateRequest({ id: request.id, values: { assignee: null, status: "open" } })}
         >
@@ -66,7 +81,7 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
           aria-label="Assume Assignment"
           variant="outline"
           size="sm"
-          disabled={isRequestInactive}
+          visibility={request.status === "open" || request.status === "in_progress" ? "visible" : "hidden"}
           opacity={isRequestInactive ? 0.5 : 1}
           onClick={() =>
             updateRequest({ id: request.id, values: { assignee: private_profile_id, status: "in_progress" } })
@@ -184,6 +199,10 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   const { private_profile_id } = useClassProfiles();
   const currentUserProfile = useUserProfile(private_profile_id);
 
+  // Modal management for moderation and karma actions
+  const moderationModal = useModalManager();
+  const karmaModal = useModalManager();
+
   // Get help request messages from database with real-time updates
   const { data: helpRequestMessages } = useList<HelpRequestMessage>({
     resource: "help_request_messages",
@@ -194,6 +213,23 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   });
 
   const { mutate } = useUpdate({ resource: "help_requests", id: request.id });
+
+  // Modal success handlers
+  const handleModerationSuccess = () => {
+    moderationModal.closeModal();
+    toaster.success({
+      title: "Moderation action created",
+      description: "The moderation action has been successfully created."
+    });
+  };
+
+  const handleKarmaSuccess = () => {
+    karmaModal.closeModal();
+    toaster.success({
+      title: "Karma entry created",
+      description: "The karma entry has been successfully created."
+    });
+  };
 
   const resolveRequest = useCallback(() => {
     mutate({
@@ -239,6 +275,18 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
             {/* Video Call Controls */}
             <VideoCallControls request={request} canStartCall={true} size="sm" variant="full" />
 
+            {/* Moderation Action Button */}
+            <Button size="sm" colorPalette="orange" variant="outline" onClick={() => moderationModal.openModal()}>
+              <Icon as={BsShield} fontSize="md!" />
+              Moderate
+            </Button>
+
+            {/* Karma Entry Button */}
+            <Button size="sm" colorPalette="yellow" variant="outline" onClick={() => karmaModal.openModal()}>
+              <Icon as={BsStar} fontSize="md!" />
+              Karma
+            </Button>
+
             {/* Resolve Button */}
             {request.status !== "resolved" && request.status !== "closed" && (
               <PopConfirm
@@ -261,7 +309,12 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
               <PopConfirm
                 triggerLabel="Close Request"
                 trigger={
-                  <Button size="sm" colorPalette="red" variant="outline">
+                  <Button
+                    size="sm"
+                    colorPalette="red"
+                    variant="outline"
+                    visibility={request.status === "open" || request.status === "in_progress" ? "visible" : "hidden"}
+                  >
                     <Icon as={BsXCircle} fontSize="md!" />
                     Close
                   </Button>
@@ -302,6 +355,19 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           helpRequest={request}
         />
       </Flex>
+
+      {/* Moderation and Karma Modals */}
+      <CreateModerationActionModal
+        isOpen={moderationModal.isOpen}
+        onClose={moderationModal.closeModal}
+        onSuccess={handleModerationSuccess}
+      />
+
+      <CreateKarmaEntryModal
+        isOpen={karmaModal.isOpen}
+        onClose={karmaModal.closeModal}
+        onSuccess={handleKarmaSuccess}
+      />
     </Flex>
   );
 }

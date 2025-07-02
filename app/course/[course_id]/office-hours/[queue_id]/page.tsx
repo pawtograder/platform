@@ -18,6 +18,8 @@ export default function HelpQueuePage() {
     resource: "help_queues",
     id: Number.parseInt(queue_id as string)
   });
+
+  // Fetch all requests by this user in this class
   const { data: allRequests } = useList<HelpRequest>({
     resource: "help_requests",
     pagination: {
@@ -36,36 +38,38 @@ export default function HelpQueuePage() {
       }
     ]
   });
+
+  // Fetch current active request in this specific queue
   const { data: currentRequestData } = useList<HelpRequest>({
     resource: "help_requests",
     pagination: { pageSize: 1 },
     filters: [
       { field: "help_queue", operator: "eq", value: Number.parseInt(queue_id as string) },
       { field: "creator", operator: "eq", value: private_profile_id },
-      { field: "resolved_by", operator: "null", value: null }
+      { field: "status", operator: "in", value: ["open", "in_progress"] }
     ],
     sorters: [{ field: "created_at", order: "desc" }]
   });
 
-  // Fetch recent public requests in this queue for students to see similar questions
+  // Fetch recent resolved/closed public requests in this queue for students to see similar questions
   const { data: publicRequests } = useList<HelpRequest>({
     resource: "help_requests",
     pagination: { pageSize: 50 },
     filters: [
       { field: "help_queue", operator: "eq", value: Number.parseInt(queue_id as string) },
       { field: "is_private", operator: "eq", value: false },
-      { field: "resolved_by", operator: "nnull", value: null }
+      { field: "status", operator: "in", value: ["resolved", "closed"] }
     ],
     sorters: [{ field: "resolved_at", order: "desc" }]
   });
 
-  // Fetch all currently open requests in this queue (for queue status)
+  // Fetch all currently active requests in this queue (for queue status) - ordered by creation time (oldest first)
   const { data: queueRequests } = useList<HelpRequest>({
     resource: "help_requests",
     pagination: { pageSize: 100 },
     filters: [
       { field: "help_queue", operator: "eq", value: Number.parseInt(queue_id as string) },
-      { field: "resolved_by", operator: "null", value: null }
+      { field: "status", operator: "in", value: ["open", "in_progress"] }
     ],
     sorters: [{ field: "created_at", order: "asc" }]
   });
@@ -86,7 +90,11 @@ export default function HelpQueuePage() {
   }
 
   const currentRequest = currentRequestData?.data?.[0] || null;
-  const resolvedRequests = allRequests?.data?.filter((request) => request.resolved_by) || [];
+
+  // Filter resolved/closed requests for history (both student-resolved and staff-resolved)
+  const resolvedRequests =
+    allRequests?.data?.filter((request) => request.status === "resolved" || request.status === "closed") || [];
+
   const pendingRequests = queueRequests?.data || [];
 
   // Use only resolved public requests for "similar questions" to avoid duplication with queue status
@@ -97,25 +105,32 @@ export default function HelpQueuePage() {
     <ModerationBanNotice classId={Number(course_id)}>
       <Box m={4}>
         <Heading>Help Queue: {queue.data?.data.name}</Heading>
-        <Tabs.Root size="md" orientation="vertical" defaultValue="queue">
+        <Tabs.Root size="md" orientation="vertical" defaultValue={"queue"}>
           <Tabs.List>
             <Tabs.Trigger value="queue">Queue Status ({pendingRequests.length})</Tabs.Trigger>
-            <Tabs.Trigger value="current">{currentRequest ? "My Request" : "Submit Request"}</Tabs.Trigger>
-            <Tabs.Trigger value="similar">Resolved Public Requests ({similarQuestions.length})</Tabs.Trigger>
+            {currentRequest && <Tabs.Trigger value="current">My Request</Tabs.Trigger>}
+            <Tabs.Trigger value="new-request">Submit Request</Tabs.Trigger>
+            <Tabs.Trigger value="similar" textAlign="left">
+              Resolved Public Requests From Other Students ({similarQuestions.length})
+            </Tabs.Trigger>
             <Tabs.Trigger value="past">My History ({resolvedRequests.length})</Tabs.Trigger>
           </Tabs.List>
           <Tabs.Content width="100%" value="queue">
             <HelpRequestHistory requests={pendingRequests} />
           </Tabs.Content>
-          <Tabs.Content width="100%" value="current">
-            {currentRequest && <CurrentRequest queue={queue.data?.data} request={currentRequest} />}
-            {!currentRequest && <HelpRequestForm />}
+          {currentRequest && (
+            <Tabs.Content width="100%" value="current">
+              <CurrentRequest queue={queue.data?.data} request={currentRequest} />
+            </Tabs.Content>
+          )}
+          <Tabs.Content width="100%" value="new-request">
+            <HelpRequestForm currentRequest={currentRequest} />
           </Tabs.Content>
           <Tabs.Content width="100%" value="similar">
             <HelpRequestHistory requests={similarQuestions} />
           </Tabs.Content>
           <Tabs.Content width="100%" value="past">
-            <HelpRequestHistory requests={resolvedRequests} />
+            <HelpRequestHistory requests={resolvedRequests} showPrivacyIndicator={true} />
           </Tabs.Content>
           <Tabs.Indicator />
         </Tabs.Root>

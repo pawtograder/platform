@@ -5,23 +5,30 @@ import { useState } from "react";
 import { BsChevronDown, BsChevronUp } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 
-export default function HelpRequestHistory({ requests }: { requests: HelpRequest[] }) {
+interface HelpRequestHistoryProps {
+  requests: HelpRequest[];
+  showPrivacyIndicator?: boolean;
+}
+
+export default function HelpRequestHistory({ requests, showPrivacyIndicator = false }: HelpRequestHistoryProps) {
   const [expandedRequest, setExpandedRequest] = useState<number | null>(null);
 
   if (requests.length === 0) {
     return (
       <Card.Root>
         <Card.Body>
-          <Text textAlign="center">No public help requests found.</Text>
+          <Text textAlign="center">No help requests found.</Text>
         </Card.Body>
       </Card.Root>
     );
   }
 
+  console.log(requests);
+
   return (
     <Stack spaceY={4}>
       <Text fontSize="lg" fontWeight="medium">
-        Public Help Requests ({requests.length})
+        {`Help Requests (${requests.length})`}
       </Text>
       <Stack spaceY={4}>
         {requests
@@ -29,7 +36,7 @@ export default function HelpRequestHistory({ requests }: { requests: HelpRequest
             // Sort by resolved_at if available, otherwise by created_at
             const dateA = new Date(a.resolved_at || a.created_at).getTime();
             const dateB = new Date(b.resolved_at || b.created_at).getTime();
-            return dateB - dateA;
+            return dateA - dateB;
           })
           .map((request) => (
             <Card.Root
@@ -64,7 +71,7 @@ export default function HelpRequestHistory({ requests }: { requests: HelpRequest
                           {request.location_type}
                         </Badge>
                       )}
-                      {request.is_private && (
+                      {(showPrivacyIndicator || request.is_private) && request.is_private && (
                         <Badge colorPalette="orange" size="sm">
                           Private
                         </Badge>

@@ -33,7 +33,11 @@ type FileReference = {
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
-export default function HelpRequestForm() {
+interface HelpRequestFormProps {
+  currentRequest?: HelpRequest | null;
+}
+
+export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps) {
   const { course_id, queue_id } = useParams();
   const supabase = createClient();
   const router = useRouter();
@@ -78,12 +82,13 @@ export default function HelpRequestForm() {
 
   const { private_profile_id } = useClassProfiles();
 
+  // Fetch resolved/closed previous requests for follow-up options
   const { data: previousRequests } = useList<HelpRequest>({
     resource: "help_requests",
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
       { field: "creator", operator: "eq", value: private_profile_id },
-      { field: "resolved_by", operator: "nnull", value: null }
+      { field: "status", operator: "in", value: ["resolved", "closed"] }
     ],
     sorters: [{ field: "resolved_at", order: "desc" }],
     pagination: { pageSize: 20 }
@@ -128,35 +133,52 @@ export default function HelpRequestForm() {
     }
   });
 
-  // TODO: Fix RLS violation for help_requests table
+  // Watch the selected help queue to validate against existing requests
+  const selectedHelpQueue = watch("help_queue");
+
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
-      async function populate() {
-        if (!private_profile_id) {
-          toaster.error({
-            title: "Error",
-            description: "You must be logged in to submit a help request"
-          });
-          return;
-        }
-        setValue("creator", private_profile_id);
-        setValue("assignee", null);
-        setValue("class_id", Number.parseInt(course_id as string));
 
-        // Create a custom onFinish function that excludes file_references
-        const customOnFinish = (values: Record<string, unknown>) => {
-          // Exclude file_references from the submission data since it's not a column in help_requests table
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { file_references, ...helpRequestData } = values;
-          return onFinish(helpRequestData);
+      if (!private_profile_id) {
+        toaster.error({
+          title: "Error",
+          description: "You must be logged in to submit a help request"
+        });
+        return;
+      }
+
+      // Check if user already has an active request in the selected queue
+      const selectedQueueId = getValues("help_queue");
+      if (currentRequest && currentRequest.help_queue === selectedQueueId) {
+        toaster.error({
+          title: "Error",
+          description:
+            "You already have an active request in this queue. Please resolve your current request before submitting a new one."
+        });
+        return;
+      }
+
+      // Create a custom onFinish function that excludes file_references and adds required fields
+      const customOnFinish = (values: Record<string, unknown>) => {
+        // Exclude file_references from the submission data since it's not a column in help_requests table
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { file_references, ...helpRequestData } = values;
+
+        // Add required fields that may not be set in the form
+        const finalData = {
+          ...helpRequestData,
+          creator: private_profile_id,
+          assignee: null,
+          class_id: Number.parseInt(course_id as string)
         };
 
-        handleSubmit(customOnFinish)();
-      }
-      populate();
+        return onFinish(finalData);
+      };
+
+      handleSubmit(customOnFinish)();
     },
-    [handleSubmit, onFinish, private_profile_id, course_id, setValue]
+    [handleSubmit, onFinish, private_profile_id, course_id, currentRequest, getValues]
   );
 
   if (query?.error) {
@@ -170,10 +192,21 @@ export default function HelpRequestForm() {
     return <div>Loading...</div>;
   }
 
+  // Check if the selected queue would conflict with current request
+  const wouldConflict = Boolean(currentRequest && currentRequest.help_queue === selectedHelpQueue);
+
   return (
     <form onSubmit={onSubmit}>
       <Heading>Request Live Help</Heading>
       <Text>Submit a request to get help from a live tutor via text or video chat.</Text>
+
+      {wouldConflict && (
+        <Text color="orange.500" mb={4}>
+          ⚠️ You already have an active request in this queue. Please resolve your current request before submitting a
+          new one.
+        </Text>
+      )}
+
       <Fieldset.Root size="lg" maxW="100%">
         <Fieldset.Content>
           <Field
@@ -451,7 +484,7 @@ export default function HelpRequestForm() {
           </Fieldset.Content>
         )}
       </Fieldset.Root>
-      <Button type="submit" loading={isSubmitting} mt={4}>
+      <Button type="submit" loading={isSubmitting} disabled={wouldConflict} mt={4}>
         Submit Request
       </Button>
     </form>

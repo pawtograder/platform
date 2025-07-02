@@ -96,6 +96,8 @@ export default function VideoCallControls({
     }
   }, [canStartCall, isStartingCall, updateRequest, request, supabase]);
 
+  // let openedWindow = useRef<Window | null>(null);
+
   /**
    * Joins an existing video call
    */
@@ -127,6 +129,8 @@ export default function VideoCallControls({
         }
       });
 
+      // openedWindow.close();
+
       toaster.success({
         title: "Video call ended",
         description: "Video meeting has been terminated"
@@ -142,6 +146,8 @@ export default function VideoCallControls({
   }, [isEndingCall, updateRequest, request.id]);
 
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
+  // TODO:Use auth context to check if current user is instructor or grader
+  const currentUserIsInstructorOrGrader = true;
 
   // Minimal variant - just shows join button when call is live
   if (variant === "minimal") {
@@ -172,7 +178,13 @@ export default function VideoCallControls({
       {!request.is_video_live ? (
         // No video call active - show start button for TAs/instructors
         canStartCall && (
-          <Button size={size} onClick={startVideoCall} loading={isStartingCall} disabled={isRequestInactive}>
+          <Button
+            size={size}
+            onClick={startVideoCall}
+            loading={isStartingCall}
+            // Only graders and instructors can start video calls
+            visibility={isRequestInactive && !currentUserIsInstructorOrGrader ? "hidden" : "visible"}
+          >
             <Icon as={BsCameraVideo} />
             Start Video Call
           </Button>
