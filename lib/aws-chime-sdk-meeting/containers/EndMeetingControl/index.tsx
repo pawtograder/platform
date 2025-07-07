@@ -13,31 +13,46 @@ import {
   useLogger
 } from "amazon-chime-sdk-component-library-react";
 
-import { endMeeting } from "../../utils/api";
 import { StyledP } from "./Styled";
-import { useAppState } from "../../providers/AppStateProvider";
-import routes from "../../constants/routes";
-import { useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+import { liveMeetingEnd } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 
 const EndMeetingControl: React.FC = () => {
   const logger = useLogger();
   const [showModal, setShowModal] = useState(false);
+  const [isEndingMeeting, setIsEndingMeeting] = useState(false);
   const toggleModal = (): void => setShowModal(!showModal);
-  const { meetingId } = useAppState();
-  const router = useRouter();
+  const { help_request_id, course_id } = useParams();
+  const supabase = createClient();
 
   const leaveMeeting = async (): Promise<void> => {
-    router.push(routes.HOME);
+    // Close the current window since this is the meeting interface
+    window.close();
   };
 
   const endMeetingForAll = async (): Promise<void> => {
+    if (isEndingMeeting) return;
+
+    setIsEndingMeeting(true);
     try {
-      if (meetingId) {
-        await endMeeting(meetingId);
-        router.push(routes.HOME);
+      if (help_request_id && course_id) {
+        await liveMeetingEnd(
+          {
+            courseId: parseInt(course_id as string),
+            helpRequestId: parseInt(help_request_id as string)
+          },
+          supabase
+        );
+        // Close the current window after ending the meeting
+        window.close();
+      } else {
+        throw new Error("Missing help request or course information");
       }
     } catch (e) {
       logger.error(`Could not end meeting: ${e}`);
+    } finally {
+      setIsEndingMeeting(false);
     }
   };
 
@@ -59,6 +74,7 @@ const EndMeetingControl: React.FC = () => {
                 onClick={endMeetingForAll}
                 variant="primary"
                 label="End meeting for all"
+                disabled={isEndingMeeting}
                 closesModal
               />,
               <ModalButton

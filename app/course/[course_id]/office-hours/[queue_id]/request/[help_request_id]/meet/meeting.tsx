@@ -20,6 +20,7 @@ import { StyleSheetManager, ThemeProvider } from "styled-components";
 import { useParams } from "next/navigation";
 import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => {
   return (
     <ThemeProvider theme={lightTheme}>
@@ -47,10 +48,10 @@ function HelpMeeting() {
   const meetingManager = useMeetingManager();
   const { users } = useUserProfiles();
   const { help_request_id, course_id } = useParams();
+  const supabase = createClient();
 
   useEffect(() => {
     meetingManager.getAttendee = async (chimeAttendeeId: string, externalUserId?: string) => {
-      console.log("Getting attendee", chimeAttendeeId, externalUserId);
       const user = users.find((user) => user.id === externalUserId);
       if (!user) {
         throw new Error("User not found");
@@ -58,18 +59,47 @@ function HelpMeeting() {
       return { chimeAttendeeId, externalUserId, name: user.name! };
     };
   }, [users, meetingManager]);
+
   const initialized = useRef(false);
+
+  // Set up real-time subscription to detect when meeting ends externally
+  useEffect(() => {
+    if (!help_request_id) return;
+
+    const channel = supabase
+      .channel("meeting-end-detection")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "help_requests",
+          filter: `id=eq.${help_request_id}`
+        },
+        (payload) => {
+          const updatedRequest = payload.new as HelpRequest;
+
+          // If the meeting is no longer live, close this window
+          if (!updatedRequest.is_video_live) {
+            window.close();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [help_request_id, supabase]);
 
   useEffect(() => {
     const joinMeeting = async () => {
       // Fetch the meeting and attendee data from your server application
-      console.log("Fetching meeting and attendee data");
       const supabase = createClient();
       const { Meeting, Attendee } = await liveMeetingForHelpRequest(
         { courseId: parseInt(course_id as string), helpRequestId: parseInt(help_request_id as string) },
         supabase
       );
-      console.log("Meeting and attendee data fetched");
       const meetingSessionConfiguration = new MeetingSessionConfiguration(Meeting, Attendee);
       await meetingManager.join(meetingSessionConfiguration);
 
@@ -80,13 +110,9 @@ function HelpMeeting() {
 
       // Start the `MeetingSession` to join the meeting
       await meetingManager.start();
-      console.log("Meeting joined and started");
     };
     if (!initialized.current) {
       initialized.current = true;
-
-      console.log("Triggering join meeting");
-      console.log(meetingManager);
       joinMeeting().catch(console.error);
     }
     return () => {

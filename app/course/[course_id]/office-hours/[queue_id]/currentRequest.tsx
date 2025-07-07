@@ -9,6 +9,7 @@ import { useList, useUpdate } from "@refinedev/core";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCallback } from "react";
 import { toaster } from "@/components/ui/toaster";
+import { useMeetingWindows } from "@/hooks/useMeetingWindows";
 
 // function ChatChannelParticipants() {
 //   const { participants } = useChatChannel();
@@ -26,6 +27,8 @@ import { toaster } from "@/components/ui/toaster";
 // }
 
 function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
+  const { openMeetingWindow } = useMeetingWindows();
+
   const { mutate: updateRequest } = useUpdate<HelpRequest>({
     resource: "help_requests",
     id: request.id,
@@ -54,6 +57,10 @@ function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
     });
   }, [updateRequest, request.id]);
 
+  const joinVideoCall = useCallback(() => {
+    openMeetingWindow(request.class_id, request.id, request.help_queue);
+  }, [openMeetingWindow, request.class_id, request.id, request.help_queue]);
+
   // Don't show actions for already closed/resolved requests
   if (request.status === "closed" || request.status === "resolved") {
     return null;
@@ -63,16 +70,7 @@ function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
     <HStack gap={2} mb={4}>
       {/* Video Call Button */}
       {request.is_video_live && (
-        <IconButton
-          aria-label="Join Video Call"
-          variant="ghost"
-          onClick={() => {
-            window.open(
-              `${process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/course/${request.class_id}/office-hours/${request.help_queue}/request/${request.id}/meet`,
-              "_blank"
-            );
-          }}
-        >
+        <IconButton aria-label="Join Video Call" variant="ghost" onClick={joinVideoCall}>
           <Icon as={BsCameraVideo} />
         </IconButton>
       )}

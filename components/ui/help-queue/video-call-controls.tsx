@@ -9,9 +9,10 @@ import { Button, Icon, HStack, Badge, Text } from "@chakra-ui/react";
 import { BsCameraVideo, BsCameraVideoOff, BsPersonVideo, BsPersonVideo2 } from "react-icons/bs";
 import { useUpdate } from "@refinedev/core";
 import { createClient } from "@/utils/supabase/client";
-import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
+import { liveMeetingForHelpRequest, liveMeetingEnd } from "@/lib/edgeFunctions";
 import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
+import { useMeetingWindows } from "@/hooks/useMeetingWindows";
 
 type VideoCallControlsProps = {
   request: HelpRequest;
@@ -36,6 +37,7 @@ export default function VideoCallControls({
   const [isStartingCall, setIsStartingCall] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
   const supabase = createClient();
+  const { openMeetingWindow } = useMeetingWindows();
 
   const { mutateAsync: updateRequest } = useUpdate<HelpRequest>({
     resource: "help_requests",
@@ -67,12 +69,8 @@ export default function VideoCallControls({
         supabase
       );
 
-      // Open the video call in a new window for the TA/instructor
-      window.open(
-        `/course/${request.class_id}/office-hours/${request.help_queue}/request/${request.id}/meet`,
-        "_blank",
-        "width=1200,height=800,resizable=yes,scrollbars=yes"
-      );
+      // Open the video call in a new window for the TA/instructor using managed window
+      openMeetingWindow(request.class_id, request.id, request.help_queue);
 
       toaster.success({
         title: "Video call started",
@@ -94,25 +92,20 @@ export default function VideoCallControls({
     } finally {
       setIsStartingCall(false);
     }
-  }, [canStartCall, isStartingCall, updateRequest, request, supabase]);
-
-  // let openedWindow = useRef<Window | null>(null);
+  }, [canStartCall, isStartingCall, updateRequest, request, supabase, openMeetingWindow]);
 
   /**
    * Joins an existing video call
    */
   const joinVideoCall = useCallback(() => {
-    window.open(
-      `/course/${request.class_id}/office-hours/${request.help_queue}/request/${request.id}/meet`,
-      "_blank",
-      "width=1200,height=800,resizable=yes,scrollbars=yes"
-    );
+    // Use managed window opening
+    openMeetingWindow(request.class_id, request.id, request.help_queue);
 
     toaster.success({
       title: "Joining video call",
       description: "Opening video meeting window"
     });
-  }, [request]);
+  }, [request, openMeetingWindow]);
 
   /**
    * Ends the video call
@@ -122,18 +115,18 @@ export default function VideoCallControls({
 
     setIsEndingCall(true);
     try {
-      await updateRequest({
-        id: request.id,
-        values: {
-          is_video_live: false
-        }
-      });
-
-      // openedWindow.close();
+      // Call the edge function to properly end the Chime meeting
+      await liveMeetingEnd(
+        {
+          courseId: request.class_id,
+          helpRequestId: request.id
+        },
+        supabase
+      );
 
       toaster.success({
         title: "Video call ended",
-        description: "Video meeting has been terminated"
+        description: "Video meeting has been terminated for all participants"
       });
     } catch (error) {
       toaster.error({
@@ -143,7 +136,7 @@ export default function VideoCallControls({
     } finally {
       setIsEndingCall(false);
     }
-  }, [isEndingCall, updateRequest, request.id]);
+  }, [isEndingCall, request, supabase]);
 
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
   // TODO:Use auth context to check if current user is instructor or grader

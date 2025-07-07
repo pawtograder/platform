@@ -35,15 +35,19 @@ async function handleRequest(req: Request) {
       MeetingId: activeMeeting.chime_meeting_id!
     });
   } catch (error) {
-    // Try to re-recreate the meeting
-    await supabase
+    console.log("Chime meeting not found, marking session as ended and creating new one:", error);
+    // Mark the current session as ended since the Chime meeting no longer exists
+    await adminSupabase
       .from("video_meeting_sessions")
       .update({
         ended: new Date().toISOString()
       })
       .eq("id", activeMeeting.id);
+
+    // Get a new active meeting (this will create a new session)
+    const newActiveMeeting = await chimeUtils.getActiveMeeting(helpRequest);
     Meeting = await chime.getMeeting({
-      MeetingId: (await chimeUtils.getActiveMeeting(helpRequest)).chime_meeting_id!
+      MeetingId: newActiveMeeting.chime_meeting_id!
     });
   }
   if (!Meeting) {
