@@ -82,8 +82,7 @@ for select
 to authenticated
 using (authorizeforclass(class_id));
 
-ALTER PUBLICATION "supabase_realtime" DROP TABLE "public"."help_request_message_read_receipts";
-ALTER PUBLICATION "supabase_realtime" DROP TABLE "public"."help_request_messages";
+
 
 
 
