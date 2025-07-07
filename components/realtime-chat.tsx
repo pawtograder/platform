@@ -13,7 +13,6 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 interface RealtimeChatProps {
-  roomName: string;
   username: string;
   onMessage?: (messages: UnifiedMessage[]) => void;
   messages?: ChatMessage[];
@@ -119,7 +118,6 @@ const ReplyPreview = ({
  * @returns The chat component
  */
 export const RealtimeChat = ({
-  roomName,
   username: propUsername, // Keep prop for fallback
   onMessage,
   messages: databaseMessages = [],
@@ -147,7 +145,6 @@ export const RealtimeChat = ({
   const [markedAsRead, setMarkedAsRead] = useState<Set<number>>(new Set());
 
   const { broadcastMessages, sendMessage, markMessageAsRead, isConnected, readReceipts } = useRealtimeChat({
-    roomName,
     username: displayName, // Pass display name to hook
     messages: databaseMessages, // Pass messages from props to hook
     helpRequest

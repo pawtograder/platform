@@ -102,7 +102,6 @@ const ReadReceiptUser = ({ userId }: { userId: string }) => {
  */
 const ReadReceiptTooltipContent = ({ readReceipts }: { readReceipts: HelpRequestMessageReadReceipt[] }) => {
   const firstUserProfile = useUserProfile(readReceipts[0]?.viewer_id || "");
-  console.log("firstUserProfile", firstUserProfile);
 
   if (readReceipts.length === 0) {
     return <Text fontSize="xs">No one has read this message yet</Text>;

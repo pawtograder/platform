@@ -355,7 +355,6 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
       <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
         <RealtimeChat
-          roomName={`help_request_${request.id}`}
           username={currentUserProfile?.name || user?.email || "Unknown User"} // Pass display name, fallback to email, then unknown
           messages={helpRequestMessages?.data}
           helpRequest={request}
