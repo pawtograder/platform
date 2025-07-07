@@ -7,7 +7,8 @@ import type {
   SubmissionFile,
   HelpRequestFileReference
 } from "@/utils/supabase/DatabaseTypes";
-import { Flex, HStack, Stack, Text, AvatarGroup, Box, Button, Icon, IconButton, Card, Badge } from "@chakra-ui/react";
+import { Flex, HStack, Stack, Text, AvatarGroup, Box, Icon, IconButton, Card, Badge } from "@chakra-ui/react";
+import { Button } from "@/components/ui/button";
 import {
   BsCheck,
   BsClipboardCheckFill,
@@ -24,7 +25,6 @@ import { PopConfirm } from "../popconfirm";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { toaster } from "../toaster";
 import { RealtimeChat } from "@/components/realtime-chat";
-import type { UnifiedMessage } from "@/components/chat-message";
 import PersonAvatar from "../person-avatar";
 import VideoCallControls from "./video-call-controls";
 import useModalManager from "@/hooks/useModalManager";
@@ -202,6 +202,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
   // Get the actual user ID from auth system (not profile ID)
   const { user } = useAuthState();
+  // Get the user profile using the auth user ID to get the display name
   const currentUserProfile = useUserProfile(user?.id || "");
 
   // Modal management for moderation and karma actions
@@ -217,17 +218,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     liveMode: "auto"
   });
 
-  // TODO: fix overwritten messages
-  // Class to handle message storage/syncing if needed, sendMessage + getMessages
-
   const { mutate } = useUpdate({ resource: "help_requests", id: request.id });
-
-  // Handle message storage/syncing if needed
-  const handleMessage = useCallback((messages: UnifiedMessage[]) => {
-    // Messages are already being stored in the database via the hook
-    // This callback can be used for additional processing if needed
-    console.log(`Chat has ${messages.length} total messages`);
-  }, []);
 
   // Modal success handlers
   const handleModerationSuccess = () => {
@@ -365,10 +356,9 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
         <RealtimeChat
           roomName={`help_request_${request.id}`}
-          username={currentUserProfile?.name || ""} // Pass display name for UI, hook handles auth internally
+          username={currentUserProfile?.name || user?.email || "Unknown User"} // Pass display name, fallback to email, then unknown
           messages={helpRequestMessages?.data}
           helpRequest={request}
-          onMessage={handleMessage}
         />
       </Flex>
 

@@ -1,8 +1,10 @@
 import type { ChatMessage, BroadcastMessage } from "@/hooks/use-realtime-chat";
 import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Text, Button, Icon, Stack, HStack } from "@chakra-ui/react";
+import { Box, Flex, Text, Icon, Stack, HStack } from "@chakra-ui/react";
+import { Button } from "@/components/ui/button";
 import { Reply, Check, CheckCheck } from "lucide-react";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { Tooltip } from "@/components/ui/tooltip";
 
 // Unified message type that can handle both database and broadcast messages
 export type UnifiedMessage =
@@ -11,6 +13,7 @@ export type UnifiedMessage =
       reply_to_message_id?: number | null;
       author: string;
       message: string;
+      author_name?: string; // Preserve username for broadcast messages
     });
 
 interface ChatMessageItemProps {
@@ -87,6 +90,43 @@ const getMessageId = (message: UnifiedMessage): number | null => {
 };
 
 /**
+ * Component to display a single user name in the tooltip
+ */
+const ReadReceiptUser = ({ userId }: { userId: string }) => {
+  const profile = useUserProfile(userId);
+  return <Text>• {profile?.name || userId}</Text>;
+};
+
+/**
+ * Component to display the names of users who have read a message
+ */
+const ReadReceiptTooltipContent = ({ readReceipts }: { readReceipts: HelpRequestMessageReadReceipt[] }) => {
+  const firstUserProfile = useUserProfile(readReceipts[0]?.viewer_id || "");
+  console.log("firstUserProfile", firstUserProfile);
+
+  if (readReceipts.length === 0) {
+    return <Text fontSize="xs">No one has read this message yet</Text>;
+  }
+
+  if (readReceipts.length === 1) {
+    return <Text fontSize="xs">Read by {firstUserProfile?.name || readReceipts[0].viewer_id}</Text>;
+  }
+
+  return (
+    <Box fontSize="xs" maxW="200px">
+      <Text fontWeight="medium" mb={1}>
+        Read by:
+      </Text>
+      <Stack gap={0}>
+        {readReceipts.map((receipt, index) => (
+          <ReadReceiptUser key={`${receipt.viewer_id}-${index}`} userId={receipt.viewer_id} />
+        ))}
+      </Stack>
+    </Box>
+  );
+};
+
+/**
  * Component to display read receipt indicators
  */
 const ReadReceiptIndicator = ({
@@ -112,18 +152,24 @@ const ReadReceiptIndicator = ({
   const readCount = messageReadReceipts.length;
 
   if (readCount === 0) {
-    return <Icon as={Check} boxSize={3} color="gray.400" _dark={{ color: "gray.500" }} />;
+    return (
+      <Tooltip content="No one has read this message yet" showArrow>
+        <Icon as={Check} boxSize={3} color="gray.400" _dark={{ color: "gray.500" }} />
+      </Tooltip>
+    );
   }
 
   return (
-    <HStack gap={1} align="center">
-      <Icon as={CheckCheck} boxSize={3} color="blue.500" _dark={{ color: "blue.400" }} />
-      {readCount > 1 && (
-        <Text fontSize="2xs" color="gray.500" _dark={{ color: "gray.400" }}>
-          {readCount}
-        </Text>
-      )}
-    </HStack>
+    <Tooltip content={<ReadReceiptTooltipContent readReceipts={messageReadReceipts} />} showArrow>
+      <HStack gap={1} align="center" cursor="pointer">
+        <Icon as={CheckCheck} boxSize={3} color="blue.500" _dark={{ color: "blue.400" }} />
+        {readCount > 1 && (
+          <Text fontSize="2xs" color="gray.500" _dark={{ color: "gray.400" }}>
+            {readCount}
+          </Text>
+        )}
+      </HStack>
+    </Tooltip>
   );
 };
 
@@ -147,6 +193,20 @@ const ReplyContext = ({
 
   if (!replyToMessage || !originalMessage) return null;
 
+  // Get display name for reply context - same logic as main message
+  const getReplyDisplayName = () => {
+    // For broadcast messages with preserved username
+    if ("author_name" in originalMessage && originalMessage.author_name) {
+      return originalMessage.author_name;
+    }
+    // For database messages, use profile lookup
+    if (replyAuthor?.name) {
+      return replyAuthor.name;
+    }
+    // Final fallback to raw author ID
+    return getMessageAuthor(originalMessage);
+  };
+
   return (
     <Box
       pl={3}
@@ -160,7 +220,7 @@ const ReplyContext = ({
       _dark={{ borderColor: "gray.600", bg: "gray.700" }}
     >
       <Text fontWeight="medium" color="gray.600" mb={1} _dark={{ color: "gray.300" }}>
-        Replying to {replyAuthor?.name || getMessageAuthor(originalMessage)}
+        Replying to {getReplyDisplayName()}
       </Text>
       <Text
         color="gray.500"
@@ -193,6 +253,20 @@ export const ChatMessageItem = ({
   const messageAuthor = useUserProfile(getMessageAuthor(message));
   const messageId = getMessageId(message);
 
+  // Get display name - use author_name for broadcast messages, fallback to profile lookup
+  const getDisplayName = () => {
+    // For broadcast messages with preserved username
+    if ("author_name" in message && message.author_name) {
+      return message.author_name;
+    }
+    // For database messages, use profile lookup
+    if (messageAuthor?.name) {
+      return messageAuthor.name;
+    }
+    // Final fallback to raw author ID (should rarely be needed now)
+    return getMessageAuthor(message);
+  };
+
   const handleReply = () => {
     if (onReply && messageId) {
       onReply(messageId);
@@ -211,7 +285,7 @@ export const ChatMessageItem = ({
             justify={isOwnMessage ? "flex-end" : "flex-start"}
             direction={isOwnMessage ? "row-reverse" : "row"}
           >
-            <Text fontWeight="medium">{messageAuthor?.name || getMessageAuthor(message)}</Text>
+            <Text fontWeight="medium">{getDisplayName()}</Text>
             <Text color="gray.500" _dark={{ color: "gray.400" }} fontSize="xs">
               {new Date(getMessageTimestamp(message)).toLocaleTimeString("en-US", {
                 hour: "2-digit",

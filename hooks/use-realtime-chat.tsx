@@ -15,6 +15,7 @@ interface UseRealtimeChatProps {
   roomName: string;
   username: string; // Display name for UI
   helpRequest: HelpRequest;
+  messages?: ChatMessage[]; // Messages from parent component
 }
 
 export type ChatMessage = HelpRequestMessageWithoutId & {
@@ -51,13 +52,16 @@ export interface BroadcastReadReceipt {
 const EVENT_MESSAGE_TYPE = "message";
 const EVENT_READ_RECEIPT_TYPE = "read_receipt";
 
-export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtimeChatProps) {
+export function useRealtimeChat({ roomName, username, helpRequest, messages = [] }: UseRealtimeChatProps) {
   const supabase = createClient();
   const [broadcastMessages, setBroadcastMessages] = useState<BroadcastMessage[]>([]);
   const [broadcastReadReceipts, setBroadcastReadReceipts] = useState<BroadcastReadReceipt[]>([]);
   const [channel, setChannel] = useState<ReturnType<typeof supabase.channel> | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [participants, setParticipants] = useState<string[]>([]);
+
+  // Track pending read receipt creations to prevent duplicates
+  const [pendingReadReceipts, setPendingReadReceipts] = useState<Set<string>>(new Set());
 
   // Get the actual authenticated user ID (UUID) for presence/display
   const { user } = useAuthState();
@@ -76,12 +80,26 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
     resource: "help_request_message_read_receipts"
   });
 
-  // Fetch read receipts for this class
+  // Get message IDs from the passed messages for read receipt fetching
+  const messageIds = useMemo(() => {
+    return messages.map((msg) => msg.id).filter((id): id is number => id !== null);
+  }, [messages]);
+
+  // Fetch read receipts for messages in this help request
+  // The new RLS policy will automatically filter to only accessible read receipts
   const { data: readReceipts, refetch: refetchReadReceipts } = useList<HelpRequestMessageReadReceipt>({
     resource: "help_request_message_read_receipts",
-    filters: [{ field: "class_id", operator: "eq", value: helpRequest.class_id }],
+    filters:
+      messageIds.length > 0
+        ? [{ field: "message_id", operator: "in", value: messageIds }]
+        : [
+            { field: "message_id", operator: "eq", value: -1 } // No results if no messages yet
+          ],
     pagination: { pageSize: 1000 },
-    liveMode: "auto"
+    liveMode: "auto",
+    queryOptions: {
+      enabled: messageIds.length > 0 // Only fetch when we have message IDs
+    }
   });
 
   // Merge database read receipts with broadcast read receipts for real-time updates
@@ -90,11 +108,18 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
 
     // Add broadcast receipts that aren't already in database
     broadcastReadReceipts.forEach((broadcastReceipt) => {
+      // Note: Database uses profile IDs, broadcast uses auth user IDs
+      // For the current user, check if we already have a receipt for this message
+      // We can't easily convert between user ID and profile ID here, so we'll check by message and timing
       const isDuplicate = (readReceipts?.data || []).some(
         (dbReceipt) =>
           dbReceipt.message_id === broadcastReceipt.messageId &&
-          dbReceipt.viewer_id === broadcastReceipt.userId &&
-          Math.abs(new Date(dbReceipt.created_at).getTime() - new Date(broadcastReceipt.createdAt).getTime()) < 5000
+          // For current user's receipts, we can compare with private_profile_id
+          ((broadcastReceipt.userId === userId && dbReceipt.viewer_id === private_profile_id) ||
+            // For other users, just check by timing since we can't convert user ID to profile ID
+            (broadcastReceipt.userId !== userId &&
+              Math.abs(new Date(dbReceipt.created_at).getTime() - new Date(broadcastReceipt.createdAt).getTime()) <
+                5000))
       );
 
       if (!isDuplicate) {
@@ -102,7 +127,7 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
         const dbFormatReceipt: HelpRequestMessageReadReceipt = {
           id: Date.now() + Math.random(), // Temporary ID for broadcast receipts
           message_id: broadcastReceipt.messageId,
-          viewer_id: broadcastReceipt.userId,
+          viewer_id: broadcastReceipt.userId === userId ? private_profile_id : broadcastReceipt.userId, // Use profile ID for current user
           class_id: broadcastReceipt.classId,
           created_at: broadcastReceipt.createdAt
         };
@@ -111,7 +136,7 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
     });
 
     return mergedReceipts;
-  }, [readReceipts?.data, broadcastReadReceipts]);
+  }, [readReceipts?.data, broadcastReadReceipts, userId, private_profile_id]);
 
   // Optimistic read receipts for immediate UI feedback
   const [optimisticReadReceipts, addOptimisticReadReceipt] = useOptimistic(
@@ -171,7 +196,6 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
 
     // Cleanup on component unmount or when dependencies change
     return () => {
-      console.log("🧹 Cleaning up Supabase channel");
       newChannel.unsubscribe();
       setIsConnected(false);
       setBroadcastMessages([]);
@@ -213,7 +237,6 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
 
       try {
         // Send broadcast message for real-time delivery
-        console.log("📤 Sending broadcast message:", broadcastMessage);
         const broadcastResult = await channel.send({
           type: "broadcast",
           event: EVENT_MESSAGE_TYPE,
@@ -225,17 +248,7 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
         }
 
         // Persist message to database for persistence and features
-        console.log("💾 Persisting message to database with fields:", {
-          message: content,
-          help_request_id: helpRequest.id,
-          author: private_profile_id, // Use profile ID for database (RLS policy requirement)
-          class_id: helpRequest.class_id,
-          requestor: helpRequest.creator,
-          instructors_only: false,
-          reply_to_message_id: replyToMessageId || null
-        });
-
-        const dbResult = await createMessage({
+        await createMessage({
           values: {
             message: content,
             help_request_id: helpRequest.id,
@@ -246,8 +259,6 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
             reply_to_message_id: replyToMessageId || null
           }
         });
-
-        console.log("✅ Message saved to database:", dbResult);
       } catch (error) {
         console.error("❌ Failed to send message:", error);
         // Remove the optimistic message on error
@@ -273,85 +284,115 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
       }
 
       // Skip creating read receipts if the current user is the message author
-      if (messageAuthorId && messageAuthorId === userId) {
-        console.log(`⏭️ Skipping read receipt for message ${messageId} - user is the author`);
+      // messageAuthorId could be either a profile ID (database messages) or auth user ID (broadcast messages)
+      if (messageAuthorId && (messageAuthorId === userId || messageAuthorId === private_profile_id)) {
         return;
       }
 
-      console.log(`🔍 Attempting to mark message ${messageId} as read for user ${userId}`);
+      // Create a unique key for this read receipt to prevent duplicates
+      const receiptKey = `${messageId}-${private_profile_id}`;
+
+      // Check if we're already processing this read receipt
+      if (pendingReadReceipts.has(receiptKey)) {
+        return;
+      }
 
       try {
-        // Check if read receipt already exists (using optimistic data)
-        // Note: viewer_id in database schema references users.user_id (auth user ID), not profile ID
-        const existingReceipt = optimisticReadReceipts.find(
-          (receipt) => receipt.message_id === messageId && receipt.viewer_id === userId
+        // Mark this receipt as pending to prevent duplicates
+        setPendingReadReceipts((prev) => new Set(prev).add(receiptKey));
+
+        // Check if read receipt already exists using actual database data (not optimistic)
+        // Note: viewer_id in database schema now references profile IDs
+        const existingReceipt = (readReceipts?.data || []).find(
+          (receipt) => receipt.message_id === messageId && receipt.viewer_id === private_profile_id
         );
 
-        if (!existingReceipt) {
-          console.log(`✅ Creating read receipt for message ${messageId}`);
+        if (existingReceipt) {
+          return;
+        }
 
-          const tempId = crypto.randomUUID();
-          const timestamp = new Date().toISOString();
+        // Double-check database directly before creating to prevent duplicates
+        const { data: existingReceiptCheck, error: checkError } = await supabase
+          .from("help_request_message_read_receipts")
+          .select("id")
+          .eq("message_id", messageId)
+          .eq("viewer_id", private_profile_id)
+          .single();
 
-          // Create broadcast read receipt for real-time delivery
-          const broadcastReceipt: BroadcastReadReceipt = {
-            id: tempId,
-            messageId: messageId,
-            userId: userId,
-            userName: username,
-            classId: helpRequest.class_id,
-            createdAt: timestamp,
-            tempId
-          };
+        if (checkError && checkError.code !== "PGRST116") {
+          // PGRST116 is "no rows returned"
+          console.error("❌ Error checking for existing read receipt:", checkError);
+          return;
+        }
 
-          // Create optimistic read receipt for immediate UI feedback
-          const optimisticReceipt: HelpRequestMessageReadReceipt = {
-            id: Date.now(), // Temporary ID for optimistic update
-            message_id: messageId,
-            viewer_id: userId, // Use auth user ID (this references users.user_id in database)
-            class_id: helpRequest.class_id,
-            created_at: timestamp
-          };
+        if (existingReceiptCheck) {
+          return;
+        }
+        const tempId = crypto.randomUUID();
+        const timestamp = new Date().toISOString();
 
-          // Add optimistic update immediately
-          addOptimisticReadReceipt(optimisticReceipt);
+        // Create broadcast read receipt for real-time delivery
+        const broadcastReceipt: BroadcastReadReceipt = {
+          id: tempId,
+          messageId: messageId,
+          userId: userId,
+          userName: username,
+          classId: helpRequest.class_id,
+          createdAt: timestamp,
+          tempId
+        };
 
-          // Add to broadcast receipts for real-time delivery
-          setBroadcastReadReceipts((current) => [...current, broadcastReceipt]);
+        // Create optimistic read receipt for immediate UI feedback
+        const optimisticReceipt: HelpRequestMessageReadReceipt = {
+          id: Date.now(), // Temporary ID for optimistic update
+          message_id: messageId,
+          viewer_id: private_profile_id, // Use profile ID (this references profile IDs in database)
+          class_id: helpRequest.class_id,
+          created_at: timestamp
+        };
 
-          // Send broadcast read receipt for real-time delivery
-          console.log("📤 Broadcasting read receipt:", broadcastReceipt);
-          const broadcastResult = await channel.send({
-            type: "broadcast",
-            event: EVENT_READ_RECEIPT_TYPE,
-            payload: broadcastReceipt
-          });
+        // Add optimistic update immediately
+        addOptimisticReadReceipt(optimisticReceipt);
 
-          if (broadcastResult !== "ok") {
-            console.error("Failed to broadcast read receipt:", broadcastResult);
-          }
+        // Add to broadcast receipts for real-time delivery
+        setBroadcastReadReceipts((current) => [...current, broadcastReceipt]);
 
-          // Then persist to database for durability
-          console.log("💾 Persisting read receipt to database with fields:", {
-            message_id: messageId,
-            viewer_id: userId, // This must match users.user_id (auth user ID)
-            class_id: helpRequest.class_id
-          });
+        // Send broadcast read receipt for real-time delivery
+        const broadcastResult = await channel.send({
+          type: "broadcast",
+          event: EVENT_READ_RECEIPT_TYPE,
+          payload: broadcastReceipt
+        });
 
-          const dbResult = await createReadReceipt({
+        if (broadcastResult !== "ok") {
+          console.error("Failed to broadcast read receipt:", broadcastResult);
+        }
+
+        // Then persist to database for durability
+        try {
+          await createReadReceipt({
             values: {
               message_id: messageId,
-              viewer_id: userId, // Use auth user ID instead of profile ID
+              viewer_id: private_profile_id, // Use profile ID instead of auth user ID
               class_id: helpRequest.class_id
             }
           });
 
-          console.log(`💾 Read receipt saved to database:`, dbResult);
-
           // Refetch to sync with server (this will replace optimistic data with real data)
           refetchReadReceipts();
-        } else {
-          console.log(`⏭️ Read receipt already exists for message ${messageId}`);
+        } catch (dbError) {
+          console.error("❌ Failed to save read receipt to database:", dbError);
+          // Remove the optimistic updates on database error
+          setBroadcastReadReceipts((current) =>
+            current.filter((receipt) => !(receipt.messageId === messageId && receipt.userId === userId))
+          );
+          // The RLS policy might be preventing access - this is expected for some cases
+          if (dbError instanceof Error && dbError.message.includes("new row violates row-level security")) {
+          } else if (
+            dbError instanceof Error &&
+            (dbError.message.toLowerCase().includes("duplicate") || dbError.message.toLowerCase().includes("unique"))
+          ) {
+          }
         }
       } catch (error) {
         console.error("❌ Failed to mark message as read:", error);
@@ -362,6 +403,13 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
         // Revert optimistic update on error
         refetchReadReceipts();
         // Don't throw here as read receipts are not critical for UX
+      } finally {
+        // Always remove from pending set when done
+        setPendingReadReceipts((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(receiptKey);
+          return newSet;
+        });
       }
     },
     [
@@ -369,12 +417,16 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
       userId,
       username,
       helpRequest.class_id,
-      optimisticReadReceipts,
       addOptimisticReadReceipt,
       refetchReadReceipts,
       channel,
       isConnected,
-      setBroadcastReadReceipts
+      setBroadcastReadReceipts,
+      pendingReadReceipts,
+      setPendingReadReceipts,
+      readReceipts?.data,
+      private_profile_id,
+      supabase
     ]
   );
 
@@ -385,8 +437,9 @@ export function useRealtimeChat({ roomName, username, helpRequest }: UseRealtime
     markMessageAsRead,
     isConnected,
     participants,
+    // Return read receipts for this help request, excluding current user's own receipts
     readReceipts: optimisticReadReceipts.filter(
-      (receipt) => receipt.viewer_id !== userId // Exclude current user's read receipts from UI
+      (receipt) => receipt.viewer_id !== private_profile_id // Exclude current user's read receipts from UI (database uses profile IDs)
     )
   };
 }

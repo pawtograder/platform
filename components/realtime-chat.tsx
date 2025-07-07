@@ -1,7 +1,7 @@
 "use client";
 
 import { useChatScroll } from "@/hooks/use-chat-scroll";
-import { type ChatMessage, useRealtimeChat } from "@/hooks/use-realtime-chat";
+import { useRealtimeChat, type ChatMessage } from "@/hooks/use-realtime-chat";
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
@@ -143,9 +143,13 @@ export const RealtimeChat = ({
   // Refs for intersection observer
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
+  // Track which messages have already been marked as read to prevent duplicates
+  const [markedAsRead, setMarkedAsRead] = useState<Set<number>>(new Set());
+
   const { broadcastMessages, sendMessage, markMessageAsRead, isConnected, readReceipts } = useRealtimeChat({
     roomName,
     username: displayName, // Pass display name to hook
+    messages: databaseMessages, // Pass messages from props to hook
     helpRequest
   });
 
@@ -156,31 +160,39 @@ export const RealtimeChat = ({
     // Add broadcast messages that aren't already in database
     broadcastMessages.forEach((broadcastMsg) => {
       // Don't add if we already have this message in database
-      // We need to match using profile ID for database vs auth user ID for broadcast
       const isDuplicate = databaseMessages.some((dbMsg) => {
         // Check content match
         const contentMatches = dbMsg.message === broadcastMsg.content;
-
-        // Check author match - compare database profile ID with broadcast user ID
-        // For database messages, author is profile ID
-        // For broadcast messages, user.id is auth user ID
-        // We need to check if this broadcast message was sent by the current user
-        const isFromCurrentUser = broadcastMsg.user.id === (user?.id || "");
-        const databaseMessageFromCurrentUser = dbMsg.author === private_profile_id;
-        const authorMatches = isFromCurrentUser && databaseMessageFromCurrentUser;
 
         // Check timestamp match (5 second tolerance)
         const timeMatches =
           Math.abs(new Date(dbMsg.created_at).getTime() - new Date(broadcastMsg.createdAt).getTime()) < 5000;
 
-        return contentMatches && authorMatches && timeMatches;
+        // For the current user, also check author match to ensure we're comparing the right messages
+        // For database messages, author is profile ID. For broadcast messages, user.id is auth user ID
+        const isFromCurrentUser = broadcastMsg.user.id === (user?.id || "");
+        const databaseMessageFromCurrentUser = dbMsg.author === private_profile_id;
+        const authorMatches = !isFromCurrentUser || (isFromCurrentUser && databaseMessageFromCurrentUser);
+
+        // For messages from other users, we rely on content + timestamp matching
+        // For messages from current user, we also verify author matching
+        return contentMatches && timeMatches && authorMatches;
       });
 
       if (!isDuplicate) {
         // Convert broadcast message to unified format
+        // For consistency, use profile ID when this is the current user's message
+        let authorId = broadcastMsg.user.id; // Default to auth user ID
+
+        // If this is the current user's message, use their profile ID for consistency with database messages
+        if (broadcastMsg.user.id === (user?.id || "") && private_profile_id) {
+          authorId = private_profile_id;
+        }
+
         const unifiedMsg: UnifiedMessage = {
           ...broadcastMsg,
-          author: broadcastMsg.user.id, // Keep original for broadcast messages
+          author: authorId, // Use profile ID for current user, auth user ID for others
+          author_name: broadcastMsg.user.name, // Preserve username for display
           message: broadcastMsg.content,
           created_at: broadcastMsg.createdAt,
           reply_to_message_id: broadcastMsg.replyToMessageId,
@@ -207,6 +219,25 @@ export const RealtimeChat = ({
     }
   }, [allMessages, onMessage]);
 
+  // Clean up markedAsRead state when messages change to prevent stale data
+  useEffect(() => {
+    const currentMessageIds = new Set(
+      allMessages
+        .map((msg) => {
+          if ("id" in msg && typeof msg.id === "number") {
+            return msg.id;
+          }
+          return null;
+        })
+        .filter((id): id is number => id !== null)
+    );
+
+    setMarkedAsRead((prev) => {
+      const filtered = new Set([...prev].filter((id) => currentMessageIds.has(id)));
+      return filtered;
+    });
+  }, [allMessages]);
+
   useEffect(() => {
     // Scroll to bottom whenever messages change
     scrollToBottom();
@@ -222,8 +253,9 @@ export const RealtimeChat = ({
           if (entry.isIntersecting) {
             const messageId = parseInt(entry.target.getAttribute("data-message-id") || "0", 10);
             const messageAuthorId = entry.target.getAttribute("data-message-author-id") || undefined;
-            if (messageId) {
-              console.log(`📖 Message ${messageId} is visible, marking as read in 1 second`);
+            if (messageId && !markedAsRead.has(messageId)) {
+              // Mark this message as processed to prevent duplicate calls
+              setMarkedAsRead((prev) => new Set(prev).add(messageId));
               // Mark message as read after a short delay to ensure it's actually viewed
               setTimeout(() => {
                 markMessageAsRead(messageId, messageAuthorId);
@@ -246,7 +278,7 @@ export const RealtimeChat = ({
     return () => {
       observer.disconnect();
     };
-  }, [allMessages, markMessageAsRead]);
+  }, [allMessages, markMessageAsRead, markedAsRead, setMarkedAsRead]);
 
   const handleSendMessage = useCallback(
     (e: React.FormEvent) => {
@@ -375,7 +407,7 @@ export const RealtimeChat = ({
                     readReceipts={readReceipts}
                     onReply={handleReply}
                     allMessages={allMessages}
-                    currentUserId={user?.id} // Pass auth user ID for read receipt matching
+                    currentUserId={private_profile_id} // Pass profile ID for read receipt matching (database uses profile IDs)
                   />
                 </Box>
               );

@@ -2531,8 +2531,15 @@ export type Database = {
             foreignKeyName: "help_request_message_read_receipts_viewer_id_fkey";
             columns: ["viewer_id"];
             isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_viewer_id_fkey";
+            columns: ["viewer_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };
@@ -5946,6 +5953,10 @@ export type Database = {
           schema_name?: string;
         };
         Returns: undefined;
+      };
+      can_access_help_request: {
+        Args: { help_request_id: number };
+        Returns: boolean;
       };
       check_assignment_deadlines_passed: {
         Args: Record<PropertyKey, never>;
