@@ -24,11 +24,13 @@ import { PopConfirm } from "../popconfirm";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { toaster } from "../toaster";
 import { RealtimeChat } from "@/components/realtime-chat";
+import type { UnifiedMessage } from "@/components/chat-message";
 import PersonAvatar from "../person-avatar";
 import VideoCallControls from "./video-call-controls";
 import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
 import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
+import useAuthState from "@/hooks/useAuthState";
 
 // TODO: Fix moderation and karma button visibility
 // TODO: The modals should be different from the manage OH page, they should autofill help request specific fields
@@ -197,7 +199,10 @@ const HelpRequestFileReferences = ({ request }: { request: HelpRequest }) => {
 export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   const creator = useUserProfile(request.creator);
   const { private_profile_id } = useClassProfiles();
-  const currentUserProfile = useUserProfile(private_profile_id);
+
+  // Get the actual user ID from auth system (not profile ID)
+  const { user } = useAuthState();
+  const currentUserProfile = useUserProfile(user?.id || "");
 
   // Modal management for moderation and karma actions
   const moderationModal = useModalManager();
@@ -212,7 +217,17 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     liveMode: "auto"
   });
 
+  // TODO: fix overwritten messages
+  // Class to handle message storage/syncing if needed, sendMessage + getMessages
+
   const { mutate } = useUpdate({ resource: "help_requests", id: request.id });
+
+  // Handle message storage/syncing if needed
+  const handleMessage = useCallback((messages: UnifiedMessage[]) => {
+    // Messages are already being stored in the database via the hook
+    // This callback can be used for additional processing if needed
+    console.log(`Chat has ${messages.length} total messages`);
+  }, []);
 
   // Modal success handlers
   const handleModerationSuccess = () => {
@@ -350,9 +365,10 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
         <RealtimeChat
           roomName={`help_request_${request.id}`}
-          username={currentUserProfile?.id ?? ""}
+          username={currentUserProfile?.name || ""} // Pass display name for UI, hook handles auth internally
           messages={helpRequestMessages?.data}
           helpRequest={request}
+          onMessage={handleMessage}
         />
       </Flex>
 

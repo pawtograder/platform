@@ -2,21 +2,113 @@
 
 import { useChatScroll } from "@/hooks/use-chat-scroll";
 import { type ChatMessage, useRealtimeChat } from "@/hooks/use-realtime-chat";
-import { ChatMessageItem } from "@/components/chat-message";
-import { useCallback, useEffect, useState } from "react";
+import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
+import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Stack, Input, Icon, Text } from "@chakra-ui/react";
-import { Button } from "./ui/button";
-import { Send } from "lucide-react";
+import { Box, Flex, Stack, Input, Icon, Text, Button, HStack } from "@chakra-ui/react";
+import { Send, X } from "lucide-react";
 import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationStatus";
+import useAuthState from "@/hooks/useAuthState";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 interface RealtimeChatProps {
   roomName: string;
   username: string;
-  onMessage?: (messages: ChatMessage[]) => void;
+  onMessage?: (messages: UnifiedMessage[]) => void;
   messages?: ChatMessage[];
   helpRequest: HelpRequest;
 }
+
+/**
+ * Component to display reply preview when replying to a message
+ */
+const ReplyPreview = ({
+  replyToMessage,
+  onCancel,
+  allMessages
+}: {
+  replyToMessage: UnifiedMessage;
+  onCancel: () => void;
+  allMessages: UnifiedMessage[];
+}) => {
+  // Find the full message if we only have partial data
+  const getMessageId = (msg: UnifiedMessage) => {
+    if ("id" in msg && typeof msg.id === "number") {
+      return msg.id;
+    }
+    return null;
+  };
+
+  const getMessageContent = (msg: UnifiedMessage) => {
+    if ("message" in msg && msg.message) {
+      return msg.message;
+    }
+    if ("content" in msg && msg.content) {
+      return msg.content;
+    }
+    return "";
+  };
+
+  const getMessageAuthor = (msg: UnifiedMessage) => {
+    if ("author" in msg && msg.author) {
+      return msg.author;
+    }
+    if ("user" in msg && msg.user?.id) {
+      return msg.user.id;
+    }
+    return "";
+  };
+
+  const replyMessageId = getMessageId(replyToMessage);
+  const fullMessage = replyMessageId
+    ? allMessages.find((msg) => getMessageId(msg) === replyMessageId) || replyToMessage
+    : replyToMessage;
+
+  return (
+    <Box
+      p={3}
+      bg="gray.50"
+      _dark={{ bg: "gray.700" }}
+      borderTopRadius="md"
+      borderTop="3px solid"
+      borderColor="blue.500"
+      fontSize="sm"
+    >
+      <HStack justify="space-between" align="start">
+        <Box flex={1}>
+          <Text fontWeight="medium" fontSize="xs" color="gray.600" _dark={{ color: "gray.300" }} mb={1}>
+            Replying to {getMessageAuthor(fullMessage)}
+          </Text>
+          <Text
+            color="gray.500"
+            _dark={{ color: "gray.400" }}
+            overflow="hidden"
+            textOverflow="ellipsis"
+            style={{
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical"
+            }}
+          >
+            {getMessageContent(fullMessage)}
+          </Text>
+        </Box>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onCancel}
+          color="gray.500"
+          _dark={{ color: "gray.400" }}
+          minW="auto"
+          p={1}
+        >
+          <Icon as={X} boxSize={4} />
+        </Button>
+      </HStack>
+    </Box>
+  );
+};
 
 /**
  * Realtime chat component
@@ -28,7 +120,7 @@ interface RealtimeChatProps {
  */
 export const RealtimeChat = ({
   roomName,
-  username,
+  username: propUsername, // Keep prop for fallback
   onMessage,
   messages: databaseMessages = [],
   helpRequest
@@ -36,15 +128,78 @@ export const RealtimeChat = ({
   const { containerRef, scrollToBottom } = useChatScroll();
   const moderationStatus = useModerationStatus(helpRequest.class_id);
 
-  const { sendMessage, isConnected } = useRealtimeChat({
-    roomName,
-    username,
-    helpRequest
-  });
+  // Get authenticated user and their profile for display name
+  const { user } = useAuthState();
+  const userProfile = useUserProfile(user?.id || "");
+  const { private_profile_id } = useClassProfiles();
+
+  // Use profile name, fallback to prop username, then fallback to user email
+  const displayName = userProfile?.name || propUsername || user?.email || "Unknown User";
+
+  // Reply state
+  const [replyToMessage, setReplyToMessage] = useState<UnifiedMessage | null>(null);
   const [newMessage, setNewMessage] = useState("");
 
-  // Use database messages directly (they come with real-time updates)
-  const allMessages = databaseMessages;
+  // Refs for intersection observer
+  const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  const { broadcastMessages, sendMessage, markMessageAsRead, isConnected, readReceipts } = useRealtimeChat({
+    roomName,
+    username: displayName, // Pass display name to hook
+    helpRequest
+  });
+
+  // Merge broadcast messages with database messages
+  const allMessages = useMemo(() => {
+    const mergedMessages: UnifiedMessage[] = [...databaseMessages];
+
+    // Add broadcast messages that aren't already in database
+    broadcastMessages.forEach((broadcastMsg) => {
+      // Don't add if we already have this message in database
+      // We need to match using profile ID for database vs auth user ID for broadcast
+      const isDuplicate = databaseMessages.some((dbMsg) => {
+        // Check content match
+        const contentMatches = dbMsg.message === broadcastMsg.content;
+
+        // Check author match - compare database profile ID with broadcast user ID
+        // For database messages, author is profile ID
+        // For broadcast messages, user.id is auth user ID
+        // We need to check if this broadcast message was sent by the current user
+        const isFromCurrentUser = broadcastMsg.user.id === (user?.id || "");
+        const databaseMessageFromCurrentUser = dbMsg.author === private_profile_id;
+        const authorMatches = isFromCurrentUser && databaseMessageFromCurrentUser;
+
+        // Check timestamp match (5 second tolerance)
+        const timeMatches =
+          Math.abs(new Date(dbMsg.created_at).getTime() - new Date(broadcastMsg.createdAt).getTime()) < 5000;
+
+        return contentMatches && authorMatches && timeMatches;
+      });
+
+      if (!isDuplicate) {
+        // Convert broadcast message to unified format
+        const unifiedMsg: UnifiedMessage = {
+          ...broadcastMsg,
+          author: broadcastMsg.user.id, // Keep original for broadcast messages
+          message: broadcastMsg.content,
+          created_at: broadcastMsg.createdAt,
+          reply_to_message_id: broadcastMsg.replyToMessageId,
+          help_request_id: broadcastMsg.helpRequestId,
+          class_id: broadcastMsg.classId,
+          instructors_only: false,
+          requestor: null
+        };
+        mergedMessages.push(unifiedMsg);
+      }
+    });
+
+    // Sort by creation date
+    return mergedMessages.sort((a, b) => {
+      const timeA = "created_at" in a ? a.created_at : a.createdAt;
+      const timeB = "created_at" in b ? b.created_at : b.createdAt;
+      return timeA.localeCompare(timeB);
+    });
+  }, [databaseMessages, broadcastMessages, user?.id, private_profile_id]);
 
   useEffect(() => {
     if (onMessage) {
@@ -57,15 +212,90 @@ export const RealtimeChat = ({
     scrollToBottom();
   }, [allMessages, scrollToBottom]);
 
+  // Mark messages as read when they come into view
+  useEffect(() => {
+    if (!allMessages.length) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const messageId = parseInt(entry.target.getAttribute("data-message-id") || "0", 10);
+            const messageAuthorId = entry.target.getAttribute("data-message-author-id") || undefined;
+            if (messageId) {
+              console.log(`📖 Message ${messageId} is visible, marking as read in 1 second`);
+              // Mark message as read after a short delay to ensure it's actually viewed
+              setTimeout(() => {
+                markMessageAsRead(messageId, messageAuthorId);
+              }, 1000);
+            }
+          }
+        });
+      },
+      {
+        threshold: 0.5, // Message must be 50% visible
+        rootMargin: "0px 0px -20px 0px" // Add some bottom margin
+      }
+    );
+
+    // Observe all current message elements
+    messageRefs.current.forEach((element) => {
+      if (element) observer.observe(element);
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [allMessages, markMessageAsRead]);
+
   const handleSendMessage = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
       if (!newMessage.trim() || !isConnected || moderationStatus.isBanned) return;
 
-      sendMessage(newMessage);
+      const replyToId =
+        replyToMessage && "id" in replyToMessage && typeof replyToMessage.id === "number" ? replyToMessage.id : null;
+
+      sendMessage(newMessage, replyToId);
       setNewMessage("");
+      setReplyToMessage(null);
     },
-    [newMessage, isConnected, sendMessage, moderationStatus.isBanned]
+    [newMessage, isConnected, sendMessage, moderationStatus.isBanned, replyToMessage]
+  );
+
+  const handleReply = useCallback(
+    (messageId: number) => {
+      const messageToReplyTo = allMessages.find((msg) => {
+        if ("id" in msg && typeof msg.id === "number") {
+          return msg.id === messageId;
+        }
+        return false;
+      });
+      if (messageToReplyTo) {
+        setReplyToMessage(messageToReplyTo);
+      }
+    },
+    [allMessages]
+  );
+
+  const cancelReply = useCallback(() => {
+    setReplyToMessage(null);
+  }, []);
+
+  // Helper function to find reply-to message
+  const getReplyToMessage = useCallback(
+    (replyToId: number | null) => {
+      if (!replyToId) return null;
+      return (
+        allMessages.find((msg) => {
+          if ("id" in msg && typeof msg.id === "number") {
+            return msg.id === replyToId;
+          }
+          return false;
+        }) || null
+      );
+    },
+    [allMessages]
   );
 
   return (
@@ -90,19 +320,62 @@ export const RealtimeChat = ({
           <Stack gap={1}>
             {allMessages.map((message, index) => {
               const prevMessage = index > 0 ? allMessages[index - 1] : null;
-              const showHeader = !prevMessage || prevMessage.author !== message.author;
+              const getCurrentMessageAuthor = (msg: UnifiedMessage) => {
+                if ("author" in msg && msg.author) return msg.author;
+                if ("user" in msg && msg.user?.id) return msg.user.id;
+                return "";
+              };
+              const getPrevMessageAuthor = (msg: UnifiedMessage | null) => {
+                if (!msg) return "";
+                if ("author" in msg && msg.author) return msg.author;
+                if ("user" in msg && msg.user?.id) return msg.user.id;
+                return "";
+              };
+
+              const showHeader = !prevMessage || getCurrentMessageAuthor(message) !== getPrevMessageAuthor(prevMessage);
+
+              const getReplyToId = (msg: UnifiedMessage): number | null => {
+                if ("reply_to_message_id" in msg) return msg.reply_to_message_id ?? null;
+                if ("replyToMessageId" in msg) return msg.replyToMessageId ?? null;
+                return null;
+              };
+
+              const getUniqueKey = (msg: UnifiedMessage, idx: number) => {
+                if ("id" in msg && typeof msg.id === "number") return `db-${msg.id}`;
+                if ("id" in msg && typeof msg.id === "string") return `broadcast-${msg.id}`;
+                return `index-${idx}`;
+              };
+
+              const messageKey = getUniqueKey(message, index);
+              const replyToId = getReplyToId(message);
+              const replyToMsg = getReplyToMessage(replyToId);
 
               return (
                 <Box
-                  key={message.id}
+                  key={messageKey}
+                  ref={(el: HTMLDivElement | null) => {
+                    if (el && "id" in message && typeof message.id === "number") {
+                      messageRefs.current.set(message.id, el);
+                    }
+                  }}
+                  data-message-id={"id" in message && typeof message.id === "number" ? message.id : undefined}
+                  data-message-author-id={getCurrentMessageAuthor(message)}
                   style={{
                     animation: "slideInFromBottom 0.3s ease-out"
                   }}
                 >
                   <ChatMessageItem
                     message={message}
-                    isOwnMessage={message.author === username}
+                    isOwnMessage={
+                      getCurrentMessageAuthor(message) === private_profile_id ||
+                      getCurrentMessageAuthor(message) === (user?.id || "")
+                    }
                     showHeader={showHeader}
+                    replyToMessage={replyToMsg}
+                    readReceipts={readReceipts}
+                    onReply={handleReply}
+                    allMessages={allMessages}
+                    currentUserId={user?.id} // Pass auth user ID for read receipt matching
                   />
                 </Box>
               );
@@ -128,42 +401,43 @@ export const RealtimeChat = ({
           </Text>
         </Box>
       ) : (
-        <Box
-          as="form"
-          onSubmit={handleSendMessage}
-          p={4}
-          borderTop="1px"
-          borderColor="gray.200"
-          _dark={{ borderColor: "gray.600" }}
-        >
-          <Flex gap={2} width="100%" align="center">
-            <Input
-              borderRadius="full"
-              bg="white"
-              _dark={{ bg: "gray.800" }}
-              fontSize="sm"
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              placeholder="Type a message..."
-              disabled={!isConnected}
-              transition="all 0.3s"
-              flex="1"
-            />
-            {isConnected && newMessage.trim() && (
-              <Button
-                type="submit"
-                size="sm"
+        <Box borderTop="1px" borderColor="gray.200" _dark={{ borderColor: "gray.600" }}>
+          {/* Reply Preview */}
+          {replyToMessage && (
+            <ReplyPreview replyToMessage={replyToMessage} onCancel={cancelReply} allMessages={allMessages} />
+          )}
+
+          {/* Message Input */}
+          <Box as="form" onSubmit={handleSendMessage} p={4}>
+            <Flex gap={2} width="100%" align="center">
+              <Input
                 borderRadius="full"
-                aspectRatio="1"
+                bg="white"
+                _dark={{ bg: "gray.800" }}
+                fontSize="sm"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder={replyToMessage ? "Reply to message..." : "Type a message..."}
                 disabled={!isConnected}
-                style={{
-                  animation: "slideInFromRight 0.3s ease-out"
-                }}
-              >
-                <Icon as={Send} boxSize={4} />
-              </Button>
-            )}
-          </Flex>
+                transition="all 0.3s"
+                flex="1"
+              />
+              {isConnected && newMessage.trim() && (
+                <Button
+                  type="submit"
+                  size="sm"
+                  borderRadius="full"
+                  aspectRatio="1"
+                  disabled={!isConnected}
+                  style={{
+                    animation: "slideInFromRight 0.3s ease-out"
+                  }}
+                >
+                  <Icon as={Send} boxSize={4} />
+                </Button>
+              )}
+            </Flex>
+          </Box>
         </Box>
       )}
 

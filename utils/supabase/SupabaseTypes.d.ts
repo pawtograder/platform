@@ -2490,6 +2490,52 @@ export type Database = {
           }
         ];
       };
+      help_request_message_read_receipts: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          id: number;
+          message_id: number;
+          viewer_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          id?: number;
+          message_id: number;
+          viewer_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          id?: number;
+          message_id?: number;
+          viewer_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_message_read_receipts_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_message_id_fkey";
+            columns: ["message_id"];
+            isOneToOne: false;
+            referencedRelation: "help_request_messages";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_viewer_id_fkey";
+            columns: ["viewer_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       help_request_messages: {
         Row: {
           author: string;

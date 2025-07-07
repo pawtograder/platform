@@ -362,6 +362,15 @@ export type UserProfileWithUser = GetResult<
   Database["public"]["Tables"]["profiles"]["Relationships"],
   "*, users(*)"
 >;
+
+export type HelpRequestMessageReadReceipt = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_message_read_receipts"]["Row"],
+  "help_request_message_read_receipts",
+  Database["public"]["Tables"]["help_request_message_read_receipts"]["Relationships"],
+  "*"
+>;
+
 export type HelpRequestMessage = GetResult<
   Database["public"],
   Database["public"]["Tables"]["help_request_messages"]["Row"],
@@ -371,6 +380,10 @@ export type HelpRequestMessage = GetResult<
 >;
 
 export type HelpRequestMessageWithoutId = Omit<HelpRequestMessage, "id">;
+
+export type HelpRequestMessageWithReadReceipts = HelpRequestMessage & {
+  read_receipts: HelpRequestMessageReadReceipt[];
+};
 
 export type HelpRequestFileReference = GetResult<
   Database["public"],
