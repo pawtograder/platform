@@ -6,5 +6,5 @@ NIXPACKS_NODE_VERSION = "22"
 [phases.build]
 cmds = ["npm install", "npm run build"]
 
-[phases.start]
+[start]
 cmd = "npm run start"
