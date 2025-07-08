@@ -7,7 +7,7 @@ import {
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
 import { Text } from "@chakra-ui/react";
-import {  useList, useShow } from "@refinedev/core";
+import { useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
@@ -150,21 +150,34 @@ class AssignmentController {
   > = new Map();
   referencingChecksById: Map<number, OurRubricCheck[]> = new Map();
 
-  constructor({ client, assignment_id,
+  constructor({
+    client,
+    assignment_id,
     class_id,
     private_profile_id,
-    isGraderOrInstructor }: { client: SupabaseClient<Database>, assignment_id: number, class_id: number, private_profile_id: string, isGraderOrInstructor: boolean }) {
+    isGraderOrInstructor
+  }: {
+    client: SupabaseClient<Database>;
+    assignment_id: number;
+    class_id: number;
+    private_profile_id: string;
+    isGraderOrInstructor: boolean;
+  }) {
     this.reviewAssignments = new TableController({
       query: client.from("review_assignments").select("*").eq("assignment_id", assignment_id),
       client: client,
       table: "review_assignments",
-      realtime_key: isGraderOrInstructor ? `class_id:${class_id}` : `class_id:${class_id}:profile_id:${private_profile_id}`
+      realtime_key: isGraderOrInstructor
+        ? `class_id:${class_id}`
+        : `class_id:${class_id}:profile_id:${private_profile_id}`
     });
     this.reviewAssignmentRubricParts = new TableController({
       query: client.from("review_assignment_rubric_parts").select("*").eq("class_id", class_id),
       client: client,
       table: "review_assignment_rubric_parts",
-      realtime_key: isGraderOrInstructor ? `class_id:${class_id}` : `class_id:${class_id}:profile_id:${private_profile_id}`
+      realtime_key: isGraderOrInstructor
+        ? `class_id:${class_id}`
+        : `class_id:${class_id}:profile_id:${private_profile_id}`
     });
   }
   close() {

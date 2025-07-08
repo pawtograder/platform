@@ -74,7 +74,12 @@ export default function LineCommentForm({
       };
       try {
         setIsLoading(true);
-        const created = await submissionController.submission_file_comments.create(values as Omit<SubmissionFileComment, "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by">);
+        const created = await submissionController.submission_file_comments.create(
+          values as Omit<
+            SubmissionFileComment,
+            "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by"
+          >
+        );
         if (onSubmitted) onSubmitted(created as SubmissionFileComment);
         if (onCancel) onCancel();
         toaster.success({ title: "Comment posted" });

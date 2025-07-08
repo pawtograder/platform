@@ -43,7 +43,9 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const submission = useSubmission();
   const assignmentController = useAssignmentController();
   const initialSubmissionReviewId = submission.grading_review_id ?? undefined;
-  const [activeSubmissionReviewId, setActiveSubmissionReviewId] = useState<number | undefined>(initialSubmissionReviewId);
+  const [activeSubmissionReviewId, setActiveSubmissionReviewId] = useState<number | undefined>(
+    initialSubmissionReviewId
+  );
 
   useEffect(() => {
     const reviewAssignment = reviewAssignmentIdParam
@@ -108,9 +110,7 @@ export function useMissingRubricChecksForActiveReview() {
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
   const rubric = useRubricById(activeSubmissionReview.rubric_id);
   const rubricChecks = useMemo(() => {
-    return rubric?.rubric_parts.flatMap((part) =>
-      part.rubric_criteria.flatMap((criteria) => criteria.rubric_checks)
-    );
+    return rubric?.rubric_parts.flatMap((part) => part.rubric_criteria.flatMap((criteria) => criteria.rubric_checks));
   }, [rubric]);
   const { missing_required_checks, missing_optional_checks } = useMemo(() => {
     return {

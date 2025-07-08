@@ -821,7 +821,6 @@ function GroupDetails({
   );
 }
 
-
 function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   if (repositories?.length === 0) {
     return (
@@ -862,7 +861,13 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
   );
 }
 
-export default function ManageGroupWidget({ assignment, repositories }: { assignment: Assignment, repositories: Repository[] }) {
+export default function ManageGroupWidget({
+  assignment,
+  repositories
+}: {
+  assignment: Assignment;
+  repositories: Repository[];
+}) {
   const { private_profile_id } = useClassProfiles();
   const { time_zone } = useCourse();
   const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({

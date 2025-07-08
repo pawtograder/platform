@@ -230,7 +230,7 @@ class GradebookWhatIfController {
             let score: number | undefined;
             let released = columnStudent?.released ?? false;
             let is_missing = columnStudent?.is_missing ?? true;
-            
+
             if (columnStudent?.score_override !== null && columnStudent?.score_override !== undefined) {
               score = columnStudent.score_override;
               is_missing = false;

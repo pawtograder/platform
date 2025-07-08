@@ -222,7 +222,7 @@ function ArtifactAnnotation({
   }
 
   const reviewName = comment.submission_review_id
-    ? reviewAssignment?.rubrics?.name || 'Grading Review' || "Review"
+    ? reviewAssignment?.rubrics?.name || "Grading Review" || "Review"
     : "Self-Review";
 
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
@@ -436,22 +436,21 @@ function ArtifactCommentsForm({
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
   const submissionController = useSubmissionController();
 
-
   const postComment = useCallback(
     async (message: string, author_id: string) => {
       const finalReviewAssignmentId = reviewAssignmentId ?? reviewContext?.id;
 
       await submissionController.submission_artifact_comments.create({
-          submission_id: submission.id,
-          submission_artifact_id: artifact.id,
-          class_id: submission.assignments.class_id,
-          author: author_id,
-          comment: message,
-          submission_review_id: finalReviewAssignmentId ?? null,
-          released: reviewContext ? reviewContext.released : true,
-          eventually_visible: eventuallyVisible,
-          rubric_check_id: null,
-          points: null 
+        submission_id: submission.id,
+        submission_artifact_id: artifact.id,
+        class_id: submission.assignments.class_id,
+        author: author_id,
+        comment: message,
+        submission_review_id: finalReviewAssignmentId ?? null,
+        released: reviewContext ? reviewContext.released : true,
+        eventually_visible: eventuallyVisible,
+        rubric_check_id: null,
+        points: null
       });
     },
     [submissionController, submission, artifact, reviewContext, eventuallyVisible, reviewAssignmentId]
@@ -488,7 +487,7 @@ function ArtifactCheckPopover({
   reviewAssignmentId?: number;
 }) {
   const submission = useSubmission();
-  if (!submission.grading_review_id) {  
+  if (!submission.grading_review_id) {
     throw new Error("No grading review ID found");
   }
   const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);

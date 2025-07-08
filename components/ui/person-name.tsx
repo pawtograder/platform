@@ -18,7 +18,7 @@ function PersonName({
 }) {
   const userProfile = useUserProfile(uid);
   if (!showAvatar) {
-    return <>{userProfile?.name}</>
+    return <>{userProfile?.name}</>;
   }
   return (
     <HStack w="100%">

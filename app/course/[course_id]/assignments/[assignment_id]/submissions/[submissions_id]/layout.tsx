@@ -375,7 +375,10 @@ function ReviewActions() {
             onClick={async () => {
               try {
                 setUpdatingReview(true);
-                await submissionController.submission_reviews.update(review.id, { checked_at: new Date().toISOString(), checked_by: private_profile_id });
+                await submissionController.submission_reviews.update(review.id, {
+                  checked_at: new Date().toISOString(),
+                  checked_by: private_profile_id
+                });
               } finally {
                 setUpdatingReview(false);
               }

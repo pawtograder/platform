@@ -401,10 +401,14 @@ export default function AssignmentsTable() {
               ))}
             </Table.Header>
             <Table.Body>
-              {(refineCore.tableQuery.isLoading) && (
+              {refineCore.tableQuery.isLoading && (
                 <Table.Row>
                   <Table.Cell
-                    colSpan={getHeaderGroups().map((h) => h.headers.length).reduce((a, b) => a + b, 0) - 1}
+                    colSpan={
+                      getHeaderGroups()
+                        .map((h) => h.headers.length)
+                        .reduce((a, b) => a + b, 0) - 1
+                    }
                     bg="bg.subtle"
                   >
                     <VStack w="100%" alignItems="center" justifyContent="center" h="100%" p={12}>

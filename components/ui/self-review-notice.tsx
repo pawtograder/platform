@@ -76,7 +76,7 @@ function SelfReviewNoticeInner({
     return false;
   }
 
-  const canFinalizeEarly = !deadlinePassed() && (activeSubmission !== undefined)
+  const canFinalizeEarly = !deadlinePassed() && activeSubmission !== undefined;
 
   if (!dueDate || !review_settings) {
     return <Skeleton height="20px" width="80px" />;
@@ -86,7 +86,7 @@ function SelfReviewNoticeInner({
 
   return (
     <>
-      {(selfReviewAssignment) ? (
+      {selfReviewAssignment ? (
         <VStack gap="1" alignItems="flex-start" w="100%">
           <Flex alignItems="center" gap="2">
             <FaExclamationTriangle />
@@ -103,11 +103,15 @@ function SelfReviewNoticeInner({
             flexDir={{ base: "column", md: "row" }}
           >
             <Text fontSize="sm" color="fg.muted">
-              To complete your self review assignment, press the button below and answer a few short questions about your
-              implementation.
+              To complete your self review assignment, press the button below and answer a few short questions about
+              your implementation.
             </Text>
             {activeSubmission && (
-              <CompleteReviewButton assignment={assignment} enrollment={enrollment} activeSubmission={activeSubmission} />
+              <CompleteReviewButton
+                assignment={assignment}
+                enrollment={enrollment}
+                activeSubmission={activeSubmission}
+              />
             )}
           </Flex>
         </VStack>
@@ -133,7 +137,13 @@ function SelfReviewNoticeInner({
                 If you are done with your submission, you can finalize it early to be able to submit your self-review
                 early.
               </Text>
-              <FinalizeSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} enabled={canFinalizeEarly ?? false} setLoading={setIsLoading} loading={isLoading} />
+              <FinalizeSubmissionEarly
+                assignment={assignment}
+                private_profile_id={enrollment?.private_profile_id}
+                enabled={canFinalizeEarly ?? false}
+                setLoading={setIsLoading}
+                loading={isLoading}
+              />
             </Flex>
           )}
         </VStack>

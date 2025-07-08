@@ -726,13 +726,13 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
 
     while (hasMore) {
       const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('class_id', course_id)
+        .from("profiles")
+        .select("*")
+        .eq("class_id", course_id)
         .range(from, from + pageSize - 1);
 
       if (error) {
-        console.error('Error fetching profiles:', error);
+        console.error("Error fetching profiles:", error);
         break;
       }
 
@@ -759,13 +759,13 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
 
     while (hasMore) {
       const { data, error } = await supabase
-        .from('user_roles')
-        .select('*, users(*)')
-        .eq('class_id', course_id)
+        .from("user_roles")
+        .select("*, users(*)")
+        .eq("class_id", course_id)
         .range(from, from + pageSize - 1);
 
       if (error) {
-        console.error('Error fetching roles:', error);
+        console.error("Error fetching roles:", error);
         break;
       }
 

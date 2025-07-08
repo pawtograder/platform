@@ -1,11 +1,34 @@
 "use client";
 
-import { useMyReviewAssignments, useReviewAssignment, useRubricById, useRubrics, useSelfReviewSettings } from "@/hooks/useAssignment";
-import { Box, Button, Heading, HStack, Icon, List, Popover, SegmentGroup, Skeleton, Text, VStack } from "@chakra-ui/react";
+import {
+  useMyReviewAssignments,
+  useReviewAssignment,
+  useRubricById,
+  useRubrics,
+  useSelfReviewSettings
+} from "@/hooks/useAssignment";
+import {
+  Box,
+  Button,
+  Heading,
+  HStack,
+  Icon,
+  List,
+  Popover,
+  SegmentGroup,
+  Skeleton,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
-import { useSubmission, useSubmissionController, useSubmissionReview, useWritableSubmissionReviews } from "@/hooks/useSubmission";
+import {
+  useSubmission,
+  useSubmissionController,
+  useSubmissionReview,
+  useWritableSubmissionReviews
+} from "@/hooks/useSubmission";
 import {
   useActiveReviewAssignmentId,
   useActiveSubmissionReview,
@@ -208,7 +231,7 @@ function ReviewAssignmentActions() {
           you are done, click &quot;Complete Review&quot;.
         </Text>
       )}
-      {(activeSubmissionReview && activeReviewAssignment) && <CompleteReviewButton />}
+      {activeSubmissionReview && activeReviewAssignment && <CompleteReviewButton />}
     </HStack>
   );
 }
@@ -217,14 +240,21 @@ function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id:
   const reviewAssignment = useReviewAssignment(review_assignment_id);
   const submissionReview = useSubmissionReview(reviewAssignment?.submission_review_id);
   const rubric = useRubricById(reviewAssignment?.rubric_id);
-  if (!reviewAssignment || !submissionReview || !submissionReview.completed_at || !rubric || !submissionReview.completed_by) {
+  if (
+    !reviewAssignment ||
+    !submissionReview ||
+    !submissionReview.completed_at ||
+    !rubric ||
+    !submissionReview.completed_by
+  ) {
     return <></>;
   }
-  return <Text>
-    {rubric.name} completed on{" "}
-    {formatDate(submissionReview?.completed_at, "MM/dd/yyyy hh:mm a")} by{" "}
-    <PersonName uid={submissionReview.completed_by} showAvatar={false} />
-  </Text>;
+  return (
+    <Text>
+      {rubric.name} completed on {formatDate(submissionReview?.completed_at, "MM/dd/yyyy hh:mm a")} by{" "}
+      <PersonName uid={submissionReview.completed_by} showAvatar={false} />
+    </Text>
+  );
 }
 
 function CompletedReviewHistory() {
@@ -253,17 +283,9 @@ export default function SubmissionReviewToolbar() {
     return <></>;
   }
   return (
-    <Box w="100%"
-      p={2}
-      borderRadius="md"
-      borderWidth="1px"
-      borderColor="border.info"
-      bg="bg.info">
+    <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
       <SelfReviewDueDateInformation /> {/* TODO: This is not working */}
-      <HStack
-        w="100%"
-        justifyContent="space-between"
-      >
+      <HStack w="100%" justifyContent="space-between">
         {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
         <ReviewAssignmentActions /> {/* TODO: This is not showing up */}
       </HStack>

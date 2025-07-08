@@ -26,7 +26,6 @@ export default function SelfReviewDueDateInformation() {
   const [isLoading, setIsLoading] = useState(false);
   const isGrader = useIsGraderOrInstructor();
 
-
   if (!settings.enabled || !myReviews || !assignment || isGrader) {
     return <></>;
   }
@@ -44,7 +43,13 @@ export default function SelfReviewDueDateInformation() {
               you begin the self review, you will not be able to change your submission.
             </Text>
           </VStack>
-          <FinalizeSubmissionEarly assignment={assignment} private_profile_id={private_profile_id} enabled={settings.allow_early} setLoading={setIsLoading} loading={isLoading} />
+          <FinalizeSubmissionEarly
+            assignment={assignment}
+            private_profile_id={private_profile_id}
+            enabled={settings.allow_early}
+            setLoading={setIsLoading}
+            loading={isLoading}
+          />
         </HStack>
       );
     }

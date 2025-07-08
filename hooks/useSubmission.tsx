@@ -33,13 +33,10 @@ import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { SubmissionReviewProvider } from "./useSubmissionReview";
 
-
-
 class SubmissionController {
   private _submission?: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
   private _file?: SubmissionFile;
   private _artifact?: SubmissionArtifact;
-
 
   readonly submission_comments: TableController<"submission_comments">;
   readonly submission_file_comments: TableController<"submission_file_comments">;
@@ -168,14 +165,14 @@ export function SubmissionProvider({
     <SubmissionContext.Provider value={{ submissionController: controller.current }}>
       <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
       {(!ready || !newControllersReady) && <Spinner />}
-      {(ready && newControllersReady) && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
+      {ready && newControllersReady && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
     </SubmissionContext.Provider>
   );
 }
 export function useSubmissionFileComments({
   file_id,
   onEnter,
-  onLeave,
+  onLeave
 }: {
   file_id?: number;
   onEnter?: (comment: SubmissionFileComment[]) => void;
@@ -190,18 +187,38 @@ export function useSubmissionFileComments({
       setComments([]);
       return;
     }
-    const { unsubscribe, data } = submissionController.submission_file_comments.list(
-      (data, { entered, left }) => {
-        setComments(data.filter((comment) => (comment.deleted_at === null || comment.deleted_at === undefined) && (file_id === undefined || comment.submission_file_id === file_id)));
-        if (onEnter) {
-          onEnter(entered.filter((comment) => (comment.deleted_at === null || comment.deleted_at === undefined) && (file_id === undefined || comment.submission_file_id === file_id)));
-        }
-        if (onLeave) {
-          onLeave(left.filter((comment) => (comment.deleted_at === null || comment.deleted_at === undefined) && (file_id === undefined || comment.submission_file_id === file_id)));
-        }
+    const { unsubscribe, data } = submissionController.submission_file_comments.list((data, { entered, left }) => {
+      setComments(
+        data.filter(
+          (comment) =>
+            (comment.deleted_at === null || comment.deleted_at === undefined) &&
+            (file_id === undefined || comment.submission_file_id === file_id)
+        )
+      );
+      if (onEnter) {
+        onEnter(
+          entered.filter(
+            (comment) =>
+              (comment.deleted_at === null || comment.deleted_at === undefined) &&
+              (file_id === undefined || comment.submission_file_id === file_id)
+          )
+        );
       }
+      if (onLeave) {
+        onLeave(
+          left.filter(
+            (comment) =>
+              (comment.deleted_at === null || comment.deleted_at === undefined) &&
+              (file_id === undefined || comment.submission_file_id === file_id)
+          )
+        );
+      }
+    });
+    const filteredData = data.filter(
+      (comment) =>
+        (comment.deleted_at === null || comment.deleted_at === undefined) &&
+        (file_id === undefined || comment.submission_file_id === file_id)
     );
-    const filteredData = data.filter((comment) => (comment.deleted_at === null || comment.deleted_at === undefined) && (file_id === undefined || comment.submission_file_id === file_id));
     setComments(filteredData);
     if (onEnter) {
       onEnter(filteredData);
@@ -217,7 +234,7 @@ export function useSubmissionFileComments({
 
 export function useSubmissionComments({
   onEnter,
-  onLeave,
+  onLeave
 }: {
   onEnter?: (comment: SubmissionComments[]) => void;
   onLeave?: (comment: SubmissionComments[]) => void;
@@ -231,18 +248,16 @@ export function useSubmissionComments({
       setComments([]);
       return;
     }
-    const { unsubscribe, data } = submissionController.submission_comments.list(
-      (data, { entered, left }) => {
-        const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
-        setComments(filteredData);
-        if (onEnter) {
-          onEnter(entered.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
-        }
-        if (onLeave) {
-          onLeave(left.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
-        }
+    const { unsubscribe, data } = submissionController.submission_comments.list((data, { entered, left }) => {
+      const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
+      setComments(filteredData);
+      if (onEnter) {
+        onEnter(entered.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
       }
-    );
+      if (onLeave) {
+        onLeave(left.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
+      }
+    });
     const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
     setComments(filteredData);
     if (onEnter) {
@@ -259,7 +274,7 @@ export function useSubmissionComments({
 
 export function useSubmissionArtifactComments({
   onEnter,
-  onLeave,
+  onLeave
 }: {
   onEnter?: (comment: SubmissionArtifactComment[]) => void;
   onLeave?: (comment: SubmissionArtifactComment[]) => void;
@@ -273,17 +288,15 @@ export function useSubmissionArtifactComments({
       setComments([]);
       return;
     }
-    const { unsubscribe, data } = submissionController.submission_artifact_comments.list(
-      (data, { entered, left }) => {
-        setComments(data.filter((comment) => comment.deleted_at === null));
-        if (onEnter) {
-          onEnter(entered.filter((comment) => comment.deleted_at === null));
-        }
-        if (onLeave) {
-          onLeave(left.filter((comment) => comment.deleted_at === null));
-        }
+    const { unsubscribe, data } = submissionController.submission_artifact_comments.list((data, { entered, left }) => {
+      setComments(data.filter((comment) => comment.deleted_at === null));
+      if (onEnter) {
+        onEnter(entered.filter((comment) => comment.deleted_at === null));
       }
-    );
+      if (onLeave) {
+        onLeave(left.filter((comment) => comment.deleted_at === null));
+      }
+    });
     const filteredData = data.filter((comment) => comment.deleted_at === null);
     setComments(filteredData);
     if (onEnter) {
@@ -299,7 +312,9 @@ export function useSubmissionArtifactComments({
 }
 export function useSubmissionFileComment(comment_id: number) {
   const submissionController = useSubmissionController();
-  const [comment, setComment] = useState<SubmissionFileComment | undefined>(submissionController.submission_file_comments.getById(comment_id).data);
+  const [comment, setComment] = useState<SubmissionFileComment | undefined>(
+    submissionController.submission_file_comments.getById(comment_id).data
+  );
   useEffect(() => {
     const { unsubscribe, data } = submissionController.submission_file_comments.getById(comment_id, (data) => {
       setComment(data);
@@ -311,11 +326,13 @@ export function useSubmissionFileComment(comment_id: number) {
 }
 export function useSubmissionArtifactComment(comment_id: number) {
   const submissionController = useSubmissionController();
-  const [comment, setComment] = useState<SubmissionArtifactComment | undefined>(submissionController.submission_artifact_comments.getById(comment_id).data);
+  const [comment, setComment] = useState<SubmissionArtifactComment | undefined>(
+    submissionController.submission_artifact_comments.getById(comment_id).data
+  );
   useEffect(() => {
     const { unsubscribe, data } = submissionController.submission_artifact_comments.getById(comment_id, (data) => {
       setComment(data);
-    }); 
+    });
     setComment(data);
     return () => unsubscribe();
   }, [submissionController, comment_id]);
@@ -323,8 +340,10 @@ export function useSubmissionArtifactComment(comment_id: number) {
 }
 export function useSubmissionComment(comment_id: number) {
   const submissionController = useSubmissionController();
-  const [comment, setComment] = useState<SubmissionComments | undefined>(submissionController.submission_comments.getById(comment_id).data);
-    useEffect(() => {
+  const [comment, setComment] = useState<SubmissionComments | undefined>(
+    submissionController.submission_comments.getById(comment_id).data
+  );
+  useEffect(() => {
     const { unsubscribe, data } = submissionController.submission_comments.getById(comment_id, (data) => {
       setComment(data);
     });
@@ -335,7 +354,9 @@ export function useSubmissionComment(comment_id: number) {
 }
 export function useSubmissionCommentByType(comment_id: number, type: "file" | "artifact" | "submission") {
   const ctx = useContext(SubmissionContext);
-  const [comment, setComment] = useState<PossiblyTentativeResult<SubmissionFileComment | SubmissionArtifactComment | SubmissionComments> | undefined>(undefined);
+  const [comment, setComment] = useState<
+    PossiblyTentativeResult<SubmissionFileComment | SubmissionArtifactComment | SubmissionComments> | undefined
+  >(undefined);
   if (!ctx) {
     throw new Error("SubmissionContext not found");
   }
@@ -609,7 +630,7 @@ export function useSubmissionReview(reviewId?: number) {
   useEffect(() => {
     if (!ctx || !controller || !reviewId) {
       return;
-    }   
+    }
     const { unsubscribe, data } = controller.submission_reviews.getById(reviewId, (data) => {
       setReview(data);
     });
@@ -626,11 +647,9 @@ export function useSubmissionReviews() {
     if (!ctx || !controller) {
       return;
     }
-    const { unsubscribe, data } = controller.submission_reviews.list(
-      (data) => {
-        setReviews(data);
-      }
-    );
+    const { unsubscribe, data } = controller.submission_reviews.list((data) => {
+      setReviews(data);
+    });
     setReviews(data);
     return () => unsubscribe();
   }, [ctx, controller]);
@@ -647,11 +666,9 @@ export function useSubmissionReviewOrGradingReview(reviewId: number) {
   }
 
   useEffect(() => {
-
-    const { unsubscribe, data} = controller.submission_reviews.getById(reviewId, (data) => {
-        setReview(data);
-      }
-    );
+    const { unsubscribe, data } = controller.submission_reviews.getById(reviewId, (data) => {
+      setReview(data);
+    });
     setReview(data);
     return () => {
       unsubscribe();
@@ -883,7 +900,9 @@ export function useSubmissionReviewForRubric(rubricId?: number | null): Submissi
       setSubmissionReview(undefined);
       return;
     }
-    const desiredReview = reviews?.find((review) => review.submission_id === submission.id && review.rubric_id === rubricId);
+    const desiredReview = reviews?.find(
+      (review) => review.submission_id === submission.id && review.rubric_id === rubricId
+    );
     if (desiredReview) {
       setSubmissionReview(desiredReview);
       const { unsubscribe } = controller.submission_reviews.getById(desiredReview.id, (updatedReview) => {

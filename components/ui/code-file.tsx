@@ -1,7 +1,13 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import { useRubricById, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useSubmission, useSubmissionController, useSubmissionFileComment, useSubmissionFileComments, useSubmissionReviewByAssignmentId } from "@/hooks/useSubmission";
+import {
+  useSubmission,
+  useSubmissionController,
+  useSubmissionFileComment,
+  useSubmissionFileComments,
+  useSubmissionReviewByAssignmentId
+} from "@/hooks/useSubmission";
 import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
@@ -479,13 +485,7 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   );
 }
 
-function CodeLineComment({
-  comment_id,
-  submissionReviewId
-}: {
-  comment_id: number;
-  submissionReviewId?: number;
-}) {
+function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: number; submissionReviewId?: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
   const { private_profile_id } = useClassProfiles();
@@ -645,36 +645,38 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
           label: criteria.name,
           value: criteria.id.toString(),
           criteria: criteria as HydratedRubricCriteria,
-          options: (criteria.rubric_checks.filter((check) => check.is_annotation) as HydratedRubricCheck[]).map((check) => {
-            // Count existing annotations for this specific check
-            const existingAnnotationsForCheck = existingComments.filter(
-              (comment) => comment.rubric_check_id === check.id
-            ).length;
+          options: (criteria.rubric_checks.filter((check) => check.is_annotation) as HydratedRubricCheck[]).map(
+            (check) => {
+              // Count existing annotations for this specific check
+              const existingAnnotationsForCheck = existingComments.filter(
+                (comment) => comment.rubric_check_id === check.id
+              ).length;
 
-            // Check if this option should be disabled due to max_annotations
-            const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
+              // Check if this option should be disabled due to max_annotations
+              const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
 
-            const option: RubricCheckSelectOption = {
-              label: check.name,
-              value: check.id.toString(),
-              check,
-              criteria: criteria as HydratedRubricCriteria,
-              options: [],
-              isDisabled
-            };
-            if (isRubricCheckDataWithOptions(check.data)) {
-              option.options = check.data.options.map((subOption: RubricCheckSubOption, index: number) => ({
-                label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
-                comment: subOption.label,
-                index: index.toString(),
-                value: index.toString(),
-                points: subOption.points,
-                check: option,
+              const option: RubricCheckSelectOption = {
+                label: check.name,
+                value: check.id.toString(),
+                check,
+                criteria: criteria as HydratedRubricCriteria,
+                options: [],
                 isDisabled
-              }));
+              };
+              if (isRubricCheckDataWithOptions(check.data)) {
+                option.options = check.data.options.map((subOption: RubricCheckSubOption, index: number) => ({
+                  label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
+                  comment: subOption.label,
+                  index: index.toString(),
+                  value: index.toString(),
+                  points: subOption.points,
+                  check: option,
+                  isDisabled
+                }));
+              }
+              return option;
             }
-            return option;
-          })
+          )
         };
       }) as RubricCriteriaSelectGroupOption[]) || [];
 
@@ -984,7 +986,7 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
   const [showReply, setShowReply] = useState(isReplyEnabled);
 
   const commentsToDisplay = useMemo(() => {
-    const ret= allCommentsForFile.filter((comment) => {
+    const ret = allCommentsForFile.filter((comment) => {
       if (comment.line !== lineNumber) return false;
       if (!isGraderOrInstructor && submission.released !== null) {
         return comment.eventually_visible === true;
@@ -992,8 +994,8 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
       return true;
     });
     ret.sort((a, b) => {
-      if(a.rubric_check_id && !b.rubric_check_id) return -1;
-      if(!a.rubric_check_id && b.rubric_check_id) return 1;
+      if (a.rubric_check_id && !b.rubric_check_id) return -1;
+      if (!a.rubric_check_id && b.rubric_check_id) return 1;
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     });
     return ret;

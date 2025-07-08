@@ -40,7 +40,14 @@ import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
-import { useAssignmentController, useReviewAssignment, useReviewAssignmentRubricParts, useRubricById, useRubricCheck, useRubrics } from "@/hooks/useAssignment";
+import {
+  useAssignmentController,
+  useReviewAssignment,
+  useReviewAssignmentRubricParts,
+  useRubricById,
+  useRubricCheck,
+  useRubrics
+} from "@/hooks/useAssignment";
 import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
@@ -314,17 +321,18 @@ export function CommentActions({
           if (value.value === "edit") {
             setIsEditing(true);
           } else if (value.value === "delete") {
-            if(comment.id === -1){
+            if (comment.id === -1) {
               toaster.error({
                 title: "Error",
-                description: "You cannot delete a comment that has not been saved yet. Please wait for it to finish saving before trying again, or refresh your browser to see if it was successfully saved."
+                description:
+                  "You cannot delete a comment that has not been saved yet. Please wait for it to finish saving before trying again, or refresh your browser to see if it was successfully saved."
               });
               return;
             }
 
-            if(isLineComment(comment)) {
+            if (isLineComment(comment)) {
               submissionController.submission_file_comments.delete(comment.id);
-            } else if(isArtifactComment(comment)) {
+            } else if (isArtifactComment(comment)) {
               submissionController.submission_artifact_comments.delete(comment.id);
             } else {
               submissionController.submission_comments.delete(comment.id);
@@ -418,11 +426,11 @@ export function RubricCheckComment({
 
   const handleEditComment = useCallback(
     async (message: string) => {
-      if(comment_type === "submission") {
+      if (comment_type === "submission") {
         await submissionController.submission_comments.update(comment_id, { comment: message });
-      } else if(comment_type === "file") {
+      } else if (comment_type === "file") {
         await submissionController.submission_file_comments.update(comment_id, { comment: message });
-      } else if(comment_type === "artifact") {
+      } else if (comment_type === "artifact") {
         await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
       }
       setIsEditing(false);
@@ -436,9 +444,9 @@ export function RubricCheckComment({
     check?.artifact && submission
       ? submission.submission_artifacts.find((a) => a.name === check.artifact)?.id
       : undefined;
-      if(!comment) {
-        return <Skeleton w="100%" h="100px" />;
-      }
+  if (!comment) {
+    return <Skeleton w="100%" h="100px" />;
+  }
 
   let pointsText = <></>;
   if (comment.points) {
@@ -706,10 +714,11 @@ export function RubricCheckAnnotation({
       <HStack justify="space-between">
         <HStack>
           <Tooltip
-            content={`This check is an annotation, it can only be applied by ${annotationTarget === "file" || annotationTarget === null
-              ? "clicking on a specific line of code"
-              : "clicking on an artifact"
-              }`}
+            content={`This check is an annotation, it can only be applied by ${
+              annotationTarget === "file" || annotationTarget === null
+                ? "clicking on a specific line of code"
+                : "clicking on an artifact"
+            }`}
           >
             <Icon as={annotationTarget === "file" ? BsFileEarmarkCodeFill : BsFileEarmarkImageFill} size="xs" />
           </Tooltip>
@@ -725,7 +734,13 @@ export function RubricCheckAnnotation({
         {check.description}
       </Markdown>
       {rubricCheckComments.map((comment) => (
-        <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="file" criteria={criteria} check={check} />
+        <RubricCheckComment
+          key={comment.id}
+          comment_id={comment.id}
+          comment_type="file"
+          criteria={criteria}
+          check={check}
+        />
       ))}
 
       {/* Inline reference management for preview mode */}
@@ -815,11 +830,17 @@ export function RubricCheckGlobal({
     if (!checkboxIsChecked) {
       setIsEditing(
         isSelected &&
-        rubricCheckComments.length === 0 &&
-        criteria.max_checks_per_submission != criteriaCheckComments.length
+          rubricCheckComments.length === 0 &&
+          criteria.max_checks_per_submission != criteriaCheckComments.length
       );
     }
-  }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length, checkboxIsChecked]);
+  }, [
+    isSelected,
+    rubricCheckComments.length,
+    criteria.max_checks_per_submission,
+    criteriaCheckComments.length,
+    checkboxIsChecked
+  ]);
 
   if (!shouldShowCheck) {
     return null;
@@ -858,7 +879,9 @@ export function RubricCheckGlobal({
                 wordBreak="break-word"
               >
                 <HStack justify="space-between" w="100%">
-                  <Field.Label><Text fontSize="sm">{check.name}</Text></Field.Label>
+                  <Field.Label>
+                    <Text fontSize="sm">{check.name}</Text>
+                  </Field.Label>
                   <StudentVisibilityIndicator check={check} isApplied={isApplied} isReleased={isReleased} />
                 </HStack>
                 <Markdown
@@ -1024,7 +1047,13 @@ export function RubricCheckGlobal({
         />
       )}
       {rubricCheckComments.map((comment) => (
-        <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" criteria={criteria} check={check} />
+        <RubricCheckComment
+          key={comment.id}
+          comment_id={comment.id}
+          comment_type="submission"
+          criteria={criteria}
+          check={check}
+        />
       ))}
 
       {/* Inline reference management for preview mode */}
@@ -1083,7 +1112,11 @@ function SubmissionCommentForm({
         </Text>
       </Box>
       <MessageInput
-        ariaLabel={check.is_comment_required ? `Required: comment on check ${check.name}` : `Optional: comment on check ${check.name}`}
+        ariaLabel={
+          check.is_comment_required
+            ? `Required: comment on check ${check.name}`
+            : `Optional: comment on check ${check.name}`
+        }
         placeholder={"Comment"}
         sendButtonText="Add Check"
         sendMessage={async (message, profile_id) => {
@@ -1093,8 +1126,8 @@ function SubmissionCommentForm({
           }
           const artifactInfo = check.artifact
             ? {
-              submission_artifact_id: linkedArtifactId
-            }
+                submission_artifact_id: linkedArtifactId
+              }
             : {};
 
           const values = {
@@ -1222,9 +1255,10 @@ export function RubricCriteria({
       w="100%"
     >
       <Fieldset.Root>
-
         <Heading size="sm">
-          <HStack gap={1}><Fieldset.Legend>{criteria.name}</Fieldset.Legend> {pointsText}</HStack>
+          <HStack gap={1}>
+            <Fieldset.Legend>{criteria.name}</Fieldset.Legend> {pointsText}
+          </HStack>
         </Heading>
 
         <Fieldset.HelperText>
@@ -1462,11 +1496,7 @@ export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: Hyd
       reviewAssignmentRubricParts?.length > 0
     ) {
       partsToDisplay = displayRubric.rubric_parts
-        .filter((part) =>
-          reviewAssignmentRubricParts.some(
-            (linkedPart) => linkedPart.rubric_part_id === part.id
-          )
-        )
+        .filter((part) => reviewAssignmentRubricParts.some((linkedPart) => linkedPart.rubric_part_id === part.id))
         .sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));
     } else if (displayRubric.rubric_parts) {
       partsToDisplay = [...displayRubric.rubric_parts].sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0));

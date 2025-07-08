@@ -191,18 +191,21 @@ export default function MessageInput(props: MessageInputProps) {
                 return;
               }
               setIsSending(true);
-              sendMessage(value!, profile_id, true).then(() => {
-                setValue("");
-              }).catch((error) => {
-                console.error("Error sending message", error);
-                toaster.create({
-                  title: "Error sending message",
-                  description: error instanceof Error ? error.message : "Unknown error",
-                  type: "error"
+              sendMessage(value!, profile_id, true)
+                .then(() => {
+                  setValue("");
+                })
+                .catch((error) => {
+                  console.error("Error sending message", error);
+                  toaster.create({
+                    title: "Error sending message",
+                    description: error instanceof Error ? error.message : "Unknown error",
+                    type: "error"
+                  });
+                })
+                .finally(() => {
+                  setIsSending(false);
                 });
-              }).finally(() => {
-                setIsSending(false);
-              });
             }
           }}
         />
