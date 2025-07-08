@@ -1,14 +1,15 @@
 "use client";
 import FinalizeSubmissionEarly from "@/app/course/[course_id]/assignments/[assignment_id]/finalizeSubmissionEarly";
-import { AssignmentProvider, useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
+import { useMyReviewAssignments, useRubric } from "@/hooks/useAssignment";
 import { useAssignmentDueDate } from "@/hooks/useCourseController";
 import { Assignment, SelfReviewSettings, Submission, SubmissionReview, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
-import { addHours } from "date-fns";
+import { addHours, differenceInMinutes } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import { FaExclamationTriangle } from "react-icons/fa";
 
 function CompleteReviewButton({
@@ -66,6 +67,16 @@ function SelfReviewNoticeInner({
   const myReviewAssignments = useMyReviewAssignments();
   const selfReviewRubric = useRubric("self-review");
   const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
+  const [isLoading, setIsLoading] = useState(false);
+
+  function deadlinePassed(): boolean {
+    if (dueDate) {
+      return differenceInMinutes(Date.now(), dueDate) > 0;
+    }
+    return false;
+  }
+
+  const canFinalizeEarly = !deadlinePassed() && (activeSubmission !== undefined)
 
   if (!dueDate || !review_settings) {
     return <Skeleton height="20px" width="80px" />;
@@ -75,22 +86,31 @@ function SelfReviewNoticeInner({
 
   return (
     <>
-      {selfReviewAssignment ? (
-        <Box>
-          <Flex alignItems={"baseline"} gap="2">
-            <Heading size="md">Complete Self Review</Heading>
+      {(selfReviewAssignment) ? (
+        <VStack gap="1" alignItems="flex-start" w="100%">
+          <Flex alignItems="center" gap="2">
+            <FaExclamationTriangle />
+            <Heading size="md">Self Review Now Due</Heading>
             <Text fontSize="sm" color="fg.muted">
-              Due {formatInTimeZone(evalDeadline, time_zone || "America/New_York", "MMM d h:mm aaa")} ({time_zone})
+              Due by {formatInTimeZone(evalDeadline, time_zone || "America/New_York", "MMM d h:mm aaa")} ({time_zone})
             </Text>
           </Flex>
-          <Text fontSize="sm" color="fg.muted">
-            To complete your self review assignment, press the button below and answer a few short questions about your
-            implementation.
-          </Text>
-          {activeSubmission && (
-            <CompleteReviewButton assignment={assignment} enrollment={enrollment} activeSubmission={activeSubmission} />
-          )}
-        </Box>
+          <Flex
+            mt="2"
+            w="100%"
+            justifyContent={"space-between"}
+            alignItems={"center"}
+            flexDir={{ base: "column", md: "row" }}
+          >
+            <Text fontSize="sm" color="fg.muted">
+              To complete your self review assignment, press the button below and answer a few short questions about your
+              implementation.
+            </Text>
+            {activeSubmission && (
+              <CompleteReviewButton assignment={assignment} enrollment={enrollment} activeSubmission={activeSubmission} />
+            )}
+          </Flex>
+        </VStack>
       ) : review_settings?.enabled ? (
         <VStack gap="1" alignItems="flex-start" w="100%">
           <Flex alignItems="center" gap="2">
@@ -113,7 +133,7 @@ function SelfReviewNoticeInner({
                 If you are done with your submission, you can finalize it early to be able to submit your self-review
                 early.
               </Text>
-              <FinalizeSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} />
+              <FinalizeSubmissionEarly assignment={assignment} private_profile_id={enrollment?.private_profile_id} enabled={canFinalizeEarly ?? false} setLoading={setIsLoading} loading={isLoading} />
             </Flex>
           )}
         </VStack>
@@ -134,10 +154,8 @@ export default function SelfReviewNotice(props: {
     return <></>;
   }
   return (
-    <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-      <AssignmentProvider>
-        <SelfReviewNoticeInner {...props} />
-      </AssignmentProvider>
+    <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
+      <SelfReviewNoticeInner {...props} />
     </Box>
   );
 }

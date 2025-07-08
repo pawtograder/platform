@@ -25,6 +25,8 @@ import {
   Portal,
   RadioGroup,
   Separator,
+  Skeleton,
+  Spinner,
   Tag,
   Text,
   VStack
@@ -38,13 +40,15 @@ import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
 import { Radio } from "@/components/ui/radio";
 import { toaster } from "@/components/ui/toaster";
-import { useAssignmentController, useRubricCheck, useRubrics } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useAssignmentController, useReviewAssignment, useReviewAssignmentRubricParts, useRubricById, useRubricCheck, useRubrics } from "@/hooks/useAssignment";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { useShouldShowRubricCheck } from "@/hooks/useRubricVisibility";
 import {
   useReferencedRubricCheckInstances,
   useRubricCheckInstances,
   useRubricCriteriaInstances,
+  useSubmissionCommentByType,
+  useSubmissionController,
   useSubmissionMaybe,
   useSubmissionReviewForRubric,
   useSubmissionReviewOrGradingReview
@@ -52,7 +56,7 @@ import {
 import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubricId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
-import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
+import { useCreate, useDelete, useList } from "@refinedev/core";
 import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname } from "next/navigation";
@@ -301,16 +305,7 @@ export function CommentActions({
   comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
   setIsEditing: (isEditing: boolean) => void;
 }) {
-  const { private_profile_id } = useClassProfiles();
-  const resource = isArtifactComment(comment)
-    ? "submission_artifact_comments"
-    : isLineComment(comment)
-      ? "submission_file_comments"
-      : "submission_comments";
-
-  const { mutateAsync: updateComment } = useUpdate({
-    resource: resource
-  });
+  const submissionController = useSubmissionController();
 
   return (
     <HStack gap={1}>
@@ -319,13 +314,21 @@ export function CommentActions({
           if (value.value === "edit") {
             setIsEditing(true);
           } else if (value.value === "delete") {
-            await updateComment({
-              id: comment.id,
-              values: {
-                edited_by: private_profile_id,
-                deleted_at: new Date()
-              }
-            });
+            if(comment.id === -1){
+              toaster.error({
+                title: "Error",
+                description: "You cannot delete a comment that has not been saved yet. Please wait for it to finish saving before trying again, or refresh your browser to see if it was successfully saved."
+              });
+              return;
+            }
+
+            if(isLineComment(comment)) {
+              submissionController.submission_file_comments.delete(comment.id);
+            } else if(isArtifactComment(comment)) {
+              submissionController.submission_artifact_comments.delete(comment.id);
+            } else {
+              submissionController.submission_comments.delete(comment.id);
+            }
           }
         }}
       >
@@ -394,38 +397,37 @@ export function SubmissionFileCommentLink({ comment }: { comment: SubmissionFile
 }
 
 export function RubricCheckComment({
-  comment,
+  comment_type,
+  comment_id,
   criteria,
   check
 }: {
-  comment: SubmissionFileComment | SubmissionComments | SubmissionArtifactComment;
+  comment_type: "file" | "artifact" | "submission";
+  comment_id: number;
   criteria?: HydratedRubricCriteria;
   check?: HydratedRubricCheck;
 }) {
-  const author = useUserProfile(comment.author);
+  const comment = useSubmissionCommentByType(comment_id, comment_type);
+  const submissionController = useSubmissionController();
+  const author = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
-  const resource = isArtifactComment(comment)
-    ? "submission_artifact_comments"
-    : isLineComment(comment)
-      ? "submission_file_comments"
-      : "submission_comments";
 
-  const { mutateAsync: updateComment } = useUpdate({
-    resource: resource
-  });
   const pathname = usePathname();
 
   const handleEditComment = useCallback(
     async (message: string) => {
-      await updateComment({
-        id: comment.id,
-        values: { comment: message }
-      });
+      if(comment_type === "submission") {
+        await submissionController.submission_comments.update(comment_id, { comment: message });
+      } else if(comment_type === "file") {
+        await submissionController.submission_file_comments.update(comment_id, { comment: message });
+      } else if(comment_type === "artifact") {
+        await submissionController.submission_artifact_comments.update(comment_id, { comment: message });
+      }
       setIsEditing(false);
     },
-    [updateComment, comment.id, setIsEditing]
+    [comment_id, comment_type, setIsEditing, submissionController]
   );
 
   const linkedFileId =
@@ -434,6 +436,9 @@ export function RubricCheckComment({
     check?.artifact && submission
       ? submission.submission_artifacts.find((a) => a.name === check.artifact)?.id
       : undefined;
+      if(!comment) {
+        return <Skeleton w="100%" h="100px" />;
+      }
 
   let pointsText = <></>;
   if (comment.points) {
@@ -462,6 +467,7 @@ export function RubricCheckComment({
     >
       <Box bg={criteria ? "bg.info" : "bg.muted"} pl={1} borderTopRadius="md">
         <HStack justify="space-between">
+          {comment.__db_pending && <Spinner size="sm" />}
           <Text fontSize="sm" color="fg.muted">
             {author?.name} {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
           </Text>
@@ -533,15 +539,16 @@ function ReferencedFeedbackHeader({ check_id }: { check_id: number }) {
 
 export function ReviewRoundTag({ submission_review_id }: { submission_review_id: number }) {
   const submissionReview = useSubmissionReviewOrGradingReview(submission_review_id);
+  const rubric = useRubricById(submissionReview?.rubric_id);
   if (!submissionReview) {
     return null;
   }
-  if (!submissionReview.rubrics) {
+  if (!rubric) {
     return null;
   }
   return (
     <Tag.Root minW="fit-content" flexShrink={0} size="sm" colorPalette="blue" variant="outline">
-      <Tag.Label>{submissionReview.rubrics.review_round}</Tag.Label>
+      <Tag.Label>{rubric.review_round}</Tag.Label>
     </Tag.Root>
   );
 }
@@ -718,7 +725,7 @@ export function RubricCheckAnnotation({
         {check.description}
       </Markdown>
       {rubricCheckComments.map((comment) => (
-        <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} check={check} />
+        <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="file" criteria={criteria} check={check} />
       ))}
 
       {/* Inline reference management for preview mode */}
@@ -762,7 +769,7 @@ export function RubricCheckGlobal({
   });
 
   // Move all useState calls before any early returns
-  const [selected, setSelected] = useState<boolean>(rubricCheckComments.length > 0);
+  const [checkboxIsChecked, setCheckboxIsChecked] = useState<boolean>(rubricCheckComments.length > 0);
   const [isEditing, setIsEditing] = useState<boolean>(isSelected && rubricCheckComments.length === 0);
   const hasOptions = isRubricCheckDataWithOptions(check.data) && check.data.options.length > 0;
   const _selectedOptionIndex =
@@ -775,6 +782,10 @@ export function RubricCheckGlobal({
       setSelectedOptionIndex(_selectedOptionIndex);
     }
   }, [_selectedOptionIndex]);
+
+  const onCommentSuccess = useCallback(() => {
+    setIsEditing(false);
+  }, []);
 
   const submission = useSubmissionMaybe();
   const isGrader = useIsGraderOrInstructor();
@@ -798,20 +809,17 @@ export function RubricCheckGlobal({
   });
 
   useEffect(() => {
-    setSelected(rubricCheckComments.length > 0);
+    setCheckboxIsChecked(rubricCheckComments.length > 0);
   }, [rubricCheckComments.length]);
   useEffect(() => {
-    setIsEditing(
-      (old) => {
-        if (old) {
-          return true; //Async race: user clicked the checkbox to edit before we fired this effect
-        }
-        return isSelected &&
-          rubricCheckComments.length === 0 &&
-          criteria.max_checks_per_submission != criteriaCheckComments.length
-      }
-    );
-  }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length]);
+    if (!checkboxIsChecked) {
+      setIsEditing(
+        isSelected &&
+        rubricCheckComments.length === 0 &&
+        criteria.max_checks_per_submission != criteriaCheckComments.length
+      );
+    }
+  }, [isSelected, rubricCheckComments.length, criteria.max_checks_per_submission, criteriaCheckComments.length, checkboxIsChecked]);
 
   if (!shouldShowCheck) {
     return null;
@@ -917,7 +925,7 @@ export function RubricCheckGlobal({
                 <HStack justify="space-between" w="100%">
                   <Checkbox
                     disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
-                    checked={selected}
+                    checked={checkboxIsChecked || isSelected}
                     aria-label={`${check.name} (${points})`}
                     onCheckedChange={(newState) => {
                       if (newState.checked) {
@@ -925,7 +933,7 @@ export function RubricCheckGlobal({
                       } else {
                         setIsEditing(false);
                       }
-                      setSelected(newState.checked ? true : false);
+                      setCheckboxIsChecked(newState.checked ? true : false);
                     }}
                   >
                     <Field.Label>
@@ -1012,10 +1020,11 @@ export function RubricCheckGlobal({
           submissionReview={reviewForThisRubric}
           selectedOptionIndex={selectedOptionIndex}
           linkedArtifactId={linkedAritfactId}
+          onSuccess={onCommentSuccess}
         />
       )}
       {rubricCheckComments.map((comment) => (
-        <RubricCheckComment key={comment.id} comment={comment} criteria={criteria} check={check} />
+        <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" criteria={criteria} check={check} />
       ))}
 
       {/* Inline reference management for preview mode */}
@@ -1038,25 +1047,18 @@ function SubmissionCommentForm({
   check,
   submissionReview,
   selectedOptionIndex,
-  linkedArtifactId
+  linkedArtifactId,
+  onSuccess
 }: {
   check: HydratedRubricCheck;
   submissionReview?: SubmissionReview;
   selectedOptionIndex?: number;
   linkedArtifactId?: number;
+  onSuccess: () => void;
 }) {
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
-  const resource =
-    check.is_annotation && check.annotation_target === "artifact"
-      ? "submission_artifact_comments"
-      : check.is_annotation
-        ? "submission_file_comments"
-        : "submission_comments";
-
-  const { mutateAsync: createComment } = useCreate({
-    resource: resource
-  });
+  const submissionController = useSubmissionController();
 
   useEffect(() => {
     if (messageInputRef.current) {
@@ -1102,11 +1104,19 @@ function SubmissionCommentForm({
             submission_id: submission.id,
             author: profile_id,
             points: selectedOption?.points !== undefined ? selectedOption.points : check.points,
-            released: submissionReview?.released,
-            submission_review_id: submissionReview?.id,
+            released: submissionReview?.released ?? true,
+            submission_review_id: submissionReview?.id ?? null,
+            eventually_visible: true,
             ...artifactInfo
           };
-          await createComment({ values });
+          onSuccess();
+          console.log("Creating comment", values);
+          if (check.is_annotation) {
+            throw new Error("Not implemented");
+          } else {
+            await submissionController.submission_comments.create(values);
+          }
+          console.log("Comment created");
         }}
         defaultSingleLine={true}
         allowEmptyMessage={!check.is_comment_required}
@@ -1435,27 +1445,25 @@ export function RubricSidebar({ initialRubric, rubricId }: { initialRubric?: Hyd
 
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const assignmentController = useAssignmentController();
-  const activeAssignmentReview = assignmentController.assignment.review_assignments.find(
-    (review) => review.id === activeReviewAssignmentId
-  );
-  const fetchedRubric = assignmentController.assignment.rubrics.find((rubric) => rubric.id === rubricId);
+  const activeAssignmentReview = useReviewAssignment(activeReviewAssignmentId);
+  const reviewAssignmentRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
+  const rubric = useRubricById(rubricId);
   const isGrader = useIsGraderOrInstructor();
   const reviewForThisRubric = useSubmissionReviewForRubric(rubricId);
   const viewOnly = !isGrader && !reviewForThisRubric;
 
-  const displayRubric = !rubricId && initialRubric ? initialRubric : fetchedRubric;
+  const displayRubric = !rubricId && initialRubric ? initialRubric : rubric;
 
   let partsToDisplay: HydratedRubricPart[] = [];
   if (displayRubric) {
     if (
       activeAssignmentReview &&
       activeAssignmentReview.rubric_id === rubricId &&
-      activeAssignmentReview.review_assignment_rubric_parts &&
-      activeAssignmentReview.review_assignment_rubric_parts.length > 0
+      reviewAssignmentRubricParts?.length > 0
     ) {
       partsToDisplay = displayRubric.rubric_parts
         .filter((part) =>
-          activeAssignmentReview.review_assignment_rubric_parts.some(
+          reviewAssignmentRubricParts.some(
             (linkedPart) => linkedPart.rubric_part_id === part.id
           )
         )

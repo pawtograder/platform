@@ -1,6 +1,6 @@
 import { useSearchParams } from "next/navigation";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { useAssignmentController, useMyReviewAssignments, useReviewAssignment } from "./useAssignment";
+import { useAssignmentController, useMyReviewAssignments, useReviewAssignment, useRubricById } from "./useAssignment";
 import {
   useAllCommentsForReview,
   useSubmission,
@@ -34,7 +34,6 @@ export function useActiveRubricId() {
 
 export function SubmissionReviewProvider({ children }: { children: React.ReactNode }) {
   const [activeReviewAssignmentId, setActiveReviewAssignmentId] = useState<number | undefined>(undefined);
-  const [activeSubmissionReviewId, setActiveSubmissionReviewId] = useState<number | undefined>(undefined);
   const [activeRubricId, setActiveRubricId] = useState<number | undefined>(undefined);
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
   const searchParams = useSearchParams();
@@ -43,6 +42,8 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const writableReviews = useWritableSubmissionReviews();
   const submission = useSubmission();
   const assignmentController = useAssignmentController();
+  const initialSubmissionReviewId = submission.grading_review_id ?? undefined;
+  const [activeSubmissionReviewId, setActiveSubmissionReviewId] = useState<number | undefined>(initialSubmissionReviewId);
 
   useEffect(() => {
     const reviewAssignment = reviewAssignmentIdParam
@@ -56,7 +57,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       setActiveRubricId(reviewAssignment.rubric_id);
     } else if (writableReviews && writableReviews.length > 0) {
       //Default to a grading review if it is writable
-      const gradingReview = writableReviews.find((wr) => wr.rubrics.review_round === "grading-review");
+      const gradingReview = writableReviews.find((wr) => wr.id === submission.grading_review_id);
       if (gradingReview) {
         setActiveReviewAssignmentId(myAssignedReviews.find((ra) => ra.submission_review_id === gradingReview.id)?.id);
         //Only set submission review id if it is writable!
@@ -72,7 +73,7 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     } else {
       //Default to grading review
       setActiveReviewAssignmentId(undefined);
-      setActiveSubmissionReviewId(undefined);
+      setActiveSubmissionReviewId(submission.grading_review_id ?? undefined);
       setActiveRubricId(assignmentController.assignment.grading_rubric_id ?? undefined);
     }
   }, [
@@ -81,7 +82,8 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     myAssignedReviews,
     writableReviews,
     submission,
-    assignmentController
+    assignmentController,
+    setActiveSubmissionReviewId
   ]);
 
   const value = {
@@ -100,12 +102,16 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
 
 export function useMissingRubricChecksForActiveReview() {
   const activeSubmissionReview = useActiveSubmissionReview();
+  if (!activeSubmissionReview) {
+    throw new Error("No active submission review found");
+  }
   const comments = useAllCommentsForReview(activeSubmissionReview?.id);
+  const rubric = useRubricById(activeSubmissionReview.rubric_id);
   const rubricChecks = useMemo(() => {
-    return activeSubmissionReview?.rubrics.rubric_parts.flatMap((part) =>
+    return rubric?.rubric_parts.flatMap((part) =>
       part.rubric_criteria.flatMap((criteria) => criteria.rubric_checks)
     );
-  }, [activeSubmissionReview]);
+  }, [rubric]);
   const { missing_required_checks, missing_optional_checks } = useMemo(() => {
     return {
       missing_required_checks: rubricChecks?.filter(
@@ -117,7 +123,7 @@ export function useMissingRubricChecksForActiveReview() {
     };
   }, [rubricChecks, comments]);
   const { missing_required_criteria, missing_optional_criteria } = useMemo(() => {
-    const allCriteria = activeSubmissionReview?.rubrics.rubric_parts.flatMap((part) => part.rubric_criteria);
+    const allCriteria = rubric?.rubric_parts.flatMap((part) => part.rubric_criteria);
     const criteriaEvaluation = allCriteria?.map((criteria) => ({
       criteria,
       check_count_applied: criteria.rubric_checks.filter((check) =>
@@ -134,13 +140,16 @@ export function useMissingRubricChecksForActiveReview() {
         (item) => item.criteria.min_checks_per_submission === null && item.check_count_applied === 0
       )
     };
-  }, [comments, activeSubmissionReview?.rubrics.rubric_parts]);
+  }, [comments, rubric]);
   return { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria };
 }
 
 export function useActiveSubmissionReview() {
   const ctx = useContext(SubmissionReviewContext);
   if (!ctx) throw new Error("useActiveSubmissionReview must be used within a SubmissionReviewProvider");
+  if (!ctx.activeSubmissionReviewId) {
+    throw new Error("No active submission review ID found");
+  }
   return useSubmissionReviewOrGradingReview(ctx.activeSubmissionReviewId);
 }
 export function useActiveReviewAssignmentId() {

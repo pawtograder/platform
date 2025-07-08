@@ -161,3 +161,33 @@ BEGIN
     );
 END; 
 $$;
+
+-- Create trigger function to handle negative hours in due date exceptions
+CREATE OR REPLACE FUNCTION handle_negative_due_date_exception()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- If hours is negative, call auto_assign_self_reviews for affected students
+    IF NEW.hours < 0 THEN
+        -- If student_id is specified, call for that specific student
+        IF NEW.student_id IS NOT NULL THEN
+            PERFORM auto_assign_self_reviews(NEW.assignment_id, NEW.student_id);
+        END IF;
+        
+        -- If assignment_group_id is specified, call for all students in that group
+        IF NEW.assignment_group_id IS NOT NULL THEN
+            PERFORM auto_assign_self_reviews(NEW.assignment_id, agm.profile_id)
+            FROM assignment_groups_members agm
+            WHERE agm.assignment_group_id = NEW.assignment_group_id
+            AND agm.assignment_id = NEW.assignment_id;
+        END IF;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger on assignment_due_date_exceptions table
+CREATE TRIGGER trigger_negative_due_date_exception
+    AFTER INSERT ON assignment_due_date_exceptions
+    FOR EACH ROW
+    EXECUTE FUNCTION handle_negative_due_date_exception();
