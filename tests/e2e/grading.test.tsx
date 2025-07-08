@@ -215,6 +215,11 @@ public class Entrypoint {
   }
 });
 
+const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
+const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glove test";
+const GRADING_REVIEW_COMMENT_1 = "Your code is like a mystery novel - I have no idea what's going to happen next";
+const GRADING_REVIEW_COMMENT_2 = "This is the kind of code that makes me question my career choices";
+
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
   test("Students can submit self-review early", async ({ page }) => {
@@ -240,7 +245,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("option", { name: "Leave a comment" }).click();
 
     await page.getByRole("textbox", { name: "Add a comment about this line" }).click();
-    await page.getByRole("textbox", { name: "Add a comment about this line" }).fill("here is a comment");
+    await page.getByRole("textbox", { name: "Add a comment about this line" }).fill(SELF_REVIEW_COMMENT_1);
     await percySnapshot(page, "Adding a comment on the self-review");
     await page.getByRole("button", { name: "Add Comment" }).click();
     await page.getByText("Annotate line 15 with a check:").waitFor({ state: "hidden" });
@@ -262,7 +267,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     );
     //Wait for the add check button to stabilize
     await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
-    await page.getByRole("textbox", { name: "Optional: comment on check Self Review Check 2" }).fill("Hi");
+    await page.getByRole("textbox", { name: "Optional: comment on check Self Review Check 2" }).fill(SELF_REVIEW_COMMENT_2);
     await percySnapshot(page, "Adding a global self-review check with a comment");
 
     await page.getByRole("button", { name: "Add Check" }).click();
@@ -287,7 +292,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Files" }).click();
 
     await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(`${student_email} applied today at`);
+    //Make sure that we get a very nice screenshot with a fully-loaded page
     await expect(page.getByText("public static void main(")).toBeVisible();
+    await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
+    await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
+    await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
     await percySnapshot(page, "Instructor can view the student's self-review");
 
     await page.getByText("public static void main(").click({
@@ -295,7 +304,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     });
     await page.getByRole("option", { name: "Grading Review Check 1 (+10)" }).click();
     await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
-    await page.getByRole("textbox", { name: "Optionally add a comment, or" }).fill("grading comment again");
+    await page.getByRole("textbox", { name: "Optionally add a comment, or" }).fill(GRADING_REVIEW_COMMENT_1);
     await percySnapshot(page, "Instructor adds a grading review check");
     await page.getByRole("button", { name: "Add Check" }).click();
     // await clickAddCheckWithRetry(page);
@@ -309,7 +318,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
     await page
       .getByRole("textbox", { name: "Optional: comment on check Grading Review Check 2" })
-      .fill("grading comment");
+      .fill(GRADING_REVIEW_COMMENT_2);
     await page.getByRole("button", { name: "Add Check" }).click();
     // await clickAddCheckWithRetry(page);
 
@@ -337,9 +346,10 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByText("public int doMath(int a, int").click();
 
     await expect(page.locator("#rubric-1")).toContainText("Grading Review Criteria 20/20");
+    await expect(page.locator("#rubric-1")).toContainText(GRADING_REVIEW_COMMENT_1);
+    await expect(page.locator("#rubric-1")).toContainText(GRADING_REVIEW_COMMENT_2);
     await percySnapshot(page, "Student can view their grading results");
 
     await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(`${instructor_email} applied today`);
-    await expect(page.locator("body")).toContainText("grading comment again");
   });
 });
