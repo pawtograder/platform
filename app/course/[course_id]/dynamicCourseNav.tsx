@@ -171,7 +171,7 @@ export default function DynamicCourseNav() {
   const course = enrollment.classes as CourseWithFeatures;
   const filteredLinks = LinkItems(enrollment.class_id)
     .filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor))
-    .filter((link) => !link.feature_flag || course.features?.find((f) => f.name === link.feature_flag)?.enabled);
+    .filter((link) => !('feature_flag' in link) || course.features?.find((f) => f.name === link.feature_flag)?.enabled);
 
   return (
     <Box

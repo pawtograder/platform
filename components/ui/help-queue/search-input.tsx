@@ -1,5 +1,6 @@
-import { Input, InputGroup, InputProps } from "@chakra-ui/react";
+import { Input, InputProps } from "@chakra-ui/react";
 import { BsSearch } from "react-icons/bs";
+import { InputGroup } from "../input-group";
 
 export type SearchInputProps = InputProps & {
   value?: string;
