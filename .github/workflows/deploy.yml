@@ -22,7 +22,7 @@ jobs:
           coolify_server_uuid: ${{ secrets.COOLIFY_SERVER_UUID }}
           coolify_api_token: ${{ secrets.COOLIFY_API_TOKEN }}
           coolify_project_uuid: ${{ secrets.COOLIFY_PROJECT_UUID }}
-          coolify_environment_name: ${{ secrets.COOLIFY_ENVIRONMENT_NAME }}
+          coolify_environment_name: ${{ vars.COOLIFY_ENVIRONMENT_NAME }}
           coolify_environment_uuid: ${{ secrets.COOLIFY_ENVIRONMENT_UUID }}
           coolify_supabase_api_url: ${{ secrets.COOLIFY_SUPABASE_API_URL }}
           deployment_app_uuid: ${{ secrets.COOLIFY_DEPLOYMENT_APP_UUID }}
