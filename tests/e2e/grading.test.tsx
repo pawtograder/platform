@@ -267,7 +267,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     );
     //Wait for the add check button to stabilize
     await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
-    await page.getByRole("textbox", { name: "Optional: comment on check Self Review Check 2" }).fill(SELF_REVIEW_COMMENT_2);
+    await page
+      .getByRole("textbox", { name: "Optional: comment on check Self Review Check 2" })
+      .fill(SELF_REVIEW_COMMENT_2);
     await percySnapshot(page, "Adding a global self-review check with a comment");
 
     await page.getByRole("button", { name: "Add Check" }).click();
