@@ -1,8 +1,8 @@
 "use client";
-import React, { useContext } from "react";
+import { Container, Image, VStack } from "@chakra-ui/react";
 import { IGif } from "@giphy/js-types";
-import { Grid, SearchBar, SearchContext, SearchContextManager, SuggestionBar } from "@giphy/react-components";
-import { VStack, Container, Image } from "@chakra-ui/react";
+import { Grid, SearchBar, SearchContext, SearchContextManager } from "@giphy/react-components";
+import { useContext } from "react";
 import { useColorMode } from "./color-mode";
 
 const GiphyPicker = ({ onGifSelect }: { onGifSelect: (gif: IGif) => void }) => (
