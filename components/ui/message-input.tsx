@@ -277,7 +277,7 @@ export default function MessageInput(props: MessageInputProps) {
               />
             )}
             {enableGiphyPicker && (
-              <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
+              <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)} lazyMount>
                 <PopoverTrigger asChild>
                   <Button
                     aria-label="Toggle giphy picker"

@@ -2,7 +2,8 @@
 import React, { useContext } from "react";
 import { IGif } from "@giphy/js-types";
 import { Grid, SearchBar, SearchContext, SearchContextManager, SuggestionBar } from "@giphy/react-components";
-import { VStack, Container } from "@chakra-ui/react";
+import { VStack, Container, Image } from "@chakra-ui/react";
+import { useColorMode } from "./color-mode";
 
 const GiphyPicker = ({ onGifSelect }: { onGifSelect: (gif: IGif) => void }) => (
   <SearchContextManager apiKey="yVBc6zuQtPlYItUXdgBTPXP1NYx1P3vW">
@@ -13,11 +14,14 @@ const GiphyPicker = ({ onGifSelect }: { onGifSelect: (gif: IGif) => void }) => (
 const InnerPicker = ({ onGifSelect }: { onGifSelect: (gif: IGif) => void }) => {
   const { fetchGifs, searchKey } = useContext(SearchContext);
 
+  const { colorMode } = useColorMode();
+
   return (
     <Container overflowY="auto" height="300px" width="400px">
       <VStack align="stretch" spaceY={2}>
         <SearchBar />
-        <SuggestionBar />
+        <Image w="200px" src={colorMode === "dark" ? "/giphy_black.png" : "/giphy_white.png"} alt="Powered by Giphy" />
+        {/* <SuggestionBar /> */}
         {/**
                 key will recreate the component,
                 this is important for when you change fetchGifs
