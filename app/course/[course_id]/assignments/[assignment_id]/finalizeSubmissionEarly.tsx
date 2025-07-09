@@ -3,7 +3,6 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
-import { useInvalidate } from "@refinedev/core";
 
 export default function FinalizeSubmissionEarly({
   assignment,
@@ -20,19 +19,19 @@ export default function FinalizeSubmissionEarly({
 }) {
   const supabase = createClient();
 
-  const invalidate = useInvalidate();
-
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
   // ex if something is due at 9:15pm and the student marks "finished" at 6:30pm, their deadline will be moved
   // back 3 hours to 6:15pm so they can access the self review immediately.
   const finalizeSubmission = async () => {
     try {
+      console.log("Finalizing submission early", assignment.id, private_profile_id);
       setLoading(true);
       // @ts-expect-error - Function not yet in types
       const { data, error } = await supabase.rpc("finalize_submission_early", {
         this_assignment_id: assignment.id,
         this_profile_id: private_profile_id
       });
+      console.log("Finalized submission early", data, error);
 
       if (error) {
         console.error("Error finalizing submission:", error);
@@ -47,15 +46,6 @@ export default function FinalizeSubmissionEarly({
         // You might want to show a toast notification here
         return;
       }
-
-      await invalidate({
-        resource: "review_assignments",
-        invalidates: ["all"]
-      });
-      await invalidate({
-        resource: "submission_reviews",
-        invalidates: ["all"]
-      });
     } catch (err) {
       console.error("Unexpected error finalizing submission:", err);
     } finally {

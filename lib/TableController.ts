@@ -110,6 +110,7 @@ export default class TableController<
             }
           });
           this._realtimeChannel.on("broadcast", { event: "data-change" }, (message) => {
+            console.log("Received data change message", JSON.stringify(message, null, 2));
             const payload = message.payload as DataChangePayload<RelationName>;
             if (payload.table === table) {
               switch (payload.operation) {
@@ -145,6 +146,7 @@ export default class TableController<
           });
           this._realtimeChannel.on("broadcast", { event: "data-change-by-id" }, (message) => {
             const payload = message.payload as DataChangeByIDPayload<RelationName>;
+            console.log("Received data change by id message", JSON.stringify(payload, null, 2));
             if (payload.table === table) {
               switch (payload.operation) {
                 case "INSERT":
@@ -225,6 +227,7 @@ export default class TableController<
 
   close() {
     if (this._realtimeChannel) {
+      console.log("Unsubscribing from realtime channel", this._realtimeChannelName);
       this._realtimeChannel.unsubscribe();
     }
   }
