@@ -64,7 +64,6 @@ export default function AutograderPage() {
           has_autograder: values.assignments.has_autograder
         }
       });
-      console.log(values.max_submissions_count, values.max_submissions_period_secs);
       refineCore.onFinish({
         grader_repo: values.grader_repo,
         max_submissions_count: values.max_submissions_count || null,

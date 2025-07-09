@@ -17,6 +17,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import { createClient } from "@/utils/supabase/client";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
@@ -708,34 +709,91 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       controller.setDiscussionThreadReadStatuses(threadReadStatuses.data.data);
     }
   }, [controller, threadReadStatuses.data]);
-  const { data: userProfiles } = useList<UserProfile>({
-    resource: "profiles",
-    queryOptions: {
-      staleTime: Infinity
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
-  const { data: roles } = useList<UserRoleWithUser>({
-    resource: "user_roles",
-    queryOptions: {
-      staleTime: Infinity
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    meta: {
-      select: "*, users(*)"
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
-  useEffect(() => {
-    if (userProfiles?.data && roles?.data) {
-      controller.setUserProfiles(userProfiles.data, roles.data);
+
+  // Replace useList with direct Supabase API calls for profiles and roles
+  const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
+  const [roles, setRoles] = useState<UserRoleWithUser[]>([]);
+  const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
+  const [isLoadingRoles, setIsLoadingRoles] = useState(true);
+
+  // Function to fetch all profiles with pagination
+  const fetchAllProfiles = useCallback(async () => {
+    const supabase = createClient();
+    let allProfiles: UserProfile[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("class_id", course_id)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error("Error fetching profiles:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allProfiles = [...allProfiles, ...data];
+        from += pageSize;
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
     }
-  }, [controller, userProfiles?.data, roles?.data]);
+
+    setUserProfiles(allProfiles);
+    setIsLoadingProfiles(false);
+  }, [course_id]);
+
+  // Function to fetch all roles with pagination
+  const fetchAllRoles = useCallback(async () => {
+    const supabase = createClient();
+    let allRoles: UserRoleWithUser[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("*, users(*)")
+        .eq("class_id", course_id)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error("Error fetching roles:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allRoles = [...allRoles, ...data];
+        from += pageSize;
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    setRoles(allRoles);
+    setIsLoadingRoles(false);
+  }, [course_id]);
+
+  // Fetch profiles and roles on mount
+  useEffect(() => {
+    fetchAllProfiles();
+    fetchAllRoles();
+  }, [fetchAllProfiles, fetchAllRoles]);
+
+  // Update controller when both profiles and roles are loaded
+  useEffect(() => {
+    if (!isLoadingProfiles && !isLoadingRoles && userProfiles.length > 0 && roles.length > 0) {
+      controller.setUserProfiles(userProfiles, roles);
+    }
+  }, [controller, userProfiles, roles, isLoadingProfiles, isLoadingRoles]);
 
   const query = useList<DiscussionThread>({
     resource: "discussion_threads",
@@ -924,7 +982,7 @@ export function useAssignmentDueDate(assignment: Assignment) {
       lateTokensConsumed,
       time_zone
     };
-  }, [dueDateExceptions, assignment.due_date]);
+  }, [dueDateExceptions, assignment.due_date, time_zone]);
   return ret;
 }
 
