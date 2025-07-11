@@ -1,12 +1,18 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { Avatar, Box, HStack, Stack, Text } from "@chakra-ui/react";
+import { Avatar, Box, HStack, Stack, Text, Badge, Icon, AvatarGroup } from "@chakra-ui/react";
+import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "react-markdown";
+import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+
 interface MessageData {
   user: string;
   updatedAt: string;
   message: string;
   isResolved: boolean;
   isAssigned: boolean;
+  students?: string[];
+  queue?: HelpQueue;
+  isVideoLive?: boolean;
 }
 
 interface Props {
@@ -14,10 +20,90 @@ interface Props {
   selected?: boolean;
 }
 
+/**
+ * Get icon for queue type
+ */
+const getQueueIcon = (type: string) => {
+  switch (type) {
+    case "video":
+      return BsCameraVideo;
+    case "in_person":
+      return BsGeoAlt;
+    default:
+      return BsChatText;
+  }
+};
+
 export const HelpRequestTeaser = (props: Props) => {
-  const { user, updatedAt, message } = props.data;
+  const { updatedAt, message, students = [], queue, isVideoLive = false } = props.data;
   const { selected } = props;
-  const userProfile = useUserProfile(user);
+
+  // Get user profiles for up to 3 students (unconditionally)
+  const student1Profile = useUserProfile(students[0] || "");
+  const student2Profile = useUserProfile(students[1] || "");
+  const student3Profile = useUserProfile(students[2] || "");
+
+  // Helper functions that use the profiles we've already loaded
+  const renderStudentsDisplay = () => {
+    if (students.length === 0) {
+      return <Text fontWeight="medium">Unknown Student</Text>;
+    }
+
+    if (students.length === 1) {
+      return <Text fontWeight="medium">{student1Profile?.name || "Unknown Student"}</Text>;
+    }
+
+    if (students.length === 2) {
+      return (
+        <Text fontWeight="medium">
+          {student1Profile?.name || "Unknown"} & {student2Profile?.name || "Unknown"}
+        </Text>
+      );
+    }
+
+    return (
+      <HStack spaceX={1}>
+        <Text fontWeight="medium">
+          {student1Profile?.name || "Unknown"} + {students.length - 1} others
+        </Text>
+        <Icon as={BsPeople} fontSize="sm" color="fg.muted" />
+      </HStack>
+    );
+  };
+
+  const renderStudentsAvatars = () => {
+    if (students.length === 0) {
+      return (
+        <Avatar.Root size="sm">
+          <Avatar.Fallback>?</Avatar.Fallback>
+        </Avatar.Root>
+      );
+    }
+
+    if (students.length === 1) {
+      return (
+        <Avatar.Root size="sm">
+          <Avatar.Image src={student1Profile?.avatar_url} />
+          <Avatar.Fallback>{student1Profile?.name?.charAt(0) || "?"}</Avatar.Fallback>
+        </Avatar.Root>
+      );
+    }
+
+    const profiles = [student1Profile, student2Profile, student3Profile].filter(Boolean);
+    const maxAvatars = Math.min(3, students.length);
+
+    return (
+      <AvatarGroup size="sm">
+        {profiles.slice(0, maxAvatars).map((profile, index) => (
+          <Avatar.Root key={students[index]} size="sm">
+            <Avatar.Image src={profile?.avatar_url} />
+            <Avatar.Fallback>{profile?.name?.charAt(0) || "?"}</Avatar.Fallback>
+          </Avatar.Root>
+        ))}
+      </AvatarGroup>
+    );
+  };
+
   return (
     <HStack
       align="flex-start"
@@ -28,20 +114,35 @@ export const HelpRequestTeaser = (props: Props) => {
       rounded="md"
       bg={selected ? "bg.muted" : ""}
     >
-      <Box pt="1">
-        <Avatar.Root size="sm">
-          <Avatar.Image src={userProfile?.avatar_url} />
-          <Avatar.Fallback>{userProfile?.name.charAt(0)}</Avatar.Fallback>
-        </Avatar.Root>
-      </Box>
+      <Box pt="1">{renderStudentsAvatars()}</Box>
       <Stack spaceY="0" fontSize="sm" flex="1" truncate>
-        <HStack spaceX="1">
-          <Text fontWeight="medium" flex="1">
-            {userProfile?.name}
-          </Text>
-          <Text color="fg.subtle" fontSize="xs">
-            {updatedAt}
-          </Text>
+        <HStack spaceX="1" justify="space-between">
+          <Box flex="1" truncate>
+            {renderStudentsDisplay()}
+          </Box>
+          <HStack spaceX="2">
+            {isVideoLive && (
+              <Badge colorPalette="green" variant="solid" size="xs">
+                <Icon as={BsPersonVideo2} fontSize="xs" />
+                Live
+              </Badge>
+            )}
+            {queue && (
+              <Badge
+                colorPalette={queue.color ? undefined : "blue"}
+                bg={queue.color || undefined}
+                color={queue.color ? "white" : undefined}
+                variant="solid"
+                size="xs"
+              >
+                <Icon as={getQueueIcon(queue.queue_type)} fontSize="xs" />
+                {queue.name}
+              </Badge>
+            )}
+            <Text color="fg.subtle" fontSize="xs">
+              {updatedAt}
+            </Text>
+          </HStack>
         </HStack>
         <Box color="fg.subtle" truncate>
           <Markdown>{message}</Markdown>

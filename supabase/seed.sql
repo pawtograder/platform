@@ -1139,7 +1139,6 @@ BEGIN
         -- Create help request (alternate queue & privacy)
         INSERT INTO public.help_requests (
             class_id,
-            creator,
             request,
             help_queue,
             is_private,
@@ -1149,7 +1148,6 @@ BEGIN
             status
         ) VALUES (
             demo_class_id,
-            student_priv,
             format('Help request #%s: My program crashes on edge cases.', i),
             CASE WHEN i % 3 = 1 THEN text_queue_id WHEN i % 3 = 2 THEN video_queue_id ELSE inperson_queue_id END,
             (i % 2 = 0),
@@ -1162,6 +1160,17 @@ BEGIN
             CASE WHEN i % 2 = 0 THEN debugging_template_id ELSE concept_template_id END,
             'open'
         ) RETURNING id INTO help_req_id;
+
+        -- Add student to help request via the new many-to-many table
+        INSERT INTO public.help_request_students (
+            help_request_id,
+            profile_id,
+            class_id
+        ) VALUES (
+            help_req_id,
+            student_priv,
+            demo_class_id
+        );
 
         -- Optional file reference for even numbered requests
         IF i % 2 = 0 THEN
@@ -1227,6 +1236,72 @@ BEGIN
             'Student created a new help request via web UI.'
         );
     END LOOP;
+
+    ------------------------------------------------------------------
+    -- Create some group help requests to demonstrate many-to-many ---
+    ------------------------------------------------------------------
+    
+    -- Create a group help request with multiple students
+    INSERT INTO public.help_requests (
+        class_id,
+        request,
+        help_queue,
+        is_private,
+        location_type,
+        priority_level,
+        status
+    ) VALUES (
+        demo_class_id,
+        'Group project debugging session - need help with merge conflicts and integration issues.',
+        video_queue_id,
+        FALSE,
+        'remote',
+        2,
+        'open'
+    ) RETURNING id INTO help_req_id;
+
+    -- Add multiple students to this group help request
+    FOR i IN 1..3 LOOP
+        INSERT INTO public.help_request_students (
+            help_request_id,
+            profile_id,
+            class_id
+        ) VALUES (
+            help_req_id,
+            student_private_profile_ids[i],
+            demo_class_id
+        );
+    END LOOP;
+
+    -- Group message from first student
+    INSERT INTO public.help_request_messages (
+        help_request_id,
+        class_id,
+        author,
+        message,
+        instructors_only
+    ) VALUES (
+        help_req_id,
+        demo_class_id,
+        student_private_profile_ids[1],
+        'We are working on our group project and ran into some Git merge conflicts. Can we get help during office hours?',
+        FALSE
+    );
+
+    -- Another group member adds details
+    INSERT INTO public.help_request_messages (
+        help_request_id,
+        class_id,
+        author,
+        message,
+        instructors_only
+    ) VALUES (
+        help_req_id,
+        demo_class_id,
+        student_private_profile_ids[2],
+        'Also having issues with our database integration tests failing after the merge.',
+        FALSE
+    );
 
     ------------------------------------------------------------------
     -- Example moderation action -------------------------------------

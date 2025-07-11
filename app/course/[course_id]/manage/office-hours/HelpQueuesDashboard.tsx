@@ -1,10 +1,16 @@
 "use client";
-import { Box, Flex, HStack, Stack, Text } from "@chakra-ui/react";
+import { Box, Flex, HStack, Stack, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { useList, useCreate, useUpdate } from "@refinedev/core";
 import type { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import PersonAvatar from "@/components/ui/person-avatar";
+import { BsPersonBadge } from "react-icons/bs";
+import { useMemo } from "react";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+
+type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"]["Row"];
 
 /**
  * Dashboard component for instructors/TAs to manage their office-hour queues.
@@ -39,6 +45,21 @@ export default function HelpQueuesDashboard() {
     pagination: { current: 1, pageSize: 100 }
   });
 
+  // Fetch ALL active assignments for all staff members in this course
+  const {
+    data: allActiveAssignments,
+    isLoading: activeAssignmentsLoading,
+    error: activeAssignmentsError
+  } = useList<HelpQueueAssignment>({
+    resource: "help_queue_assignments",
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "is_active", operator: "eq", value: true }
+    ],
+    sorters: [{ field: "started_at", order: "asc" }],
+    pagination: { pageSize: 1000 }
+  });
+
   // Fetch all unresolved help requests for this course to display queue workload counts.
   const { data: requestsResponse } = useList<HelpRequest>({
     resource: "help_requests",
@@ -48,6 +69,23 @@ export default function HelpQueuesDashboard() {
 
   const activeAssignments = assignmentsResponse?.data ?? [];
   const unresolvedRequests = (requestsResponse?.data ?? []).filter((r) => r.resolved_by === null);
+
+  // Group all active assignments by queue
+  const activeAssignmentsByQueue = useMemo(() => {
+    if (!allActiveAssignments?.data) return {};
+
+    return allActiveAssignments.data.reduce(
+      (acc, assignment) => {
+        const queueId = assignment.help_queue_id;
+        if (!acc[queueId]) {
+          acc[queueId] = [];
+        }
+        acc[queueId].push(assignment);
+        return acc;
+      },
+      {} as Record<number, HelpQueueAssignment[]>
+    );
+  }, [allActiveAssignments?.data]);
 
   const { mutate: createAssignment } = useCreate();
   const { mutate: updateAssignment } = useUpdate();
@@ -76,8 +114,9 @@ export default function HelpQueuesDashboard() {
     });
   };
 
-  if (queuesLoading) return <Text>Loading office-hour queues…</Text>;
+  if (queuesLoading || activeAssignmentsLoading) return <Text>Loading office-hour queues…</Text>;
   if (queuesError) return <Text>Error: {queuesError.message}</Text>;
+  if (activeAssignmentsError) return <Text>Error loading assignments: {activeAssignmentsError.message}</Text>;
 
   const queues = queuesResponse?.data ?? [];
 
@@ -85,6 +124,9 @@ export default function HelpQueuesDashboard() {
     <Stack spaceY="4">
       {queues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
+        const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
+        const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
+
         return (
           <Flex
             key={queue.id}
@@ -103,6 +145,27 @@ export default function HelpQueuesDashboard() {
                   · Open Requests: {unresolvedRequests.filter((r) => r.help_queue === queue.id).length}
                 </Text>
               </HStack>
+
+              {/* Active staff section */}
+              <VStack align="stretch" spaceY={2} mt={2}>
+                <HStack align="center" spaceX={2}>
+                  <BsPersonBadge />
+                  <Text fontSize="sm" fontWeight="medium">
+                    Staff on duty ({activeStaff.length})
+                  </Text>
+                </HStack>
+
+                {activeStaff.length > 0 ? (
+                  <HStack wrap="wrap" gap={2}>
+                    {activeStaff.slice(0, 4).map((staffId, index) => (
+                      <PersonAvatar key={`staff-${staffId}-${index}`} uid={staffId} size="sm" />
+                    ))}
+                    {activeStaff.length > 4 && <Text fontSize="xs">+{activeStaff.length - 4} more</Text>}
+                  </HStack>
+                ) : (
+                  <Text fontSize="xs">No staff currently on duty</Text>
+                )}
+              </VStack>
             </Box>
             {myAssignment ? (
               <Button variant="outline" colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>

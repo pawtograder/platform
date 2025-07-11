@@ -23,8 +23,6 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
     );
   }
 
-  console.log(requests);
-
   return (
     <Stack spaceY={4}>
       <Text fontSize="lg" fontWeight="medium">

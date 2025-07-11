@@ -1,7 +1,7 @@
 "use client";
 
 import { Box, Tabs } from "@chakra-ui/react";
-import HelpQueuesDashboard from "./HelpQueuesDashboard";
+import HelpQueuesDashboard from "./helpQueuesDashboard";
 import HelpQueueManagement from "./helpQueueManagement";
 import HelpQueueAssignmentManagement from "./helpQueueAssignmentManagement";
 import HelpRequestTemplateManagement from "./helpRequestTemplateManagement";

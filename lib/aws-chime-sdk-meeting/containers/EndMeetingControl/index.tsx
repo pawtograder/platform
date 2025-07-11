@@ -17,6 +17,7 @@ import { StyledP } from "./Styled";
 import { useParams } from "next/navigation";
 import { liveMeetingEnd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 const EndMeetingControl: React.FC = () => {
   const logger = useLogger();
@@ -25,6 +26,10 @@ const EndMeetingControl: React.FC = () => {
   const toggleModal = (): void => setShowModal(!showModal);
   const { help_request_id, course_id } = useParams();
   const supabase = createClient();
+  const { role } = useClassProfiles();
+
+  // Check if current user is instructor or grader (not a student)
+  const isInstructorOrGrader = role?.role === "instructor" || role?.role === "grader";
 
   const leaveMeeting = async (): Promise<void> => {
     // Close the current window since this is the meeting interface
@@ -69,14 +74,19 @@ const EndMeetingControl: React.FC = () => {
           </ModalBody>
           <ModalButtonGroup
             primaryButtons={[
-              <ModalButton
-                key="end-meeting-for-all"
-                onClick={endMeetingForAll}
-                variant="primary"
-                label="End meeting for all"
-                disabled={isEndingMeeting}
-                closesModal
-              />,
+              // Only show "End meeting for all" button for instructors and graders
+              ...(isInstructorOrGrader
+                ? [
+                    <ModalButton
+                      key="end-meeting-for-all"
+                      onClick={endMeetingForAll}
+                      variant="primary"
+                      label="End meeting for all"
+                      disabled={isEndingMeeting}
+                      closesModal
+                    />
+                  ]
+                : []),
               <ModalButton
                 key="leave-meeting"
                 onClick={leaveMeeting}

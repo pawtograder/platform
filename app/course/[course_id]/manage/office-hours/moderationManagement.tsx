@@ -1,16 +1,18 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge, VStack } from "@chakra-ui/react";
+import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge, VStack, IconButton } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useList } from "@refinedev/core";
+import { useList, useDelete } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye, BsPlus } from "react-icons/bs";
+import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye, BsPlus, BsTrash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
 import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { useState } from "react";
+import { toaster } from "@/components/ui/toaster";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 
 type ModerationAction = Database["public"]["Tables"]["help_request_moderation"]["Row"];
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
@@ -31,6 +33,7 @@ type ModerationActionWithDetails = ModerationAction & {
 export default function ModerationManagement() {
   const { course_id } = useParams();
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "expired">("all");
+  const isInstructor = useIsInstructor();
 
   // Modal management
   const createModal = useModalManager();
@@ -56,9 +59,34 @@ export default function ModerationManagement() {
     }
   });
 
+  // Delete functionality
+  const { mutate: deleteModerationAction, isPending: isDeleting } = useDelete();
+
   const handleCreateSuccess = () => {
     createModal.closeModal();
     refetchModeration();
+  };
+
+  const handleDeleteModerationAction = (actionId: number) => {
+    if (window.confirm("Are you sure you want to delete this moderation action? This action cannot be undone.")) {
+      deleteModerationAction(
+        {
+          resource: "help_request_moderation",
+          id: actionId
+        },
+        {
+          onSuccess: () => {
+            refetchModeration();
+          },
+          onError: (error) => {
+            toaster.error({
+              title: "Failed to delete moderation action",
+              description: error instanceof Error ? error.message : "An unexpected error occurred"
+            });
+          }
+        }
+      );
+    }
   };
 
   if (moderationLoading) return <Text>Loading moderation actions...</Text>;
@@ -190,6 +218,20 @@ export default function ModerationManagement() {
 
           {action.help_request && <Text fontSize="sm">Help Request #{action.help_request.id}</Text>}
         </Box>
+
+        {/* Delete Button */}
+        {isInstructor && (
+          <IconButton
+            aria-label="Delete moderation action"
+            colorPalette="red"
+            variant="ghost"
+            size="sm"
+            loading={isDeleting}
+            onClick={() => handleDeleteModerationAction(action.id)}
+          >
+            <Icon as={BsTrash} />
+          </IconButton>
+        )}
       </Flex>
     </Box>
   );

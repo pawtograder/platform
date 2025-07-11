@@ -315,15 +315,7 @@ export default function DynamicCourseNav() {
                     >
                       <Menu.Root>
                         <Menu.Trigger asChild>
-                          <Button
-                            colorPalette="gray"
-                            _hover={{ bg: "#EBEDEF" }}
-                            size="xs"
-                            fontSize="sm"
-                            pt="0"
-                            variant="ghost"
-                            asChild
-                          >
+                          <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
                             <Flex align="center" role="group">
                               <HStack>
                                 {React.createElement(link.icon)}

@@ -74,7 +74,7 @@ export default function VideoCallControls({
 
       toaster.success({
         title: "Video call started",
-        description: "Video meeting has been initiated for this help request"
+        description: "Video meeting has been initiated for this help request. Please wait for the student(s) to join."
       });
     } catch (error) {
       toaster.error({
@@ -139,7 +139,6 @@ export default function VideoCallControls({
   }, [isEndingCall, request, supabase]);
 
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
-  // TODO:Use auth context to check if current user is instructor or grader
   const currentUserIsInstructorOrGrader = true;
 
   // Minimal variant - just shows join button when call is live

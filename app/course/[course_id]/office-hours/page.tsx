@@ -11,18 +11,10 @@ import PersonAvatar from "@/components/ui/person-avatar";
 import { useMemo } from "react";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
-// Type for help queue assignments based on database schema
-type HelpQueueAssignment = {
-  id: number;
-  help_queue_id: number;
-  ta_profile_id: string;
-  is_active: boolean;
-  started_at: string;
-  ended_at: string | null;
-  class_id: number;
-  max_concurrent_students: number;
-};
+type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"]["Row"];
+type HelpRequestStudent = Database["public"]["Tables"]["help_request_students"]["Row"];
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
@@ -46,6 +38,26 @@ export default function OfficeHoursPage() {
     pagination: { pageSize: 1000 } // Get all active requests
   });
 
+  // Get active request IDs to optimize the help_request_students query
+  const activeRequestIds = useMemo(() => {
+    return activeRequests.data?.data?.map((request) => request.id) || [];
+  }, [activeRequests.data?.data]);
+
+  // Fetch help request students only for active requests to optimize performance
+  const helpRequestStudents = useList<HelpRequestStudent>({
+    resource: "help_request_students",
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      ...(activeRequestIds.length > 0
+        ? [{ field: "help_request_id", operator: "in" as const, value: activeRequestIds }]
+        : [])
+    ],
+    pagination: { pageSize: 1000 },
+    queryOptions: {
+      enabled: activeRequestIds.length > 0 // Only run this query if we have active requests
+    }
+  });
+
   // Fetch active queue assignments (staff currently working)
   const activeAssignments = useList<HelpQueueAssignment>({
     resource: "help_queue_assignments",
@@ -57,22 +69,38 @@ export default function OfficeHoursPage() {
     pagination: { pageSize: 1000 }
   });
 
-  // Group active requests by queue
+  // Group active requests by queue and include student information
   const activeRequestsByQueue = useMemo(() => {
     if (!activeRequests.data?.data) return {};
 
+    // Create mapping of request ID to student profile IDs
+    const studentsByRequestId = (helpRequestStudents.data?.data || []).reduce(
+      (acc, student) => {
+        if (!acc[student.help_request_id]) {
+          acc[student.help_request_id] = [];
+        }
+        acc[student.help_request_id].push(student.profile_id);
+        return acc;
+      },
+      {} as Record<number, string[]>
+    );
+
+    // Group requests by queue ID, ensuring consistent number types
     return activeRequests.data.data.reduce(
       (acc, request) => {
-        const queueId = request.help_queue;
+        const queueId = Number(request.help_queue); // Ensure it's a number
         if (!acc[queueId]) {
           acc[queueId] = [];
         }
-        acc[queueId].push(request);
+        acc[queueId].push({
+          ...request,
+          students: studentsByRequestId[request.id] || []
+        });
         return acc;
       },
-      {} as Record<number, HelpRequest[]>
+      {} as Record<number, (HelpRequest & { students: string[] })[]>
     );
-  }, [activeRequests.data?.data]);
+  }, [activeRequests.data?.data, helpRequestStudents.data?.data]);
 
   // Group active assignments by queue
   const activeAssignmentsByQueue = useMemo(() => {
@@ -157,8 +185,9 @@ export default function OfficeHoursPage() {
             ) : (
               <Grid columns={{ base: 1, md: 2 }} gap={4}>
                 {availableQueues.map((queue) => {
-                  const queueRequests = activeRequestsByQueue[queue.id] || [];
-                  const activeUsers = queueRequests.map((request) => request.creator);
+                  const queueRequests = activeRequestsByQueue[Number(queue.id)] || [];
+                  // Flatten all student IDs from all requests in this queue
+                  const activeUsers = queueRequests.flatMap((request) => request.students);
                   const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
                   const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
 

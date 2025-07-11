@@ -2710,6 +2710,59 @@ export type Database = {
           }
         ];
       };
+      help_request_students: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          help_request_id: number;
+          id: number;
+          profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          help_request_id: number;
+          id?: number;
+          profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          help_request_id?: number;
+          id?: number;
+          profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_students_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_students_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_students_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_students_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       help_request_templates: {
         Row: {
           category: string;
@@ -2769,7 +2822,6 @@ export type Database = {
           assignee: string | null;
           class_id: number;
           created_at: string;
-          creator: string;
           estimated_duration_minutes: number | null;
           followup_to: number | null;
           help_queue: number;
@@ -2789,7 +2841,6 @@ export type Database = {
           assignee?: string | null;
           class_id: number;
           created_at?: string;
-          creator: string;
           estimated_duration_minutes?: number | null;
           followup_to?: number | null;
           help_queue: number;
@@ -2809,7 +2860,6 @@ export type Database = {
           assignee?: string | null;
           class_id?: number;
           created_at?: string;
-          creator?: string;
           estimated_duration_minutes?: number | null;
           followup_to?: number | null;
           help_queue?: number;
@@ -2846,20 +2896,6 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "help_requests_creator_fkey";
-            columns: ["creator"];
-            isOneToOne: false;
-            referencedRelation: "profiles";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "help_requests_creator_fkey";
-            columns: ["creator"];
-            isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["student_private_profile_id"];
           },
           {
             foreignKeyName: "help_requests_help_queue_fkey";
@@ -5935,10 +5971,6 @@ export type Database = {
         Args: { profile_id: string };
         Returns: boolean;
       };
-      auto_assign_self_reviews: {
-        Args: { this_assignment_id: number; this_profile_id: string };
-        Returns: undefined;
-      };
       call_edge_function_internal: {
         Args: {
           url_path: string;
@@ -5961,6 +5993,10 @@ export type Database = {
       check_assignment_deadlines_passed: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
+      };
+      check_realtime_authorization: {
+        Args: { topic_text: string };
+        Returns: boolean;
       };
       create_help_request_message_notification: {
         Args: {
@@ -5998,6 +6034,10 @@ export type Database = {
       };
       custom_access_token_hook: {
         Args: { event: Json };
+        Returns: Json;
+      };
+      finalize_submission_early: {
+        Args: { this_assignment_id: number; this_profile_id: string };
         Returns: Json;
       };
       generate_anon_name: {

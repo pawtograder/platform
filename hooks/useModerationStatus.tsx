@@ -17,8 +17,6 @@ type ModerationStatus = {
   error: HttpError | null;
 };
 
-// TODO: This is currently bugged.
-
 /**
  * Hook to check if the current user is banned or has recent moderation actions.
  * @param classId - The ID of the class to check moderation status for.
@@ -41,12 +39,18 @@ export function useModerationStatus(classId: number): ModerationStatus {
     sorters: [{ field: "created_at", order: "desc" }],
     pagination: { pageSize: 100 },
     queryOptions: {
-      enabled: !!private_profile_id && !!classId
+      enabled: !!private_profile_id && !!classId,
+      retry: false // Don't retry on permission errors
+    },
+    meta: {
+      // Add meta information for debugging
+      select: "*"
     }
   });
 
   const moderationStatus = useMemo((): ModerationStatus => {
-    if (isLoading || !moderationResponse?.data) {
+    // Handle loading state
+    if (isLoading) {
       return {
         isBanned: false,
         isPermanentBan: false,
@@ -54,8 +58,55 @@ export function useModerationStatus(classId: number): ModerationStatus {
         timeRemainingMs: null,
         activeBan: null,
         recentWarnings: [],
-        isLoading,
-        error: error || null
+        isLoading: true,
+        error: null
+      };
+    }
+
+    // Handle error state
+    if (error) {
+      console.error("Moderation status query error:", error);
+      return {
+        isBanned: false,
+        isPermanentBan: false,
+        banExpiresAt: null,
+        timeRemainingMs: null,
+        activeBan: null,
+        recentWarnings: [],
+        isLoading: false,
+        error
+      };
+    }
+
+    // Handle case where query is disabled (missing required params)
+    if (!private_profile_id || !classId) {
+      console.warn("Moderation status query disabled - missing required parameters:", {
+        private_profile_id,
+        classId
+      });
+      return {
+        isBanned: false,
+        isPermanentBan: false,
+        banExpiresAt: null,
+        timeRemainingMs: null,
+        activeBan: null,
+        recentWarnings: [],
+        isLoading: false,
+        error: null
+      };
+    }
+
+    // Handle case where there's no data (could be RLS issue or no records)
+    if (!moderationResponse?.data || moderationResponse.data.length === 0) {
+      return {
+        isBanned: false,
+        isPermanentBan: false,
+        banExpiresAt: null,
+        timeRemainingMs: null,
+        activeBan: null,
+        recentWarnings: [],
+        isLoading: false,
+        error: null
       };
     }
 
@@ -95,7 +146,7 @@ export function useModerationStatus(classId: number): ModerationStatus {
     // Get the most recent active ban
     const activeBan = activeBans[0] || null;
     const isBanned = !!activeBan;
-    const isPermanentBan = activeBan?.is_permanent || false;
+    const isPermanentBan = activeBan?.is_permanent || activeBan?.action_type === "permanent_ban" || false;
 
     // Calculate ban expiration info
     let banExpiresAt: Date | null = null;
@@ -120,7 +171,7 @@ export function useModerationStatus(classId: number): ModerationStatus {
       (action) => action.action_type === "warning" && new Date(action.created_at) > sevenDaysAgo
     );
 
-    return {
+    const result = {
       isBanned,
       isPermanentBan,
       banExpiresAt,
@@ -128,15 +179,19 @@ export function useModerationStatus(classId: number): ModerationStatus {
       activeBan,
       recentWarnings,
       isLoading: false,
-      error: error || null
+      error: null
     };
-  }, [moderationResponse?.data, isLoading, error]);
+
+    return result;
+  }, [moderationResponse, isLoading, error, private_profile_id, classId]);
 
   return moderationStatus;
 }
 
 /**
- * Utility function to format time remaining in a ban
+ * Utility function to format time remaining in a ban.
+ * @param timeRemainingMs - The time remaining in milliseconds.
+ * @returns A human-readable string representing the time remaining.
  */
 export function formatTimeRemaining(timeRemainingMs: number): string {
   if (timeRemainingMs <= 0) return "Expired";

@@ -25,18 +25,22 @@ export function useGradersAndInstructors() {
       .filter((r) => r.role === "grader" || r.role === "instructor")
       .map((r) => r.private_profile_id);
     return profiles.profiles.filter((p) => staff.includes(p.id));
-  }, [profiles]);
+  }, [profiles.allVisibleRoles, profiles.profiles]);
   return staffRoster;
 }
 
 export function useStudentRoster() {
   const profiles = useClassProfiles();
   const studentRoster = useMemo(() => {
-    const users = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
-    return profiles.profiles.filter((p) => users.includes(p.id));
+    console.log("profiles.allVisibleRoles", profiles.allVisibleRoles);
+    console.log("profiles.profiles", profiles.profiles);
+    const students = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
+    console.log("students", students);
+    return profiles.profiles.filter((p) => students.includes(p.id));
   }, [profiles.allVisibleRoles, profiles.profiles]);
   return studentRoster;
 }
+
 export function useClassProfiles() {
   const context = useContext(ClassProfileContext);
   if (!context) {

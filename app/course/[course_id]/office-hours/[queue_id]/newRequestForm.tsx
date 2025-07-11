@@ -1,5 +1,5 @@
 import { createClient } from "@/utils/supabase/client";
-import { useCallback } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useList } from "@refinedev/core";
 import { useParams, useRouter } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
@@ -19,6 +19,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "chakra-react-select";
 import { toaster } from "@/components/ui/toaster";
+import StudentGroupPicker from "@/components/ui/student-group-picker";
 
 type TemplateOption = { label: string; value: string };
 type SubmissionOption = { label: string; value: string };
@@ -31,16 +32,29 @@ type FileReference = {
   line_number?: number;
 };
 
+// Extended help request type to include student count
+type HelpRequestWithStudentCount = HelpRequest & {
+  student_count: number;
+};
+
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
-interface HelpRequestFormProps {
-  currentRequest?: HelpRequest | null;
-}
-
-export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps) {
+export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const supabase = createClient();
   const router = useRouter();
+  const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
+  const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
+  const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+
+  // Use ref to avoid closure issues with selectedStudents in async callbacks
+  const selectedStudentsRef = useRef<string[]>([]);
+
+  // Update ref whenever selectedStudents changes
+  useEffect(() => {
+    selectedStudentsRef.current = selectedStudents;
+  }, [selectedStudents]);
+
   const {
     refineCore: { formLoading, query },
     setValue,
@@ -62,37 +76,144 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
       resource: "help_requests",
       action: "create",
       onMutationSuccess: async (data) => {
-        // After creating the help request, create file references if any
-        const fileReferences = getValues("file_references") || [];
-        if (fileReferences.length > 0) {
-          for (const ref of fileReferences) {
-            await supabase.from("help_request_file_references").insert({
+        try {
+          // Get current selected students from ref to avoid closure issues
+          const currentSelectedStudents = selectedStudentsRef.current;
+
+          if (!data?.data?.id) {
+            throw new Error("Help request ID not found in response data");
+          }
+
+          // Add all selected students to help_request_students
+          if (currentSelectedStudents.length > 0) {
+            const studentEntries = currentSelectedStudents.map((studentId) => ({
               help_request_id: data.data.id,
-              class_id: Number.parseInt(course_id as string),
-              submission_file_id: ref.submission_file_id,
-              submission_id: getValues("referenced_submission_id"),
-              line_number: ref.line_number
+              profile_id: studentId,
+              class_id: Number.parseInt(course_id as string)
+            }));
+
+            const { error: studentInsertError } = await supabase.from("help_request_students").insert(studentEntries);
+
+            if (studentInsertError) {
+              toaster.error({
+                title: "Error",
+                description: `Failed to create student associations: ${studentInsertError.message}`
+              });
+              throw new Error(`Failed to create student associations: ${studentInsertError.message}`);
+            }
+          } else {
+            toaster.error({
+              title: "Error",
+              description: "No students selected for help request"
             });
           }
+
+          // Create file references if any
+          const fileReferences = getValues("file_references") || [];
+          if (fileReferences.length > 0) {
+            for (const ref of fileReferences) {
+              const { error: fileRefError } = await supabase.from("help_request_file_references").insert({
+                help_request_id: data.data.id,
+                class_id: Number.parseInt(course_id as string),
+                submission_file_id: ref.submission_file_id,
+                submission_id: getValues("referenced_submission_id"),
+                line_number: ref.line_number
+              });
+
+              if (fileRefError) {
+                toaster.error({
+                  title: "Error",
+                  description: `Failed to create file reference: ${fileRefError.message}`
+                });
+                throw new Error(`Failed to create file reference: ${fileRefError.message}`);
+              }
+            }
+          }
+
+          // Navigate to queue view
+          router.push(`/course/${course_id}/office-hours/${queue_id}?tab=queue`);
+        } catch (error) {
+          toaster.error({
+            title: "Error",
+            description: error instanceof Error ? error.message : "Failed to complete help request creation"
+          });
         }
-        router.push(`/course/${course_id}/office-hours/${queue_id}`);
       }
     }
   });
 
   const { private_profile_id } = useClassProfiles();
 
-  // Fetch resolved/closed previous requests for follow-up options
-  const { data: previousRequests } = useList<HelpRequest>({
-    resource: "help_requests",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "creator", operator: "eq", value: private_profile_id },
-      { field: "status", operator: "in", value: ["resolved", "closed"] }
-    ],
-    sorters: [{ field: "resolved_at", order: "desc" }],
-    pagination: { pageSize: 20 }
-  });
+  // Initialize selected students with current user when profile is available
+  useEffect(() => {
+    if (private_profile_id && selectedStudents.length === 0) {
+      setSelectedStudents([private_profile_id]);
+    }
+  }, [private_profile_id, selectedStudents.length]);
+
+  // Fetch user's help requests using direct Supabase client
+  useEffect(() => {
+    if (!private_profile_id) return;
+
+    const fetchUserRequests = async () => {
+      // First, fetch the help request IDs for this user
+      const { data: userRequestIds } = await supabase
+        .from("help_request_students")
+        .select("help_request_id")
+        .eq("profile_id", private_profile_id);
+
+      if (!userRequestIds || userRequestIds.length === 0) {
+        setUserPreviousRequests([]);
+        setUserActiveRequests([]);
+        return;
+      }
+
+      const requestIds = userRequestIds.map((item) => item.help_request_id);
+
+      // Fetch previous requests (resolved/closed)
+      const { data: previousRequestsData } = await supabase
+        .from("help_requests")
+        .select("*")
+        .eq("class_id", Number.parseInt(course_id as string))
+        .in("status", ["resolved", "closed"])
+        .in("id", requestIds)
+        .order("resolved_at", { ascending: false })
+        .limit(20);
+
+      if (previousRequestsData) {
+        setUserPreviousRequests(previousRequestsData);
+      }
+
+      // Fetch active requests with student counts
+      const { data: activeRequestsData } = await supabase
+        .from("help_requests")
+        .select("*")
+        .eq("class_id", Number.parseInt(course_id as string))
+        .in("status", ["open", "in_progress"])
+        .in("id", requestIds);
+
+      if (activeRequestsData) {
+        // Get student counts for each active request
+        const activeRequestsWithCount: HelpRequestWithStudentCount[] = [];
+
+        for (const request of activeRequestsData) {
+          const { count } = await supabase
+            .from("help_request_students")
+            .select("*", { count: "exact", head: true })
+            .eq("help_request_id", request.id);
+
+          activeRequestsWithCount.push({
+            ...request,
+            student_count: count || 0
+          });
+        }
+
+        setUserActiveRequests(activeRequestsWithCount);
+      }
+    };
+
+    fetchUserRequests();
+  }, [private_profile_id, course_id, supabase]);
 
   const { data: templates, error: templatesError } = useList<HelpRequestTemplate>({
     resource: "help_request_templates",
@@ -148,16 +269,35 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
         return;
       }
 
-      // Check if user already has an active request in the selected queue
-      const selectedQueueId = getValues("help_queue");
-      if (currentRequest && currentRequest.help_queue === selectedQueueId) {
+      // Check if selected students are valid
+      if (selectedStudents.length === 0) {
         toaster.error({
           title: "Error",
-          description:
-            "You already have an active request in this queue. Please resolve your current request before submitting a new one."
+          description: "At least one student must be selected for the help request."
         });
         return;
       }
+
+      // Check for conflicts based on solo vs group request rules
+      const selectedQueueId = getValues("help_queue");
+      const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
+
+      if (isCreatingSoloRequest) {
+        // For solo requests, check if user already has a solo request in this queue
+        const hasSoloRequestInQueue = userActiveRequests.some(
+          (request) => request.help_queue === selectedQueueId && request.student_count === 1
+        );
+
+        if (hasSoloRequestInQueue) {
+          toaster.error({
+            title: "Error",
+            description:
+              "You already have a solo help request in this queue. Please resolve your current request before submitting a new solo request."
+          });
+          return;
+        }
+      }
+      // Group requests are always allowed - no validation needed
 
       // Create a custom onFinish function that excludes file_references and adds required fields
       const customOnFinish = (values: Record<string, unknown>) => {
@@ -165,10 +305,9 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { file_references, ...helpRequestData } = values;
 
-        // Add required fields that may not be set in the form
+        // Add required fields that may not be set in the form (removed creator field)
         const finalData = {
           ...helpRequestData,
-          creator: private_profile_id,
           assignee: null,
           class_id: Number.parseInt(course_id as string)
         };
@@ -178,7 +317,7 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
 
       handleSubmit(customOnFinish)();
     },
-    [handleSubmit, onFinish, private_profile_id, course_id, currentRequest, getValues]
+    [handleSubmit, onFinish, private_profile_id, course_id, userActiveRequests, getValues, selectedStudents]
   );
 
   if (query?.error) {
@@ -192,8 +331,13 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
     return <div>Loading...</div>;
   }
 
-  // Check if the selected queue would conflict with current request
-  const wouldConflict = Boolean(currentRequest && currentRequest.help_queue === selectedHelpQueue);
+  // Check if the selected queue would conflict with current requests
+  const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
+  const wouldConflict = Boolean(
+    selectedHelpQueue &&
+      isCreatingSoloRequest &&
+      userActiveRequests.some((request) => request.help_queue === selectedHelpQueue && request.student_count === 1)
+  );
 
   return (
     <form onSubmit={onSubmit}>
@@ -202,8 +346,8 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
 
       {wouldConflict && (
         <Text color="orange.500" mb={4}>
-          ⚠️ You already have an active request in this queue. Please resolve your current request before submitting a
-          new one.
+          ⚠️ You already have a solo help request in this queue. Please resolve your current request before submitting a
+          new solo request, or add other students to create a group request.
         </Text>
       )}
 
@@ -249,6 +393,21 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
               )}
             />
           </Field>
+        </Fieldset.Content>
+
+        <Fieldset.Content>
+          <StudentGroupPicker
+            selectedStudents={selectedStudents}
+            onSelectionChange={setSelectedStudents}
+            label="Students"
+            required={true}
+            helperText="Select all students who should be associated with this help request. You are automatically included and cannot be removed."
+            placeholder="Search and select students..."
+            invalid={selectedStudents.length === 0}
+            errorMessage={selectedStudents.length === 0 ? "At least one student must be selected" : undefined}
+            minSelections={1}
+            requiredStudents={private_profile_id ? [private_profile_id] : []}
+          />
         </Fieldset.Content>
 
         <Fieldset.Content>
@@ -358,7 +517,11 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
         )}
 
         <Fieldset.Content>
-          <Field label="Privacy " helperText="Private requests are only visible to staff." optionalText="(Optional)">
+          <Field
+            label="Privacy "
+            helperText="Private requests are only visible to course staff and associated students."
+            optionalText="(Optional)"
+          >
             <Controller
               name="is_private"
               control={control}
@@ -445,7 +608,7 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
           </Fieldset.Content>
         )}
 
-        {previousRequests?.data && previousRequests.data.length > 0 && (
+        {userPreviousRequests && userPreviousRequests.length > 0 && (
           <Fieldset.Content>
             <Field label="Follow-up to previous request " optionalText="(Optional)">
               <Controller
@@ -456,7 +619,7 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
                     isMulti={false}
                     isClearable={true}
                     placeholder="Reference a previous request"
-                    options={previousRequests.data.map(
+                    options={userPreviousRequests.map(
                       (req) =>
                         ({
                           label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${new Date(req.resolved_at!).toLocaleDateString()})`,
@@ -467,7 +630,7 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
                       field.value
                         ? ({
                             label:
-                              previousRequests.data.find((r) => r.id === field.value)?.request.substring(0, 60) +
+                              userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
                                 "..." || "",
                             value: field.value.toString()
                           } as TemplateOption)
@@ -484,7 +647,7 @@ export default function HelpRequestForm({ currentRequest }: HelpRequestFormProps
           </Fieldset.Content>
         )}
       </Fieldset.Root>
-      <Button type="submit" loading={isSubmitting} disabled={wouldConflict} mt={4}>
+      <Button type="submit" loading={isSubmitting} disabled={wouldConflict || selectedStudents.length === 0} mt={4}>
         Submit Request
       </Button>
     </form>
