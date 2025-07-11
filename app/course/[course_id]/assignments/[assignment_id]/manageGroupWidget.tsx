@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "@/components/ui/link";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -17,7 +18,8 @@ import {
   Assignment,
   AssignmentGroupInvitation,
   AssignmentGroupJoinRequest,
-  AssignmentGroupWithMembersInvitationsAndJoinRequests
+  AssignmentGroupWithMembersInvitationsAndJoinRequests,
+  Repository
 } from "@/utils/supabase/DatabaseTypes";
 import {
   Avatar,
@@ -819,7 +821,53 @@ function GroupDetails({
   );
 }
 
-export default function ManageGroupWidget({ assignment }: { assignment: Assignment }) {
+function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
+  if (repositories?.length === 0) {
+    return (
+      <Text fontSize="sm" color="text.muted">
+        No repositories found. Please refresh the page. If this issue persists, please contact your instructor.
+      </Text>
+    );
+  }
+  if (repositories?.length === 1) {
+    return (
+      <HStack>
+        <Text fontSize="sm" fontWeight="bold">
+          Repository:{" "}
+        </Text>
+        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+      </HStack>
+    );
+  }
+  const groupRepo = repositories.find((r) => r.assignment_group_id !== null);
+  const personalRepo = repositories.find((r) => r.assignment_group_id === null);
+  return (
+    <VStack textAlign="left" alignItems="flex-start" fontSize="sm" color="text.muted">
+      <HStack>
+        <Text fontWeight="bold" fontSize="sm">
+          Current group repository:
+        </Text>{" "}
+        <Link href={`https://github.com/${groupRepo?.repository}`}>{groupRepo?.repository}</Link>
+      </HStack>
+      <Text fontWeight="bold">
+        Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
+        (the current group repository).
+      </Text>
+      <Text>
+        Individual repository (not in use, you are now in a group):{" "}
+        <Link href={`https://github.com/${personalRepo?.repository}`}>{personalRepo?.repository}</Link>
+      </Text>
+    </VStack>
+  );
+}
+
+export default function ManageGroupWidget({
+  assignment,
+  repositories
+}: {
+  assignment: Assignment;
+  repositories: Repository[];
+}) {
   const { private_profile_id } = useClassProfiles();
   const { time_zone } = useCourse();
   const { data: groups } = useList<AssignmentGroupWithMembersInvitationsAndJoinRequests>({
@@ -839,6 +887,7 @@ export default function ManageGroupWidget({ assignment }: { assignment: Assignme
         <Text fontSize="sm" color="fg.muted">
           You will not be able to join a group for this assignment.
         </Text>
+        <RepositoriesInfo repositories={repositories} />
       </Box>
     );
   }

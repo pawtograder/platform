@@ -434,7 +434,6 @@ function AuditTable() {
                 title="Select page size"
                 value={"" + getState().pagination.pageSize}
                 onChange={(event) => {
-                  console.log(event.target.value);
                   setPageSize(Number(event.target.value));
                 }}
               >
