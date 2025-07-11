@@ -114,6 +114,11 @@ export type LiveMeetingForHelpRequestRequest = {
   helpRequestId: number;
 };
 
+export type LiveMeetingEndRequest = {
+  courseId: number;
+  helpRequestId: number;
+};
+
 export type AssignmentCreateAllReposRequest = {
   courseId: number;
   assignmentId: number;

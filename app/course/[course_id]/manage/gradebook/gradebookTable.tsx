@@ -161,7 +161,7 @@ function AddColumnDialog() {
   }, [isOpen, reset]);
 
   const onSubmit = async (data: FieldValues) => {
-    const loadingToast = toaster.loading({
+    toaster.loading({
       title: "Saving...",
       description: "This may take a few seconds to recalculate..."
     });
@@ -188,11 +188,11 @@ function AddColumnDialog() {
         invalidates: ["all"]
       });
       setIsLoading(false);
-      toaster.dismiss(loadingToast);
+      toaster.dismiss();
       setIsOpen(false);
     } catch (e) {
-      toaster.dismiss(loadingToast);
       setIsLoading(false);
+      toaster.dismiss();
       let message = "An unknown error occurred";
       if (e && typeof e === "object" && "message" in e && typeof (e as { message?: string }).message === "string") {
         message = (e as { message: string }).message;
@@ -382,7 +382,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   const scoreExpression = watch("scoreExpression");
 
   const onSubmit = async (data: FieldValues) => {
-    const loadingToast = toaster.loading({
+    toaster.loading({
       title: "Saving...",
       description: "This may take a few seconds to recalculate..."
     });
@@ -404,11 +404,11 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         }
       });
       setIsLoading(false);
-      toaster.dismiss(loadingToast);
+      toaster.dismiss();
       onClose();
     } catch (e) {
-      toaster.dismiss(loadingToast);
       setIsLoading(false);
+      toaster.dismiss();
       let message = "An unknown error occurred";
       if (e && typeof e === "object" && "message" in e && typeof (e as { message?: string }).message === "string") {
         message = (e as { message: string }).message;
@@ -1013,11 +1013,11 @@ function GradebookColumnHeader({
   const allGrades = useGradebookColumnGrades(column_id);
 
   const moveLeft = useCallback(async () => {
-    if (column.sort_order === 0) return;
+    if (column.sort_order == null || column.sort_order === 0) return;
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order
+        sort_order: column.sort_order!
       })
       .eq("gradebook_id", column.gradebook_id)
       .eq("sort_order", column.sort_order! - 1);
@@ -1035,10 +1035,11 @@ function GradebookColumnHeader({
   }, [column_id, column, invalidate, supabase]);
 
   const moveRight = useCallback(async () => {
+    if (column.sort_order == null) return;
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order
+        sort_order: column.sort_order!
       })
       .eq("gradebook_id", column.gradebook_id)
       .eq("sort_order", (column.sort_order ?? 0) + 1);
@@ -1098,7 +1099,7 @@ function GradebookColumnHeader({
         ))}
       </VStack>
     );
-  }, [column, gradebookController, column_id, areAllDependenciesReleased]);
+  }, [column, areAllDependenciesReleased]);
 
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px" height="100%">
@@ -1641,7 +1642,6 @@ export default function GradebookTable() {
   const nextPage = table.nextPage;
   const getCanPreviousPage = table.getCanPreviousPage;
   const getCanNextPage = table.getCanNextPage;
-  const columnModel = table.getAllColumns();
 
   const rows = useMemo(() => {
     return rowModel.rows.map((row, idx) => (
@@ -1712,7 +1712,7 @@ export default function GradebookTable() {
         })}
       </Table.Row>
     ));
-  }, [rowModel.rows, columnModel, toggleGroup, collapsedGroups]);
+  }, [rowModel.rows, toggleGroup]);
 
   if (!students || !gradebook || !gradebookController.isReady) {
     return <Spinner />;

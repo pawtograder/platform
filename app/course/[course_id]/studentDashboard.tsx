@@ -116,13 +116,13 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
 
       <Box>
         <Heading size="lg" mb={4}>
-          Open Help Requests
+          Open Office Hours
         </Heading>
         <Stack spaceY={4}>
           {helpRequests?.map((request) => (
             <CardRoot key={request.id}>
               <CardHeader>
-                <Link href={`/course/${course_id}/help/${request.id}`}>{request.request}</Link>
+                <Link href={`/course/${course_id}/office-hours/${request.id}`}>{request.request}</Link>
               </CardHeader>
               <CardBody>Requested: {new Date(request.created_at).toLocaleString()}</CardBody>
             </CardRoot>
