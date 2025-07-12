@@ -32,6 +32,19 @@ interface MessageSubscription {
   callback: MessageCallback;
 }
 
+export type ChannelStatus = {
+  name: string;
+  state: string;
+  type: "staff" | "user" | "submission_graders" | "submission_user";
+  submissionId?: number;
+};
+
+export type ConnectionStatus = {
+  overall: "connected" | "partial" | "disconnected" | "connecting";
+  channels: ChannelStatus[];
+  lastUpdate: Date;
+};
+
 export class ClassRealTimeController {
   private _client: SupabaseClient<Database>;
   private _classId: number;
@@ -42,6 +55,9 @@ export class ClassRealTimeController {
   private _submissionChannels: Map<number, { graders?: RealtimeChannel; user?: RealtimeChannel }> = new Map();
   private _subscriptions: Map<string, MessageSubscription> = new Map();
   private _subscriptionCounter = 0;
+  private _statusChangeListeners: ((status: ConnectionStatus) => void)[] = [];
+  private _objDebugId = `${new Date().getTime()}-${Math.random()}`;
+  private _closed = false;
 
   constructor({
     client,
@@ -63,11 +79,14 @@ export class ClassRealTimeController {
   }
 
   private async _initializeChannels() {
+    console.log("Initializing channels", this._objDebugId);
     const accessToken = await this._client.auth.getSession();
-    console.log("accessToken", accessToken);
     await this._client.realtime.setAuth(accessToken.data.session?.access_token);
-    console.log("setAuth called");
     // Initialize staff channel if user is staff
+    if (this._closed) {
+      console.log("Channels already closed", this._objDebugId);
+      return;
+    }
     if (this._isStaff) {
       console.log("initializing staff channel");
       this._staffChannel = this._client.channel(`class:${this._classId}:staff`, {
@@ -80,6 +99,7 @@ export class ClassRealTimeController {
 
       this._staffChannel.subscribe((status, err) => {
         console.log(`Staff channel status: class:${this._classId}:staff`, status, err);
+        this._notifyStatusChange();
       });
     }
 
@@ -94,6 +114,7 @@ export class ClassRealTimeController {
 
     this._userChannel.subscribe((status, err) => {
       console.log(`User channel status: class:${this._classId}:user:${this._profileId}`, status, err);
+      this._notifyStatusChange();
     });
   }
 
@@ -136,6 +157,9 @@ export class ClassRealTimeController {
    * Subscribe to broadcast messages with optional filtering
    */
   subscribe(filter: MessageFilter, callback: MessageCallback): () => void {
+    if (this._closed) {
+      throw new Error("Cannot subscribe to channels after they have been closed");
+    }
     const subscriptionId = `sub_${++this._subscriptionCounter}`;
 
     this._subscriptions.set(subscriptionId, {
@@ -165,6 +189,9 @@ export class ClassRealTimeController {
     submissionId: number,
     callback: MessageCallback
   ): () => void {
+    if (this._closed) {
+      throw new Error("Cannot subscribe to channels after they have been closed");
+    }
     // Ensure submission channels are created
     this._ensureSubmissionChannels(submissionId);
 
@@ -175,6 +202,9 @@ export class ClassRealTimeController {
    * Subscribe to all messages for a specific submission (any table)
    */
   subscribeToSubmission(submissionId: number, callback: MessageCallback): () => void {
+    if (this._closed) {
+      throw new Error("Cannot subscribe to channels after they have been closed");
+    }
     return this.subscribe({ submission_id: submissionId }, callback);
   }
 
@@ -245,6 +275,7 @@ export class ClassRealTimeController {
 
       channels.graders.subscribe((status, err) => {
         console.log(`Submission graders channel status: ${gradersChannelName}`, status, err);
+        this._notifyStatusChange();
       });
     }
 
@@ -260,6 +291,7 @@ export class ClassRealTimeController {
 
     channels.user.subscribe((status, err) => {
       console.log(`Submission user channel status: ${userChannelName}`, status, err);
+      this._notifyStatusChange();
     });
 
     this._submissionChannels.set(submissionId, channels);
@@ -269,9 +301,10 @@ export class ClassRealTimeController {
    * Clean up channels and subscriptions
    */
   close() {
-    console.log("Closing ClassRealTimeController channels");
-
+    console.log("Closing ClassRealTimeController channels", this._objDebugId);
+    this._closed = true;
     this._subscriptions.clear();
+    this._statusChangeListeners = [];
 
     if (this._staffChannel) {
       this._staffChannel.unsubscribe();
@@ -293,6 +326,95 @@ export class ClassRealTimeController {
       }
     }
     this._submissionChannels.clear();
+  }
+
+  /**
+   * Subscribe to connection status changes
+   */
+  subscribeToStatus(callback: (status: ConnectionStatus) => void): () => void {
+    console.log("Subscribing to status changes", this._objDebugId, this._statusChangeListeners);
+    this._statusChangeListeners.push(callback);
+
+    return () => {
+      this._statusChangeListeners = this._statusChangeListeners.filter((cb) => cb !== callback);
+      console.log("After unsubscribing from status changes", this._objDebugId, this._statusChangeListeners);
+    };
+  }
+
+  /**
+   * Get current connection status
+   */
+  getConnectionStatus(): ConnectionStatus {
+    const channels: ChannelStatus[] = [];
+
+    // Add class-level channels
+    if (this._staffChannel) {
+      channels.push({
+        name: `class:${this._classId}:staff`,
+        state: this._staffChannel.state,
+        type: "staff"
+      });
+    }
+
+    if (this._userChannel) {
+      channels.push({
+        name: `class:${this._classId}:user:${this._profileId}`,
+        state: this._userChannel.state,
+        type: "user"
+      });
+    }
+
+    // Add submission channels
+    for (const [submissionId, submissionChannels] of this._submissionChannels.entries()) {
+      if (submissionChannels.graders) {
+        channels.push({
+          name: `submission:${submissionId}:graders`,
+          state: submissionChannels.graders.state,
+          type: "submission_graders",
+          submissionId
+        });
+      }
+
+      if (submissionChannels.user) {
+        channels.push({
+          name: `submission:${submissionId}:profile_id:${this._profileId}`,
+          state: submissionChannels.user.state,
+          type: "submission_user",
+          submissionId
+        });
+      }
+    }
+
+    // Calculate overall status
+    const connectedCount = channels.filter((c) => c.state === "joined").length;
+    const totalCount = channels.length;
+
+    let overall: ConnectionStatus["overall"];
+    if (totalCount === 0) {
+      overall = "connecting";
+    } else if (connectedCount === totalCount) {
+      overall = "connected";
+    } else if (connectedCount === 0) {
+      overall = "disconnected";
+    } else {
+      overall = "partial";
+    }
+
+    return {
+      overall,
+      channels,
+      lastUpdate: new Date()
+    };
+  }
+
+  /**
+   * Notify status change listeners
+   */
+  private _notifyStatusChange() {
+    const status = this.getConnectionStatus();
+    console.log("Notifying status change listeners", this._objDebugId, status);
+    console.log("Status change listeners", this._objDebugId, this._statusChangeListeners);
+    this._statusChangeListeners.forEach((callback) => callback(status));
   }
 
   /**

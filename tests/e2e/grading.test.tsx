@@ -2,6 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 import percySnapshot from "@percy/playwright";
 import { createClient } from "@supabase/supabase-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
 
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
@@ -34,6 +36,7 @@ const student_email = `student-${workerIndex}-${test_run_batch}@pawtograder.net`
 const instructor_email = `instructor-${workerIndex}-${test_run_batch}@pawtograder.net`;
 let submission_id: number | undefined;
 test.beforeAll(async () => {
+  console.log(`Configuring test env on ${process.env.SUPABASE_URL}`);
   const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
   //Add a student to the database
 
@@ -231,6 +234,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Sign in password" }).press("Enter");
     await page.getByRole("button", { name: "Sign in with email" }).click();
     await page.getByRole("link", { name: "Demo Assignment" }).click();
+
+    //Wait for the realtime connection status to be connected
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await percySnapshot(page, "Student can submit self-review early");
