@@ -198,14 +198,14 @@ export class CourseController {
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   private _classRealTimeController: ClassRealTimeController | null = null;
-  
+
   constructor(public courseId: number) {}
-  
+
   initializeRealTimeController(profileId: string, isStaff: boolean) {
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
     }
-    
+
     this._classRealTimeController = new ClassRealTimeController({
       client: createClient(),
       classId: this.courseId,
@@ -213,7 +213,7 @@ export class CourseController {
       isStaff
     });
   }
-  
+
   get classRealTimeController(): ClassRealTimeController {
     if (!this._classRealTimeController) {
       throw new Error("ClassRealTimeController not initialized. Call initializeRealTimeController first.");

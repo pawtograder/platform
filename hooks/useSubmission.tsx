@@ -47,7 +47,12 @@ class SubmissionController {
 
   readonly readyPromise: Promise<[void, void, void, void]>;
 
-  constructor(client: SupabaseClient<Database>, submission_id: number, class_id: number, classRealTimeController: ClassRealTimeController) {
+  constructor(
+    client: SupabaseClient<Database>,
+    submission_id: number,
+    class_id: number,
+    classRealTimeController: ClassRealTimeController
+  ) {
     this.submission_comments = new TableController({
       client,
       table: "submission_comments",
@@ -140,9 +145,14 @@ export function SubmissionProvider({
   const [newControllersReady, setNewControllersReady] = useState(false);
   const [isLoadingNewController, setIsLoadingNewController] = useState(false);
   const courseController = useCourseController();
-  
+
   if (controller.current === null) {
-    controller.current = new SubmissionController(createClient(), submission_id, class_id, courseController.classRealTimeController);
+    controller.current = new SubmissionController(
+      createClient(),
+      submission_id,
+      class_id,
+      courseController.classRealTimeController
+    );
     setIsLoadingNewController(true);
     setNewControllersReady(false);
   }
@@ -175,7 +185,7 @@ export function SubmissionProvider({
     <SubmissionContext.Provider value={{ submissionController: controller.current }}>
       <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
       {(!ready || !newControllersReady) && <Spinner />}
-      {(ready && newControllersReady) && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
+      {ready && newControllersReady && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
     </SubmissionContext.Provider>
   );
 }

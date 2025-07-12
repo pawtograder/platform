@@ -268,7 +268,7 @@ export function AssignmentProvider({
   const params = useParams();
   const controller = useRef<AssignmentController | null>(null);
   const courseController = useCourseController();
-  
+
   if (controller.current === null) {
     controller.current = new AssignmentController({
       client: createClient(),

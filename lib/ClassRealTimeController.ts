@@ -58,7 +58,7 @@ export class ClassRealTimeController {
     this._classId = classId;
     this._profileId = profileId;
     this._isStaff = isStaff;
-    
+
     this._initializeChannels();
   }
 
@@ -69,15 +69,15 @@ export class ClassRealTimeController {
     console.log("setAuth called");
     // Initialize staff channel if user is staff
     if (this._isStaff) {
-        console.log("initializing staff channel");
+      console.log("initializing staff channel");
       this._staffChannel = this._client.channel(`class:${this._classId}:staff`, {
         config: { private: true }
       });
-      
+
       this._staffChannel.on("broadcast", { event: "broadcast" }, (message) => {
         this._handleBroadcastMessage(message.payload as BroadcastMessage);
       });
-      
+
       this._staffChannel.subscribe((status, err) => {
         console.log(`Staff channel status: class:${this._classId}:staff`, status, err);
       });
@@ -87,11 +87,11 @@ export class ClassRealTimeController {
     this._userChannel = this._client.channel(`class:${this._classId}:user:${this._profileId}`, {
       config: { private: true }
     });
-    
+
     this._userChannel.on("broadcast", { event: "broadcast" }, (message) => {
       this._handleBroadcastMessage(message.payload as BroadcastMessage);
     });
-    
+
     this._userChannel.subscribe((status, err) => {
       console.log(`User channel status: class:${this._classId}:user:${this._profileId}`, status, err);
     });
@@ -99,7 +99,7 @@ export class ClassRealTimeController {
 
   private _handleBroadcastMessage(message: BroadcastMessage) {
     console.log("Received broadcast message:", message);
-    
+
     // Skip system messages like channel_created
     if (message.type !== "table_change") {
       return;
@@ -137,7 +137,7 @@ export class ClassRealTimeController {
    */
   subscribe(filter: MessageFilter, callback: MessageCallback): () => void {
     const subscriptionId = `sub_${++this._subscriptionCounter}`;
-    
+
     this._subscriptions.set(subscriptionId, {
       id: subscriptionId,
       filter,
@@ -167,7 +167,7 @@ export class ClassRealTimeController {
   ): () => void {
     // Ensure submission channels are created
     this._ensureSubmissionChannels(submissionId);
-    
+
     return this.subscribe({ table, submission_id: submissionId }, callback);
   }
 
@@ -193,16 +193,16 @@ export class ClassRealTimeController {
    * Check if the controller is ready (channels subscribed)
    */
   get isReady(): boolean {
-    const staffReady = !this._isStaff || (this._staffChannel?.state === "joined");
+    const staffReady = !this._isStaff || this._staffChannel?.state === "joined";
     const userReady = this._userChannel?.state === "joined";
-    
+
     // Check submission channels
-    const submissionChannelsReady = Array.from(this._submissionChannels.values()).every(channels => {
-      const gradersReady = !this._isStaff || !channels.graders || (channels.graders.state === "joined");
-      const userChannelReady = !channels.user || (channels.user.state === "joined");
+    const submissionChannelsReady = Array.from(this._submissionChannels.values()).every((channels) => {
+      const gradersReady = !this._isStaff || !channels.graders || channels.graders.state === "joined";
+      const userChannelReady = !channels.user || channels.user.state === "joined";
       return gradersReady && userChannelReady;
     });
-    
+
     return staffReady && userReady && submissionChannelsReady;
   }
 
@@ -238,11 +238,11 @@ export class ClassRealTimeController {
       channels.graders = this._client.channel(gradersChannelName, {
         config: { private: true }
       });
-      
+
       channels.graders.on("broadcast", { event: "broadcast" }, (message) => {
         this._handleBroadcastMessage(message.payload as BroadcastMessage);
       });
-      
+
       channels.graders.subscribe((status, err) => {
         console.log(`Submission graders channel status: ${gradersChannelName}`, status, err);
       });
@@ -253,11 +253,11 @@ export class ClassRealTimeController {
     channels.user = this._client.channel(userChannelName, {
       config: { private: true }
     });
-    
+
     channels.user.on("broadcast", { event: "broadcast" }, (message) => {
       this._handleBroadcastMessage(message.payload as BroadcastMessage);
     });
-    
+
     channels.user.subscribe((status, err) => {
       console.log(`Submission user channel status: ${userChannelName}`, status, err);
     });
@@ -270,14 +270,14 @@ export class ClassRealTimeController {
    */
   close() {
     console.log("Closing ClassRealTimeController channels");
-    
+
     this._subscriptions.clear();
-    
+
     if (this._staffChannel) {
       this._staffChannel.unsubscribe();
       this._staffChannel = null;
     }
-    
+
     if (this._userChannel) {
       this._userChannel.unsubscribe();
       this._userChannel = null;
@@ -311,10 +311,10 @@ export class ClassRealTimeController {
         userChannelState: channels.user?.state
       })),
       subscriptionCount: this._subscriptions.size,
-      subscriptions: Array.from(this._subscriptions.values()).map(sub => ({
+      subscriptions: Array.from(this._subscriptions.values()).map((sub) => ({
         id: sub.id,
         filter: sub.filter
       }))
     };
   }
-} 
+}

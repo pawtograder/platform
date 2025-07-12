@@ -108,17 +108,17 @@ export default class TableController<
         let page = 0;
         const pageSize = 1000;
         let nRows: number | undefined;
-        
+
         // Set up realtime subscription if controller is provided
         if (this._classRealTimeController) {
           const messageHandler = (message: BroadcastMessage) => {
             console.log("Received broadcast message", JSON.stringify(message, null, 2));
-            
+
             // Filter by table name
             if (message.table !== table) {
               return;
             }
-            
+
             // Handle different message types
             switch (message.operation) {
               case "INSERT":
@@ -132,7 +132,7 @@ export default class TableController<
                 break;
             }
           };
-          
+
           // Subscribe to messages for this table, optionally filtered by submission
           if (this._submissionId) {
             this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
@@ -141,10 +141,7 @@ export default class TableController<
               messageHandler
             );
           } else {
-            this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTable(
-              table,
-              messageHandler
-            );
+            this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTable(table, messageHandler);
           }
         }
         //Load initial data, do all of the pages.
@@ -219,11 +216,7 @@ export default class TableController<
       const data = message.data as Record<string, unknown>;
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
       if (existingRow) {
-        this._updateRow(
-          data.id as IDType,
-          { ...data, id: data.id } as ResultOne & { id: IDType },
-          false
-        );
+        this._updateRow(data.id as IDType, { ...data, id: data.id } as ResultOne & { id: IDType }, false);
       } else {
         this._addRow({
           ...data,
