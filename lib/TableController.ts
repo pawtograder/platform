@@ -1,6 +1,7 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
+import { ClassRealTimeController } from "./ClassRealTimeController";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -12,17 +13,17 @@ type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["R
 export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };
-type DataChangeByIDPayload<T extends TablesThatHaveAnIDField> = {
-  id: string; //UUID for the message
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  table: T;
-  row_id: ExtractIdType<T>;
-};
-type DataChangePayload<T extends TablesThatHaveAnIDField> = {
-  id: string; //UUID for the message
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  table: T;
-  data: Database["public"]["Tables"][T]["Row"];
+
+type BroadcastMessage = {
+  type: "table_change" | "channel_created" | "system";
+  operation?: "INSERT" | "UPDATE" | "DELETE";
+  table?: TablesThatHaveAnIDField;
+  row_id?: number | string;
+  data?: Record<string, unknown>;
+  submission_id?: number;
+  class_id: number;
+  target_audience?: "user" | "staff";
+  timestamp: string;
 };
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
@@ -49,8 +50,9 @@ export default class TableController<
   private _readyPromise: Promise<void>;
   private _table: RelationName;
   private _temporaryIdCounter: number = -1;
-  private _realtimeChannel: RealtimeChannel | null = null;
-  private _realtimeChannelName: string | null = null;
+  private _classRealTimeController: ClassRealTimeController | null = null;
+  private _realtimeUnsubscribe: (() => void) | null = null;
+  private _submissionId: number | null = null;
 
   private _listDataListeners: ((
     data: ResultOne[],
@@ -80,7 +82,8 @@ export default class TableController<
     query,
     client,
     table,
-    realtime_key
+    classRealTimeController,
+    submissionId
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -91,110 +94,58 @@ export default class TableController<
     >;
     client: SupabaseClient<Database>;
     table: RelationName;
-    realtime_key?: string;
+    classRealTimeController?: ClassRealTimeController;
+    submissionId?: number;
   }) {
     this._rows = [];
     this._client = client;
     this._query = query;
     this._table = table;
+    this._classRealTimeController = classRealTimeController || null;
+    this._submissionId = submissionId || null;
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         let page = 0;
         const pageSize = 1000;
         let nRows: number | undefined;
-        if (realtime_key) {
-          this._realtimeChannelName = `${table}:${realtime_key}`;
-          this._realtimeChannel = client.channel(this._realtimeChannelName, {
-            config: {
-              private: true
+        
+        // Set up realtime subscription if controller is provided
+        if (this._classRealTimeController) {
+          const messageHandler = (message: BroadcastMessage) => {
+            console.log("Received broadcast message", JSON.stringify(message, null, 2));
+            
+            // Filter by table name
+            if (message.table !== table) {
+              return;
             }
-          });
-          this._realtimeChannel.on("broadcast", { event: "data-change" }, (message) => {
-            console.log("Received data change message", JSON.stringify(message, null, 2));
-            const payload = message.payload as DataChangePayload<RelationName>;
-            if (payload.table === table) {
-              switch (payload.operation) {
-                case "INSERT":
-                  //Check to see if we already have it. If so, we have nothing to do.
-                  if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === payload.data.id)) {
-                    this._addRow({
-                      ...payload.data,
-                      __db_pending: false
-                    } as PossiblyTentativeResult<ResultOne>);
-                  }
-                  break;
-                case "UPDATE":
-                  const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === payload.data.id);
-                  if (existingRow) {
-                    this._updateRow(
-                      payload.data.id as IDType,
-                      { ...payload.data, id: payload.data.id } as ResultOne & { id: IDType },
-                      false
-                    );
-                  } else {
-                    this._addRow({
-                      ...payload.data,
-                      __db_pending: false
-                    } as PossiblyTentativeResult<ResultOne>);
-                  }
-                  break;
-                case "DELETE":
-                  this._removeRow(payload.data.id as IDType);
-                  break;
-              }
+            
+            // Handle different message types
+            switch (message.operation) {
+              case "INSERT":
+                this._handleInsert(message);
+                break;
+              case "UPDATE":
+                this._handleUpdate(message);
+                break;
+              case "DELETE":
+                this._handleDelete(message);
+                break;
             }
-          });
-          this._realtimeChannel.on("broadcast", { event: "data-change-by-id" }, (message) => {
-            const payload = message.payload as DataChangeByIDPayload<RelationName>;
-            console.log("Received data change by id message", JSON.stringify(payload, null, 2));
-            if (payload.table === table) {
-              switch (payload.operation) {
-                case "INSERT":
-                  //Check to see if we already have it. If so, we have nothing to do.
-                  if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === payload.row_id)) {
-                    //Need to retrieve it
-                    this._fetchRow(payload.row_id as IDType).then((row) => {
-                      if (!row) {
-                        return;
-                      }
-                      //One last check to see if we already have it.
-                      if (this._rows.find((r) => (r as ResultOne & { id: IDType }).id === payload.row_id)) {
-                        return;
-                      }
-                      this._addRow({
-                        ...row,
-                        __db_pending: false
-                      });
-                    });
-                  }
-                  break;
-                case "UPDATE":
-                  this._fetchRow(payload.row_id as IDType).then((row) => {
-                    if (!row) {
-                      return;
-                    }
-                    const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === payload.row_id);
-                    if (existingRow) {
-                      this._updateRow(payload.row_id as IDType, row as ResultOne & { id: IDType }, false);
-                    } else {
-                      this._addRow({
-                        ...row,
-                        __db_pending: false
-                      });
-                    }
-                  });
-                  break;
-                case "DELETE":
-                  this._removeRow(payload.row_id as IDType);
-                  break;
-              }
-            } else {
-            }
-          });
-          this._realtimeChannel.subscribe((message, err) => {
-            //Add debugging here, maybe some indicator to user that we are connected...
-            console.log(`Realtime channel status: ${this._realtimeChannelName}`, message, err);
-          });
+          };
+          
+          // Subscribe to messages for this table, optionally filtered by submission
+          if (this._submissionId) {
+            this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
+              table,
+              this._submissionId,
+              messageHandler
+            );
+          } else {
+            this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTable(
+              table,
+              messageHandler
+            );
+          }
         }
         //Load initial data, do all of the pages.
         while (page * pageSize < (nRows ?? 1000)) {
@@ -226,9 +177,84 @@ export default class TableController<
   }
 
   close() {
-    if (this._realtimeChannel) {
-      console.log("Unsubscribing from realtime channel", this._realtimeChannelName);
-      this._realtimeChannel.unsubscribe();
+    if (this._realtimeUnsubscribe) {
+      console.log("Unsubscribing from realtime messages");
+      this._realtimeUnsubscribe();
+    }
+  }
+
+  private _handleInsert(message: BroadcastMessage) {
+    if (message.data) {
+      // Handle full data broadcasts
+      const data = message.data as Record<string, unknown>;
+      if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id)) {
+        this._addRow({
+          ...data,
+          __db_pending: false
+        } as PossiblyTentativeResult<ResultOne>);
+      }
+    } else if (message.row_id) {
+      // Handle ID-only broadcasts - fetch the data
+      if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === message.row_id)) {
+        this._fetchRow(message.row_id as IDType).then((row) => {
+          if (!row) {
+            return;
+          }
+          // One last check to see if we already have it
+          if (this._rows.find((r) => (r as ResultOne & { id: IDType }).id === message.row_id)) {
+            return;
+          }
+          this._addRow({
+            ...row,
+            __db_pending: false
+          });
+        });
+      }
+    }
+  }
+
+  private _handleUpdate(message: BroadcastMessage) {
+    if (message.data) {
+      // Handle full data broadcasts
+      const data = message.data as Record<string, unknown>;
+      const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+      if (existingRow) {
+        this._updateRow(
+          data.id as IDType,
+          { ...data, id: data.id } as ResultOne & { id: IDType },
+          false
+        );
+      } else {
+        this._addRow({
+          ...data,
+          __db_pending: false
+        } as PossiblyTentativeResult<ResultOne>);
+      }
+    } else if (message.row_id) {
+      // Handle ID-only broadcasts - fetch the data
+      this._fetchRow(message.row_id as IDType).then((row) => {
+        if (!row) {
+          return;
+        }
+        const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === message.row_id);
+        if (existingRow) {
+          this._updateRow(message.row_id as IDType, row as ResultOne & { id: IDType }, false);
+        } else {
+          this._addRow({
+            ...row,
+            __db_pending: false
+          });
+        }
+      });
+    }
+  }
+
+  private _handleDelete(message: BroadcastMessage) {
+    if (message.data) {
+      const data = message.data as Record<string, unknown>;
+      this._removeRow(data.id as IDType);
+    } else if (message.row_id) {
+      this._removeRow(message.row_id as IDType);
     }
   }
 

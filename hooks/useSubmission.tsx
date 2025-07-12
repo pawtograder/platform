@@ -9,6 +9,8 @@ import {
 } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
+import { useCourseController } from "@/hooks/useCourseController";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubric,
@@ -45,30 +47,34 @@ class SubmissionController {
 
   readonly readyPromise: Promise<[void, void, void, void]>;
 
-  constructor(client: SupabaseClient<Database>, submission_id: number, class_id: number) {
+  constructor(client: SupabaseClient<Database>, submission_id: number, class_id: number, classRealTimeController: ClassRealTimeController) {
     this.submission_comments = new TableController({
       client,
       table: "submission_comments",
       query: client.from("submission_comments").select("*").eq("submission_id", submission_id),
-      realtime_key: `class_id:${class_id}:submission_id:${submission_id}`
+      classRealTimeController,
+      submissionId: submission_id
     });
     this.submission_file_comments = new TableController({
       client,
       table: "submission_file_comments",
       query: client.from("submission_file_comments").select("*").eq("submission_id", submission_id),
-      realtime_key: `class_id:${class_id}:submission_id:${submission_id}`
+      classRealTimeController,
+      submissionId: submission_id
     });
     this.submission_artifact_comments = new TableController({
       client,
       table: "submission_artifact_comments",
       query: client.from("submission_artifact_comments").select("*").eq("submission_id", submission_id),
-      realtime_key: `class_id:${class_id}:submission_id:${submission_id}`
+      classRealTimeController,
+      submissionId: submission_id
     });
     this.submission_reviews = new TableController({
       client,
       table: "submission_reviews",
       query: client.from("submission_reviews").select("*").eq("submission_id", submission_id),
-      realtime_key: `class_id:${class_id}:submission_id:${submission_id}`
+      classRealTimeController,
+      submissionId: submission_id
     });
     this.readyPromise = Promise.all([
       this.submission_comments.readyPromise,
@@ -132,26 +138,30 @@ export function SubmissionProvider({
   const controller = useRef<SubmissionController | null>(null);
   const [ready, setReady] = useState(false);
   const [newControllersReady, setNewControllersReady] = useState(false);
+  const [isLoadingNewController, setIsLoadingNewController] = useState(false);
+  const courseController = useCourseController();
+  
   if (controller.current === null) {
-    controller.current = new SubmissionController(createClient(), submission_id, class_id);
+    controller.current = new SubmissionController(createClient(), submission_id, class_id, courseController.classRealTimeController);
+    setIsLoadingNewController(true);
+    setNewControllersReady(false);
   }
   useEffect(() => {
-    console.log("Mounting submission controller");
     return () => {
       if (controller.current) {
-        console.log("Unmounting submission controller");
         controller.current.close();
         controller.current = null;
       }
     };
   }, []);
   useEffect(() => {
-    if (controller.current) {
+    if (controller.current && isLoadingNewController) {
+      setIsLoadingNewController(false);
       controller.current.readyPromise.then(() => {
         setNewControllersReady(true);
       });
     }
-  }, [controller]);
+  }, [controller, isLoadingNewController]);
 
   if (isNaN(submission_id)) {
     toaster.error({
@@ -165,7 +175,7 @@ export function SubmissionProvider({
     <SubmissionContext.Provider value={{ submissionController: controller.current }}>
       <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
       {(!ready || !newControllersReady) && <Spinner />}
-      {ready && newControllersReady && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
+      {(ready && newControllersReady) && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
     </SubmissionContext.Provider>
   );
 }
@@ -642,7 +652,7 @@ export function useSubmissionReview(reviewId?: number) {
 export function useSubmissionReviews() {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
-  const [reviews, setReviews] = useState<SubmissionReview[] | undefined>(undefined);
+  const [reviews, setReviews] = useState<SubmissionReview[] | undefined>(controller.submission_reviews.rows);
   useEffect(() => {
     if (!ctx || !controller) {
       return;
@@ -652,7 +662,7 @@ export function useSubmissionReviews() {
     });
     setReviews(data);
     return () => unsubscribe();
-  }, [ctx, controller]);
+  }, [ctx, controller, controller?.submission_reviews]);
   return reviews;
 }
 
