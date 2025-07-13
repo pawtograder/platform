@@ -15,6 +15,8 @@ import TableController from "@/lib/TableController";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import { useCourseController } from "./useCourseController";
 export function useSelfReviewSettings() {
   const controller = useAssignmentController();
   return controller.assignment.assignment_self_review_settings;
@@ -154,30 +156,24 @@ class AssignmentController {
     client,
     assignment_id,
     class_id,
-    private_profile_id,
-    isGraderOrInstructor
+    classRealTimeController
   }: {
     client: SupabaseClient<Database>;
     assignment_id: number;
     class_id: number;
-    private_profile_id: string;
-    isGraderOrInstructor: boolean;
+    classRealTimeController: ClassRealTimeController;
   }) {
     this.reviewAssignments = new TableController({
       query: client.from("review_assignments").select("*").eq("assignment_id", assignment_id),
       client: client,
       table: "review_assignments",
-      realtime_key: isGraderOrInstructor
-        ? `class_id:${class_id}`
-        : `class_id:${class_id}:profile_id:${private_profile_id}`
+      classRealTimeController
     });
     this.reviewAssignmentRubricParts = new TableController({
       query: client.from("review_assignment_rubric_parts").select("*").eq("class_id", class_id),
       client: client,
       table: "review_assignment_rubric_parts",
-      realtime_key: isGraderOrInstructor
-        ? `class_id:${class_id}`
-        : `class_id:${class_id}:profile_id:${private_profile_id}`
+      classRealTimeController
     });
   }
   close() {
@@ -271,14 +267,14 @@ export function AssignmentProvider({
 }) {
   const params = useParams();
   const controller = useRef<AssignmentController | null>(null);
-  const { role } = useClassProfiles();
+  const courseController = useCourseController();
+
   if (controller.current === null) {
     controller.current = new AssignmentController({
       client: createClient(),
       assignment_id: initial_assignment_id ?? Number(params.assignment_id),
       class_id: Number(params.course_id),
-      private_profile_id: role.private_profile_id,
-      isGraderOrInstructor: role.role === "grader" || role.role === "instructor"
+      classRealTimeController: courseController.classRealTimeController
     });
   }
   useEffect(() => {
