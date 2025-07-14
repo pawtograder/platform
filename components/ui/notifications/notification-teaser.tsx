@@ -7,6 +7,7 @@ import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams } from "next/navigation";
 import { LucideMail, X } from "lucide-react";
 import { useState } from "react";
+import { toaster } from "../toaster";
 // type NotificationTextProps = {
 //   notification: Notification;
 // } & TextProps;
@@ -470,7 +471,10 @@ export default function NotificationTeaser({
     try {
       await dismiss();
     } catch (error) {
-      console.error("Failed to dismiss notification:", error);
+      toaster.error({
+        title: "Failed to dismiss notification",
+        description: "Error: " + (error as Error).message
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -483,7 +487,10 @@ export default function NotificationTeaser({
     try {
       await markAsRead();
     } catch (error) {
-      console.error("Failed to mark notification as read:", error);
+      toaster.error({
+        title: "Failed to mark notification as read",
+        description: "Error: " + (error as Error).message
+      });
     } finally {
       setIsProcessing(false);
     }

@@ -37,6 +37,7 @@ import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/
 import useAuthState from "@/hooks/useAuthState";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
+import Link from "next/link";
 
 // Type for help request students relationship
 type HelpRequestStudent = {
@@ -129,7 +130,7 @@ const HelpRequestFileReferences = ({ request }: { request: HelpRequest }) => {
     filters: [{ field: "help_request_id", operator: "eq", value: request.id }]
   });
 
-  // Fetch the actual files referenced
+  // Fetch the actual files referenced to get their name
   const fileReferenceIds = fileReferences?.data?.map((ref) => ref.submission_file_id) || [];
   const { data: referencedFiles } = useList<SubmissionFile>({
     resource: "submission_files",
@@ -146,7 +147,7 @@ const HelpRequestFileReferences = ({ request }: { request: HelpRequest }) => {
   }
 
   return (
-    <Card.Root variant="outline" mb={4}>
+    <Card.Root variant="outline" m={4}>
       <Card.Header>
         <HStack>
           <Icon as={BsCode} />
@@ -161,14 +162,19 @@ const HelpRequestFileReferences = ({ request }: { request: HelpRequest }) => {
               <Text fontSize="sm" fontWeight="medium" mb={2}>
                 Submission:
               </Text>
+
               <HStack>
                 <Badge colorPalette="blue" variant="subtle">
                   {referencedSubmission.data[0].repository}
                 </Badge>
-                <Text fontSize="sm" color="fg.muted">
-                  Run #{referencedSubmission.data[0].run_number} •{" "}
-                  {new Date(referencedSubmission.data[0].created_at).toLocaleDateString()}
-                </Text>
+                <Link
+                  href={`/course/${request.class_id}/assignments/${referencedSubmission.data[0].assignment_id}/submissions/${referencedSubmission.data[0].id}`}
+                >
+                  <Text fontSize="sm" color="fg.muted" _hover={{ textDecoration: "underline" }}>
+                    Run #{referencedSubmission.data[0].run_number} •{" "}
+                    {new Date(referencedSubmission.data[0].created_at).toLocaleDateString()}
+                  </Text>
+                </Link>
               </HStack>
             </Box>
           )}
@@ -183,9 +189,16 @@ const HelpRequestFileReferences = ({ request }: { request: HelpRequest }) => {
                 {referencedFiles.data.map((file) => {
                   const fileRef = fileReferences?.data?.find((ref) => ref.submission_file_id === file.id);
                   return (
-                    <HStack key={file.id}>
+                    <HStack key={fileRef?.id}>
                       <Icon as={BsFileEarmark} color="fg.muted" />
-                      <Text fontSize="sm">{file.name}</Text>
+                      <Link
+                        href={`/course/${request.class_id}/assignments/${fileRef?.assignment_id}/submissions/${fileRef?.submission_id}/files?file_id=${fileRef?.submission_file_id}#L${fileRef?.line_number}`}
+                        key={fileRef?.id}
+                      >
+                        <Text fontSize="sm" _hover={{ textDecoration: "underline" }}>
+                          {file.name}
+                        </Text>
+                      </Link>
                       {fileRef?.line_number && (
                         <Badge size="sm" variant="outline">
                           Line {fileRef.line_number}

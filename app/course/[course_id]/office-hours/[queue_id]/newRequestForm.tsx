@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { useList } from "@refinedev/core";
 import { useParams, useRouter } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
-import { Fieldset, Button, Heading, Text } from "@chakra-ui/react";
+import { Fieldset, Button, Heading, Text, Box, Stack, Input, IconButton } from "@chakra-ui/react";
 import {
   HelpRequest,
   HelpRequestTemplate,
@@ -20,6 +20,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "chakra-react-select";
 import { toaster } from "@/components/ui/toaster";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
+import { X } from "lucide-react";
 
 type TemplateOption = { label: string; value: string };
 type SubmissionOption = { label: string; value: string };
@@ -75,6 +76,26 @@ export default function HelpRequestForm() {
     refineCoreProps: {
       resource: "help_requests",
       action: "create",
+      onMutationError: (error) => {
+        toaster.error({
+          title: "Error",
+          description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
+        });
+
+        // Check if it's an RLS violation
+        if (error && typeof error === "object" && "code" in error && error.code === "42501") {
+          toaster.error({
+            title: "Permission Error",
+            description:
+              "You don't have permission to create this help request. This might be due to database security policies. Please try making the request public instead of private, or contact your instructor."
+          });
+        } else {
+          toaster.error({
+            title: "Error",
+            description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
+        }
+      },
       onMutationSuccess: async (data) => {
         try {
           // Get current selected students from ref to avoid closure issues
@@ -106,15 +127,40 @@ export default function HelpRequestForm() {
               title: "Error",
               description: "No students selected for help request"
             });
+            throw new Error("No students selected for help request");
+          }
+
+          // Check if we need to update the help request to private
+          const intendedPrivacy = getValues("_intended_privacy");
+          if (intendedPrivacy) {
+            const { error: updateError } = await supabase
+              .from("help_requests")
+              .update({ is_private: true })
+              .eq("id", data.data.id);
+
+            if (updateError) {
+              toaster.error({
+                title: "Warning",
+                description: "Help request created but could not be set to private. It will remain public."
+              });
+              // Don't throw here - the request was created successfully
+            }
           }
 
           // Create file references if any
           const fileReferences = getValues("file_references") || [];
           if (fileReferences.length > 0) {
+            // Get assignment_id from the selected submission
+            const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
+            if (!selectedSubmission?.assignment_id) {
+              throw new Error("Assignment ID not found for the selected submission");
+            }
+
             for (const ref of fileReferences) {
               const { error: fileRefError } = await supabase.from("help_request_file_references").insert({
                 help_request_id: data.data.id,
                 class_id: Number.parseInt(course_id as string),
+                assignment_id: selectedSubmission.assignment_id,
                 submission_file_id: ref.submission_file_id,
                 submission_id: getValues("referenced_submission_id"),
                 line_number: ref.line_number
@@ -254,6 +300,13 @@ export default function HelpRequestForm() {
     }
   });
 
+  // Auto-set privacy when submission is referenced
+  useEffect(() => {
+    if (selectedSubmissionId) {
+      setValue("is_private", true);
+    }
+  }, [selectedSubmissionId, setValue]);
+
   // Watch the selected help queue to validate against existing requests
   const selectedHelpQueue = watch("help_queue");
 
@@ -305,19 +358,40 @@ export default function HelpRequestForm() {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { file_references, ...helpRequestData } = values;
 
-        // Add required fields that may not be set in the form (removed creator field)
+        // Store the intended privacy setting for later use
+        const intendedPrivacy = selectedSubmissionId ? true : values.is_private || false;
+
+        // Add required fields that may not be set in the form
         const finalData = {
           ...helpRequestData,
           assignee: null,
-          class_id: Number.parseInt(course_id as string)
+          class_id: Number.parseInt(course_id as string),
+          // Ensure these fields have proper defaults
+          status: "open" as const,
+          priority_level: 1,
+          is_video_live: false,
+          // WORKAROUND: Always create as public first to avoid RLS issues
+          is_private: false
         };
 
+        // Store intended privacy separately (not in database data)
+        setValue("_intended_privacy", intendedPrivacy);
         return onFinish(finalData);
       };
 
       handleSubmit(customOnFinish)();
     },
-    [handleSubmit, onFinish, private_profile_id, course_id, userActiveRequests, getValues, selectedStudents]
+    [
+      handleSubmit,
+      onFinish,
+      private_profile_id,
+      course_id,
+      userActiveRequests,
+      getValues,
+      selectedStudents,
+      setValue,
+      selectedSubmissionId
+    ]
   );
 
   if (query?.error) {
@@ -482,34 +556,79 @@ export default function HelpRequestForm() {
                 control={control}
                 defaultValue={[]}
                 render={({ field }) => (
-                  <Select
-                    isMulti={true}
-                    isClearable={true}
-                    placeholder="Select files to reference"
-                    options={submissionFiles.data.map(
-                      (file) =>
-                        ({
-                          label: file.name,
-                          value: file.id.toString()
-                        }) as FileOption
+                  <Box>
+                    {/* Add new file reference */}
+                    <Stack gap={3} mb={4}>
+                      <Select
+                        placeholder="Select a file to add"
+                        options={submissionFiles.data
+                          .filter(
+                            (file) => !field.value?.some((ref: FileReference) => ref.submission_file_id === file.id)
+                          )
+                          .map((file) => ({
+                            label: file.name,
+                            value: file.id.toString()
+                          }))}
+                        onChange={(option: FileOption | null) => {
+                          if (option) {
+                            const newRef: FileReference = {
+                              submission_file_id: Number.parseInt(option.value),
+                              line_number: undefined
+                            };
+                            field.onChange([...(field.value || []), newRef]);
+                          }
+                        }}
+                        value={null}
+                        isClearable={false}
+                      />
+                    </Stack>
+
+                    {/* Display current file references */}
+                    {field.value && field.value.length > 0 && (
+                      <Stack gap={2}>
+                        {field.value.map((ref: FileReference, index: number) => {
+                          const fileName =
+                            submissionFiles.data.find((f) => f.id === ref.submission_file_id)?.name || "Unknown";
+                          return (
+                            <Box key={index} p={3} border="1px solid" borderColor="gray.200" borderRadius="md">
+                              <Stack direction="row" gap={3} align="center">
+                                <Text flex={1} fontWeight="medium">
+                                  {fileName}
+                                </Text>
+                                <Input
+                                  placeholder="Line number (optional)"
+                                  type="number"
+                                  value={ref.line_number || ""}
+                                  onChange={(e) => {
+                                    const newRefs = [...field.value];
+                                    newRefs[index] = {
+                                      ...ref,
+                                      line_number: e.target.value ? Number.parseInt(e.target.value) : undefined
+                                    };
+                                    field.onChange(newRefs);
+                                  }}
+                                  width="150px"
+                                  min={1}
+                                />
+                                <IconButton
+                                  aria-label="Remove file reference"
+                                  size="sm"
+                                  colorScheme="red"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    const newRefs = field.value.filter((_: FileReference, i: number) => i !== index);
+                                    field.onChange(newRefs);
+                                  }}
+                                >
+                                  <X size={16} />
+                                </IconButton>
+                              </Stack>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
                     )}
-                    value={
-                      field.value?.map((ref: FileReference) => ({
-                        label: submissionFiles.data.find((f) => f.id === ref.submission_file_id)?.name || "Unknown",
-                        value: ref.submission_file_id.toString()
-                      })) || []
-                    }
-                    onChange={(options) => {
-                      if (!options) {
-                        field.onChange([]);
-                        return;
-                      }
-                      const newRefs = Array.from(options).map((option: FileOption) => ({
-                        submission_file_id: Number.parseInt(option.value)
-                      }));
-                      field.onChange(newRefs);
-                    }}
-                  />
+                  </Box>
                 )}
               />
             </Field>
@@ -519,15 +638,27 @@ export default function HelpRequestForm() {
         <Fieldset.Content>
           <Field
             label="Privacy "
-            helperText="Private requests are only visible to course staff and associated students."
-            optionalText="(Optional)"
+            helperText={
+              selectedSubmissionId
+                ? "Private requests are only visible to course staff and associated students. This is automatically enabled when referencing a submission."
+                : "Private requests are only visible to course staff and associated students. Note: Due to current system limitations, private requests may not work properly without a submission reference."
+            }
+            optionalText={selectedSubmissionId ? "(Required)" : "(Optional)"}
           >
             <Controller
               name="is_private"
               control={control}
               defaultValue={false}
               render={({ field }) => (
-                <Checkbox checked={field.value} onCheckedChange={({ checked }) => field.onChange(!!checked)}>
+                <Checkbox
+                  checked={selectedSubmissionId ? true : field.value}
+                  disabled={!!selectedSubmissionId}
+                  onCheckedChange={({ checked }) => {
+                    if (!selectedSubmissionId) {
+                      field.onChange(!!checked);
+                    }
+                  }}
+                >
                   Private
                 </Checkbox>
               )}

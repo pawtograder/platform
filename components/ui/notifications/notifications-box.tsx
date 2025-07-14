@@ -13,40 +13,47 @@ export default function NotificationsBox() {
 
   return (
     <Box>
-      <PopoverRoot closeOnInteractOutside={true} open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
-        <PopoverTrigger asChild>
-          <Tooltip content="Notifications" showArrow>
-            <IconButton
-              variant="outline"
-              colorPalette="gray"
-              size="sm"
-              onClick={() => setIsOpen(!isOpen)}
-              position="relative"
-            >
-              {unreadCount > 0 && (
-                <Badge
-                  variant="solid"
-                  colorPalette="blue"
-                  size="xs"
-                  position="absolute"
-                  top="-1"
-                  right="-1"
-                  borderRadius="full"
-                  minW="18px"
-                  h="18px"
-                  fontSize="10px"
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                >
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </Badge>
-              )}
-              <HiOutlineInbox size={18} />
-            </IconButton>
-          </Tooltip>
-        </PopoverTrigger>
-        <PopoverContent shadow="lg" borderRadius="lg" borderWidth="1px">
+      <PopoverRoot
+        closeOnInteractOutside={true}
+        open={isOpen}
+        onOpenChange={(details) => setIsOpen(details.open)}
+        positioning={{ placement: "bottom-end" }}
+      >
+        <Tooltip content="Notifications" showArrow>
+          <Box display="inline-block">
+            <PopoverTrigger asChild>
+              <IconButton
+                variant="outline"
+                colorPalette="gray"
+                size="sm"
+                onClick={() => setIsOpen(!isOpen)}
+                position="relative"
+              >
+                {unreadCount > 0 && (
+                  <Badge
+                    variant="solid"
+                    colorPalette="blue"
+                    size="xs"
+                    position="absolute"
+                    top="-1"
+                    right="-1"
+                    borderRadius="full"
+                    minW="18px"
+                    h="18px"
+                    fontSize="10px"
+                    display="flex"
+                    alignItems="center"
+                    justifyContent="center"
+                  >
+                    {unreadCount > 9 ? "9+" : unreadCount}
+                  </Badge>
+                )}
+                <HiOutlineInbox size={18} />
+              </IconButton>
+            </PopoverTrigger>
+          </Box>
+        </Tooltip>
+        <PopoverContent shadow="lg" borderRadius="lg" borderWidth="1px" portalled={false}>
           <PopoverBody p="0">
             <Box p="4" borderBottom="1px" borderColor="border.muted">
               <Text fontWeight="semibold" fontSize="lg" color="fg.default">

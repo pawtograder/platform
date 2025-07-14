@@ -1179,13 +1179,15 @@ BEGIN
                 class_id,
                 submission_file_id,
                 submission_id,
-                line_number
+                line_number,
+                assignment_id
             ) VALUES (
                 help_req_id,
                 demo_class_id,
                 submission_file_sample,
                 (SELECT submission_id FROM public.submission_files WHERE id = submission_file_sample),
-                42
+                42,
+                1
             );
         END IF;
 

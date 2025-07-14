@@ -1,97 +1,9 @@
-import { DataList, Flex, Icon, IconButton, Button, HStack } from "@chakra-ui/react";
-
+import { DataList, Flex } from "@chakra-ui/react";
 import { Box } from "@chakra-ui/react";
 import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
-import { BsCameraVideo, BsXCircle } from "react-icons/bs";
-import { useList, useUpdate } from "@refinedev/core";
-import { PopConfirm } from "@/components/ui/popconfirm";
-import { useCallback } from "react";
-import { toaster } from "@/components/ui/toaster";
-import { useMeetingWindows } from "@/hooks/useMeetingWindows";
-
-// function ChatChannelParticipants() {
-//   const { participants } = useChatChannel();
-//   const profiles = useUserProfiles();
-//   return (
-//     <>
-//       {participants.map((participant, index) => (
-//         <Text key={participant}>
-//           {profiles.users.find((p) => p.id === participant)?.name}
-//           {index === participants.length - 1 ? "" : ", "}
-//         </Text>
-//       ))}
-//     </>
-//   );
-// }
-
-function HelpRequestStudentActions({ request }: { request: HelpRequest }) {
-  const { openMeetingWindow } = useMeetingWindows();
-
-  const { mutate: updateRequest } = useUpdate<HelpRequest>({
-    resource: "help_requests",
-    id: request.id,
-    mutationOptions: {
-      onSuccess: () => {
-        toaster.success({
-          title: "Request closed",
-          description: "Your help request has been closed successfully."
-        });
-      },
-      onError: () => {
-        toaster.error({
-          title: "Failed to close request",
-          description: "There was an error closing your request. Please try again."
-        });
-      }
-    }
-  });
-
-  const closeOwnRequest = useCallback(() => {
-    updateRequest({
-      id: request.id,
-      values: {
-        status: "closed"
-      }
-    });
-  }, [updateRequest, request.id]);
-
-  const joinVideoCall = useCallback(() => {
-    openMeetingWindow(request.class_id, request.id, request.help_queue);
-  }, [openMeetingWindow, request.class_id, request.id, request.help_queue]);
-
-  // Don't show actions for already closed/resolved requests
-  if (request.status === "closed" || request.status === "resolved") {
-    return null;
-  }
-
-  return (
-    <HStack gap={2} mb={4}>
-      {/* Video Call Button */}
-      {request.is_video_live && (
-        <IconButton aria-label="Join Video Call" variant="ghost" onClick={joinVideoCall}>
-          <Icon as={BsCameraVideo} />
-        </IconButton>
-      )}
-
-      {/* Close Request Button */}
-      <PopConfirm
-        triggerLabel="Close Request"
-        trigger={
-          <Button size="sm" colorPalette="red" variant="outline">
-            <Icon as={BsXCircle} fontSize="md!" />
-            Close Request
-          </Button>
-        }
-        confirmHeader="Close Your Request"
-        confirmText="Are you sure you want to close your help request? This cannot be undone."
-        onConfirm={closeOwnRequest}
-        onCancel={() => {}}
-      />
-    </HStack>
-  );
-}
+import { useList } from "@refinedev/core";
 
 export default function CurrentRequest({ queue, request }: { queue: HelpQueue; request: HelpRequest }) {
   const assignee = useUserProfile(request.assignee);
@@ -120,8 +32,6 @@ export default function CurrentRequest({ queue, request }: { queue: HelpQueue; r
           <DataList.ItemValue>{assignee ? assignee.name : "Nobody is working on this request yet"}</DataList.ItemValue>
         </DataList.Item>
       </DataList.Root>
-
-      <HelpRequestStudentActions request={request} />
 
       <Flex height="100vh" overflow="hidden" width="100%">
         <HelpRequestChat request={request} />

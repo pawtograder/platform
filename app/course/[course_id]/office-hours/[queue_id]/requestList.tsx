@@ -71,7 +71,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
                       )}
                       {(showPrivacyIndicator || request.is_private) && request.is_private && (
                         <Badge colorPalette="orange" size="sm">
-                          Private
+                          private
                         </Badge>
                       )}
                     </HStack>

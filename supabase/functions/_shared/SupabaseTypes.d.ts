@@ -2412,6 +2412,7 @@ export type Database = {
       };
       help_request_file_references: {
         Row: {
+          assignment_id: number;
           class_id: number;
           created_at: string;
           help_request_id: number;
@@ -2421,6 +2422,7 @@ export type Database = {
           submission_id: number | null;
         };
         Insert: {
+          assignment_id: number;
           class_id: number;
           created_at?: string;
           help_request_id: number;
@@ -2430,6 +2432,7 @@ export type Database = {
           submission_id?: number | null;
         };
         Update: {
+          assignment_id?: number;
           class_id?: number;
           created_at?: string;
           help_request_id?: number;
@@ -2439,6 +2442,27 @@ export type Database = {
           submission_id?: number | null;
         };
         Relationships: [
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
           {
             foreignKeyName: "help_request_file_references_class_id_fkey";
             columns: ["class_id"];
@@ -5994,7 +6018,7 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
-      check_realtime_authorization: {
+      check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
       };
@@ -6050,6 +6074,10 @@ export type Database = {
           id: string;
         }[];
       };
+      help_request_is_private: {
+        Args: { p_help_request_id: number };
+        Returns: boolean;
+      };
       intval: {
         Args: { "": string };
         Returns: number;
@@ -6101,6 +6129,10 @@ export type Database = {
           p_is_mastered: boolean;
         };
         Returns: undefined;
+      };
+      user_is_in_help_request: {
+        Args: { p_help_request_id: number; p_user_id?: string };
+        Returns: boolean;
       };
     };
     Enums: {
