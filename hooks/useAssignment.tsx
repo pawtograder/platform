@@ -14,7 +14,7 @@ import { useClassProfiles } from "./useClassProfiles";
 import TableController from "@/lib/TableController";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { useCourseController } from "./useCourseController";
 export function useSelfReviewSettings() {
@@ -182,7 +182,6 @@ class AssignmentController {
   }
   // Assignment
   set assignment(assignment: AssignmentWithRubricsAndReferences) {
-    console.log("Setting assignment", assignment);
     if (this._assignment) {
       //TODO: refine.dev does a pretty bad job with invalidation on a complex query like this... but we never want it to be invalidated anyway I guess?
       return;
@@ -270,13 +269,13 @@ export function AssignmentProvider({
   const controller = useRef<AssignmentController | null>(null);
   const courseController = useCourseController();
   const [ready, setReady] = useState(false);
-  const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
+  const assignment_id = initial_assignment_id ?? Number(params["assignment_id"]);
 
   if (controller.current === null) {
     controller.current = new AssignmentController({
       client: createClient(),
-      assignment_id: initial_assignment_id ?? Number(params.assignment_id),
-      class_id: Number(params.course_id),
+      assignment_id: initial_assignment_id ?? Number(params["assignment_id"]),
+      class_id: Number(params["course_id"]),
       classRealTimeController: courseController.classRealTimeController
     });
     setReady(false);
@@ -347,9 +346,6 @@ function AssignmentControllerCreator({
       controller.submissions = submissionsData.data;
     }
     if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
-      console.log("Setting ready to true");
-      console.log(assignmentQuery.data.data);
-      console.log(controller.assignment);
       setReady(true);
     }
   }, [assignmentQuery.data, assignmentQuery.isLoading, submissionsData, controller, setReady, tableControllersReady]);

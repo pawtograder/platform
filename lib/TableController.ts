@@ -1,6 +1,6 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
+import { type UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
 import { ClassRealTimeController } from "./ClassRealTimeController";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
@@ -112,8 +112,6 @@ export default class TableController<
         // Set up realtime subscription if controller is provided
         if (this._classRealTimeController) {
           const messageHandler = (message: BroadcastMessage) => {
-            console.log("Received broadcast message", JSON.stringify(message, null, 2));
-
             // Filter by table name
             if (message.table !== table) {
               return;
@@ -175,7 +173,6 @@ export default class TableController<
 
   close() {
     if (this._realtimeUnsubscribe) {
-      console.log("Unsubscribing from realtime messages");
       this._realtimeUnsubscribe();
     }
   }
@@ -184,7 +181,7 @@ export default class TableController<
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
-      if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id)) {
+      if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data["id"])) {
         this._addRow({
           ...data,
           __db_pending: false
@@ -214,9 +211,9 @@ export default class TableController<
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
-      const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+      const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data["id"]);
       if (existingRow) {
-        this._updateRow(data.id as IDType, { ...data, id: data.id } as ResultOne & { id: IDType }, false);
+        this._updateRow(data["id"] as IDType, { ...data, id: data["id"] } as ResultOne & { id: IDType }, false);
       } else {
         this._addRow({
           ...data,
@@ -245,7 +242,7 @@ export default class TableController<
   private _handleDelete(message: BroadcastMessage) {
     if (message.data) {
       const data = message.data as Record<string, unknown>;
-      this._removeRow(data.id as IDType);
+      this._removeRow(data["id"] as IDType);
     } else if (message.row_id) {
       this._removeRow(message.row_id as IDType);
     }
@@ -322,7 +319,7 @@ export default class TableController<
       listeners.forEach((listener) => listener(this._rows[index]));
     }
     if (typeof newRow === "object" && "deleted_at" in newRow) {
-      if (newRow.deleted_at && (!("deleted_at" in oldRow) || oldRow.deleted_at === null)) {
+      if (newRow.deleted_at && (!("deleted_at" in oldRow!) || oldRow!.deleted_at === null)) {
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered: [], left: [] }));
       }
     }

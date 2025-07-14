@@ -16,11 +16,12 @@ import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import type { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 import { createClient } from "@/utils/supabase/client";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { Box, Spinner } from "@chakra-ui/react";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { toaster } from "@/components/ui/toaster";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
@@ -782,7 +783,10 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
         .range(from, from + pageSize - 1);
 
       if (error) {
-        console.error("Error fetching profiles:", error);
+        toaster.error({
+          title: "Error fetching profiles",
+          description: error.message
+        });
         break;
       }
 
@@ -815,7 +819,10 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
         .range(from, from + pageSize - 1);
 
       if (error) {
-        console.error("Error fetching roles:", error);
+        toaster.error({
+          title: "Error fetching roles",
+          description: error.message
+        });
         break;
       }
 

@@ -159,9 +159,7 @@ export function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitatio
       return [];
     }
     return profiles.filter(
-      (p) =>
-        p.is_private_profile &&
-        !groups.some((g) => g.assignment_groups_members.some((m: AssignmentGroupMember) => m.profile_id === p.id))
+      (p) => p.is_private_profile && !groups.some((g) => g.assignment_groups_members.some((m) => m.profile_id === p.id))
     );
   }, [profiles, groups]);
   return ungroupedProfiles;
@@ -841,12 +839,13 @@ function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
     );
   }
   if (repositories?.length === 1) {
+    const repo = repositories[0]!;
     return (
       <HStack>
         <Text fontSize="sm" fontWeight="bold">
           Repository:{" "}
         </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
+        <Link href={`https://github.com/${repo.repository}`}>{repo.repository}</Link>
       </HStack>
     );
   }

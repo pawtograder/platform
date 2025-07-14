@@ -4,7 +4,7 @@ import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
 import useAuthState from "@/hooks/useAuthState";
-import {
+import type {
   Assignment,
   Repository,
   SelfReviewSettings,
@@ -14,7 +14,7 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useList } from "@refinedev/core";
+import { type CrudFilter, useList } from "@refinedev/core";
 import { format } from "date-fns";
 import { useParams } from "next/navigation";
 import { CommitHistoryDialog } from "./commitHistory";

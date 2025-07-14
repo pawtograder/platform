@@ -196,11 +196,9 @@ export default function MessageInput(props: MessageInputProps) {
                   setValue("");
                 })
                 .catch((error) => {
-                  console.error("Error sending message", error);
-                  toaster.create({
+                  toaster.error({
                     title: "Error sending message",
-                    description: error instanceof Error ? error.message : "Unknown error",
-                    type: "error"
+                    description: error instanceof Error ? error.message : "Unknown error"
                   });
                 })
                 .finally(() => {
@@ -339,11 +337,9 @@ export default function MessageInput(props: MessageInputProps) {
                 setIsSending(true);
                 await sendMessage(value!, profile_id, true);
               } catch (error) {
-                console.error("Error sending message", error);
-                toaster.create({
+                toaster.error({
                   title: "Error sending message",
-                  description: error instanceof Error ? error.message : "Unknown error",
-                  type: "error"
+                  description: error instanceof Error ? error.message : "Unknown error"
                 });
               } finally {
                 setIsSending(false);
@@ -486,16 +482,12 @@ export default function MessageInput(props: MessageInputProps) {
             }
             try {
               setIsSending(true);
-              console.log("Sending message", value, profile_id);
               await sendMessage(value!, profile_id, true);
-              console.log("Message sent", value, profile_id);
               setValue("");
             } catch (error) {
-              console.error(error);
-              toaster.create({
+              toaster.error({
                 title: "Error sending message",
-                description: error instanceof Error ? error.message : "Unknown error",
-                type: "error"
+                description: error instanceof Error ? error.message : "Unknown error"
               });
             } finally {
               setIsSending(false);

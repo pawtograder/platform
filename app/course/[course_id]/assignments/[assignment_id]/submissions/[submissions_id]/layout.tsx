@@ -34,7 +34,7 @@ import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
+import { type CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";

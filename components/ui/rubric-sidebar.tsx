@@ -64,7 +64,7 @@ import { useActiveReviewAssignment, useActiveReviewAssignmentId, useActiveRubric
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Icon } from "@chakra-ui/react";
 import { useCreate, useDelete, useList } from "@refinedev/core";
-import { Select as ChakraReactSelect, OptionBase } from "chakra-react-select";
+import { Select as ChakraReactSelect, type OptionBase } from "chakra-react-select";
 import { format, formatRelative } from "date-fns";
 import { usePathname } from "next/navigation";
 import path from "path";
@@ -1143,13 +1143,11 @@ function SubmissionCommentForm({
             ...artifactInfo
           };
           onSuccess();
-          console.log("Creating comment", values);
           if (check.is_annotation) {
             throw new Error("Not implemented");
           } else {
             await submissionController.submission_comments.create(values);
           }
-          console.log("Comment created");
         }}
         defaultSingleLine={true}
         allowEmptyMessage={!check.is_comment_required}

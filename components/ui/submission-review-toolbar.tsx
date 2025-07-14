@@ -88,7 +88,6 @@ export function CompleteReviewButton() {
     !missing_required_criteria ||
     !missing_optional_criteria
   ) {
-    console.log("No active submission review, showing loading instead of popover??");
     // Render a loading state or disabled button
     return (
       <Button variant="surface" loading>
@@ -175,22 +174,21 @@ export function CompleteReviewButton() {
                   loading={isLoading}
                   onClick={async () => {
                     try {
-                      console.log("Marking review as complete", activeSubmissionReview.id, private_profile_id);
                       setIsLoading(true);
                       await submissionController.submission_reviews.update(activeSubmissionReview.id, {
                         completed_at: new Date().toISOString(),
                         completed_by: private_profile_id
                       });
-                      console.log("Review marked as complete", activeSubmissionReview.id, private_profile_id);
                       toaster.success({
                         title: "Review marked as complete",
                         description: "Your review has been marked as complete."
                       });
                     } catch (error) {
-                      console.error("Error marking review as complete", error);
                       toaster.error({
                         title: "Error marking review as complete",
-                        description: "An error occurred while marking the review as complete."
+                        description:
+                          "An error occurred while marking the review as complete: " +
+                          (error instanceof Error ? error.message : "Unknown error")
                       });
                     } finally {
                       setIsLoading(false);
@@ -218,7 +216,6 @@ function ReviewAssignmentActions() {
   const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const { time_zone } = useCourse();
   const rubric = useRubricById(activeSubmissionReview?.rubric_id);
-  console.log("ReviewAssignmentActions", { activeReviewAssignment, activeSubmissionReview });
   if (!activeReviewAssignment || !activeSubmissionReview || activeSubmissionReview.completed_at) {
     return <></>;
   }
@@ -274,7 +271,6 @@ export default function SubmissionReviewToolbar() {
   const selfReviewSettings = useSelfReviewSettings();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const canSubmitEarlyForSelfReview = selfReviewSettings.enabled && selfReviewSettings.allow_early;
-  console.log("SubmissionReviewToolbar", { writableReviews, canSubmitEarlyForSelfReview, activeReviewAssignmentId });
   if (
     (!writableReviews || writableReviews.length === 0 || writableReviews.length === 1) &&
     !canSubmitEarlyForSelfReview &&

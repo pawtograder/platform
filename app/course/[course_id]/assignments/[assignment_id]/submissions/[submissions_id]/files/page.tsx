@@ -66,7 +66,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
-import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
+import { chakraComponents, Select, type SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
 import JSZip from "jszip";
 import Image from "next/image";
