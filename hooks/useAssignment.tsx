@@ -15,6 +15,8 @@ import TableController from "@/lib/TableController";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import { useCourseController } from "./useCourseController";
 export function useSelfReviewSettings() {
   const controller = useAssignmentController();
   return controller.assignment.assignment_self_review_settings;
@@ -154,30 +156,24 @@ class AssignmentController {
     client,
     assignment_id,
     class_id,
-    private_profile_id,
-    isGraderOrInstructor
+    classRealTimeController
   }: {
     client: SupabaseClient<Database>;
     assignment_id: number;
     class_id: number;
-    private_profile_id: string;
-    isGraderOrInstructor: boolean;
+    classRealTimeController: ClassRealTimeController;
   }) {
     this.reviewAssignments = new TableController({
       query: client.from("review_assignments").select("*").eq("assignment_id", assignment_id),
       client: client,
       table: "review_assignments",
-      realtime_key: isGraderOrInstructor
-        ? `class_id:${class_id}`
-        : `class_id:${class_id}:profile_id:${private_profile_id}`
+      classRealTimeController
     });
     this.reviewAssignmentRubricParts = new TableController({
       query: client.from("review_assignment_rubric_parts").select("*").eq("class_id", class_id),
       client: client,
       table: "review_assignment_rubric_parts",
-      realtime_key: isGraderOrInstructor
-        ? `class_id:${class_id}`
-        : `class_id:${class_id}:profile_id:${private_profile_id}`
+      classRealTimeController
     });
   }
   close() {
@@ -186,6 +182,7 @@ class AssignmentController {
   }
   // Assignment
   set assignment(assignment: AssignmentWithRubricsAndReferences) {
+    console.log("Setting assignment", assignment);
     if (this._assignment) {
       //TODO: refine.dev does a pretty bad job with invalidation on a complex query like this... but we never want it to be invalidated anyway I guess?
       return;
@@ -271,15 +268,18 @@ export function AssignmentProvider({
 }) {
   const params = useParams();
   const controller = useRef<AssignmentController | null>(null);
-  const { role } = useClassProfiles();
+  const courseController = useCourseController();
+  const [ready, setReady] = useState(false);
+  const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
+
   if (controller.current === null) {
     controller.current = new AssignmentController({
       client: createClient(),
       assignment_id: initial_assignment_id ?? Number(params.assignment_id),
       class_id: Number(params.course_id),
-      private_profile_id: role.private_profile_id,
-      isGraderOrInstructor: role.role === "grader" || role.role === "instructor"
+      classRealTimeController: courseController.classRealTimeController
     });
+    setReady(false);
   }
   useEffect(() => {
     return () => {
@@ -289,8 +289,6 @@ export function AssignmentProvider({
       }
     };
   }, []);
-  const [ready, setReady] = useState(false);
-  const assignment_id = initial_assignment_id ?? Number(params.assignment_id);
 
   if (!assignment_id || isNaN(assignment_id)) {
     return <Text>Error: Invalid Assignment ID.</Text>;
@@ -349,6 +347,9 @@ function AssignmentControllerCreator({
       controller.submissions = submissionsData.data;
     }
     if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
+      console.log("Setting ready to true");
+      console.log(assignmentQuery.data.data);
+      console.log(controller.assignment);
       setReady(true);
     }
   }, [assignmentQuery.data, assignmentQuery.isLoading, submissionsData, controller, setReady, tableControllersReady]);
