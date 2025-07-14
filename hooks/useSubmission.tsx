@@ -661,8 +661,8 @@ export function useSubmissionReview(reviewId?: number) {
 }
 export function useSubmissionReviews() {
   const ctx = useContext(SubmissionContext);
-  const controller = useSubmissionController();
-  const [reviews, setReviews] = useState<SubmissionReview[] | undefined>(controller.submission_reviews.rows);
+  const controller = ctx?.submissionController;
+  const [reviews, setReviews] = useState<SubmissionReview[] | undefined>(controller?.submission_reviews.rows);
   useEffect(() => {
     if (!ctx || !controller) {
       return;
