@@ -1,6 +1,13 @@
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database, Json } from "./SupabaseTypes";
 export type { Json };
+
+export type GradebookColumnExternalData = {
+  source: "csv";
+  fileName: string;
+  date: string;
+  creator: string;
+};
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
 
 export type AssignmentWithRubricsAndReferences = GetResult<
@@ -8,7 +15,7 @@ export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
+  "*, assignment_self_review_settings(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
 >;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
@@ -184,12 +191,6 @@ export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"]["Tables"]["submissions"]["Relationships"],
   "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
-export type SubmissionWithAllRelatedData = SubmissionWithFilesGraderResultsOutputTestsAndRubric & {
-  submission_file_comments: SubmissionFileComment[];
-  submission_comments: SubmissionComments[];
-  submission_reviews: SubmissionReviewWithRubric[];
-  submission_artifact_comments: SubmissionArtifactComment[];
-};
 export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
@@ -572,6 +573,22 @@ export type RubricCheckReference = GetResult<
   "*"
 >;
 
+export type EmailDistributionList = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_list"]["Row"],
+  "email_distribution_list",
+  Database["public"]["Tables"]["email_distribution_list"]["Relationships"],
+  "*"
+>;
+
+export type EmailDistributionItem = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_distribution_item"]["Row"],
+  "email_distribution_item",
+  Database["public"]["Tables"]["email_distribution_item"]["Relationships"],
+  "*"
+>;
+
 export type GradebookColumnDependencies = {
   assignments?: int[];
   gradebook_columns?: int[];
@@ -654,5 +671,36 @@ export type ReviewAssignments = GetResult<
   Database["public"]["Tables"]["review_assignments"]["Row"],
   "review_assignments",
   Database["public"]["Tables"]["review_assignments"]["Relationships"],
+  "*"
+>;
+export type ReviewAssignmentParts = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["review_assignment_rubric_parts"]["Row"],
+  "review_assignment_rubric_parts",
+  Database["public"]["Tables"]["review_assignment_rubric_parts"]["Relationships"],
+  "*"
+>;
+
+export type Emails = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["emails"]["Row"],
+  "emails",
+  Database["public"]["Tables"]["emails"]["Relationships"],
+  "*"
+>;
+
+export type EmailBatches = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["email_batches"]["Row"],
+  "email_batches",
+  Database["public"]["Tables"]["email_batches"]["Relationships"],
+  "*"
+>;
+
+export type Course = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["classes"]["Row"],
+  "classes",
+  Database["public"]["Tables"]["classes"]["Relationships"],
   "*"
 >;

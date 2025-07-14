@@ -2,13 +2,19 @@ INSERT into public.classes(id,name, semester, slug, is_demo, github_org, time_zo
 
 DO $$
 DECLARE 
-    alyssa_self_review_id int8;
+    assignment_id int8;
+    assignment_self_review_settings_id int8;
+    new_self_review_rubric_id int8;
+    new_grading_review_rubric_id int8;
+    self_review_criteria_id int8;
+    grading_review_criteria_id int8;
+    self_review_check_reference_id int8;
+    grading_review_check_reference_id int8;
 BEGIN
-INSERT INTO public.assignment_self_review_settings(id, enabled, deadline_offset, allow_early, class_id)
-  VALUES (1, true, 2, true, 1) RETURNING id into alyssa_self_review_id;
+INSERT INTO public.assignment_self_review_settings(enabled, deadline_offset, allow_early, class_id)
+  VALUES (true, 2, true, 1) RETURNING id into assignment_self_review_settings_id;
     
 INSERT INTO public.assignments (
-  id,
   class_id,
   due_date,
   group_config,
@@ -22,7 +28,7 @@ INSERT INTO public.assignments (
   total_points,
   template_repo,
   self_review_setting_id
-) VALUES (1,
+) VALUES (
   1,
   '2028-12-31T23:59:59Z',
   'individual',
@@ -35,9 +41,132 @@ INSERT INTO public.assignments (
   '2024-12-01T00:00:00Z',
   100,
   'not-actually/a-template-repo',
-  alyssa_self_review_id
-);
+  assignment_self_review_settings_id
+) RETURNING id into assignment_id;
 
+-- Retrieve the self review and grading review rubric IDs
+SELECT self_review_rubric_id INTO new_self_review_rubric_id FROM public.assignments WHERE id = assignment_id;
+SELECT grading_rubric_id INTO new_grading_review_rubric_id FROM public.assignments WHERE id = assignment_id;
+
+INSERT INTO public.rubric_parts (
+  class_id,
+  name,
+  description,
+  ordinal,
+  rubric_id
+) VALUES (
+  1,
+  'Self Review',
+  'Self review rubric',
+  0,
+  new_self_review_rubric_id
+), (
+  1,
+  'Grading Review',
+  'Grading review rubric',
+  1,
+  new_grading_review_rubric_id
+) ;
+
+-- Insert 1 new rubric criteria for self review rubric
+INSERT INTO public.rubric_criteria (
+  rubric_id,
+  name,
+  description,
+  total_points,
+  is_additive,
+  class_id,
+  ordinal,
+  rubric_part_id
+) VALUES (
+  new_self_review_rubric_id,
+  'Self Review Criteria',
+  'Criteria for self review evaluation',
+  10,
+  true,
+  1,
+  0,
+  (SELECT id FROM public.rubric_parts WHERE rubric_id = new_self_review_rubric_id LIMIT 1)
+) RETURNING id INTO self_review_criteria_id;
+
+-- Insert 1 new rubric criteria for grading review rubric
+INSERT INTO public.rubric_criteria (
+  rubric_id,
+  name,
+  description,
+  total_points,
+  is_additive,
+  class_id,
+  ordinal,
+  rubric_part_id
+) VALUES (
+  new_grading_review_rubric_id,
+  'Grading Review Criteria',
+  'Criteria for grading review evaluation',
+  20,
+  true,
+  1,
+  0,
+  (SELECT id FROM public.rubric_parts WHERE rubric_id = new_grading_review_rubric_id LIMIT 1)
+) RETURNING id INTO grading_review_criteria_id;
+
+-- Insert 2 new rubric checks for self review criteria
+INSERT INTO public.rubric_checks (
+  rubric_criteria_id,
+  name,
+  description,
+  ordinal,
+  points,
+  is_annotation,
+  is_comment_required,
+  class_id,
+  is_required
+) VALUES 
+  (self_review_criteria_id, 'Self Review Check 1', 'First check for self review', 0, 5, true, false, 1, true) RETURNING id INTO self_review_check_reference_id;
+INSERT INTO public.rubric_checks (
+  rubric_criteria_id,
+  name,
+  description,
+  ordinal,
+  points,
+  is_annotation,
+  is_comment_required,
+  class_id,
+  is_required
+) VALUES 
+
+  (self_review_criteria_id, 'Self Review Check 2', 'Second check for self review', 1, 5, false, false, 1, true); 
+
+-- Insert 2 new rubric checks for grading review criteria
+INSERT INTO public.rubric_checks (
+  rubric_criteria_id,
+  name,
+  description,
+  ordinal,
+  points,
+  is_annotation,
+  is_comment_required,
+  class_id,
+  is_required
+) VALUES 
+  (grading_review_criteria_id, 'Grading Review Check 1', 'First check for grading review', 0, 10, true, false, 1, true)
+RETURNING id INTO grading_review_check_reference_id;
+
+INSERT INTO public.rubric_checks (
+  rubric_criteria_id,
+  name,
+  description,
+  ordinal,
+  points,
+  is_annotation,
+  is_comment_required,
+  class_id,
+  is_required
+) VALUES 
+  (grading_review_criteria_id, 'Grading Review Check 2', 'Second check for grading review', 1, 10, false, false, 1, true);
+
+insert into rubric_check_references(referencing_rubric_check_id, referenced_rubric_check_id, class_id) values
+(grading_review_check_reference_id, self_review_check_reference_id, 1);
 END $$;
 
 insert into help_queues (name, description, class_id, available, depth)
@@ -49,12 +178,68 @@ INSERT INTO "public"."name_generation_words" ("id", "word", "is_noun", "is_adjec
 
 
 INSERT INTO public.gradebook_columns (id, sort_order, gradebook_id, class_id, slug, name, description, score_expression, render_expression, max_score, dependencies) VALUES
-(2, 2, 1, 1, 'average.assignments', 'Assignments Average', 'Average of all assignments', 'mean(gradebook_columns("assignment-*"))', 'letter(score)', 100, '{"gradebook_columns": [1]}'),
-(3, 3, 1, 1, 'participation', 'Participation', 'Participation in class', NULL, NULL, 100, NULL),
-(4, 4, 1, 1, 'exam-1', 'Exam 1', 'Score for Exam 1', NULL, NULL, 100, NULL),
-(5, 5, 1, 1, 'exam-2', 'Exam 2', 'Score for Exam 2', NULL, NULL, 100, NULL),
-(6, 6, 1, 1, 'average.exams', 'Exam average,', 'Average of all exams', 'mean(gradebook_columns("exam-*"))', 'letter(score)', 100, '{"gradebook_columns": [4,5]}'),
-(7, 7, 1, 1, 'final', 'Final', 'Final score', 'gradebook_columns("average.assignments")*0.4 + gradebook_columns("participation")*0.1 + gradebook_columns("average.exams")*0.5', 'letter(score)', 100, '{"gradebook_columns": [2,3,6]}');
+(2, 2, 1, 1, 'skill-1', 'Skill #1', 'Score for skill #1', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(3, 3, 1, 1, 'skill-2', 'Skill #2', 'Score for skill #2', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(4, 4, 1, 1, 'skill-3', 'Skill #3', 'Score for skill #3', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(5, 5, 1, 1, 'skill-4', 'Skill #4', 'Score for skill #4', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(6, 6, 1, 1, 'skill-5', 'Skill #5', 'Score for skill #5', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(7, 7, 1, 1, 'skill-6', 'Skill #6', 'Score for skill #6', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(8, 8, 1, 1, 'skill-7', 'Skill #7', 'Score for skill #7', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(9, 9, 1, 1, 'skill-8', 'Skill #8', 'Score for skill #8', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(10, 10, 1, 1, 'skill-9', 'Skill #9', 'Score for skill #9', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(11, 11, 1, 1, 'skill-10', 'Skill #10', 'Score for skill #10', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(12, 12, 1, 1, 'skill-11', 'Skill #11', 'Score for skill #11', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+(13, 13, 1, 1, 'skill-12', 'Skill #12', 'Score for skill #12', NULL, 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])', 2, NULL),
+-- Expectation level columns
+(14, 14, 1, 1, 'meets-expectations', 'Skills Meeting Expectations', 'Total number of skills at meets expectations level', 'countif(gradebook_columns("skill-*"), f(x) = x.score == 2)', NULL, 12, '{"gradebook_columns" : [2,3,4,5,6,7,8,9,10,11,12,13]}'),
+(15, 15, 1, 1, 'approaching-expectations', 'Skills Approaching Expectations', 'Total number of skills at approaching expectations level', 'countif(gradebook_columns("skill-*"), f(x) = x.score == 1)', NULL, 12,  '{"gradebook_columns" : [2,3,4,5,6,7,8,9,10,11,12,13]}'),
+(16, 16, 1, 1, 'does-not-meet-expectations', 'Skills Not Meeting Expectations', 'Total number of skills at does not meet expectations level', 'countif(gradebook_columns("skill-*"), f(x) = x.score == 0)', NULL, 12,  '{"gradebook_columns" : [2,3,4,5,6,7,8,9,10,11,12,13]}'),
+-- HW columns 1-5
+(17, 17, 1, 1, 'hw-1', 'HW #1', 'Score for HW #1', NULL, NULL, 100, NULL),
+(18, 18, 1, 1, 'hw-2', 'HW #2', 'Score for HW #2', NULL, NULL, 100, NULL),
+(19, 19, 1, 1, 'hw-3', 'HW #3', 'Score for HW #3', NULL, NULL, 100, NULL),
+(20, 20, 1, 1, 'hw-4', 'HW #4', 'Score for HW #4', NULL, NULL, 100, NULL),
+(21, 21, 1, 1, 'hw-5', 'HW #5', 'Score for HW #5', NULL, NULL, 100, NULL),
+-- Avg HW
+(22, 22, 1, 1, 'average.hw', 'Avg HW', 'Average of all homework assignments', 'mean(gradebook_columns("hw-*"))', NULL, 100, '{"gradebook_columns": [17,18,19,20,21]}'),
+-- Lab columns 1-10
+(23, 23, 1, 1, 'lab-1', 'Lab #1', 'Participation in Lab #1', NULL, 'checkOrX(score)', 1, NULL),
+(24, 24, 1, 1, 'lab-2', 'Lab #2', 'Participation in Lab #2', NULL, 'checkOrX(score)', 1, NULL),
+(25, 25, 1, 1, 'lab-3', 'Lab #3', 'Participation in Lab #3', NULL, 'checkOrX(score)', 1, NULL),
+(26, 26, 1, 1, 'lab-4', 'Lab #4', 'Participation in Lab #4', NULL, 'checkOrX(score)', 1, NULL),
+(27, 27, 1, 1, 'lab-5', 'Lab #5', 'Participation in Lab #5', NULL, 'checkOrX(score)', 1, NULL),
+(28, 28, 1, 1, 'lab-6', 'Lab #6', 'Participation in Lab #6', NULL, 'checkOrX(score)', 1, NULL),
+(29, 29, 1, 1, 'lab-7', 'Lab #7', 'Participation in Lab #7', NULL, 'checkOrX(score)', 1, NULL),
+(30, 30, 1, 1, 'lab-8', 'Lab #8', 'Participation in Lab #8', NULL, 'checkOrX(score)', 1, NULL),
+(31, 31, 1, 1, 'lab-9', 'Lab #9', 'Participation in Lab #9', NULL, 'checkOrX(score)', 1, NULL),
+(32, 32, 1, 1, 'lab-10', 'Lab #10', 'Participation in Lab #10', NULL, 'checkOrX(score)', 1, NULL),
+-- Total Labs
+(33, 33, 1, 1, 'total-labs', 'Total Labs', 'Total number of labs participated in', 'countif(gradebook_columns("lab-*"), f(x) = not x.is_missing and x.score>0)', NULL, 10, '{"gradebook_columns": [23,24,25,26,27,28,29,30,31,32]}'),
+-- Final Score
+(34, 34, 1, 1, 'final', 'Final Score', 'Grades will be primarily assigned by achievement levels of the course Skills, with required grade thresholds on HW for each letter grade, and + (other than A) given for participation in 8 or more out of 10 labs, - given for participating in fewer than 6 out of ten labs.
+Grade | Skills Needed | HW Needed 
+-- | -- | --
+A | Meets expectations on 10+/12, Approaching expectations on remainder | 85% or better
+B | Meets expectations on 8+/12, Approaching expectations on remainder | 75% or better
+C | Meets expectations on 5+/12, Approaching expectations on remainder | 65% or better
+D | Approaching expectations or better on 9+/12 | 55% or better
+', 'CriteriaA = gradebook_columns("meets-expectations") >= 10 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 85
+CriteriaB = gradebook_columns("meets-expectations") >= 8 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 75
+CriteriaC = gradebook_columns("meets-expectations") >= 5 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 65
+CriteriaD = gradebook_columns("approaching-expectations") >= 9 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 55
+CriteriaPlus = gradebook_columns("total-labs") >= 8
+CriteriaMinus = gradebook_columns("total-labs") < 6
+letter = case_when([CriteriaA, 95;
+CriteriaB, 85;
+CriteriaC, 75;
+CriteriaD, 65;
+true, 0])
+mod = case_when([CriteriaPlus, 3;
+CriteriaMinus, -3;
+true, 0])
+final = max(letter + mod, 0)
+final;', 'letter(score)', 100, '{"gradebook_columns":[14, 15, 16, 22, 33]}');
+
 
 
 INSERT INTO auth.users (
@@ -162,9 +347,9 @@ public class Entrypoint {
  output
  **wow**', 'markdown', 1, alyssa_profile_id, alyssa_submission_id, TRUE);
 
-update public.gradebook_column_students set score=100 where gradebook_column_id=3 and student_id=alyssa_profile_id;
-update public.gradebook_column_students set score=0,is_excused=true where gradebook_column_id=4 and student_id=alyssa_profile_id;
-update public.gradebook_column_students set score=100 where gradebook_column_id=5 and student_id=alyssa_profile_id;
+update public.gradebook_column_students set score=100, is_missing=false where gradebook_column_id=3 and student_id=alyssa_profile_id;
+update public.gradebook_column_students set score=0,is_excused=true, is_missing=false where gradebook_column_id=4 and student_id=alyssa_profile_id;
+update public.gradebook_column_students set score=100, is_missing=false where gradebook_column_id=5 and student_id=alyssa_profile_id;
 
 
   
@@ -233,9 +418,261 @@ BEGIN
       (0, 5, 'test 1', 'text', 'output for student ' || i, 'markdown', 1, student_profile_id, student_submission_id, TRUE),
       (5, 5, 'test 2', 'text', 'output for student ' || i, 'markdown', 1, student_profile_id, student_submission_id, TRUE);
 
-   update public.gradebook_column_students set score=i*5 where gradebook_column_id=3 and student_id=student_profile_id;
-   update public.gradebook_column_students set score=i*7 where gradebook_column_id=4 and student_id=student_profile_id;
-   update public.gradebook_column_students set score=i*10 where gradebook_column_id=5 and student_id=student_profile_id;
+   update public.gradebook_column_students set score=i*5, is_missing=false where gradebook_column_id=3 and student_id=student_profile_id;
+   update public.gradebook_column_students set score=i*7, is_missing=false where gradebook_column_id=4 and student_id=student_profile_id;
+   update public.gradebook_column_students set score=i*10, is_missing=false where gradebook_column_id=5 and student_id=student_profile_id;
+
+  END LOOP;
+END $$;
+
+-- Set up comprehensive gradebook data for different grade scenarios
+DO $$
+DECLARE
+  student_profile_id uuid;
+  student_user_id uuid;
+  i int;
+  student_uuid_arr uuid[] := ARRAY[
+    '22222222-2222-2222-2222-222222222222', -- Alyssa (existing)
+    '33333333-3333-3333-3333-333333333331', -- Student 1: A
+    '33333333-3333-3333-3333-333333333332', -- Student 2: A-
+    '33333333-3333-3333-3333-333333333333', -- Student 3: B+
+    '33333333-3333-3333-3333-333333333334', -- Student 4: B
+    '33333333-3333-3333-3333-333333333335', -- Student 5: B-
+    '33333333-3333-3333-3333-333333333336', -- Student 6: C+
+    '33333333-3333-3333-3333-333333333337', -- Student 7: C
+    '33333333-3333-3333-3333-333333333338', -- Student 8: C-
+    '33333333-3333-3333-3333-333333333339', -- Student 9: D+
+    '33333333-3333-3333-3333-333333333340'  -- Student 10: D
+  ];
+BEGIN
+  FOR i IN 1..11 LOOP
+    student_user_id := student_uuid_arr[i];
+    
+    -- Get the profile_id for this student
+    SELECT p.id INTO student_profile_id
+    FROM public.profiles p
+    INNER JOIN public.user_roles r ON r.private_profile_id = p.id
+    WHERE r.user_id = student_user_id;
+
+    RAISE NOTICE 'Setting up gradebook data for student %', student_profile_id;
+    -- Set up different grade scenarios based on i
+    CASE i
+      WHEN 1 THEN -- Alyssa: A grade (10+ meets, 85%+ HW, 8+ labs)
+        -- Skills: 10 meets expectations (score 2), 2 approaching (score 1)
+        FOR col IN 2..11 LOOP
+          RAISE NOTICE 'Setting score for column %', col;
+          RAISE NOTICE 'IDs that will be updated: %', (SELECT ARRAY_AGG(id) FROM public.gradebook_column_students WHERE gradebook_column_id = col AND student_id = student_profile_id);
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 12..13 LOOP
+                  RAISE NOTICE 'IDs that will be updated: %', (SELECT ARRAY_AGG(id) FROM public.gradebook_column_students WHERE gradebook_column_id = col AND student_id = student_profile_id);
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        -- HW: 85%+ average
+        UPDATE public.gradebook_column_students SET score = 90, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 85, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 90, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 85, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 90, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        -- Labs: 8+ participation
+        FOR col IN 23..30 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 31..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 2 THEN -- Student 1: A- grade (10+ meets, 85%+ HW, 6-7 labs)
+        FOR col IN 2..11 LOOP
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 12..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 90, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 85, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 90, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 85, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 90, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..28 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 29..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 3 THEN -- Student 2: B+ grade (8+ meets, 75%+ HW, 8+ labs)
+        FOR col IN 2..9 LOOP
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 10..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 75, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 75, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..30 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 31..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 4 THEN -- Student 3: B grade (8+ meets, 75%+ HW, 6-7 labs)
+        FOR col IN 2..9 LOOP
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 10..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 75, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 75, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..28 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 29..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 5 THEN -- Student 4: B- grade (8+ meets, 75%+ HW, <6 labs)
+        FOR col IN 2..9 LOOP
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 10..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 75, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 75, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 80, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..26 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 27..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 6 THEN -- Student 5: C+ grade (5+ meets, 65%+ HW, 8+ labs)
+        FOR col IN 2..6 LOOP
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 7..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 65, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 65, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..30 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 31..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 7 THEN -- Student 6: C grade (5+ meets, 65%+ HW, 6-7 labs)
+        FOR col IN 2..6 LOOP
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 7..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 65, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 65, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..28 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 29..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 8 THEN -- Student 7: C- grade (5+ meets, 65%+ HW, <6 labs)
+        FOR col IN 2..6 LOOP
+          UPDATE public.gradebook_column_students SET score = 2, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 7..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 65, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 65, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 70, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..26 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 27..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 9 THEN -- Student 8: D+ grade (9+ approaching, 8+ labs)
+        FOR col IN 2..10 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 11..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 55, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 55, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..30 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 31..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 10 THEN -- Student 9: D grade (9+ approaching, 6-7 labs)
+        FOR col IN 2..10 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 11..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 55, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 55, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..28 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 29..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+      WHEN 11 THEN -- Student 10: F grade (<9 approaching, or <65% HW)
+        FOR col IN 2..9 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 10..13 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 17 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 55, is_excused = false, is_missing = false WHERE gradebook_column_id = 18 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 19 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 55, is_excused = false, is_missing = false WHERE gradebook_column_id = 20 AND student_id = student_profile_id;
+        UPDATE public.gradebook_column_students SET score = 60, is_excused = false, is_missing = false WHERE gradebook_column_id = 21 AND student_id = student_profile_id;
+        FOR col IN 23..26 LOOP
+          UPDATE public.gradebook_column_students SET score = 1, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+        FOR col IN 27..32 LOOP
+          UPDATE public.gradebook_column_students SET score = 0, is_excused = false, is_missing = false WHERE gradebook_column_id = col AND student_id = student_profile_id;
+        END LOOP;
+
+    END CASE;
 
   END LOOP;
 END $$;

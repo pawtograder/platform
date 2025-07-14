@@ -11,7 +11,7 @@ export type QueueMessage<T> = {
   message: T;
 };
 const startTime = Date.now();
-async function runHandler() {
+export async function runHandler() {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -21,23 +21,31 @@ async function runHandler() {
     sleep_seconds: 5,
     n: 30
   });
-  console.log(result.error);
-  console.log(`Read ${result.data?.length} gradebook column recalculation requests`);
+  if (result.error) {
+    console.error(result.error);
+  }
   if (result.data) {
-    const studentColumns = (result.data as QueueMessage<{ gradebook_column_id: number; student_id: string }>[]).map(
-      (s) => ({
-        gradebook_column_id: s.message.gradebook_column_id,
-        student_id: s.message.student_id,
-        onComplete: () => {
-          adminSupabase
-            .schema("pgmq_public")
-            .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id })
-            .then((res) => {
-              console.log(`Archived message ${s.msg_id} after ${Date.now() - startTime}ms`);
-            });
-        }
-      })
-    );
+    const studentColumns = (
+      result.data as QueueMessage<{
+        gradebook_column_id: number;
+        student_id: string;
+        gradebook_column_student_id: number;
+        is_private: boolean;
+      }>[]
+    ).map((s) => ({
+      gradebook_column_id: s.message.gradebook_column_id,
+      student_id: s.message.student_id,
+      gradebook_column_student_id: s.message.gradebook_column_student_id,
+      is_private: s.message.is_private,
+      onComplete: () => {
+        adminSupabase
+          .schema("pgmq_public")
+          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id })
+          .then((res) => {
+            console.log(`Archived message ${s.msg_id} after ${Date.now() - startTime}ms`);
+          });
+      }
+    }));
     await processGradebookCellCalculation(studentColumns, adminSupabase);
   }
 }
