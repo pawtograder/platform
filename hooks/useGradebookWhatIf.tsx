@@ -208,10 +208,7 @@ class GradebookWhatIfController {
     // In the future, this could recalculate all columns based on dependencies
     // For now, do nothing (tentative grade is just the input)
     const column = this.gradebookController.getGradebookColumn(columnId);
-    console.log(`Recalculating column ${columnId} ${column?.slug}`);
-    console.log(history);
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
-    console.log(allColumns.map((c) => c.slug));
     if (!column) return;
     if (column.score_expression) {
       const math = create(all!, {});
@@ -233,16 +230,7 @@ class GradebookWhatIfController {
             let score: number | undefined;
             let released = columnStudent?.released ?? false;
             let is_missing = columnStudent?.is_missing ?? true;
-            if (columnId === 34) {
-              console.log(
-                "Column",
-                columnId,
-                whatIfVal,
-                incompleteValues,
-                columnStudent,
-                context.incomplete_values_policy
-              );
-            }
+
             if (columnStudent?.score_override !== null && columnStudent?.score_override !== undefined) {
               score = columnStudent.score_override;
               is_missing = false;
@@ -278,9 +266,7 @@ class GradebookWhatIfController {
             } else {
               score = undefined;
             }
-            if (columnId === 34) {
-              console.log("Column", columnId, score, is_missing, released);
-            }
+
             const ret: GradebookColumnStudentWithMaxScore = {
               is_missing: is_missing,
               is_excused: false,
@@ -614,7 +600,6 @@ class GradebookWhatIfController {
           assume_zero: undefined,
           gradebook_score: this._grades[columnId]?.gradebook_score
         };
-        console.log(`Before recalculation: ${JSON.stringify(this._grades[columnId], null, 2)}`);
         for (const policy of ["assume_max", "assume_zero", "report_only"]) {
           const context: ExpressionContext = {
             student_id: this.private_profile_id,
@@ -667,7 +652,6 @@ class GradebookWhatIfController {
         if (Number.isNaN(scores.assume_zero ?? 0)) {
           scores.assume_zero = undefined;
         }
-        console.log(`After recalculation: ${JSON.stringify(scores, null, 2)}`);
         this._grades[columnId] = scores;
       }
       //Find everything that depends on this column

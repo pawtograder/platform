@@ -3,12 +3,8 @@ import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
-import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
-import { format } from "date-fns";
-import { CommitHistoryDialog } from "./commitHistory";
-import ManageGroupWidget from "./manageGroupWidget";
-import type {
+import useAuthState from "@/hooks/useAuthState";
+import {
   Assignment,
   Repository,
   SelfReviewSettings,
@@ -16,49 +12,14 @@ import type {
   UserRole,
   UserRoleWithCourse
 } from "@/utils/supabase/DatabaseTypes";
+import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
+import { TZDate } from "@date-fns/tz";
+import { CrudFilter, useList } from "@refinedev/core";
+import { format } from "date-fns";
 import { useParams } from "next/navigation";
-import useAuthState from "@/hooks/useAuthState";
-import { type CrudFilter, useList } from "@refinedev/core";
+import { CommitHistoryDialog } from "./commitHistory";
+import ManageGroupWidget from "./manageGroupWidget";
 
-function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
-  if (repositories?.length === 0) {
-    return (
-      <Text fontSize="sm" color="text.muted">
-        No repositories found. Please refresh the page. If this issue persists, please contact your instructor.
-      </Text>
-    );
-  }
-  if (repositories?.length === 1) {
-    return (
-      <HStack>
-        <Text fontSize="sm" fontWeight="bold">
-          Repository:{" "}
-        </Text>
-        <Link href={`https://github.com/${repositories[0]?.repository}`}>{repositories[0]?.repository}</Link>
-      </HStack>
-    );
-  }
-  const groupRepo = repositories.find((r) => r.assignment_group_id !== null);
-  const personalRepo = repositories.find((r) => r.assignment_group_id === null);
-  return (
-    <VStack textAlign="left" alignItems="flex-start" fontSize="sm" color="text.muted">
-      <HStack>
-        <Text fontWeight="bold" fontSize="sm">
-          Current group repository:
-        </Text>{" "}
-        <Link href={`https://github.com/${groupRepo?.repository}`}>{groupRepo?.repository}</Link>
-      </HStack>
-      <Text fontWeight="bold">
-        Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
-        (the current group repository).
-      </Text>
-      <Text>
-        Individual repository (not in use, you are now in a group):{" "}
-        <Link href={`https://github.com/${personalRepo?.repository}`}>{personalRepo?.repository}</Link>
-      </Text>
-    </VStack>
-  );
-}
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
   const { user } = useAuthState();
@@ -184,12 +145,10 @@ export default function AssignmentPage() {
           </Alert.Description>
         </Alert.Root>
       ) : (
-        <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-          <RepositoriesInfo repositories={repositories ?? []} />
-        </Box>
+        <></>
       )}
-      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-        <ManageGroupWidget assignment={assignment} />
+      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
+        <ManageGroupWidget assignment={assignment} repositories={repositories ?? []} />
       </Box>
       <SelfReviewNotice
         review_settings={review_settings ?? ({} as SelfReviewSettings)}

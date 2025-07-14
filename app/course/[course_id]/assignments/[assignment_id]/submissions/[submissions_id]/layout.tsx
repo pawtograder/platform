@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import type {
   Submission,
-  SubmissionReviewWithRubric,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric,
   SubmissionWithGraderResultsAndReview
 } from "@/utils/supabase/DatabaseTypes";
@@ -25,15 +24,17 @@ import {
   useRubricCriteriaInstances,
   useSubmission,
   useSubmissionComments,
+  useSubmissionController,
   useSubmissionReviewOrGradingReview
 } from "@/hooks/useSubmission";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
+import { formatDueDateInTimezone } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
 import { Icon } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { type CrudFilter, useInvalidate, useList, useUpdate } from "@refinedev/core";
+import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -48,7 +49,6 @@ import { RxQuestionMarkCircled } from "react-icons/rx";
 import { TbMathFunction } from "react-icons/tb";
 import type { GraderResultTestData } from "./results/page";
 import { linkToSubPage } from "./utils";
-import { formatDueDateInTimezone } from "@/lib/utils";
 
 // Create a mapping of icon names to their components
 const iconMap: { [key: string]: ReactElementType } = {
@@ -298,7 +298,11 @@ function TestResults() {
 }
 function ReviewStats() {
   const submission = useSubmission();
-  const review = useSubmissionReviewOrGradingReview();
+  const reviewId = submission.grading_review_id;
+  if (!reviewId) {
+    throw new Error("No grading review ID found");
+  }
+  const review = useSubmissionReviewOrGradingReview(reviewId);
   const { checked_by, completed_by, checked_at, completed_at } = review || {};
   const allRubricInstances = useRubricCriteriaInstances({
     review_id: review?.id,
@@ -346,11 +350,15 @@ function ReviewStats() {
 }
 
 function ReviewActions() {
-  const review = useSubmissionReviewOrGradingReview();
+  const submission = useSubmission();
+  const reviewId = submission.grading_review_id;
+  if (!reviewId) {
+    throw new Error("No grading review ID found");
+  }
+  const review = useSubmissionReviewOrGradingReview(reviewId);
   const { private_profile_id } = useClassProfiles();
-  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
-    resource: "submission_reviews"
-  });
+  const submissionController = useSubmissionController();
+  const [updatingReview, setUpdatingReview] = useState(false);
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -363,8 +371,17 @@ function ReviewActions() {
         {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
           <Button
             variant="surface"
-            onClick={() => {
-              updateReview({ id: review.id, values: { checked_at: new Date(), checked_by: private_profile_id } });
+            loading={updatingReview}
+            onClick={async () => {
+              try {
+                setUpdatingReview(true);
+                await submissionController.submission_reviews.update(review.id, {
+                  checked_at: new Date().toISOString(),
+                  checked_by: private_profile_id
+                });
+              } finally {
+                setUpdatingReview(false);
+              }
             }}
           >
             Mark as Checked
@@ -372,9 +389,15 @@ function ReviewActions() {
         )}
         {review.released ? (
           <Button
+            loading={updatingReview}
             variant="surface"
-            onClick={() => {
-              updateReview({ id: review.id, values: { released: false } });
+            onClick={async () => {
+              try {
+                setUpdatingReview(true);
+                await submissionController.submission_reviews.update(review.id, { released: false });
+              } finally {
+                setUpdatingReview(false);
+              }
             }}
           >
             Unrelease
@@ -382,8 +405,14 @@ function ReviewActions() {
         ) : (
           <Button
             variant="surface"
-            onClick={() => {
-              updateReview({ id: review.id, values: { released: true } });
+            loading={updatingReview}
+            onClick={async () => {
+              try {
+                setUpdatingReview(true);
+                await submissionController.submission_reviews.update(review.id, { released: true });
+              } finally {
+                setUpdatingReview(false);
+              }
             }}
           >
             Release To Student
@@ -447,7 +476,11 @@ function RubricView() {
     error: reviewAssignmentError
   } = useReviewAssignment(activeReviewAssignmentId);
 
-  const gradingReview = useSubmissionReviewOrGradingReview();
+  const reviewId = submission.grading_review_id;
+  if (!reviewId) {
+    throw new Error("No grading review ID found");
+  }
+  const gradingReview = useSubmissionReviewOrGradingReview(reviewId);
 
   return (
     <Box
@@ -522,7 +555,7 @@ function Comments() {
       <Heading size="md">Comments</Heading>
       <VStack align="start" gap={2}>
         {comments.map((comment) => (
-          <RubricCheckComment key={comment.id} comment={comment} />
+          <RubricCheckComment key={comment.id} comment_id={comment.id} comment_type="submission" />
         ))}
       </VStack>
     </Box>

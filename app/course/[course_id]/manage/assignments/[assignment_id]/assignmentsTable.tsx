@@ -21,6 +21,7 @@ import {
   Link,
   NativeSelect,
   Popover,
+  Spinner,
   Table,
   Text,
   VStack
@@ -248,14 +249,15 @@ export default function AssignmentsTable() {
     getCanNextPage,
     nextPage,
     previousPage,
-    setPageSize
+    setPageSize,
+    refineCore
   } = useTable({
     columns,
     initialState: {
       columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
       pagination: {
         pageIndex: 0,
-        pageSize: 50
+        pageSize: 200
       },
       sorting: [{ id: "name", desc: false }]
     },
@@ -399,6 +401,23 @@ export default function AssignmentsTable() {
               ))}
             </Table.Header>
             <Table.Body>
+              {refineCore.tableQuery.isLoading && (
+                <Table.Row>
+                  <Table.Cell
+                    colSpan={
+                      getHeaderGroups()
+                        .map((h) => h.headers.length)
+                        .reduce((a, b) => a + b, 0) - 1
+                    }
+                    bg="bg.subtle"
+                  >
+                    <VStack w="100%" alignItems="center" justifyContent="center" h="100%" p={12}>
+                      <Spinner size="lg" />
+                      <Text>Loading...</Text>
+                    </VStack>
+                  </Table.Cell>
+                </Table.Row>
+              )}
               {getRowModel()
                 .rows //.filter(row => row.getValue("profiles.name") !== undefined)
                 .map((row, idx) => {
@@ -487,7 +506,7 @@ export default function AssignmentsTable() {
                   setPageSize(Number(event.target.value));
                 }}
               >
-                {[25, 50, 100, 200, 500].map((pageSize) => (
+                {[25, 50, 100, 200, 500, 1000, 2000].map((pageSize) => (
                   <option key={pageSize} value={pageSize}>
                     Show {pageSize}
                   </option>

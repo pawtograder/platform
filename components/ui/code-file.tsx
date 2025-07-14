@@ -1,7 +1,13 @@
 import { Tooltip } from "@/components/ui/tooltip";
-import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
+import { useRubricById, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useSubmission, useSubmissionFileComments, useSubmissionReviewByAssignmentId } from "@/hooks/useSubmission";
+import {
+  useSubmission,
+  useSubmissionController,
+  useSubmissionFileComment,
+  useSubmissionFileComments,
+  useSubmissionReviewByAssignmentId
+} from "@/hooks/useSubmission";
 import { useActiveSubmissionReview } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import type {
@@ -14,7 +20,7 @@ import type {
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
-import { useCreate, useUpdate } from "@refinedev/core";
+import { useUpdate } from "@refinedev/core";
 import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, type SelectComponentsConfig, type SelectInstance } from "chakra-react-select";
@@ -375,23 +381,22 @@ export function starryNightGutter(
   tree.children = replacement;
 }
 
-function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
-  const commentAuthor = useUserProfile(comment.author);
+function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
+  const comment = useSubmissionFileComment(comment_id);
+  const commentAuthor = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const { mutateAsync: updateComment } = useUpdate({
-    resource: "submission_file_comments"
-  });
+  const submissionController = useSubmissionController();
 
-  const rubricCheck = useRubricCheck(comment.rubric_check_id);
+  const rubricCheck = useRubricCheck(comment?.rubric_check_id);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
 
-  if (!rubricCheck || !rubricCriteria) {
+  if (!rubricCheck || !rubricCriteria || !comment) {
     return <Skeleton height="100px" width="100%" />;
   }
 
-  const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
-  const hasPoints = comment.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
+  const pointsText = rubricCriteria.is_additive ? `+${comment?.points}` : `-${comment?.points}`;
+  const hasPoints = comment?.points !== 0 || (rubricCheck && rubricCheck.points !== 0);
 
   // Determine if this comment will be visible to students
   const getStudentVisibilityInfo = () => {
@@ -455,7 +460,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
           <Box pl={2}>
             <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
           </Box>
-          <Box pl={2}>
+          <Box pl={2} w="100%">
             {isEditing ? (
               <MessageInput
                 textAreaRef={messageInputRef}
@@ -466,7 +471,7 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
                   setIsEditing(false);
                 }}
                 sendMessage={async (message) => {
-                  await updateComment({ id: comment.id, values: { comment: message } });
+                  await submissionController.submission_file_comments.update(comment.id, { comment: message });
                   setIsEditing(false);
                 }}
               />
@@ -480,24 +485,19 @@ function LineCheckAnnotation({ comment }: { comment: SubmissionFileComment }) {
   );
 }
 
-function CodeLineComment({
-  comment,
-  submissionReviewId
-}: {
-  comment: SubmissionFileComment;
-  submissionReviewId?: number;
-}) {
-  const authorProfile = useUserProfile(comment.author);
+function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: number; submissionReviewId?: number }) {
+  const comment = useSubmissionFileComment(comment_id);
+  const authorProfile = useUserProfile(comment?.author);
   const { private_profile_id } = useClassProfiles();
-  const isAuthor = private_profile_id === comment.author;
+  const isAuthor = private_profile_id === comment?.author;
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
     resource: "submission_file_comments"
   });
-  useSubmissionReviewByAssignmentId(submissionReviewId ?? comment.submission_review_id ?? undefined);
+  useSubmissionReviewByAssignmentId(submissionReviewId ?? comment?.submission_review_id ?? undefined);
 
-  if (!authorProfile) {
+  if (!authorProfile || !comment) {
     return <Skeleton height="100px" width="100%" />;
   }
 
@@ -538,7 +538,7 @@ function CodeLineComment({
               <CommentActions comment={comment} setIsEditing={setIsEditing} />
             </HStack>
           </HStack>
-          <Box pl={2}>
+          <Box pl={2} w="100%">
             {isEditing ? (
               <MessageInput
                 textAreaRef={messageInputRef}
@@ -576,6 +576,7 @@ export type RubricCheckSelectOption = {
   readonly check?: HydratedRubricCheck;
   readonly criteria?: HydratedRubricCriteria;
   options?: RubricCheckSubOptions[];
+  isDisabled?: boolean;
 };
 
 export type RubricCheckSubOptions = {
@@ -585,6 +586,7 @@ export type RubricCheckSubOptions = {
   readonly comment: string;
   readonly points: number;
   readonly check: RubricCheckSelectOption;
+  isDisabled?: boolean;
 };
 
 export function formatPoints(option: {
@@ -599,8 +601,11 @@ export function formatPoints(option: {
 }
 
 function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
+  const submissionController = useSubmissionController();
   const submission = useSubmission();
   const review = useActiveSubmissionReview();
+  const rubric = useRubricById(review?.rubric_id);
+  const [selectOpen, setSelectOpen] = useState(true);
 
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
@@ -609,9 +614,85 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   const popupRef = useRef<HTMLDivElement>(null);
   const [currentMode, setCurrentMode] = useState<"marking" | "select">(mode);
 
-  const { mutateAsync: createComment } = useCreate<SubmissionFileComment>({
-    resource: "submission_file_comments"
-  });
+  useEffect(() => {
+    if (!selectedCheckOption) {
+      setSelectOpen(true);
+    }
+  }, [selectedCheckOption]);
+
+  // Get existing comments for this file to check max_annotations
+  const existingComments = useSubmissionFileComments({ file_id: file.id });
+
+  const criteria: RubricCriteriaSelectGroupOption[] = useMemo(() => {
+    // Only show criteria that have annotation checks
+    let criteriaWithAnnotationChecks: HydratedRubricCriteria[] = [];
+
+    if (rubric?.rubric_parts) {
+      // Using the effective rubric (either manually selected or default)
+      criteriaWithAnnotationChecks = rubric.rubric_parts
+        .flatMap((part: HydratedRubricPart) => part.rubric_criteria || [])
+        .filter((criteria: HydratedRubricCriteria) =>
+          criteria.rubric_checks.some(
+            (check: HydratedRubricCheck) =>
+              check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
+          )
+        );
+    }
+
+    const criteriaOptions: RubricCriteriaSelectGroupOption[] =
+      (criteriaWithAnnotationChecks?.map((criteria) => {
+        return {
+          label: criteria.name,
+          value: criteria.id.toString(),
+          criteria: criteria as HydratedRubricCriteria,
+          options: (criteria.rubric_checks.filter((check) => check.is_annotation) as HydratedRubricCheck[]).map(
+            (check) => {
+              // Count existing annotations for this specific check
+              const existingAnnotationsForCheck = existingComments.filter(
+                (comment) => comment.rubric_check_id === check.id
+              ).length;
+
+              // Check if this option should be disabled due to max_annotations
+              const isDisabled = check.max_annotations ? existingAnnotationsForCheck >= check.max_annotations : false;
+
+              const option: RubricCheckSelectOption = {
+                label: check.name,
+                value: check.id.toString(),
+                check,
+                criteria: criteria as HydratedRubricCriteria,
+                options: [],
+                isDisabled
+              };
+              if (isRubricCheckDataWithOptions(check.data)) {
+                option.options = check.data.options.map((subOption: RubricCheckSubOption, index: number) => ({
+                  label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
+                  comment: subOption.label,
+                  index: index.toString(),
+                  value: index.toString(),
+                  points: subOption.points,
+                  check: option,
+                  isDisabled
+                }));
+              }
+              return option;
+            }
+          )
+        };
+      }) as RubricCriteriaSelectGroupOption[]) || [];
+
+    criteriaOptions.push({
+      label: "Leave a comment",
+      value: "comment",
+      options: [
+        {
+          label: "Leave a comment",
+          value: "comment"
+        }
+      ]
+    });
+
+    return criteriaOptions;
+  }, [rubric, existingComments, file.id]);
 
   useEffect(() => {
     if (!visible) {
@@ -667,57 +748,6 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   if (!visible) {
     return null;
   }
-
-  // Only show criteria that have annotation checks
-  let criteriaWithAnnotationChecks: HydratedRubricCriteria[] = [];
-
-  if (review?.rubrics?.rubric_parts) {
-    // Using the effective rubric (either manually selected or default)
-    criteriaWithAnnotationChecks = review.rubrics.rubric_parts
-      .flatMap((part: HydratedRubricPart) => part.rubric_criteria || [])
-      .filter((criteria: HydratedRubricCriteria) =>
-        criteria.rubric_checks.some(
-          (check: HydratedRubricCheck) =>
-            check.is_annotation && (check.annotation_target === "file" || check.annotation_target === null)
-        )
-      );
-  }
-  const criteria: RubricCriteriaSelectGroupOption[] =
-    (criteriaWithAnnotationChecks?.map((criteria) => ({
-      label: criteria.name,
-      value: criteria.id.toString(),
-      criteria: criteria as HydratedRubricCriteria,
-      options: (criteria.rubric_checks.filter((check) => check.is_annotation) as HydratedRubricCheck[]).map((check) => {
-        const option: RubricCheckSelectOption = {
-          label: check.name,
-          value: check.id.toString(),
-          check,
-          criteria: criteria as HydratedRubricCriteria,
-          options: []
-        };
-        if (isRubricCheckDataWithOptions(check.data)) {
-          option.options = check.data.options.map((subOption: RubricCheckSubOption, index: number) => ({
-            label: (criteria.is_additive ? "+" : "-") + subOption.points + " " + subOption.label,
-            comment: subOption.label,
-            index: index.toString(),
-            value: index.toString(),
-            points: subOption.points,
-            check: option
-          }));
-        }
-        return option;
-      })
-    })) as RubricCriteriaSelectGroupOption[]) || [];
-  criteria.push({
-    label: "Leave a comment",
-    value: "comment",
-    options: [
-      {
-        label: "Leave a comment",
-        value: "comment"
-      }
-    ]
-  });
   const numChecks = criteria.reduce((acc, curr) => acc + curr.options.length, 0);
   if (currentMode === "marking" && numChecks > 1) {
     return (
@@ -804,9 +834,16 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
 
         <HStack>
           <Select
+            aria-label="Select a rubric check or leave a comment"
             ref={selectRef}
             options={criteria}
-            defaultMenuIsOpen={selectedCheckOption === null}
+            menuIsOpen={selectOpen}
+            onMenuOpen={() => {
+              setSelectOpen(true);
+            }}
+            onMenuClose={() => {
+              setSelectOpen(false);
+            }}
             escapeClearsValue={true}
             components={components}
             value={selectedCheckOption}
@@ -874,6 +911,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
             <MessageInput
               textAreaRef={messageInputRef}
               enableGiphyPicker={true}
+              sendButtonText={selectedCheckOption.check ? "Add Check" : "Add Comment"}
               placeholder={
                 !selectedCheckOption.check
                   ? "Add a comment about this line and press enter to submit..."
@@ -903,20 +941,20 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                 const values = {
                   comment,
                   line: lineNumber,
-                  rubric_check_id: selectedCheckOption.check?.id,
+                  rubric_check_id: selectedCheckOption.check?.id ?? null,
                   class_id: file.class_id,
                   submission_file_id: file.id,
                   submission_id: submission.id,
                   author: profile_id,
                   released: review ? review.released : true,
-                  points,
-                  submission_review_id: submissionReviewId,
+                  points: points ?? null,
+                  submission_review_id: submissionReviewId ?? null,
                   eventually_visible: selectedCheckOption.check
                     ? selectedCheckOption.check.student_visibility !== "never"
                     : true
                 };
                 try {
-                  await createComment({ values });
+                  await submissionController.submission_file_comments.create(values);
                   setCurrentMode(mode);
                   close();
                 } catch (e) {
@@ -948,13 +986,19 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
   const [showReply, setShowReply] = useState(isReplyEnabled);
 
   const commentsToDisplay = useMemo(() => {
-    return allCommentsForFile.filter((comment) => {
+    const ret = allCommentsForFile.filter((comment) => {
       if (comment.line !== lineNumber) return false;
       if (!isGraderOrInstructor && submission.released !== null) {
         return comment.eventually_visible === true;
       }
       return true;
     });
+    ret.sort((a, b) => {
+      if (a.rubric_check_id && !b.rubric_check_id) return -1;
+      if (!a.rubric_check_id && b.rubric_check_id) return 1;
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+    return ret;
   }, [allCommentsForFile, lineNumber, isGraderOrInstructor, submission.released]);
 
   if (!submission || !file || !showCommentsFeature || commentsToDisplay.length === 0) {
@@ -989,9 +1033,9 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
       >
         {commentsToDisplay.map((comment) =>
           comment.rubric_check_id ? (
-            <LineCheckAnnotation key={comment.id} comment={comment} />
+            <LineCheckAnnotation key={comment.id} comment_id={comment.id} />
           ) : (
-            <CodeLineComment key={comment.id} comment={comment} submissionReviewId={submissionReviewId} />
+            <CodeLineComment key={comment.id} comment_id={comment.id} submissionReviewId={submissionReviewId} />
           )
         )}
         {showReply ? (

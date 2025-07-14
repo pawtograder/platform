@@ -1,12 +1,11 @@
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
-import type {
+import { useSubmissionController, useSubmissionReviewOrGradingReview } from "@/hooks/useSubmission";
+import {
   SubmissionFile,
   SubmissionFileComment,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Text } from "@chakra-ui/react";
-import { useCreate, useInvalidate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 import { Checkbox } from "./checkbox";
 import MessageInput from "./message-input";
@@ -35,14 +34,15 @@ export default function LineCommentForm({
   onCancel?: () => void;
   onSubmitted?: (comment: SubmissionFileComment) => void;
 }) {
-  const { mutateAsync: createComment, isLoading: isCreatingComment } = useCreate<SubmissionFileComment>({
-    resource: "submission_file_comments"
-  });
+  const [isLoading, setIsLoading] = useState(false);
+  const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
   const isGraderOrInstructor = useIsGraderOrInstructor();
-  const invalidateQuery = useInvalidate();
   const [eventuallyVisible, setEventuallyVisible] = useState(defaultEventuallyVisible ?? true);
 
+  if (!submissionReviewId) {
+    throw new Error("No submission review ID found");
+  }
   const fetchedSubmissionReview = useSubmissionReviewOrGradingReview(submissionReviewId);
   const isLoadingReviewDetails = submissionReviewId !== undefined && fetchedSubmissionReview === undefined;
 
@@ -63,7 +63,7 @@ export default function LineCommentForm({
       const values: Partial<SubmissionFileComment> = {
         submission_id: submission.id,
         submission_file_id: file.id,
-        class_id: file.class_id,
+        class_id: file.class_id!,
         author: private_profile_id!,
         line: lineNumber,
         comment: message,
@@ -73,22 +73,28 @@ export default function LineCommentForm({
         eventually_visible: isGraderOrInstructor ? eventuallyVisible : true
       };
       try {
-        const created = await createComment({ values: values as SubmissionFileComment });
-        invalidateQuery({ resource: "submission_files", id: file.id, invalidates: ["all"] });
-        if (onSubmitted) onSubmitted(created.data as SubmissionFileComment);
+        setIsLoading(true);
+        const created = await submissionController.submission_file_comments.create(
+          values as Omit<
+            SubmissionFileComment,
+            "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by"
+          >
+        );
+        if (onSubmitted) onSubmitted(created as SubmissionFileComment);
         if (onCancel) onCancel();
         toaster.success({ title: "Comment posted" });
       } catch (err) {
         toaster.error({ title: "Error posting comment", description: (err as Error).message });
+      } finally {
+        setIsLoading(false);
       }
     },
     [
       submission,
       file,
       lineNumber,
-      createComment,
+      submissionController,
       private_profile_id,
-      invalidateQuery,
       submissionReviewId,
       fetchedSubmissionReview,
       isLoadingReviewDetails,
@@ -127,7 +133,7 @@ export default function LineCommentForm({
             checked={eventuallyVisible}
             onCheckedChange={(details) => setEventuallyVisible(details.checked === true)}
             size="sm"
-            disabled={isCreatingComment || (!!submissionReviewId && isLoadingReviewDetails)}
+            disabled={isLoading || (!!submissionReviewId && isLoadingReviewDetails)}
           >
             Visible to student when submission is released
           </Checkbox>

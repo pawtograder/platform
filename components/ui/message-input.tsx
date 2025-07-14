@@ -31,6 +31,7 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   textAreaRef?: React.RefObject<HTMLTextAreaElement>;
   onClose?: () => void;
   closeButtonText?: string;
+  ariaLabel?: string;
 };
 export default function MessageInput(props: MessageInputProps) {
   const {
@@ -48,6 +49,7 @@ export default function MessageInput(props: MessageInputProps) {
     onClose,
     closeButtonText,
     value: initialValue,
+    ariaLabel,
     ...editorProps
   } = props;
   const { course_id } = useParams();
@@ -59,6 +61,7 @@ export default function MessageInput(props: MessageInputProps) {
   const [showGiphyPicker, setShowGiphyPicker] = useState(false);
   const [anonymousMode, setAnonymousMode] = useState(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const onChange = useCallback(
     (value: string) => {
@@ -142,6 +145,8 @@ export default function MessageInput(props: MessageInputProps) {
         <Textarea
           p="2"
           width="100%"
+          disabled={isSending}
+          aria-label={ariaLabel ?? placeholder ?? "Reply..."}
           placeholder={placeholder ?? "Reply..."}
           m="0"
           ref={textAreaRef}
@@ -185,8 +190,22 @@ export default function MessageInput(props: MessageInputProps) {
                 });
                 return;
               }
-              sendMessage(value!, profile_id, true);
-              setValue("");
+              setIsSending(true);
+              sendMessage(value!, profile_id, true)
+                .then(() => {
+                  setValue("");
+                })
+                .catch((error) => {
+                  console.error("Error sending message", error);
+                  toaster.create({
+                    title: "Error sending message",
+                    description: error instanceof Error ? error.message : "Unknown error",
+                    type: "error"
+                  });
+                })
+                .finally(() => {
+                  setIsSending(false);
+                });
             }
           }}
         />
@@ -252,7 +271,7 @@ export default function MessageInput(props: MessageInputProps) {
               <input title="Attach a file" type="file" ref={fileInputRef} className="hidden" onChange={attachFile} />
             )}
             {enableGiphyPicker && (
-              <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
+              <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)} lazyMount>
                 <PopoverTrigger asChild>
                   <Button
                     aria-label="Toggle giphy picker"
@@ -305,8 +324,9 @@ export default function MessageInput(props: MessageInputProps) {
             </Button>
           )}
           <Button
-            aria-label="Send message"
-            onClick={() => {
+            loading={isSending}
+            aria-label={props.sendButtonText ? props.sendButtonText : "Send message"}
+            onClick={async () => {
               if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
                 toaster.create({
                   title: "Empty message",
@@ -315,7 +335,19 @@ export default function MessageInput(props: MessageInputProps) {
                 });
                 return;
               }
-              sendMessage(value!, profile_id, true);
+              try {
+                setIsSending(true);
+                await sendMessage(value!, profile_id, true);
+              } catch (error) {
+                console.error("Error sending message", error);
+                toaster.create({
+                  title: "Error sending message",
+                  description: error instanceof Error ? error.message : "Unknown error",
+                  type: "error"
+                });
+              } finally {
+                setIsSending(false);
+              }
               setValue("");
             }}
             variant="solid"
@@ -333,6 +365,9 @@ export default function MessageInput(props: MessageInputProps) {
     <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
       <MDEditor
         value={value}
+        textareaProps={{
+          disabled: isSending
+        }}
         onChange={(value) => {
           setValue(value);
           props.onChange?.(value);
@@ -438,8 +473,9 @@ export default function MessageInput(props: MessageInputProps) {
           </Button>
         )}
         <Button
+          loading={isSending}
           aria-label="Send message"
-          onClick={() => {
+          onClick={async () => {
             if ((value?.trim() === "" || !value) && !allowEmptyMessage) {
               toaster.create({
                 title: "Empty message",
@@ -448,8 +484,22 @@ export default function MessageInput(props: MessageInputProps) {
               });
               return;
             }
-            sendMessage(value!, profile_id, true);
-            setValue("");
+            try {
+              setIsSending(true);
+              console.log("Sending message", value, profile_id);
+              await sendMessage(value!, profile_id, true);
+              console.log("Message sent", value, profile_id);
+              setValue("");
+            } catch (error) {
+              console.error(error);
+              toaster.create({
+                title: "Error sending message",
+                description: error instanceof Error ? error.message : "Unknown error",
+                type: "error"
+              });
+            } finally {
+              setIsSending(false);
+            }
           }}
           variant="solid"
           colorPalette="green"

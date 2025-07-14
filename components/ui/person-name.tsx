@@ -17,14 +17,15 @@ function PersonName({
   textProps?: TextProps;
 }) {
   const userProfile = useUserProfile(uid);
+  if (!showAvatar) {
+    return <>{userProfile?.name}</>;
+  }
   return (
     <HStack w="100%">
-      {showAvatar && (
-        <Avatar.Root size={size}>
-          <Avatar.Image src={userProfile?.avatar_url} />
-          <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
-        </Avatar.Root>
-      )}
+      <Avatar.Root size={size}>
+        <Avatar.Image src={userProfile?.avatar_url} />
+        <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
+      </Avatar.Root>
       <VStack>
         <Text {...textProps}>{userProfile?.name}</Text>
       </VStack>
