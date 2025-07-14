@@ -225,7 +225,6 @@ export function useRealtimeChat({ helpRequest, messages = [] }: UseRealtimeChatP
             help_request_id: helpRequest.id,
             author: private_profile_id, // This must be a profile ID matching the database schema
             class_id: helpRequest.class_id,
-            requestor: helpRequest.creator,
             instructors_only: false,
             reply_to_message_id: replyToMessageId || null
           }
