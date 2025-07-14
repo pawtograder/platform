@@ -3,7 +3,7 @@ import { ChatGroupHeader } from "@/components/ui/help-queue/ChatGroupHeader";
 import { HelpRequestTeaser } from "@/components/ui/help-queue/HelpRequestTeaser";
 import { SearchInput } from "@/components/ui/help-queue/SearchInput";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Stack, Text } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
 import NextLink from "next/link";

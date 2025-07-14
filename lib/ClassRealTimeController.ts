@@ -1,4 +1,4 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
@@ -79,26 +79,22 @@ export class ClassRealTimeController {
   }
 
   private async _initializeChannels() {
-    console.log("Initializing channels", this._objDebugId);
     const accessToken = await this._client.auth.getSession();
     await this._client.realtime.setAuth(accessToken.data.session?.access_token);
     // Initialize staff channel if user is staff
     if (this._closed) {
-      console.log("Channels already closed", this._objDebugId);
       return;
     }
     if (this._isStaff) {
-      console.log("initializing staff channel");
       this._staffChannel = this._client.channel(`class:${this._classId}:staff`, {
         config: { private: true }
       });
 
       this._staffChannel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message.payload as BroadcastMessage);
+        this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
       });
 
-      this._staffChannel.subscribe((status, err) => {
-        console.log(`Staff channel status: class:${this._classId}:staff`, status, err);
+      this._staffChannel.subscribe(() => {
         this._notifyStatusChange();
       });
     }
@@ -109,18 +105,15 @@ export class ClassRealTimeController {
     });
 
     this._userChannel.on("broadcast", { event: "broadcast" }, (message) => {
-      this._handleBroadcastMessage(message.payload as BroadcastMessage);
+      this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
     });
 
-    this._userChannel.subscribe((status, err) => {
-      console.log(`User channel status: class:${this._classId}:user:${this._profileId}`, status, err);
+    this._userChannel.subscribe(() => {
       this._notifyStatusChange();
     });
   }
 
   private _handleBroadcastMessage(message: BroadcastMessage) {
-    console.log("Received broadcast message:", message);
-
     // Skip system messages like channel_created
     if (message.type !== "table_change") {
       return;
@@ -270,11 +263,10 @@ export class ClassRealTimeController {
       });
 
       channels.graders.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message.payload as BroadcastMessage);
+        this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
       });
 
-      channels.graders.subscribe((status, err) => {
-        console.log(`Submission graders channel status: ${gradersChannelName}`, status, err);
+      channels.graders.subscribe(() => {
         this._notifyStatusChange();
       });
     }
@@ -286,11 +278,10 @@ export class ClassRealTimeController {
     });
 
     channels.user.on("broadcast", { event: "broadcast" }, (message) => {
-      this._handleBroadcastMessage(message.payload as BroadcastMessage);
+      this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
     });
 
-    channels.user.subscribe((status, err) => {
-      console.log(`Submission user channel status: ${userChannelName}`, status, err);
+    channels.user.subscribe(() => {
       this._notifyStatusChange();
     });
 
@@ -301,7 +292,6 @@ export class ClassRealTimeController {
    * Clean up channels and subscriptions
    */
   close() {
-    console.log("Closing ClassRealTimeController channels", this._objDebugId);
     this._closed = true;
     this._subscriptions.clear();
     this._statusChangeListeners = [];
@@ -332,12 +322,10 @@ export class ClassRealTimeController {
    * Subscribe to connection status changes
    */
   subscribeToStatus(callback: (status: ConnectionStatus) => void): () => void {
-    console.log("Subscribing to status changes", this._objDebugId, this._statusChangeListeners);
     this._statusChangeListeners.push(callback);
 
     return () => {
       this._statusChangeListeners = this._statusChangeListeners.filter((cb) => cb !== callback);
-      console.log("After unsubscribing from status changes", this._objDebugId, this._statusChangeListeners);
     };
   }
 
@@ -412,8 +400,6 @@ export class ClassRealTimeController {
    */
   private _notifyStatusChange() {
     const status = this.getConnectionStatus();
-    console.log("Notifying status change listeners", this._objDebugId, status);
-    console.log("Status change listeners", this._objDebugId, this._statusChangeListeners);
     this._statusChangeListeners.forEach((callback) => callback(status));
   }
 

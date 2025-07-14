@@ -4,6 +4,7 @@ import { useDataMessagesState } from "../../providers/DataMessagesProvider";
 import { useAppState } from "../../providers/AppStateProvider";
 import { StyledMessages } from "./Styled";
 import { DataMessage } from "amazon-chime-sdk-js";
+import { toaster } from "@/components/ui/toaster";
 
 // Define a type for the parsed message content
 type ParsedMessage = {
@@ -32,7 +33,10 @@ export default function Messages() {
       try {
         parsedData = JSON.parse(message.text());
       } catch (error) {
-        console.error("Failed to parse message data:", error);
+        toaster.error({
+          title: "Error parsing message data",
+          description: error instanceof Error ? error.message : "Unknown error"
+        });
         return null; // Skip rendering if parsing fails
       }
 

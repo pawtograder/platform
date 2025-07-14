@@ -27,7 +27,7 @@ export default async function ProtectedPage() {
     .order("semester", { ascending: false })
     .order("name", { ascending: true });
 
-  if (courses.data?.length === 1) {
+  if (courses.data && courses.data.length === 1 && courses.data[0]) {
     return redirect(`/course/${courses.data[0].id}`);
   }
   let actions = <></>;

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { HydratedRubricCheck } from "@/utils/supabase/DatabaseTypes";
+import type { HydratedRubricCheck } from "@/utils/supabase/DatabaseTypes";
 
 /**
  * A hook to determine if a rubric check should be visible to the current user.

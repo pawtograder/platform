@@ -1,5 +1,5 @@
 "use client";
-import { DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
+import type { DiscussionThreadWatcher } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -46,7 +46,7 @@ export function useDiscussionThreadWatchStatus(threadId: number) {
         });
       }
     },
-    [controller, threadId, curWatch]
+    [threadId, curWatch, course_id, createThreadWatcher, updateWatch, user]
   );
   return {
     status: curWatch?.enabled ?? false,

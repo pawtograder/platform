@@ -4,7 +4,7 @@ import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import { Switch } from "@/components/ui/switch";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { GraderResultOutput, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
+import type { GraderResultOutput, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   CardBody,
@@ -92,7 +92,7 @@ export default function GraderResults() {
   if (query.data.data.grader_results?.errors) {
     const errors = query.data.data.grader_results.errors;
     const userVisibleMessage =
-      typeof errors === "object" && "user_visible_message" in errors ? errors.user_visible_message : null;
+      typeof errors === "object" && "user_visible_message" in errors ? errors["user_visible_message"] : null;
     return (
       <Box>
         <Alert title="Submission Error" status="error" p={4} m={4}>
@@ -197,7 +197,8 @@ export default function GraderResults() {
                   (r.extra_data as GraderResultTestData)?.hide_score !== "true" && (showHiddenOutput || r.is_released)
               )
               .map((result, index) => {
-                const isNewPart = index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1].part;
+                const isNewPart =
+                  index > 0 && result.part !== data.grader_results?.grader_result_tests[index - 1]?.part;
                 return (
                   <Fragment key={result.id}>
                     {isNewPart && (

@@ -1,7 +1,7 @@
 "use client";
 import data from "@emoji-mart/data";
 import { useCallback, useRef, useState } from "react";
-import { IGif } from "@giphy/js-types";
+import type { IGif } from "@giphy/js-types";
 import MDEditor from "@uiw/react-md-editor";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { Box, Button, Field, HStack, Textarea, VStack, Text } from "@chakra-ui/react";
@@ -95,7 +95,7 @@ export default function MessageInput(props: MessageInputProps) {
       }
       const urlEncodedFilename = encodeURIComponent(fileName);
 
-      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
+      const url = `${process.env["NEXT_PUBLIC_SUPABASE_URL"]}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
       sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
       return url;
     },
@@ -196,11 +196,9 @@ export default function MessageInput(props: MessageInputProps) {
                   setValue("");
                 })
                 .catch((error) => {
-                  console.error("Error sending message", error);
-                  toaster.create({
+                  toaster.error({
                     title: "Error sending message",
-                    description: error instanceof Error ? error.message : "Unknown error",
-                    type: "error"
+                    description: error instanceof Error ? error.message : "Unknown error"
                   });
                 })
                 .finally(() => {
@@ -268,13 +266,7 @@ export default function MessageInput(props: MessageInputProps) {
               </Button>
             </Tooltip>
             {enableFilePicker && (
-              <input
-                title="Attach a file"
-                type="file"
-                ref={fileInputRef}
-                style={{ display: "none" }}
-                onChange={attachFile}
-              />
+              <input title="Attach a file" type="file" ref={fileInputRef} className="hidden" onChange={attachFile} />
             )}
             {enableGiphyPicker && (
               <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)} lazyMount>
@@ -345,11 +337,9 @@ export default function MessageInput(props: MessageInputProps) {
                 setIsSending(true);
                 await sendMessage(value!, profile_id, true);
               } catch (error) {
-                console.error("Error sending message", error);
-                toaster.create({
+                toaster.error({
                   title: "Error sending message",
-                  description: error instanceof Error ? error.message : "Unknown error",
-                  type: "error"
+                  description: error instanceof Error ? error.message : "Unknown error"
                 });
               } finally {
                 setIsSending(false);
@@ -429,13 +419,7 @@ export default function MessageInput(props: MessageInputProps) {
             </Button>
           </Tooltip>
           {enableFilePicker && (
-            <input
-              title="Attach a file"
-              type="file"
-              ref={fileInputRef}
-              style={{ display: "none" }}
-              onChange={attachFile}
-            />
+            <input title="Attach a file" type="file" ref={fileInputRef} className="hidden" onChange={attachFile} />
           )}
           {enableGiphyPicker && (
             <PopoverRoot open={showGiphyPicker} onOpenChange={(e) => setShowGiphyPicker(e.open)}>
@@ -498,16 +482,12 @@ export default function MessageInput(props: MessageInputProps) {
             }
             try {
               setIsSending(true);
-              console.log("Sending message", value, profile_id);
               await sendMessage(value!, profile_id, true);
-              console.log("Message sent", value, profile_id);
               setValue("");
             } catch (error) {
-              console.error(error);
-              toaster.create({
+              toaster.error({
                 title: "Error sending message",
-                description: error instanceof Error ? error.message : "Unknown error",
-                type: "error"
+                description: error instanceof Error ? error.message : "Unknown error"
               });
             } finally {
               setIsSending(false);

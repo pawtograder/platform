@@ -1,5 +1,5 @@
 import { Avatar, Box, Button, Flex, HStack, Skeleton, Text, VStack } from "@chakra-ui/react";
-import { Notification } from "@/utils/supabase/DatabaseTypes";
+import type { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import Link from "next/link";
 import { useNotification } from "@/hooks/useNotifications";

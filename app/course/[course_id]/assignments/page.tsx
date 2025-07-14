@@ -8,7 +8,7 @@ import { useIdentity } from "@/hooks/useIdentities";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import { dueDateAdvice } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroup,
@@ -23,11 +23,11 @@ import {
 import { Card, Container, Flex, Heading, Spinner, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
-import { UserIdentity } from "@supabase/supabase-js";
+import type { UserIdentity } from "@supabase/supabase-js";
 import { addHours, addMinutes, differenceInHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
-import { UUID } from "node:crypto";
+import type { UUID } from "node:crypto";
 import { useEffect, useState } from "react";
 
 // Define the type for the groups query result
@@ -98,10 +98,8 @@ export default function StudentPage() {
       enabled: !!course_id && !!user
     }
   });
-  const private_profile_id: string | null =
-    private_profile_id_data && private_profile_id_data.data.length > 0
-      ? private_profile_id_data.data[0].private_profile_id
-      : null;
+  // Safely extract the student's private profile ID if it exists.
+  const private_profile_id: string | null = private_profile_id_data?.data?.[0]?.["private_profile_id"] ?? null;
   const invalidate = useInvalidate();
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
@@ -210,11 +208,14 @@ export default function StudentPage() {
       const group = groups?.find((group) => group.assignment_id === assignment.id);
       let repo = "-";
       if (assignment.repositories.length) {
-        repo = assignment.repositories[0].repository;
+        // With `noUncheckedIndexedAccess`, direct index access returns possibly undefined
+        // but our length check guarantees at least one element. Assert non-null.
+        repo = assignment.repositories[0]!.repository;
       }
       if (group && group.assignment_groups) {
         if (group.assignment_groups.repositories.length) {
-          repo = group.assignment_groups.repositories[0].repository;
+          // Same reasoning as above – safe after length check.
+          repo = group.assignment_groups.repositories[0]!.repository;
         } else {
           repo = "-";
         }
@@ -224,7 +225,7 @@ export default function StudentPage() {
       const originalDueDate = new TZDate(assignment.due_date);
       const modifiedDueDate = new TZDate(
         addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended),
-        course?.time_zone ?? "America/New_York"
+        course?.["time_zone"] ?? "America/New_York"
       );
       result.push({
         key: assignment.id.toString(),
@@ -253,8 +254,8 @@ export default function StudentPage() {
           due_date: new TZDate(evalDueDate),
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
-          name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0].submission_id}/files?review_assignment_id=${assignment.review_assignments[0].id}`,
-          submission_text: assignment.review_assignments[0].submission_reviews.completed_at
+          name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0]!.submission_id}/files?review_assignment_id=${assignment.review_assignments[0]!.id}`,
+          submission_text: assignment.review_assignments[0]!.submission_reviews?.completed_at
             ? "Submitted"
             : "Not Submitted",
           group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
@@ -276,7 +277,7 @@ export default function StudentPage() {
         <Flex>
           {allAssignedWork()
             .filter((work) => {
-              return work.due_date > new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+              return work.due_date > new TZDate(new Date(), course?.["time_zone"] ?? "America/New_York");
             })
             .map((work) => {
               return (
@@ -294,12 +295,12 @@ export default function StudentPage() {
                     </Text>
                     <Text>
                       <strong>Due:</strong>{" "}
-                      {formatInTimeZone(work.due_date, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}{" "}
+                      {formatInTimeZone(work.due_date, course?.["time_zone"] || "America/New_York", "MMM d h:mm aaa")}{" "}
                       {differenceInHours(
                         new TZDate(work.due_date),
-                        TZDate.tz(course?.time_zone || "America/New_York")
+                        TZDate.tz(course?.["time_zone"] || "America/New_York")
                       ) <= 48
-                        ? dueDateAdvice(work.due_date.toString(), course?.time_zone ?? undefined)
+                        ? dueDateAdvice(work.due_date.toString(), course?.["time_zone"] ?? undefined)
                         : ""}
                     </Text>
                     <Text>
@@ -322,7 +323,7 @@ export default function StudentPage() {
               Due Date
               <br />
               <Text fontSize="sm" color="fg.muted">
-                ({course?.time_zone})
+                ({course?.["time_zone"]})
               </Text>
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>

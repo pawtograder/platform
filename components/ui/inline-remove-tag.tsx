@@ -1,5 +1,5 @@
 import useTags from "@/hooks/useTags";
-import { Tag } from "@/utils/supabase/DatabaseTypes";
+import type { Tag } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useState } from "react";

@@ -1,6 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
+import { toaster } from "@/components/ui/toaster";
 import { DefaultAudioMixController, TimeoutScheduler } from "amazon-chime-sdk-js";
 
 class TestSound {
@@ -29,14 +30,20 @@ class TestSound {
           // @ts-expect-error: deviceId might not be assignable or method might not exist on type
           await audioMixController.bindAudioDevice({ deviceId: sinkId });
         } catch (e) {
-          console.error("Failed to bind audio device", e);
+          toaster.error({
+            title: "Failed to bind audio device",
+            description: e instanceof Error ? e.message : "Unknown error"
+          });
         }
       }
 
       try {
         await audioMixController.bindAudioElement(new Audio());
       } catch (e) {
-        console.error("Failed to bind audio element", e);
+        toaster.error({
+          title: "Failed to bind audio element",
+          description: e instanceof Error ? e.message : "Unknown error"
+        });
       }
     };
 

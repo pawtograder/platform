@@ -1,8 +1,9 @@
 import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
-import { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
+import type { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useDiscussionThreadReadStatus,
@@ -13,7 +14,7 @@ import useDiscussionThreadChildren from "@/hooks/useDiscussionThreadRootControll
 import { useNotifications } from "@/hooks/useNotifications";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useIntersection } from "@/hooks/useViewportIntersection";
-import { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
+import type { DiscussionThread as DiscussionThreadType } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Container, Flex, HStack, Link, Stack, Text } from "@chakra-ui/react";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
@@ -118,24 +119,6 @@ function NotificationAndReadStatusUpdater({
 
   return <div ref={ref}>{threadIsUnread ? <Badge colorPalette="red">New</Badge> : ""}</div>;
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function print(value: any) {
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  } else {
-    if (!value) {
-      return "falsy";
-    }
-    return value.toString();
-  }
-}
-export function useLogIfChanged<T>(name: string, value: T) {
-  const previous = useRef(value);
-  if (!Object.is(previous.current, value)) {
-    console.log(`${name} changed. Old: ${print(previous.current)}, New: ${print(value)} `);
-    previous.current = value;
-  }
-}
 
 // Define the inner component that assumes thread and thread.root are valid
 const DiscussionThreadContent = memo(
@@ -208,7 +191,10 @@ const DiscussionThreadContent = memo(
     const toggleAnswered = useCallback(async () => {
       // root_thread might still be loading initially, handle that case
       if (!root_thread || thread.root === undefined || thread.id === undefined) {
-        console.error("Cannot toggle answer status: root_thread not loaded or thread IDs missing.");
+        toaster.error({
+          title: "Cannot toggle answer status",
+          description: "root_thread not loaded or thread IDs missing."
+        });
         return;
       }
       if (is_answer) {
@@ -341,7 +327,7 @@ const DiscussionThreadContent = memo(
               thread_id={child.id}
               originalPoster={originalPoster}
               indent={index === 0}
-              outerSiblings={childOuterSiblings[index]}
+              outerSiblings={childOuterSiblings[index] || ""}
               isFirstDescendantOfParent={index === 0}
             />
           ))}

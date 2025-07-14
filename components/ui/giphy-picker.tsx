@@ -1,6 +1,6 @@
 "use client";
 import { Container, Image, VStack } from "@chakra-ui/react";
-import { IGif } from "@giphy/js-types";
+import type { IGif } from "@giphy/js-types";
 import { Grid, SearchBar, SearchContext, SearchContextManager } from "@giphy/react-components";
 import { useContext } from "react";
 import { useColorMode } from "./color-mode";
