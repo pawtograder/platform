@@ -22,6 +22,9 @@ import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 import { createClient } from "@/utils/supabase/client";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import { Box, Spinner } from "@chakra-ui/react";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
@@ -200,7 +203,29 @@ export class CourseController {
   private _onlyShowGradesFor: string = "";
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
-  constructor(public courseId: number) { }
+  private _classRealTimeController: ClassRealTimeController | null = null;
+
+  constructor(public courseId: number) {}
+
+  initializeRealTimeController(profileId: string, isStaff: boolean) {
+    if (this._classRealTimeController) {
+      this._classRealTimeController.close();
+    }
+
+    this._classRealTimeController = new ClassRealTimeController({
+      client: createClient(),
+      classId: this.courseId,
+      profileId,
+      isStaff
+    });
+  }
+
+  get classRealTimeController(): ClassRealTimeController {
+    if (!this._classRealTimeController) {
+      throw new Error("ClassRealTimeController not initialized. Call initializeRealTimeController first.");
+    }
+    return this._classRealTimeController;
+  }
   private discussionThreadReadStatusesSubscribers: Map<
     number,
     UpdateCallback<DiscussionThreadReadWithAllDescendants>[]
@@ -1096,8 +1121,30 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
   return <></>;
 }
 const CourseControllerContext = createContext<CourseController | null>(null);
-export function CourseControllerProvider({ course_id, children }: { course_id: number; children: React.ReactNode }) {
+export function CourseControllerProvider({
+  course_id,
+  profile_id,
+  role,
+  children
+}: {
+  profile_id: string;
+  role: Database["public"]["Enums"]["app_role"];
+  course_id: number;
+  children: React.ReactNode;
+}) {
   const controller = useRef<CourseController>(new CourseController(course_id));
+  const [isInitialized, setIsInitialized] = useState(false);
+  useEffect(() => {
+    controller.current.initializeRealTimeController(profile_id, role === "instructor" || role === "grader");
+    setIsInitialized(true);
+  }, [controller, profile_id, role]);
+  if (!isInitialized) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
+        <Spinner />
+      </Box>
+    );
+  }
   return (
     <CourseControllerContext.Provider value={controller.current}>
       <CourseControllerProviderImpl controller={controller.current} course_id={course_id} />

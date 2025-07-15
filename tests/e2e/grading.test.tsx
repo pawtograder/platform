@@ -2,10 +2,15 @@ import { test, expect, type Page } from "@playwright/test";
 import percySnapshot from "@percy/playwright";
 import { createClient } from "@supabase/supabase-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+<<<<<<< HEAD
 import { createUserInDemoClass, insertAssignment, insertPreBakedSubmission, TestingUser, updateClassSettings } from "./TestingUtils";
 import dotenv from "dotenv";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { addDays } from "date-fns";
+=======
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
+>>>>>>> staging
 
 dotenv.config({ path: ".env.local" });
 // Helper function to retry clicks that should make textboxes appear
@@ -75,6 +80,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
 
     await page.getByRole("link", {name: assignment!.title}).click();
+
+    //Wait for the realtime connection status to be connected
+    await expect(
+      page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
+    ).toBeVisible();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await percySnapshot(page, "Student can submit self-review early");
