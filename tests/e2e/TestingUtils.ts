@@ -23,7 +23,7 @@ export async function updateClassSettings({
   class_id,
   start_date,
   end_date,
-  late_tokens_per_student 
+  late_tokens_per_student
 }: {
   class_id: number;
   start_date: string;
@@ -268,7 +268,6 @@ export async function createLabSectionWithStudents({
     throw new Error(`Failed to create lab section: ${labSectionError.message}`);
   }
   const lab_section_id = labSectionData.id;
-  console.log("Created lab section", lab_section_id);
   for (const student of students) {
     await supabase
       .from("user_roles")
@@ -293,7 +292,7 @@ export async function insertAssignment({
   const test_run_prefix = getTestRunPrefix() + "#" + assignmentIdx;
   const title = `Test ${test_run_prefix}`;
   assignmentIdx++;
-  const { data: assignmentData, error: assignmentError } = await supabase
+  const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
     .insert({
       title: title,
@@ -310,15 +309,107 @@ export async function insertAssignment({
       group_config: "individual",
       self_review_setting_id: 1,
     })
-    .select("*")
+    .select("id")
     .single();
   if (assignmentError) {
     throw new Error(`Failed to create assignment: ${assignmentError.message}`);
   }
-
+  const { data: assignmentData } = await supabase.from("assignments").select("*").eq("id", insertedAssignmentData.id).single();
+  if (!assignmentData) {
+    throw new Error("Failed to get assignment");
+  }
   await supabase.from("autograder").update({
-    config: {submissionFiles: {files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: []}}
+    config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
   }).eq("id", assignmentData.id);
+
+  const partsData = await supabase.from("rubric_parts").insert([{
+    class_id: 1,
+    name: "Self Review",
+    description: "Self review rubric",
+    ordinal: 0,
+    rubric_id: assignmentData.self_review_rubric_id || 0
+  }, {
+    class_id: 1,
+    name: "Grading Review",
+    description: "Grading review rubric",
+    ordinal: 1,
+    rubric_id: assignmentData.grading_rubric_id || 0
+  }]).select("id");
+  if (partsData.error) {
+    throw new Error(`Failed to create rubric parts: ${partsData.error.message}`);
+  }
+  const self_review_part_id = partsData.data?.[0]?.id;
+  const grading_review_part_id = partsData.data?.[1]?.id;
+  const criteriaData = await supabase.from("rubric_criteria").insert([{
+    class_id: 1,
+    name: "Self Review Criteria",
+    description: "Criteria for self review evaluation",
+    ordinal: 0,
+    total_points: 10,
+    is_additive: true,
+    rubric_part_id: self_review_part_id || 0,
+    rubric_id: assignmentData.self_review_rubric_id || 0
+  }, {
+    class_id: 1,
+    name: "Grading Review Criteria",
+    description: "Criteria for grading review evaluation",
+    ordinal: 0,
+    total_points: 20,
+    is_additive: true,
+    rubric_part_id: grading_review_part_id || 0,
+    rubric_id: assignmentData.grading_rubric_id || 0
+  }]).select("id");
+  if (criteriaData.error) {
+    throw new Error(`Failed to create rubric criteria: ${criteriaData.error.message}`);
+  }
+  const selfReviewCriteriaId = criteriaData.data?.[0]?.id;
+  const gradingReviewCriteriaId = criteriaData.data?.[1]?.id;
+  await supabase.from("rubric_checks").insert([{
+    rubric_criteria_id: selfReviewCriteriaId || 0,
+    name: "Self Review Check 1",
+    description: "First check for self review",
+    ordinal: 0,
+    points: 5,
+    is_annotation: true,
+    is_comment_required: false,
+    class_id: 1,
+    is_required: true
+  },
+  {
+    rubric_criteria_id: selfReviewCriteriaId || 0,
+    name: "Self Review Check 2",
+    description: "Second check for self review",
+    ordinal: 1,
+    points: 5,
+    is_annotation: false,
+    is_comment_required: false,
+    class_id: 1,
+    is_required: true
+  },
+  {
+    rubric_criteria_id: gradingReviewCriteriaId || 0,
+    name: "Grading Review Check 1",
+    description: "First check for grading review",
+    ordinal: 0,
+    points: 10,
+    is_annotation: true,
+    is_comment_required: false,
+    class_id: 1,
+    is_required: true
+  },
+  {
+    rubric_criteria_id: gradingReviewCriteriaId || 0,
+    name: "Grading Review Check 2",
+    description: "Second check for grading review",
+    ordinal: 1,
+    points: 10,
+    is_annotation: false,
+    is_comment_required: false,
+    class_id: 1,
+    is_required: true
+  }
+  ]).select("id");
+
   return assignmentData;
 }
 
@@ -393,8 +484,8 @@ export async function insertSubmissionViaAPI({
       Authorization: token_str
     }
   });
-  if('error' in data) {
-    if('details' in data.error) {
+  if ('error' in data) {
+    if ('details' in data.error) {
       throw new Error(data.error.details);
     }
     throw new Error("Failed to create submission");
@@ -404,9 +495,3 @@ export async function insertSubmissionViaAPI({
     submission_id: data.submission_id
   };
 }
-// async function main() {
-//   const student = await createUserInDemoClass({ role: "student" });
-//   const submission = await insertSubmissionViaAPI({ student_profile_id: student.private_profile_id, assignment_id: 1 });
-//   console.log(submission);
-// }
-// main();

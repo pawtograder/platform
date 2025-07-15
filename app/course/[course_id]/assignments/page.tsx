@@ -40,7 +40,7 @@ type AssignmentUnit = {
   key: string;
   name: string;
   type: "assignment" | "self review";
-  due_date: TZDate;
+  due_date: TZDate | undefined;
   due_date_component: JSX.Element;
   due_date_link?: string;
   repo: string;
@@ -163,6 +163,11 @@ export default function StudentPage() {
     })
     : null, [assignments, groups, githubIdentity]);
 
+  const hasLabSectionAssignments = useMemo(() => {
+    return assignments?.some((assignment) => {
+      return assignment.minutes_due_after_lab !== null;
+    });
+  }, [assignments]);
   const actions = !githubIdentity ? (
     <LinkAccount />
   ) : assignmentsWithoutRepos?.length ? (
@@ -219,8 +224,8 @@ export default function StudentPage() {
       // Calculate the effective due date for this student
       // This ensures sorting/filtering uses the actual due date the student sees,
       // which includes both lab-based scheduling and manual due date extensions
-      let effectiveDueDate: Date;
-      if (private_profile_id && courseController.isLoaded && labSectionsLoaded) {
+      let effectiveDueDate: Date | undefined;
+      if (private_profile_id && courseController.isLoaded && (labSectionsLoaded || !hasLabSectionAssignments)) {
         // Use the CourseController's lab-aware calculation
         const labAwareDueDate = courseController.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: private_profile_id, labSectionId: lab_section_id ?? undefined });
 
@@ -229,10 +234,10 @@ export default function StudentPage() {
         const minutesExtended = assignment.assignment_due_date_exceptions.reduce((acc, curr) => acc + curr.minutes, 0);
         effectiveDueDate = addMinutes(addHours(labAwareDueDate, hoursExtended), minutesExtended);
       } else {
-        return [];
+        effectiveDueDate = undefined;
       }
 
-      const modifiedDueDate = new TZDate(effectiveDueDate, course?.time_zone ?? "America/New_York");
+      const modifiedDueDate = effectiveDueDate ? new TZDate(effectiveDueDate, course?.time_zone ?? "America/New_York") : undefined;
       result.push({
         key: assignment.id.toString(),
         name: assignment.title,
@@ -252,12 +257,12 @@ export default function StudentPage() {
       });
 
       if (assignment.assignment_self_review_settings.enabled && assignment.review_assignments.length > 0) {
-        const evalDueDate = addHours(effectiveDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0);
+        const evalDueDate = effectiveDueDate ? addHours(effectiveDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0) : undefined;
         result.push({
           key: assignment.id.toString() + "selfReview",
           name: "Self Review for " + assignment.title,
           type: "self review",
-          due_date: new TZDate(evalDueDate),
+          due_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
           name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0].submission_id}/files?review_assignment_id=${assignment.review_assignments[0].id}`,
@@ -270,27 +275,29 @@ export default function StudentPage() {
     });
     // Sort by effective due date (includes lab-based scheduling and extensions)
     return result.sort((a, b) => {
-      const dateA = new TZDate(a.due_date);
-      const dateB = new TZDate(b.due_date);
+      const dateA = a.due_date ? new TZDate(a.due_date) : new TZDate(new Date());
+      const dateB = b.due_date ? new TZDate(b.due_date) : new TZDate(new Date());
       return dateB.getTime() - dateA.getTime();
     });
   }, [assignments, groups, courseController, private_profile_id, lab_section_id, course, course_id, labSectionsLoaded]);
 
   const workInFuture = useMemo(() => {
+    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
     return allAssignedWork.filter((work) => {
-      return work.due_date > new Date();
+      return work.due_date && work.due_date > curTimeInCourseTimezone;
     });
   }, [allAssignedWork]);
   workInFuture.sort((a, b) => {
-    return a.due_date.getTime() - b.due_date.getTime();
+    return (a.due_date?.getTime() ?? 0) - (b.due_date?.getTime() ?? 0);
   });
   const workInPast = useMemo(() => {
+    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
     return allAssignedWork.filter((work) => {
-      return work.due_date < new Date();
+      return work.due_date && work.due_date < curTimeInCourseTimezone;
     });
   }, [allAssignedWork]);
   workInPast.sort((a, b) => {
-    return b.due_date.getTime() - a.due_date.getTime();
+    return (b.due_date?.getTime() ?? 0) - (a.due_date?.getTime() ?? 0);
   });
   return (
     <Container>
@@ -316,12 +323,12 @@ export default function StudentPage() {
         </Table.Header>
         <Table.Body>
           {(labSectionsLoaded && workInFuture.length === 0) && <Table.Row><Table.Cell colSpan={5}><EmptyState.Root size="md"><EmptyState.Content><EmptyState.Indicator><Icon as={FaCheckCircle} /></EmptyState.Indicator><EmptyState.Title>No upcoming deadlines available</EmptyState.Title><EmptyState.Description>Your instructor may not have released any upcoming assignments yet.</EmptyState.Description></EmptyState.Content></EmptyState.Root></Table.Cell></Table.Row>}
-          {!labSectionsLoaded && <Table.Row><Table.Cell colSpan={5}><Spinner /></Table.Cell></Table.Row>}
+          {(!labSectionsLoaded && hasLabSectionAssignments) && <Table.Row><Table.Cell colSpan={5}><Spinner /></Table.Cell></Table.Row>}
           {workInFuture.map((work) => {
-            const isCloseDeadline = differenceInHours(work.due_date, new Date()) < 24;
+            const isCloseDeadline = work.due_date && differenceInHours(work.due_date, new Date()) < 24;
             return (
               <Table.Row key={work.key} border={isCloseDeadline ? "2px solid" : "none"} borderColor={isCloseDeadline ? "border.info" : undefined}
-              bg={isCloseDeadline ? "bg.info" : undefined}>
+                bg={isCloseDeadline ? "bg.info" : undefined}>
                 <Table.Cell>
                   <Link prefetch={true} href={work.due_date_link ?? ""}>
                     {work.due_date_component}

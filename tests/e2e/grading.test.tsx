@@ -1,16 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
-import percySnapshot from "@percy/playwright";
-import { createClient } from "@supabase/supabase-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-<<<<<<< HEAD
-import { createUserInDemoClass, insertAssignment, insertPreBakedSubmission, TestingUser, updateClassSettings } from "./TestingUtils";
-import dotenv from "dotenv";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import percySnapshot from "@percy/playwright";
+import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
-=======
 import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
->>>>>>> staging
+import { createUserInDemoClass, insertAssignment, insertPreBakedSubmission, TestingUser, updateClassSettings } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
 // Helper function to retry clicks that should make textboxes appear
@@ -55,10 +48,11 @@ test.beforeAll(async () => {
     due_date: addDays(new Date(), 1).toUTCString()
   });
 
-  await insertPreBakedSubmission({
+  const submission_res = await insertPreBakedSubmission({
     student_profile_id: student.private_profile_id,
     assignment_id: assignment!.id
   })
+  submission_id = submission_res.submission_id
 });
 
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
@@ -76,15 +70,17 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Sign in password" }).fill(student!.password);
     await page.getByRole("textbox", { name: "Sign in password" }).press("Enter");
     await page.getByRole("button", { name: "Sign in with email" }).click();
-
-    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
-
-    await page.getByRole("link", {name: assignment!.title}).click();
-
     //Wait for the realtime connection status to be connected
     await expect(
       page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
     ).toBeVisible();
+
+    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+
+
+    await page.getByRole("link", { name: assignment!.title }).click();
+
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await percySnapshot(page, "Student can submit self-review early");
@@ -143,7 +139,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Sign in password" }).click();
     await page.getByRole("textbox", { name: "Sign in password" }).fill(instructor!.password);
     await page.getByRole("button", { name: "Sign in with email" }).click();
-    
+
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/1/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
@@ -196,16 +194,17 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Sign in password" }).fill(student!.password);
     await page.getByRole("button", { name: "Sign in with email" }).click();
 
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
-    await page.getByRole("link", {name: assignment!.title}).click();
+    await page.getByRole("link", { name: assignment!.title, exact: true}).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
-    await expect(page.locator("#rubric-1")).toContainText("Grading Review Criteria 20/20");
-    await expect(page.locator("#rubric-1")).toContainText(GRADING_REVIEW_COMMENT_1);
-    await expect(page.locator("#rubric-1")).toContainText(GRADING_REVIEW_COMMENT_2);
+    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText("Grading Review Criteria 20/20");
+    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(GRADING_REVIEW_COMMENT_1);
+    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(GRADING_REVIEW_COMMENT_2);
     await percySnapshot(page, "Student can view their grading results");
 
     await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(`${instructor!.email} applied today`);

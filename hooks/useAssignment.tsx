@@ -347,9 +347,6 @@ function AssignmentControllerCreator({
       controller.submissions = submissionsData.data;
     }
     if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
-      console.log("Setting ready to true");
-      console.log(assignmentQuery.data.data);
-      console.log(controller.assignment);
       setReady(true);
     }
   }, [assignmentQuery.data, assignmentQuery.isLoading, submissionsData, controller, setReady, tableControllersReady]);
