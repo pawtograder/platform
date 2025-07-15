@@ -6,7 +6,7 @@ import { addDays, format } from "date-fns";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
-const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 function getTestRunPrefix() {
   const test_run_batch = format(new Date(), "yyyy-MM-dd.HH.mm.ss") + "#" + Math.random().toString(36).substring(2, 6);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined";
@@ -19,16 +19,18 @@ export type TestingUser = {
   public_profile_id: string;
 };
 
-export async function updateClassStartEndDates({
+export async function updateClassSettings({
   class_id,
   start_date,
-  end_date
+  end_date,
+  late_tokens_per_student 
 }: {
   class_id: number;
   start_date: string;
   end_date: string;
+  late_tokens_per_student?: number;
 }) {
-  await supabase.from("classes").update({ start_date: start_date, end_date: end_date }).eq("id", class_id);
+  await supabase.from("classes").update({ start_date: start_date, end_date: end_date, late_tokens_per_student: late_tokens_per_student }).eq("id", class_id);
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser) {
   await page.goto("/");
@@ -75,7 +77,7 @@ export async function createUserInDemoClass({
 export async function insertPreBakedSubmission({
   student_profile_id,
   assignment_group_id,
-  assignment_id = 1
+  assignment_id
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
@@ -123,7 +125,7 @@ export async function insertPreBakedSubmission({
   const { data: submissionData, error: submissionError } = await supabase
     .from("submissions")
     .insert({
-      assignment_id: 1,
+      assignment_id: assignment_id,
       profile_id: student_profile_id,
       assignment_group_id: assignment_group_id,
       sha: "none",
@@ -289,7 +291,7 @@ export async function insertAssignment({
   lab_due_date_offset?: number;
 }): Promise<Assignment> {
   const test_run_prefix = getTestRunPrefix() + "#" + assignmentIdx;
-  const title = `AE2E ${test_run_prefix}`;
+  const title = `Test ${test_run_prefix}`;
   assignmentIdx++;
   const { data: assignmentData, error: assignmentError } = await supabase
     .from("assignments")
@@ -301,17 +303,22 @@ export async function insertAssignment({
       template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
       autograder_points: 100,
       total_points: 100,
+      max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
       class_id: 1,
       slug: test_run_prefix,
       group_config: "individual",
-      self_review_setting_id: 1
+      self_review_setting_id: 1,
     })
     .select("*")
     .single();
   if (assignmentError) {
     throw new Error(`Failed to create assignment: ${assignmentError.message}`);
   }
+
+  await supabase.from("autograder").update({
+    config: {submissionFiles: {files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: []}}
+  }).eq("id", assignmentData.id);
   return assignmentData;
 }
 
@@ -381,16 +388,20 @@ export async function insertSubmissionViaAPI({
     "." +
     Buffer.from(JSON.stringify(payload)).toString("base64") +
     ".";
-  console.log(token_str);
   const { data } = await supabase.functions.invoke("autograder-create-submission", {
     headers: {
       Authorization: token_str
     }
   });
-  console.log(data);
+  if('error' in data) {
+    if('details' in data.error) {
+      throw new Error(data.error.details);
+    }
+    throw new Error("Failed to create submission");
+  }
   return {
     repository_name: repository,
-    submission_id: 40
+    submission_id: data.submission_id
   };
 }
 // async function main() {

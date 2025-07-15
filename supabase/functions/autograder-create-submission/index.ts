@@ -336,7 +336,8 @@ async function handleRequest(req: Request) {
       if (isE2ERun) {
         return {
           grader_url: "not-a-real-url",
-          grader_sha: "not-a-real-sha"
+          grader_sha: "not-a-real-sha",
+          submission_id: submission_id
         };
       }
       if (!config.grader_repo) {

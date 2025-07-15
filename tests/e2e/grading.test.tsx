@@ -2,7 +2,10 @@ import { test, expect, type Page } from "@playwright/test";
 import percySnapshot from "@percy/playwright";
 import { createClient } from "@supabase/supabase-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import { createUserInDemoClass, insertAssignment, insertPreBakedSubmission, TestingUser, updateClassSettings } from "./TestingUtils";
 import dotenv from "dotenv";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { addDays } from "date-fns";
 
 dotenv.config({ path: ".env.local" });
 // Helper function to retry clicks that should make textboxes appear
@@ -29,210 +32,49 @@ async function clickWithTextboxRetry(
   }
 }
 
-const password = "test";
-const test_run_batch = "abcd" + Math.random().toString(36).substring(2, 15);
-const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-const student_email = `student-${workerIndex}-${test_run_batch}@pawtograder.net`;
-const instructor_email = `instructor-${workerIndex}-${test_run_batch}@pawtograder.net`;
+
+let student: TestingUser | undefined;
+let instructor: TestingUser | undefined;
 let submission_id: number | undefined;
+let assignment: Assignment | undefined;
 test.beforeAll(async () => {
-  const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  //Add a student to the database
-
-  const { data: studentData, error: studentError } = await supabase.auth.admin.createUser({
-    email: student_email,
-    password: password,
-    email_confirm: true
-  });
-  if (studentError) {
-    console.error(studentError);
-    throw new Error("Failed to create student user");
-  }
-  const new_student_uid = studentData?.user?.id;
-  const student_private_profile_id = await supabase
-    .from("user_roles")
-    .select("private_profile_id")
-    .eq("user_id", new_student_uid)
-    .single();
-  if (!student_private_profile_id.data?.private_profile_id) {
-    throw new Error("Student private profile id not found");
-  }
-  const { data: instructorData, error: instructorError } = await supabase.auth.admin.createUser({
-    email: instructor_email,
-    password: password,
-    email_confirm: true
-  });
-  if (instructorError) {
-    console.error(instructorError);
-    throw new Error("Failed to create instructor user");
-  }
-  const new_instructor_uid = instructorData?.user?.id;
-  const instructor_private_profile_id = await supabase
-    .from("user_roles")
-    .select("private_profile_id")
-    .eq("user_id", new_instructor_uid)
-    .single();
-  if (!instructor_private_profile_id.data?.private_profile_id) {
-    throw new Error("Instructor private profile id not found");
-  }
-
-  //Insert a submission for the student
-  const { data: repositoryData, error: repositoryError } = await supabase
-    .from("repositories")
-    .insert({
-      assignment_id: 1,
-      repository: `not-actually/repository-${test_run_batch}-${workerIndex}`,
-      class_id: 1,
-      profile_id: student_private_profile_id.data?.private_profile_id,
-      synced_handout_sha: "none"
-    })
-    .select("id")
-    .single();
-  if (repositoryError) {
-    console.error(repositoryError);
-    throw new Error("Failed to create repository");
-  }
-  const repository_id = repositoryData?.id;
-  const { data: checkRunData, error: checkRunError } = await supabase
-    .from("repository_check_runs")
-    .insert({
-      class_id: 1,
-      repository_id: repository_id,
-      check_run_id: 1,
-      status: "{}",
-      sha: "none",
-      commit_message: "none"
-    })
-    .select("id")
-    .single();
-  if (checkRunError) {
-    console.error(checkRunError);
-    throw new Error("Failed to create check run");
-  }
-  const check_run_id = checkRunData?.id;
-  const { data: submissionData, error: submissionError } = await supabase
-    .from("submissions")
-    .insert({
-      assignment_id: 1,
-      profile_id: student_private_profile_id.data?.private_profile_id,
-      sha: "none",
-      repository: "not-actually/repository",
-      run_attempt: 1,
-      run_number: 1,
-      class_id: 1,
-      repository_check_run_id: check_run_id,
-      repository_id: repository_id
-    })
-    .select("id")
-    .single();
-  if (submissionError) {
-    console.error(submissionError);
-    throw new Error("Failed to create submission");
-  }
-  submission_id = submissionData?.id;
-  const { error: submissionFileError } = await supabase.from("submission_files").insert({
-    name: "sample.java",
-    contents: `package com.pawtograder.example.java;
-
-public class Entrypoint {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
-    }
-
-  /*
-   * This method takes two integers and returns their sum.
-   * 
-   * @param a the first integer
-   * @param b the second integer
-   * @return the sum of a and b
-   */
-  public int doMath(int a, int b) {
-      return a+b;
-  }
-
-  /**
-   * This method returns a message, "Hello, World!"
-   * @return
-   */
-  public String getMessage() {
-      
-      return "Hello, World!";
-  }
-}`,
+  await updateClassSettings({
     class_id: 1,
-    submission_id: submission_id,
-    profile_id: student_private_profile_id.data?.private_profile_id
+    start_date: addDays(new Date(), -30).toUTCString(),
+    end_date: addDays(new Date(), 90).toUTCString(),
+    late_tokens_per_student: 10
   });
-  if (submissionFileError) {
-    console.error(submissionFileError);
-    throw new Error("Failed to create submission file");
-  }
-  const { data: graderResultData, error: graderResultError } = await supabase
-    .from("grader_results")
-    .insert({
-      submission_id: submission_id,
-      score: 5,
-      class_id: 1,
-      profile_id: instructor_private_profile_id.data?.private_profile_id,
-      lint_passed: true,
-      lint_output: "no lint output",
-      lint_output_format: "markdown",
-      max_score: 10
-    })
-    .select("id")
-    .single();
-  if (graderResultError) {
-    console.error(graderResultError);
-    throw new Error("Failed to create grader result");
-  }
-  const { error: graderResultTestError } = await supabase.from("grader_result_tests").insert([
-    {
-      score: 5,
-      max_score: 5,
-      name: "test 1",
-      name_format: "text",
-      output: "here is a bunch of output\n**wow**",
-      output_format: "markdown",
-      class_id: 1,
-      student_id: student_private_profile_id.data?.private_profile_id,
-      grader_result_id: graderResultData.id,
-      is_released: true
-    },
-    {
-      score: 5,
-      max_score: 5,
-      name: "test 2",
-      name_format: "text",
-      output: "here is a bunch of output\n**wow**",
-      output_format: "markdown",
-      class_id: 1,
-      student_id: student_private_profile_id.data?.private_profile_id,
-      grader_result_id: graderResultData.id,
-      is_released: true
-    }
-  ]);
-  if (graderResultTestError) {
-    console.error(graderResultTestError);
-    throw new Error("Failed to create grader result test");
-  }
+  student = await createUserInDemoClass({ role: "student" });
+  instructor = await createUserInDemoClass({ role: "instructor" });
+  assignment = await insertAssignment({
+    due_date: addDays(new Date(), 1).toUTCString()
+  });
+
+  await insertPreBakedSubmission({
+    student_profile_id: student.private_profile_id,
+    assignment_id: assignment!.id
+  })
 });
 
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
 const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glove test";
-const GRADING_REVIEW_COMMENT_1 = "Your code is like a mystery novel - I have no idea what's going to happen next";
-const GRADING_REVIEW_COMMENT_2 = "This is the kind of code that makes me question my career choices";
+const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great job on making your logic understandable!";
+const GRADING_REVIEW_COMMENT_2 = "This is the kind of code that makes grading enjoyable: well-structured and thoughtful work!";
 
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
   test("Students can submit self-review early", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(student_email);
+    await page.getByRole("textbox", { name: "Sign in email" }).fill(student!.email);
     await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(password);
+    await page.getByRole("textbox", { name: "Sign in password" }).fill(student!.password);
     await page.getByRole("textbox", { name: "Sign in password" }).press("Enter");
     await page.getByRole("button", { name: "Sign in with email" }).click();
-    await page.getByRole("link", { name: "Demo Assignment" }).click();
+
+    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+
+    await page.getByRole("link", {name: assignment!.title}).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await percySnapshot(page, "Student can submit self-review early");
@@ -287,15 +129,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(instructor_email);
+    await page.getByRole("textbox", { name: "Sign in email" }).fill(instructor!.email);
     await page.getByRole("textbox", { name: "Sign in password" }).click();
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(password);
+    await page.getByRole("textbox", { name: "Sign in password" }).fill(instructor!.password);
     await page.getByRole("button", { name: "Sign in with email" }).click();
-    await expect(page.getByRole("link", { name: "Demo Assignment" })).toBeVisible();
-    await page.goto(`/course/1/assignments/1/submissions/${submission_id}`);
+    
+    await page.goto(`/course/1/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
-    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(`${student_email} applied today at`);
+    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(`${student!.email} applied today at`);
     //Make sure that we get a very nice screenshot with a fully-loaded page
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
@@ -339,11 +181,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test("Students can view their grading results", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(student_email);
+    await page.getByRole("textbox", { name: "Sign in email" }).fill(student!.email);
     await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(password);
+    await page.getByRole("textbox", { name: "Sign in password" }).fill(student!.password);
     await page.getByRole("button", { name: "Sign in with email" }).click();
-    await page.getByRole("link", { name: "Demo Assignment" }).click();
+
+    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.getByRole("link", {name: assignment!.title}).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
     await page.getByRole("button", { name: "Files" }).click();
@@ -354,6 +198,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.locator("#rubric-1")).toContainText(GRADING_REVIEW_COMMENT_2);
     await percySnapshot(page, "Student can view their grading results");
 
-    await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(`${instructor_email} applied today`);
+    await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(`${instructor!.email} applied today`);
   });
 });
