@@ -2,14 +2,18 @@
 import {
   Assignment,
   AssignmentDueDateException,
+  Course,
   DiscussionThread,
   DiscussionThreadReadStatus,
   DiscussionThreadWatcher,
+  LabSection,
+  LabSectionMeeting,
   Notification,
   Tag,
   UserProfile,
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
+
 import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
@@ -188,13 +192,15 @@ export type UserProfileWithPrivateProfile = UserProfile & {
   private_profile?: UserProfile;
 };
 
+
+
 export class CourseController {
   private _isLoaded = false;
   private _isObfuscatedGrades: boolean = false;
   private _onlyShowGradesFor: string = "";
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
-  constructor(public courseId: number) {}
+  constructor(public courseId: number) { }
   private discussionThreadReadStatusesSubscribers: Map<
     number,
     UpdateCallback<DiscussionThreadReadWithAllDescendants>[]
@@ -214,11 +220,28 @@ export class CourseController {
   private tagListSubscribers: UpdateCallback<Tag[]>[] = [];
   private profileTagSubscribers: Map<string, UpdateCallback<Tag[]>[]> = new Map();
 
+  // Lab sections data
+  private labSections: LabSection[] = [];
+  private labSectionMeetings: LabSectionMeeting[] = [];
+  private labSectionListSubscribers: UpdateCallback<LabSection[]>[] = [];
+  private labSectionMeetingListSubscribers: UpdateCallback<LabSectionMeeting[]>[] = [];
+
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
   private genericData: { [key in string]: Map<number, unknown> } = {};
   private genericDataListSubscribers: { [key in string]: UpdateCallback<unknown>[] } = {};
 
   private genericDataTypeToId: { [key in string]: (item: unknown) => number } = {};
+  private _course: Course | undefined;
+
+  set course(course: Course){
+    this._course = course;
+  }
+  get course(){
+    if(this._course === undefined){
+      throw new Error("Course not loaded");
+    }
+    return this._course;
+  }
 
   registerGenericDataType(typeName: string, idGetter: (item: never) => number) {
     if (!this.genericDataTypeToId[typeName]) {
@@ -271,7 +294,7 @@ export class CourseController {
       );
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => {},
+          unsubscribe: () => { },
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -685,10 +708,118 @@ export class CourseController {
       this.onlyShowGradesForListeners = this.onlyShowGradesForListeners.filter((fn) => fn !== cb);
     };
   }
+
+  /**
+   * Sets lab sections data
+   */
+  setLabSections(data: LabSection[]) {
+    this.labSections = data;
+    this.labSectionListSubscribers.forEach((cb) => cb(data));
+  }
+
+  /**
+   * Sets lab section meetings data
+   */
+  setLabSectionMeetings(data: LabSectionMeeting[]) {
+    this.labSectionMeetings = data;
+    this.labSectionMeetingListSubscribers.forEach((cb) => cb(data));
+  }
+
+  /**
+   * Gets lab sections with optional callback for updates
+   */
+  listLabSections(callback?: UpdateCallback<LabSection[]>): { unsubscribe: Unsubscribe; data: LabSection[] } {
+    if (callback) {
+      this.labSectionListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this.labSectionListSubscribers = this.labSectionListSubscribers.filter((cb) => cb !== callback);
+      },
+      data: this.labSections
+    };
+  }
+
+  /**
+   * Gets lab section meetings with optional callback for updates
+   */
+  listLabSectionMeetings(callback?: UpdateCallback<LabSectionMeeting[]>): { unsubscribe: Unsubscribe; data: LabSectionMeeting[] } {
+    if (callback) {
+      this.labSectionMeetingListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this.labSectionMeetingListSubscribers = this.labSectionMeetingListSubscribers.filter((cb) => cb !== callback);
+      },
+      data: this.labSectionMeetings
+    };
+  }
+
+  /**
+   * Gets the lab section ID for a given student profile ID
+   */
+  getStudentLabSectionId(studentPrivateProfileId: string): number | null {
+    const userRole = this.userRolesByPrivateProfileId.get(studentPrivateProfileId);
+    // lab_section_id should be available on UserRoleWithUser after database types regeneration
+    return userRole?.lab_section_id || null;
+  }
+
+  /**
+   * Calculates the effective due date for an assignment and student, considering lab-based scheduling
+   */
+  calculateEffectiveDueDate(assignment: Assignment, { studentPrivateProfileId, labSectionId: labSectionIdOverride }: { studentPrivateProfileId: string, labSectionId?: number }): Date {
+    // If assignment doesn't use lab-based scheduling, return original due date
+    if(!studentPrivateProfileId && !labSectionIdOverride) {
+      throw new Error("No student private profile ID or lab section ID override provided");
+    }
+    if (!assignment.minutes_due_after_lab) {
+      return new Date(assignment.due_date);
+    }
+
+    // Get student's lab section
+    const labSectionId = labSectionIdOverride || this.getStudentLabSectionId(studentPrivateProfileId);
+    if (!labSectionId) {
+      console.log("Student not in a lab section, falling back to original due date");
+      // Student not in a lab section, fall back to original due date
+      return new Date(assignment.due_date);
+    }
+    const labSection = this.labSections.find(section => section.id === labSectionId);
+    if(!labSection){
+      throw new Error("Lab section not found");
+    }
+
+    // Find the most recent lab section meeting before the assignment's original due date
+    const assignmentDueDate = new Date(assignment.due_date);
+    const relevantMeetings = this.labSectionMeetings
+      .filter(meeting =>
+        meeting.lab_section_id === labSectionId &&
+        !meeting.cancelled &&
+        new Date(meeting.meeting_date) < assignmentDueDate
+      )
+      .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
+
+    if (relevantMeetings.length === 0) {
+      // No lab meeting found before due date, fall back to original due date
+      return new Date(assignment.due_date);
+    }
+
+    // Calculate lab-based due date
+    const mostRecentLabMeeting = relevantMeetings[0];
+    const labMeetingDate = new TZDate(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time, this.course.time_zone ?? "America/New_York");
+
+    // Add the minutes offset to the lab meeting date
+    const effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
+
+    return effectiveDueDate;
+  }
 }
 
 function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
   const { user } = useAuthState();
+  const course = useCourse();
+  useEffect(() => {
+    controller.course = course;
+  }, [course, controller]);
   const threadReadStatuses = useList<DiscussionThreadReadStatus>({
     resource: "discussion_thread_read_status",
     queryOptions: {
@@ -923,6 +1054,45 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       controller.setTags(tags.data);
     }
   }, [controller, tags?.data]);
+
+  // Fetch lab sections
+  const { data: labSections } = useList<LabSection>({
+    resource: "lab_sections",
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    pagination: {
+      pageSize: 1000
+    },
+    liveMode: "auto"
+  });
+  useEffect(() => {
+    if (labSections?.data) {
+      controller.setLabSections(labSections.data);
+    }
+  }, [controller, labSections?.data]);
+
+  // Fetch lab section meetings
+  const { data: labSectionMeetings } = useList<LabSectionMeeting>({
+    resource: "lab_section_meetings",
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    pagination: {
+      pageSize: 1000
+    },
+    liveMode: "auto"
+  });
+  useEffect(() => {
+    if (labSectionMeetings?.data) {
+      controller.setLabSectionMeetings(labSectionMeetings.data);
+    }
+  }, [controller, labSectionMeetings?.data]);
+
   return <></>;
 }
 const CourseControllerContext = createContext<CourseController | null>(null);
@@ -949,8 +1119,12 @@ export function formatWithTimeZone(date: string, timeZone: string) {
 export function useAssignmentDueDate(assignment: Assignment) {
   const controller = useCourseController();
   const course = useCourse();
+  const { role } = useClassProfiles();
   const time_zone = course.time_zone || "America/New_York";
   const [dueDateExceptions, setDueDateExceptions] = useState<AssignmentDueDateException[]>();
+  const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
+
+  // Get due date exceptions
   useEffect(() => {
     if (assignment.due_date) {
       const { data: dueDateExceptions, unsubscribe } = controller.listGenericData<AssignmentDueDateException>(
@@ -962,27 +1136,47 @@ export function useAssignmentDueDate(assignment: Assignment) {
     }
   }, [assignment, controller]);
 
+  useEffect(() => {
+    const { data: labSectionMeetings, unsubscribe } = controller.listLabSectionMeetings((data) => setLabSectionMeetings(data));
+    setLabSectionMeetings(labSectionMeetings);
+    return () => unsubscribe();
+  }, [controller]);
+
   const ret = useMemo(() => {
-    if (!dueDateExceptions) {
+    if (!dueDateExceptions || !assignment.due_date || !role.private_profile_id || (labSectionMeetings && labSectionMeetings.length === 0 && assignment.minutes_due_after_lab !== null)) {
       return {
         originalDueDate: undefined,
         dueDate: undefined,
-        hoursExtended: undefined
+        hoursExtended: undefined,
+        effectiveDueDate: undefined,
+        isLoadingEffectiveDate: false,
+        lateTokensConsumed: undefined
       };
     }
+
     const hoursExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.hours, 0);
     const minutesExtended = dueDateExceptions.reduce((acc, curr) => acc + curr.minutes, 0);
     const originalDueDate = new TZDate(assignment.due_date);
-    const dueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
+
+    // Calculate the effective due date using the CourseController's local logic
+    const effectiveDueDate = controller.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: role.private_profile_id, labSectionId: role.lab_section_id ?? undefined });
+    const effectiveDueDateTZ = new TZDate(effectiveDueDate);
+
+    // Apply extensions on top of the effective due date
+    const finalDueDate = addMinutes(addHours(effectiveDueDateTZ, hoursExtended), minutesExtended);
     const lateTokensConsumed = dueDateExceptions.reduce((acc, curr) => acc + curr.tokens_consumed, 0);
+
     return {
       originalDueDate,
-      dueDate,
+      dueDate: finalDueDate,
+      effectiveDueDate: effectiveDueDateTZ,
       hoursExtended,
       lateTokensConsumed,
+      isLoadingEffectiveDate: false,
       time_zone
     };
-  }, [dueDateExceptions, assignment.due_date, time_zone]);
+  }, [dueDateExceptions, assignment, role.private_profile_id, controller, time_zone, labSectionMeetings]);
+
   return ret;
 }
 

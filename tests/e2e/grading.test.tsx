@@ -2,7 +2,9 @@ import { test, expect, type Page } from "@playwright/test";
 import percySnapshot from "@percy/playwright";
 import { createClient } from "@supabase/supabase-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import dotenv from "dotenv";
 
+dotenv.config({ path: ".env.local" });
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
   page: Page,

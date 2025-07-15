@@ -24,6 +24,7 @@ import { addHours, addMinutes } from "date-fns";
 import HistoryPage from "./historyList";
 import { formatInTimeZone } from "date-fns-tz";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import { LuCheck } from "react-icons/lu";
 import MdEditor from "@/components/ui/md-editor";
 /* types */
@@ -69,6 +70,7 @@ function EmailsInnerPage() {
   const [body, setBody] = useState<string>("");
   const tags = useTags();
   const { role: enrollment } = useClassProfiles();
+  const courseController = useCourseController();
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
   const [ccList, setCcList] = useState<{ email: string; user_id: string }[]>([]);
   const [replyEmail, setReplyEmail] = useState<string>();
@@ -325,7 +327,7 @@ function EmailsInnerPage() {
   };
 
   /**
-   * Determines user's due date for assignment in useState based on their exceptions
+   * Determines user's due date for assignment considering both lab-based scheduling and due date exceptions
    * @param profile_id user's private profile id
    * @param group_id user's group (if they're in one)
    * @returns due date in timezone OR null if no assignment
@@ -334,6 +336,18 @@ function EmailsInnerPage() {
     if (!assignment || !dueDateExceptions || !userRolesData) {
       return null;
     }
+
+    let effectiveDueDate: Date;
+    
+    // Calculate the lab-aware effective due date if CourseController is loaded
+    if (courseController.isLoaded) {
+      effectiveDueDate = courseController.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: profile_id });
+    } else {
+      // Fallback to original due date if CourseController not loaded
+      effectiveDueDate = new Date(assignment.due_date);
+    }
+
+    // Apply due date exceptions on top of the lab-aware due date
     const myExceptionsForAssignment = dueDateExceptions.data.filter((exception) => {
       return (
         (exception.student_id === profile_id || exception.assignment_group_id === group_id) &&
@@ -342,9 +356,9 @@ function EmailsInnerPage() {
     });
     const hoursExtended = myExceptionsForAssignment.reduce((acc, curr) => acc + curr.hours, 0);
     const minutesExtended = myExceptionsForAssignment.reduce((acc, curr) => acc + curr.minutes, 0);
-    const originalDueDate = new TZDate(assignment.due_date);
-    const dueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
-    return dueDate;
+    
+    const finalDueDate = addMinutes(addHours(effectiveDueDate, hoursExtended), minutesExtended);
+    return new TZDate(finalDueDate);
   };
 
   /**

@@ -8,15 +8,16 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHash } from "node:crypto";
 import { TZDate } from "npm:@date-fns/tz";
-import { addHours, addSeconds, format, isAfter } from "npm:date-fns@4";
+import { addSeconds, format, isAfter } from "npm:date-fns@4";
 import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { cloneRepository, getRepoTarballURL, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
+import { cloneRepository, getRepoTarballURL, GitHubOIDCToken, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-
+import { Buffer } from "node:buffer";
+import { decode } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 function formatSeconds(seconds: number) {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
@@ -28,14 +29,48 @@ function formatSeconds(seconds: number) {
   return parts.join(" ");
 }
 
+const END_TO_END_REPO_PREFIX = "pawtograder-playground/test-e2e-student-repo";
+const END_TO_END_SECRET = Deno.env.get("END_TO_END_SECRET") || "not-a-secret";
+
+function getRepoToCloneConsideringE2E(repository: string) {
+  if (repository.startsWith(END_TO_END_REPO_PREFIX)) {
+    const separatorPosition = repository.indexOf("--");
+    if (separatorPosition === -1) {
+      throw new SecurityError("E2E repo provided, but no separator found");
+    }
+    return repository.slice(0, separatorPosition);
+  }
+  return repository;
+}
+async function validateOIDCTokenOrAllowE2E(token: string) {
+  const decoded = decode(token);
+  const payload = decoded[1] as GitHubOIDCToken;
+  if (payload.repository.startsWith(END_TO_END_REPO_PREFIX)) {
+    const header = decoded[0] as {
+      alg: string;
+      typ: string;
+      kid: string;
+    };
+    if (header.kid !== END_TO_END_SECRET) {
+      throw new SecurityError("E2E repo provided, but secret is incorrect");
+    }
+    return payload;
+  }
+  return await validateOIDCToken(token);
+}
+
 async function handleRequest(req: Request) {
   const token = req.headers.get("Authorization");
   if (!token) {
     throw new UserVisibleError("No token provided");
   }
-  const decoded = await validateOIDCToken(token);
+  // Check if this is part of an 
+  const decoded = await validateOIDCTokenOrAllowE2E(token);
   // Retrieve the student's submisison
   const { repository, sha, workflow_ref } = decoded;
+
+  const isE2ERun = repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
+
   // Find the corresponding student and assignment
   console.log("Creating submission for", repository, sha, workflow_ref);
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
@@ -70,44 +105,48 @@ async function handleRequest(req: Request) {
     const timeZone = checkRun.classes.time_zone || "America/New_York";
     // Validate that the submission can be created
     if (!checkRun.user_roles || (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader")) {
-      // Check if it's too late to submit. Get extensions
-      const ownershipFilter = repoData.assignment_group_id
-        ? `assignment_group_id.eq.${repoData.assignment_group_id}`
-        : `student_id.eq.${repoData.profile_id}`;
-      const { data: extensions, error: extensionsError } = await adminSupabase
-        .from("assignment_due_date_exceptions")
-        .select("*")
-        .or(ownershipFilter)
-        .eq("assignment_id", repoData.assignment_id);
-      if (extensionsError) {
-        throw new UserVisibleError(`Failed to find extensions: ${extensionsError.message}`);
-      }
+      // Check if it's too late to submit using the lab-aware due date calculation
       console.log(`Timezone: ${timeZone}`);
-      const totalExtensions = extensions?.map((e) => e.hours).reduce((a, b) => a + b, 0);
-      console.log(`Total extensions: ${totalExtensions}`);
-      console.log(`Due date: ${repoData.assignments.due_date}`);
+      console.log(`Assignment ID: ${repoData.assignment_id}`);
+      console.log(`Profile ID: ${repoData.profile_id}`);
+      console.log(`Assignment Group ID: ${repoData.assignment_group_id}`);
 
-      const originalDueDate = new TZDate(repoData.assignments.due_date);
+      // Use the database function to calculate the final due date (includes lab scheduling + extensions)
+      const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc(
+        'calculate_final_due_date',
+        {
+          assignment_id_param: repoData.assignment_id,
+          student_profile_id_param: repoData.profile_id || '',
+          assignment_group_id_param: repoData.assignment_group_id || undefined
+        }
+      );
 
-      console.log(`Original due date: ${originalDueDate}`);
-      const newDueDate = addHours(originalDueDate, totalExtensions);
-      console.log(`New due date: ${newDueDate}`);
+      if (dueDateError) {
+        throw new UserVisibleError(`Failed to calculate due date: ${dueDateError.message}`);
+      }
+
+      const finalDueDate = new TZDate(finalDueDateResult);
+      console.log(`Final due date (with lab scheduling and extensions): ${finalDueDate}`);
+
       const currentDate = TZDate.tz(timeZone);
       console.log(`Current date: ${currentDate}`);
-      if (isAfter(currentDate, newDueDate)) {
+
+      if (isAfter(currentDate, finalDueDate)) {
         //Fail the check run
-        await updateCheckRun({
-          owner: repository.split("/")[0],
-          repo: repository.split("/")[1],
-          check_run_id: checkRun.check_run_id,
-          status: "completed",
-          conclusion: "failure",
-          output: {
-            title: "Submission failed",
-            summary: "You cannot submit after the due date.",
-            text: `The due date for this assignment was ${newDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
-          }
-        });
+        if (!isE2ERun) {
+          await updateCheckRun({
+            owner: repository.split("/")[0],
+            repo: repository.split("/")[1],
+            check_run_id: checkRun.check_run_id,
+            status: "completed",
+            conclusion: "failure",
+            output: {
+              title: "Submission failed",
+              summary: "You cannot submit after the due date.",
+              text: `The due date for this assignment was ${finalDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
+            }
+          });
+        }
         throw new UserVisibleError("You cannot submit after the due date.");
       }
       // Check the max submissions per-time
@@ -115,11 +154,13 @@ async function handleRequest(req: Request) {
         repoData.assignments.autograder?.max_submissions_period_secs &&
         repoData.assignments.autograder?.max_submissions_count
       ) {
+        const ownershipFilter = repoData.assignment_group_id
+          ? `assignment_group_id.eq.${repoData.assignment_group_id}`
+          : `profile_id.eq.${repoData.profile_id}`;
         const { data: submissions, error: submissionsError } = await adminSupabase
           .from("submissions")
           .select("*, grader_results(*)")
           .or(ownershipFilter)
-          .eq("assignment_group_id", repoData.assignment_group_id!)
           .eq("assignment_id", repoData.assignment_id)
           .gte(
             "created_at",
@@ -146,25 +187,27 @@ async function handleRequest(req: Request) {
           );
 
           //Update the check run status
-          await updateCheckRun({
-            owner: repository.split("/")[0],
-            repo: repository.split("/")[1],
-            check_run_id: checkRun.check_run_id,
-            status: "completed",
-            conclusion: "failure",
-            output: {
-              title: "Submission limit reached",
-              summary: `Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
-              text: `Reached max limit (${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)})`
-            },
-            actions: [
-              {
-                label: "Submit",
-                description: "Try to submit again",
-                identifier: "submit"
-              }
-            ]
-          });
+          if (!isE2ERun) {
+            await updateCheckRun({
+              owner: repository.split("/")[0],
+              repo: repository.split("/")[1],
+              check_run_id: checkRun.check_run_id,
+              status: "completed",
+              conclusion: "failure",
+              output: {
+                title: "Submission limit reached",
+                summary: `Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`,
+                text: `Reached max limit (${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)})`
+              },
+              actions: [
+                {
+                  label: "Submit",
+                  description: "Try to submit again",
+                  identifier: "submit"
+                }
+              ]
+            });
+          }
           throw new UserVisibleError(
             `Submission limit reached (max ${repoData.assignments.autograder.max_submissions_count} submissions per ${formatSeconds(repoData.assignments.autograder.max_submissions_period_secs)}). Please wait until ${format(nextAllowedSubmission, "MM/dd/yyyy HH:mm")} to submit again.`
           );
@@ -194,7 +237,7 @@ async function handleRequest(req: Request) {
     }
     const submission_id = subID?.id;
 
-    if (checkRun) {
+    if (checkRun && !isE2ERun) {
       await adminSupabase
         .from("repository_check_runs")
         .update({
@@ -220,12 +263,13 @@ async function handleRequest(req: Request) {
 
     try {
       // Clone the repository
-      const repo = await cloneRepository(repository, sha);
+      const repoToClone = getRepoToCloneConsideringE2E(repository);
+      const repo = await cloneRepository(repoToClone, sha);
       const zip = await openZip.buffer(repo);
       const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
 
       // Check the SHA
-      const workflowFile = zip.files.find((file: any) => stripTopDir(file.path) === ".github/workflows/grade.yml");
+      const workflowFile = zip.files.find((file: { path: string }) => stripTopDir(file.path) === ".github/workflows/grade.yml");
       const hash = createHash("sha256");
       const contents = await workflowFile?.buffer();
       if (!contents) {
@@ -239,7 +283,7 @@ async function handleRequest(req: Request) {
       }
       hash.update(contentsStr);
       const hashStr = hash.digest("hex");
-      if (hashStr !== config.workflow_sha) {
+      if (hashStr !== config.workflow_sha && !isE2ERun) {
         throw new SecurityError(
           `Workflow file SHA does not match expected value: ${hashStr} !== ${config.workflow_sha}`
         );
@@ -254,30 +298,30 @@ async function handleRequest(req: Request) {
         throw new UserVisibleError("Incorrect instructor setup for assignment: no submission files set");
       }
       const submittedFiles = zip.files.filter(
-        (file: any) =>
+        (file: { path: string; type: string }) =>
           file.type === "File" && // Do not submit directories
           expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
       );
       // Make sure that all files that are NOT glob patterns are present
       const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
       const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
-        submittedFiles.some((submittedFile: any) => stripTopDir(submittedFile.path) === file)
+        submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)
       );
       if (!allNonGlobFilesPresent) {
         throw new UserVisibleError(
-          `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: any) => stripTopDir(submittedFile.path) === file)).join(", ")}`
+          `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
         );
       }
 
       const submittedFilesWithContents = await Promise.all(
-        submittedFiles.map(async (file: any) => {
+        submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
           const contents = await file.buffer();
           return { name: stripTopDir(file.path), contents };
         })
       );
       // Add files to supabase
       const { error: fileError } = await adminSupabase.from("submission_files").insert(
-        submittedFilesWithContents.map((file: any) => ({
+        submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
           submission_id: submission_id,
           name: file.name,
           profile_id: repoData.profile_id,
@@ -288,6 +332,12 @@ async function handleRequest(req: Request) {
       );
       if (fileError) {
         throw new Error(`Failed to insert submission files: ${fileError.message}`);
+      }
+      if (isE2ERun) {
+        return {
+          grader_url: "not-a-real-url",
+          grader_sha: "not-a-real-sha"
+        };
       }
       if (!config.grader_repo) {
         throw new UserVisibleError(

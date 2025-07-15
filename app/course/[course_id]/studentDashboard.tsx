@@ -1,5 +1,6 @@
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { Skeleton } from "@/components/ui/skeleton";
+import StudentLabSection from "@/components/ui/student-lab-section";
 import { createClient } from "@/utils/supabase/server";
 import {
   Box,
@@ -49,6 +50,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
   return (
     <VStack spaceY={8} align="stretch" p={8}>
       <Heading size="xl">Course Dashboard</Heading>
+      <StudentLabSection />
       <Box>
         <Heading size="lg" mb={4}>
           Upcoming Assignments

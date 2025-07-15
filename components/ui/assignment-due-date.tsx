@@ -88,13 +88,13 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
       </Text>
     );
   }
-  //Make sure that our own due date is still in the future
-  const extensionsInHours = lateTokens
-    .filter((e) => e.assignment_id === assignment.id)
-    .map((e) => e.hours)
-    .reduce((a, b) => a + b, 0);
-  const ourDueDate = addHours(new TZDate(assignment.due_date), extensionsInHours);
-  if (isAfter(new TZDate(new Date()), ourDueDate)) {
+  
+  // Use the calculated due date from the hook (which considers lab-based scheduling and extensions)
+  if (!dueDate.dueDate) {
+    return <Skeleton height="20px" width="80px" />;
+  }
+  
+  if (isAfter(new TZDate(new Date()), dueDate.dueDate)) {
     return <Text>(Firm date: You have passed the due date)</Text>;
   }
   return (
