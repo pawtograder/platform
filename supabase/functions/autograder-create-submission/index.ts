@@ -80,7 +80,7 @@ async function handleRequest(req: Request) {
   );
   const { data: repoData, error: repoError } = await adminSupabase
     .from("repositories")
-    .select("*, assignments(class_id, due_date, autograder(*))")
+    .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
     .eq("repository", repository)
     .single();
   if (repoError) {
@@ -95,7 +95,7 @@ async function handleRequest(req: Request) {
     }
     const { data: checkRun, error: checkRunError } = await adminSupabase
       .from("repository_check_runs")
-      .select("*, user_roles(*), classes(time_zone)")
+      .select("*, user_roles(*), classes(time_zone), commit_message")
       .eq("repository_id", repoData.id)
       .eq("sha", sha)
       .maybeSingle(); //TODO: Select the MOST RECENT check run, so that when we call Regrade, we know who triggered it
@@ -103,6 +103,10 @@ async function handleRequest(req: Request) {
       throw new UserVisibleError(`Failed to find check run for ${repoData.id}@${sha}: ${checkRunError?.message}`);
     }
     const timeZone = checkRun.classes.time_zone || "America/New_York";
+
+    // Check if this is a NOT-GRADED submission
+    const isNotGradedSubmission = (checkRun.commit_message && checkRun.commit_message.includes("#NOT-GRADED")) || false;
+
     // Validate that the submission can be created
     if (!checkRun.user_roles || (checkRun.user_roles.role !== "instructor" && checkRun.user_roles.role !== "grader")) {
       // Check if it's too late to submit using the lab-aware due date calculation
@@ -132,22 +136,60 @@ async function handleRequest(req: Request) {
       console.log(`Current date: ${currentDate}`);
 
       if (isAfter(currentDate, finalDueDate)) {
-        //Fail the check run
-        if (!isE2ERun) {
-          await updateCheckRun({
-            owner: repository.split("/")[0],
-            repo: repository.split("/")[1],
-            check_run_id: checkRun.check_run_id,
-            status: "completed",
-            conclusion: "failure",
-            output: {
-              title: "Submission failed",
-              summary: "You cannot submit after the due date.",
-              text: `The due date for this assignment was ${finalDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
-            }
-          });
+        // Check if this is a NOT-GRADED submission and if the assignment allows it
+        if (isNotGradedSubmission && repoData.assignments.allow_not_graded_submissions) {
+          // Allow NOT-GRADED submissions after deadline
+          console.log("NOT-GRADED submission allowed after deadline");
+
+          // Update check run to indicate this is a NOT-GRADED submission
+          if (!isE2ERun) {
+            await updateCheckRun({
+              owner: repository.split("/")[0],
+              repo: repository.split("/")[1],
+              check_run_id: checkRun.check_run_id,
+              status: "in_progress",
+              output: {
+                title: "NOT-GRADED submission",
+                summary: "This submission will not be graded but you can see feedback.",
+                text: `You submitted with #NOT-GRADED in your commit message. This submission will not be graded and cannot become your active submission, but you can still see autograder feedback.`
+              }
+            });
+          }
+        } else if (isNotGradedSubmission && !repoData.assignments.allow_not_graded_submissions) {
+          // Student tried to use NOT-GRADED but assignment doesn't allow it
+          if (!isE2ERun) {
+            await updateCheckRun({
+              owner: repository.split("/")[0],
+              repo: repository.split("/")[1],
+              check_run_id: checkRun.check_run_id,
+              status: "completed",
+              conclusion: "failure",
+              output: {
+                title: "NOT-GRADED not allowed",
+                summary: "This assignment does not allow NOT-GRADED submissions.",
+                text: `You included #NOT-GRADED in your commit message, but this assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.`
+              }
+            });
+          }
+          throw new UserVisibleError("This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.");
+        } else {
+          //Fail the check run
+          if (!isE2ERun) {
+            await updateCheckRun({
+              owner: repository.split("/")[0],
+              repo: repository.split("/")[1],
+              check_run_id: checkRun.check_run_id,
+              status: "completed",
+              conclusion: "failure",
+              output: {
+                title: "Submission failed",
+                summary: "You cannot submit after the due date.",
+                text: `The due date for this assignment was ${finalDueDate.toLocaleString()} (${timeZone}). Your code is still archived on GitHub, and instructors and TAs can still manually submit it if needed.`
+              }
+            });
+          }
+          throw new UserVisibleError("You cannot submit after the due date.");
         }
-        throw new UserVisibleError("You cannot submit after the due date.");
       }
       // Check the max submissions per-time
       if (
@@ -227,7 +269,8 @@ async function handleRequest(req: Request) {
         run_number: Number.parseInt(decoded.run_id),
         run_attempt: Number.parseInt(decoded.run_attempt),
         class_id: repoData.assignments.class_id!,
-        repository_check_run_id: checkRun?.id
+        repository_check_run_id: checkRun?.id,
+        is_not_graded: isNotGradedSubmission
       })
       .select("id")
       .single();

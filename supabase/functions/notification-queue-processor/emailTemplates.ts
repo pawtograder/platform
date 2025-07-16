@@ -1,6 +1,8 @@
 /**
  * Variables:
  * {course_name} - The name of the course
+ * {class_section} - The name of the student's class section (user-specific)
+ * {lab_section} - The name of the student's lab section (user-specific)
  */
 export const emailTemplates = {
   /**

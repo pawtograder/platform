@@ -491,3 +491,97 @@ COMMENT ON FUNCTION "public"."check_assignment_deadlines_passed"() IS 'Updated t
 COMMENT ON FUNCTION "public"."finalize_submission_early"(bigint, uuid) IS 'Updated to support lab-based due date scheduling';
 COMMENT ON VIEW "public"."submissions_with_grades_for_assignment" IS 'Updated to include both effective_due_date (lab-based) and late_due_date (with extensions)';
 COMMENT ON VIEW "public"."submissions_with_grades_for_assignment_and_regression_test" IS 'Updated to include lab-based due dates for both assignment submissions and regression tests'; 
+
+
+-- Add NOT-GRADED feature to assignments and submissions
+-- This allows students to create submissions after the deadline with #NOT-GRADED in commit message
+
+-- Add flag to assignments to enable NOT-GRADED submissions
+ALTER TABLE "public"."assignments" 
+ADD COLUMN "allow_not_graded_submissions" boolean DEFAULT false NOT NULL;
+
+-- Add flag to submissions to mark them as NOT-GRADED
+ALTER TABLE "public"."submissions" 
+ADD COLUMN "is_not_graded" boolean DEFAULT false NOT NULL;
+
+-- Add comment to explain the feature
+COMMENT ON COLUMN "public"."assignments"."allow_not_graded_submissions" IS 'When true, students can create submissions after the deadline by including #NOT-GRADED in their commit message';
+COMMENT ON COLUMN "public"."submissions"."is_not_graded" IS 'When true, this submission was created with #NOT-GRADED in the commit message and cannot become active';
+
+-- Update the submission_set_active function to prevent NOT-GRADED submissions from becoming active
+CREATE OR REPLACE FUNCTION "public"."submission_set_active"("_submission_id" bigint) RETURNS boolean
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    submission_record RECORD;
+BEGIN
+    -- Get the submission details
+    SELECT * INTO submission_record 
+    FROM submissions 
+    WHERE id = _submission_id;
+    
+    -- Check if submission exists
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Prevent NOT-GRADED submissions from becoming active
+    IF submission_record.is_not_graded THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Set all other submissions for this assignment/student to inactive
+    UPDATE submissions 
+    SET is_active = false 
+    WHERE assignment_id = submission_record.assignment_id 
+    AND (profile_id = submission_record.profile_id OR assignment_group_id = submission_record.assignment_group_id)
+    AND id != _submission_id;
+    
+    -- Set this submission as active
+    UPDATE submissions 
+    SET is_active = true 
+    WHERE id = _submission_id;
+    
+    RETURN TRUE;
+END;
+$$; 
+
+
+-- Fix all functions that set is_active to respect NOT-GRADED submissions
+-- This ensures NOT-GRADED submissions can never become active
+
+-- Update the submissions_insert_hook function to prevent NOT-GRADED submissions from becoming active
+CREATE OR REPLACE FUNCTION "public"."submissions_insert_hook"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+declare
+num_submissions int8;
+BEGIN
+   CASE TG_OP
+   WHEN 'INSERT' THEN
+      if NEW.assignment_group_id is not null then
+        SELECT count(*) FROM submissions where assignment_group_id=NEW.assignment_group_id and assignment_id=NEW.assignment_id INTO num_submissions;
+        NEW.ordinal = num_submissions + 1;
+        
+        -- Only set is_active = true if this is NOT a NOT-GRADED submission
+        IF NOT NEW.is_not_graded THEN
+          NEW.is_active = true;
+          UPDATE submissions set is_active=false where assignment_id=NEW.assignment_id and assignment_group_id=NEW.assignment_group_id;
+        END IF;
+      else
+        SELECT count(*) FROM submissions where profile_id=NEW.profile_id and assignment_id=NEW.assignment_id INTO num_submissions;
+        NEW.ordinal = num_submissions + 1;
+        
+        -- Only set is_active = true if this is NOT a NOT-GRADED submission
+        IF NOT NEW.is_not_graded THEN
+          NEW.is_active = true;
+          UPDATE submissions set is_active=false where assignment_id=NEW.assignment_id and profile_id=NEW.profile_id;
+        END IF;
+      end if;
+      RETURN NEW;
+   ELSE
+      RAISE EXCEPTION 'Unexpected TG_OP: "%". Should not occur!', TG_OP;
+   END CASE;
+   
+END
+$$;

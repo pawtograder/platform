@@ -607,6 +607,7 @@ export type Database = {
       }
       assignments: {
         Row: {
+          allow_not_graded_submissions: boolean
           allow_student_formed_groups: boolean | null
           archived_at: string | null
           autograder_points: number | null
@@ -637,6 +638,7 @@ export type Database = {
           total_points: number | null
         }
         Insert: {
+          allow_not_graded_submissions?: boolean
           allow_student_formed_groups?: boolean | null
           archived_at?: string | null
           autograder_points?: number | null
@@ -667,6 +669,7 @@ export type Database = {
           total_points?: number | null
         }
         Update: {
+          allow_not_graded_submissions?: boolean
           allow_student_formed_groups?: boolean | null
           archived_at?: string | null
           autograder_points?: number | null
@@ -4634,6 +4637,7 @@ export type Database = {
           grading_review_id: number | null
           id: number
           is_active: boolean
+          is_not_graded: boolean
           ordinal: number
           profile_id: string | null
           released: string | null
@@ -4652,6 +4656,7 @@ export type Database = {
           grading_review_id?: number | null
           id?: number
           is_active?: boolean
+          is_not_graded?: boolean
           ordinal?: number
           profile_id?: string | null
           released?: string | null
@@ -4670,6 +4675,7 @@ export type Database = {
           grading_review_id?: number | null
           id?: number
           is_active?: boolean
+          is_not_graded?: boolean
           ordinal?: number
           profile_id?: string | null
           released?: string | null

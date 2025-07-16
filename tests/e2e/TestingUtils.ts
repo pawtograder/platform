@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-function getTestRunPrefix() {
+export function getTestRunPrefix() {
   const test_run_batch = format(new Date(), "yyyy-MM-dd.HH.mm.ss") + "#" + Math.random().toString(36).substring(2, 6);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined";
   return `e2e-${test_run_batch}-${workerIndex}`;
@@ -15,10 +15,46 @@ function getTestRunPrefix() {
 export type TestingUser = {
   email: string;
   password: string;
+  user_id: string;
   private_profile_id: string;
   public_profile_id: string;
 };
 
+export async function createClass() {
+  const className = `E2E Test Class ${getTestRunPrefix()}`;
+  const { data: classData, error: classError } = await supabase.from("classes").insert({
+    name: className,
+    start_date: new Date().toISOString(),
+    end_date: addDays(new Date(), 180).toISOString(),
+    late_tokens_per_student: 10,
+    time_zone: "America/New_York"
+  }).select("*").single();
+  if (classError) {
+    throw new Error(`Failed to create class: ${classError.message}`);
+  }
+  if (!classData) {
+    throw new Error("Failed to create class");
+  }
+  return classData;
+}
+
+export async function createClassSection({
+  class_id
+}: {
+  class_id: number;
+}) {
+  const { data: sectionData, error: sectionError } = await supabase.from("class_sections").insert({
+    class_id: class_id,
+    name: `E2E Test Section ${getTestRunPrefix()}`
+  }).select("*").single();
+  if (sectionError) {
+    throw new Error(`Failed to create class section: ${sectionError.message}`);
+  }
+  if (!sectionData) {
+    throw new Error("Failed to create class section");
+  }
+  return sectionData;
+}
 export async function updateClassSettings({
   class_id,
   start_date,
@@ -40,11 +76,24 @@ export async function loginAsUser(page: Page, testingUser: TestingUser) {
   await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
   await page.getByRole("button", { name: "Sign in with email" }).click();
 }
-
 export async function createUserInDemoClass({
   role
 }: {
   role: "student" | "instructor" | "grader";
+}) {
+  const class_id = 1;
+  return createUserInClass({ role, class_id });
+}
+export async function createUserInClass({
+  role,
+  class_id,
+  section_id,
+  lab_section_id
+}: {
+  role: "student" | "instructor" | "grader";
+  class_id: number;
+  section_id?: number;
+  lab_section_id?: number;
 }): Promise<TestingUser> {
   const password = "test";
   const extra_randomness = Math.random().toString(36).substring(2, 15);
@@ -58,16 +107,57 @@ export async function createUserInDemoClass({
   if (userError) {
     throw new Error(`Failed to create user: ${userError.message}`);
   }
+  if (class_id !== 1) {
+    const { data: publicProfileData, error: publicProfileError } = await supabase.from("profiles").insert({
+      name: `E2E Test User ${getTestRunPrefix()} Public Profile`,
+      avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+      class_id: class_id,
+      is_private_profile: false
+    }).select("id").single();
+    if (publicProfileError) {
+      throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
+    }
+    const { data: privateProfileData, error: privateProfileError } = await supabase.from("profiles").insert({
+      name: `E2E Test User ${getTestRunPrefix()} Private Profile`,
+      avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+      class_id: class_id,
+      is_private_profile: true
+    }).select("id").single();
+    if (privateProfileError) {
+      throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
+    }
+    if (!publicProfileData || !privateProfileData) {
+      throw new Error("Failed to create public or private profile");
+    }
+    await supabase.from("user_roles").insert({
+      user_id: userData.user.id,
+      class_id: class_id,
+      private_profile_id: privateProfileData.id,
+      public_profile_id: publicProfileData.id,
+      role: role,
+      class_section_id: section_id,
+      lab_section_id: lab_section_id
+    });
+  } else if (section_id || lab_section_id) {
+    await supabase.from("user_roles").update({
+      class_section_id: section_id,
+      lab_section_id: lab_section_id
+    }).eq("user_id", userData.user.id)
+      .eq("class_id", class_id);
+  }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
     .select("private_profile_id, public_profile_id")
     .eq("user_id", userData.user.id)
+    .eq("class_id", class_id)
     .single();
   if (!profileData || profileError) {
     throw new Error(`Failed to get profile: ${profileError?.message}`);
   }
+  console.log(`Created ${role} ${email}, private_profile_id: ${profileData.private_profile_id}, public_profile_id: ${profileData.public_profile_id}`)
   return {
     email: email,
+    user_id: userData.user.id,
     private_profile_id: profileData.private_profile_id,
     public_profile_id: profileData.public_profile_id,
     password: password
@@ -239,12 +329,14 @@ public class Entrypoint {
 }
 
 export async function createLabSectionWithStudents({
+  class_id,
   lab_leader,
   day_of_week,
   students,
   start_time,
   end_time
 }: {
+  class_id?: number;
   lab_leader: TestingUser;
   day_of_week: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
   students: TestingUser[];
@@ -258,11 +350,11 @@ export async function createLabSectionWithStudents({
       lab_leader_id: lab_leader.private_profile_id,
       name: lab_section_name,
       day_of_week: day_of_week,
-      class_id: 1,
+      class_id: class_id || 1,
       start_time: start_time ?? "10:00",
       end_time: end_time ?? "11:00"
     })
-    .select("id")
+    .select("*")
     .single();
   if (labSectionError) {
     throw new Error(`Failed to create lab section: ${labSectionError.message}`);
@@ -276,18 +368,18 @@ export async function createLabSectionWithStudents({
       })
       .eq("private_profile_id", student.private_profile_id);
   }
-  return {
-    lab_section_id: lab_section_id
-  };
+  return labSectionData;
 }
 
 let assignmentIdx = 0;
 export async function insertAssignment({
   due_date,
-  lab_due_date_offset
+  lab_due_date_offset,
+  allow_not_graded_submissions
 }: {
   due_date: string;
   lab_due_date_offset?: number;
+  allow_not_graded_submissions?: boolean;
 }): Promise<Assignment> {
   const test_run_prefix = getTestRunPrefix() + "#" + assignmentIdx;
   const title = `Test ${test_run_prefix}`;
@@ -308,6 +400,7 @@ export async function insertAssignment({
       slug: test_run_prefix,
       group_config: "individual",
       self_review_setting_id: 1,
+      allow_not_graded_submissions: allow_not_graded_submissions || false
     })
     .select("id")
     .single();
@@ -416,10 +509,14 @@ export async function insertAssignment({
 export async function insertSubmissionViaAPI({
   student_profile_id,
   assignment_group_id,
+  sha,
+  commit_message,
   assignment_id = 1
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
+  sha?: string;
+  commit_message?: string;
   assignment_id?: number;
 }): Promise<{
   submission_id: number;
@@ -452,8 +549,8 @@ export async function insertSubmissionViaAPI({
       repository_id: repository_id,
       check_run_id: 1,
       status: "{}",
-      sha: "HEAD",
-      commit_message: "none"
+      sha: sha || "HEAD",
+      commit_message: commit_message || "none"
     })
     .select("id")
     .single();
