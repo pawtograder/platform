@@ -26,7 +26,6 @@ export default function FinalizeSubmissionEarly({
     try {
       console.log("Finalizing submission early", assignment.id, private_profile_id);
       setLoading(true);
-      // @ts-expect-error - Function not yet in types
       const { data, error } = await supabase.rpc("finalize_submission_early", {
         this_assignment_id: assignment.id,
         this_profile_id: private_profile_id

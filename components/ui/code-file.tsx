@@ -692,7 +692,7 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
     });
 
     return criteriaOptions;
-  }, [rubric, existingComments, file.id]);
+  }, [rubric, existingComments]);
 
   useEffect(() => {
     if (!visible) {
