@@ -9,6 +9,7 @@ import type {
 } from "@/utils/supabase/DatabaseTypes";
 import { Flex, HStack, Stack, Text, AvatarGroup, Box, Icon, IconButton, Card, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   BsCheck,
   BsClipboardCheckFill,
@@ -70,41 +71,61 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
 
   // Disable assignment actions for resolved/closed requests
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
+  const canShowActions = request.status === "open" || request.status === "in_progress";
 
   if (request.assignee === private_profile_id) {
     return (
-      <Text fontSize="sm">
-        Assigned to you{" "}
-        <IconButton
-          aria-label="Drop Assignment"
-          size="sm"
-          visibility={request.status === "open" || request.status === "in_progress" ? "visible" : "hidden"}
-          opacity={isRequestInactive ? 0.5 : 1}
-          onClick={() => updateRequest({ id: request.id, values: { assignee: null, status: "open" } })}
-        >
-          <Icon as={BsClipboardCheckFill} />
-        </IconButton>
-      </Text>
+      <HStack gap={2}>
+        <Badge colorPalette="green" variant="solid" fontSize="xs">
+          Assigned to you
+        </Badge>
+        {canShowActions && (
+          <Tooltip content="Drop assignment and return to queue" showArrow disabled={isRequestInactive}>
+            <IconButton
+              aria-label="Drop Assignment"
+              size="sm"
+              variant="ghost"
+              colorPalette="red"
+              opacity={isRequestInactive ? 0.5 : 1}
+              disabled={isRequestInactive}
+              onClick={() => updateRequest({ id: request.id, values: { assignee: null, status: "open" } })}
+            >
+              <Icon as={BsClipboardCheckFill} />
+            </IconButton>
+          </Tooltip>
+        )}
+      </HStack>
     );
   } else if (request.assignee) {
-    return <Text fontSize="sm">Assigned to {request.assignee}</Text>;
+    return (
+      <Badge colorPalette="blue" variant="subtle" fontSize="xs">
+        Assigned to {request.assignee}
+      </Badge>
+    );
   } else {
     return (
-      <Text fontSize="sm">
-        Not assigned{" "}
-        <IconButton
-          aria-label="Assume Assignment"
-          variant="outline"
-          size="sm"
-          visibility={request.status === "open" || request.status === "in_progress" ? "visible" : "hidden"}
-          opacity={isRequestInactive ? 0.5 : 1}
-          onClick={() =>
-            updateRequest({ id: request.id, values: { assignee: private_profile_id, status: "in_progress" } })
-          }
-        >
-          <Icon as={BsClipboardCheck} />
-        </IconButton>
-      </Text>
+      <HStack gap={2}>
+        <Badge colorPalette="gray" variant="outline" fontSize="xs">
+          Not assigned
+        </Badge>
+        {canShowActions && (
+          <Tooltip content="Take assignment and mark as in progress" showArrow disabled={isRequestInactive}>
+            <IconButton
+              aria-label="Assume Assignment"
+              variant="ghost"
+              size="sm"
+              colorPalette="green"
+              opacity={isRequestInactive ? 0.5 : 1}
+              disabled={isRequestInactive}
+              onClick={() =>
+                updateRequest({ id: request.id, values: { assignee: private_profile_id, status: "in_progress" } })
+              }
+            >
+              <Icon as={BsClipboardCheck} />
+            </IconButton>
+          </Tooltip>
+        )}
+      </HStack>
     );
   }
 };
@@ -407,8 +428,19 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   // Get student profiles for display
   const studentIds = helpRequestStudents?.data?.map((student) => student.profile_id) || [];
 
-  // Check if current user can access controls (instructor/grader OR student associated with this request)
-  const canAccessControls = isInstructorOrGrader || studentIds.includes(private_profile_id!);
+  // Check if current user can access video controls (join/start video calls)
+  // - Instructors/graders can always access video controls
+  // - For public requests: any student in the class can access video controls
+  // - For private requests: only students specifically associated with the request can access video controls
+  const canAccessVideoControls =
+    isInstructorOrGrader ||
+    (!request.is_private && role.role === "student") ||
+    (request.is_private && studentIds.includes(private_profile_id!));
+
+  // Check if current user can access request management controls (resolve/close)
+  // - Instructors/graders can always access request controls
+  // - Students can only access request controls if they are specifically associated with the request
+  const canAccessRequestControls = isInstructorOrGrader || studentIds.includes(private_profile_id!);
   const students = profiles.filter((user: UserProfile) => studentIds.includes(user.id));
 
   // Get the actual user ID from auth system (not profile ID)
@@ -501,17 +533,19 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           <Stack spaceY="2">
             <Text fontWeight="medium">{getRequestTitle()}</Text>
             {/* Students Management */}
-            <HelpRequestStudents request={request} students={students} currentUserCanEdit={canAccessControls} />
+            <HelpRequestStudents request={request} students={students} currentUserCanEdit={canAccessRequestControls} />
           </Stack>
 
           {/* Control Buttons */}
           <HStack gap={2}>
-            {/* All Controls - Available to Instructors/Graders and Students Associated with Request */}
-            {canAccessControls && (
-              <>
-                {/* Video Call Controls - Available to all users with access */}
-                <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
+            {/* Video Call Controls - Available to all users with video access */}
+            {canAccessVideoControls && (
+              <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
+            )}
 
+            {/* Request Management Controls - Available to Instructors/Graders and Students Associated with Request */}
+            {canAccessRequestControls && (
+              <>
                 {/* Instructor/Grader Only Controls */}
                 {isInstructorOrGrader && (
                   <>
@@ -605,6 +639,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           username={currentUserProfile?.name || user?.email || "Unknown User"} // Pass display name, fallback to email, then unknown
           messages={helpRequestMessages?.data}
           helpRequest={request}
+          helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling
         />
       </Flex>
 

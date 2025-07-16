@@ -1,6 +1,6 @@
 import type { ChatMessage, BroadcastMessage } from "@/hooks/use-realtime-chat";
-import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Text, Icon, Stack, HStack } from "@chakra-ui/react";
+import type { HelpRequestMessageReadReceipt, UserRole } from "@/utils/supabase/DatabaseTypes";
+import { Box, Flex, Text, Icon, Stack, HStack, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Reply, Check, CheckCheck } from "lucide-react";
 import { useUserProfile } from "@/hooks/useUserProfiles";
@@ -24,7 +24,9 @@ interface ChatMessageItemProps {
   readReceipts: HelpRequestMessageReadReceipt[];
   onReply?: (messageId: number) => void;
   allMessages: UnifiedMessage[];
-  currentUserId?: string; // Add currentUserId prop
+  currentUserId?: string;
+  helpRequestStudentIds?: string[];
+  userRoles?: UserRole[];
 }
 
 /**
@@ -87,6 +89,52 @@ const getMessageId = (message: UnifiedMessage): number | null => {
     return message.id; // Database message
   }
   return null; // Broadcast message (no database ID yet)
+};
+
+/**
+ * Component to display role-based badges for message authors
+ */
+const UserRoleBadge = ({
+  authorId,
+  helpRequestStudentIds,
+  userRoles
+}: {
+  authorId: string;
+  helpRequestStudentIds?: string[];
+  userRoles?: UserRole[];
+}) => {
+  // Check if author is a student associated with this help request (OP)
+  const isOP = helpRequestStudentIds?.includes(authorId);
+
+  // Find the user's role
+  const userRole = userRoles?.find((role) => role.private_profile_id === authorId);
+  const roleType = userRole?.role;
+
+  if (isOP) {
+    return (
+      <Badge colorPalette="blue" variant="outline" size="sm">
+        OP
+      </Badge>
+    );
+  }
+
+  if (roleType === "instructor") {
+    return (
+      <Badge colorPalette="purple" variant="outline" size="sm">
+        Instructor
+      </Badge>
+    );
+  }
+
+  if (roleType === "grader") {
+    return (
+      <Badge colorPalette="green" variant="outline" size="sm">
+        Grader
+      </Badge>
+    );
+  }
+
+  return null;
 };
 
 /**
@@ -247,10 +295,13 @@ export const ChatMessageItem = ({
   readReceipts,
   onReply,
   allMessages,
-  currentUserId
+  currentUserId,
+  helpRequestStudentIds,
+  userRoles
 }: ChatMessageItemProps) => {
   const messageAuthor = useUserProfile(getMessageAuthor(message));
   const messageId = getMessageId(message);
+  const authorId = getMessageAuthor(message);
 
   // Get display name - use author_name for broadcast messages, fallback to profile lookup
   const getDisplayName = () => {
@@ -284,7 +335,10 @@ export const ChatMessageItem = ({
             justify={isOwnMessage ? "flex-end" : "flex-start"}
             direction={isOwnMessage ? "row-reverse" : "row"}
           >
-            <Text fontWeight="medium">{getDisplayName()}</Text>
+            <HStack gap={2}>
+              <Text fontWeight="medium">{getDisplayName()}</Text>
+              <UserRoleBadge authorId={authorId} helpRequestStudentIds={helpRequestStudentIds} userRoles={userRoles} />
+            </HStack>
             <Text color="gray.500" _dark={{ color: "gray.400" }} fontSize="xs">
               {new Date(getMessageTimestamp(message)).toLocaleTimeString("en-US", {
                 hour: "2-digit",

@@ -17,6 +17,7 @@ interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
   messages?: ChatMessage[];
   helpRequest: HelpRequest;
+  helpRequestStudentIds?: string[];
 }
 
 /**
@@ -115,13 +116,15 @@ const ReplyPreview = ({
  * @param username - The username of the user
  * @param onMessage - The callback function to handle the messages. Useful if you want to store the messages in a database.
  * @param messages - The messages to display in the chat. Useful if you want to display messages from a database.
+ * @param helpRequestStudentIds - Array of student profile IDs associated with the help request (for OP labeling)
  * @returns The chat component
  */
 export const RealtimeChat = ({
   username: propUsername, // Keep prop for fallback
   onMessage,
   messages: databaseMessages = [],
-  helpRequest
+  helpRequest,
+  helpRequestStudentIds = []
 }: RealtimeChatProps) => {
   const { containerRef, scrollToBottom } = useChatScroll();
   const moderationStatus = useModerationStatus(helpRequest.class_id);
@@ -129,7 +132,7 @@ export const RealtimeChat = ({
   // Get authenticated user and their profile for display name
   const { user } = useAuthState();
   const userProfile = useUserProfile(user?.id || "");
-  const { private_profile_id } = useClassProfiles();
+  const { private_profile_id, allVisibleRoles } = useClassProfiles();
 
   // Use profile name, fallback to prop username, then fallback to user email
   const displayName = userProfile?.name || propUsername || user?.email || "Unknown User";
@@ -262,8 +265,8 @@ export const RealtimeChat = ({
         });
       },
       {
-        threshold: 0.5, // Message must be 50% visible
-        rootMargin: "0px 0px -20px 0px" // Add some bottom margin
+        threshold: 0.5,
+        rootMargin: "0px 0px -20px 0px"
       }
     );
 
@@ -405,6 +408,8 @@ export const RealtimeChat = ({
                     onReply={handleReply}
                     allMessages={allMessages}
                     currentUserId={private_profile_id} // Pass profile ID for read receipt matching (database uses profile IDs)
+                    helpRequestStudentIds={helpRequestStudentIds} // Pass student IDs for OP labeling
+                    userRoles={allVisibleRoles} // Pass all user roles for role labeling
                   />
                 </Box>
               );

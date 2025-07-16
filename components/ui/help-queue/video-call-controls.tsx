@@ -186,7 +186,7 @@ export default function VideoCallControls({
         <HStack gap={2}>
           <Button size={size} colorPalette="blue" onClick={joinVideoCall} disabled={isRequestInactive}>
             <Icon as={BsPersonVideo} />
-            Join Call
+            Join Video Call
           </Button>
 
           {canStartCall && (

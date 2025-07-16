@@ -1,9 +1,10 @@
-import { DataList, Flex } from "@chakra-ui/react";
+import { DataList, Flex, HStack, Badge, Icon, Text } from "@chakra-ui/react";
 import { Box } from "@chakra-ui/react";
 import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
 import { useList } from "@refinedev/core";
+import { BsPersonCheck, BsPersonDash } from "react-icons/bs";
 
 export default function CurrentRequest({ queue, request }: { queue: HelpQueue; request: HelpRequest }) {
   const assignee = useUserProfile(request.assignee);
@@ -28,8 +29,30 @@ export default function CurrentRequest({ queue, request }: { queue: HelpQueue; r
           <DataList.ItemValue>{position > 0 ? position : "-"}</DataList.ItemValue>
         </DataList.Item>
         <DataList.Item>
-          <DataList.ItemLabel>Working on this request:</DataList.ItemLabel>
-          <DataList.ItemValue>{assignee ? assignee.name : "Nobody is working on this request yet"}</DataList.ItemValue>
+          <DataList.ItemLabel>Assignment Status:</DataList.ItemLabel>
+          <DataList.ItemValue>
+            {assignee ? (
+              <HStack gap={2}>
+                <Badge colorPalette="green" variant="solid" fontSize="sm">
+                  <Icon as={BsPersonCheck} mr={1} />
+                  Assigned
+                </Badge>
+                <Text fontSize="sm" fontWeight="medium">
+                  {assignee.name} is working on this
+                </Text>
+              </HStack>
+            ) : (
+              <HStack gap={2}>
+                <Badge colorPalette="gray" variant="outline" fontSize="sm">
+                  <Icon as={BsPersonDash} mr={1} />
+                  Not Assigned
+                </Badge>
+                <Text fontSize="sm" color="fg.muted">
+                  Waiting for a TA/instructor to pick this up
+                </Text>
+              </HStack>
+            )}
+          </DataList.ItemValue>
         </DataList.Item>
       </DataList.Root>
 

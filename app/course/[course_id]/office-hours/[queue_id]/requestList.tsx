@@ -2,16 +2,52 @@ import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Stack, Text, Card, Badge, Button, Icon } from "@chakra-ui/react";
 import { useState } from "react";
-import { BsChevronDown, BsChevronUp } from "react-icons/bs";
+import { BsChevronDown, BsChevronUp, BsPersonCheck, BsPersonDash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
+import { useUserProfile } from "@/hooks/useUserProfiles";
 
 interface HelpRequestHistoryProps {
   requests: HelpRequest[];
   showPrivacyIndicator?: boolean;
 }
 
+/**
+ * Component to display assignment status for a help request
+ */
+function RequestAssignmentStatus({ request }: { request: HelpRequest }) {
+  const assignee = useUserProfile(request.assignee);
+
+  if (request.assignee && assignee) {
+    return (
+      <Badge colorPalette="green" variant="solid" size="sm">
+        <Icon as={BsPersonCheck} mr={1} />
+        Assigned to {assignee.name}
+      </Badge>
+    );
+  } else if (request.assignee) {
+    return (
+      <Badge colorPalette="green" variant="solid" size="sm">
+        <Icon as={BsPersonCheck} mr={1} />
+        Assigned
+      </Badge>
+    );
+  } else {
+    return (
+      <Badge colorPalette="gray" variant="outline" size="sm">
+        <Icon as={BsPersonDash} mr={1} />
+        Not Assigned
+      </Badge>
+    );
+  }
+}
+
 export default function HelpRequestHistory({ requests, showPrivacyIndicator = false }: HelpRequestHistoryProps) {
   const [expandedRequest, setExpandedRequest] = useState<number | null>(null);
+
+  const toggleExpanded = (e: React.MouseEvent, requestId: number) => {
+    e.stopPropagation();
+    setExpandedRequest(expandedRequest === requestId ? null : requestId);
+  };
 
   if (requests.length === 0) {
     return (
@@ -42,6 +78,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
               variant="outline"
               cursor="pointer"
               _hover={{ borderColor: "border.emphasized" }}
+              onClick={(e) => toggleExpanded(e, request.id)}
             >
               <Card.Body>
                 <HStack justify="space-between" align="start">
@@ -49,7 +86,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
                     <Text fontWeight="medium" fontSize="sm" lineHeight="short">
                       {request.request.length > 100 ? `${request.request.substring(0, 100)}...` : request.request}
                     </Text>
-                    <HStack mt={2} gap={2}>
+                    <HStack mt={2} gap={2} wrap="wrap">
                       <Badge
                         colorPalette={
                           request.status === "resolved"
@@ -64,6 +101,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
                       >
                         {request.status}
                       </Badge>
+                      <RequestAssignmentStatus request={request} />
                       {request.location_type && (
                         <Badge colorPalette="blue" size="sm">
                           {request.location_type}
@@ -80,14 +118,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
                     <Text fontSize="xs">
                       {formatDistanceToNow(new Date(request.resolved_at || request.created_at), { addSuffix: true })}
                     </Text>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpandedRequest(expandedRequest === request.id ? null : request.id);
-                      }}
-                    >
+                    <Button size="xs" variant="ghost" onClick={(e) => toggleExpanded(e, request.id)}>
                       {expandedRequest === request.id ? "Hide" : "View"} Chat
                       <Icon as={expandedRequest === request.id ? BsChevronUp : BsChevronDown} ml={1} />
                     </Button>
