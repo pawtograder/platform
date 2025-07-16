@@ -49,6 +49,13 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
     setExpandedRequest(expandedRequest === requestId ? null : requestId);
   };
 
+  const expandOnly = (e: React.MouseEvent, requestId: number) => {
+    e.stopPropagation();
+    if (expandedRequest !== requestId) {
+      setExpandedRequest(requestId);
+    }
+  };
+
   if (requests.length === 0) {
     return (
       <Card.Root>
@@ -78,7 +85,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
               variant="outline"
               cursor="pointer"
               _hover={{ borderColor: "border.emphasized" }}
-              onClick={(e) => toggleExpanded(e, request.id)}
+              onClick={(e) => expandOnly(e, request.id)}
             >
               <Card.Body>
                 <HStack justify="space-between" align="start">
