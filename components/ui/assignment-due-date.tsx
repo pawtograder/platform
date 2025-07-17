@@ -88,12 +88,12 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
       </Text>
     );
   }
-  
+
   // Use the calculated due date from the hook (which considers lab-based scheduling and extensions)
   if (!dueDate.dueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  
+
   if (isAfter(new TZDate(new Date()), dueDate.dueDate)) {
     return <Text>(Firm date: You have passed the due date)</Text>;
   }

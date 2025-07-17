@@ -52,18 +52,18 @@ function AdjustDueDateDialog({
   const courseController = useCourseController();
   const studentOrGroup = group ? "group" : "student";
   const dueDateFor = group ? `Group: ${group.name}` : `Student: ${student.name}`;
-  
+
   // Calculate lab-based effective due date
   const originalDueDate = new TZDate(assignment.due_date!);
-  const labBasedDueDate = courseController.isLoaded 
+  const labBasedDueDate = courseController.isLoaded
     ? new TZDate(courseController.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: student.id }))
     : originalDueDate;
-  
+
   // Calculate final due date with extensions
   const hoursExtended = extensions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
   const minutesExtended = extensions?.reduce((acc, exception) => acc + exception.minutes, 0) || 0;
   const finalDueDate = addMinutes(addHours(labBasedDueDate, hoursExtended), minutesExtended);
-  
+
   const { mutateAsync: deleteException } = useDelete();
   const {
     handleSubmit,
@@ -74,7 +74,7 @@ function AdjustDueDateDialog({
     refineCore
   } = useForm({ refineCoreProps: { resource: "assignment_due_date_exceptions", action: "create" } });
   const { private_profile_id } = useClassProfiles();
-  
+
   const onSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -99,17 +99,17 @@ function AdjustDueDateDialog({
       student.class_id
     ]
   );
-  
+
   const toHoursDays = (hours: number) => {
     const days = Math.floor(hours / 24);
     const remainingHours = hours % 24;
     return `${days} days ${remainingHours} hours`;
   };
-  
+
   const formattedDuration = toHoursDays(hoursExtended);
   const hasLabScheduling = assignment.minutes_due_after_lab !== null;
   const newDueDate = addMinutes(addHours(finalDueDate, watch("hours", 0) || 0), watch("minutes", 0) || 0);
-  
+
   return (
     <Dialog.Root size="xl">
       <Dialog.Trigger asChild>
@@ -144,12 +144,12 @@ function AdjustDueDateDialog({
               </>
             ) : (
               <Text mb={4}>
-                The current due date for this {studentOrGroup} is {new TZDate(finalDueDate).toLocaleString()} 
+                The current due date for this {studentOrGroup} is {new TZDate(finalDueDate).toLocaleString()}
                 {hoursExtended > 0 && ` (an extension of ${formattedDuration})`}.
               </Text>
             )}
-            You can manually adjust the due date for this {studentOrGroup} below, in increments of hours and minutes. 
-            Extensions are applied on top of the {hasLabScheduling ? 'lab-based' : 'original'} due date.
+            You can manually adjust the due date for this {studentOrGroup} below, in increments of hours and minutes.
+            Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
           </Dialog.Description>
           <Dialog.Body>
             <Heading size="md">Add an Exception</Heading>
@@ -169,11 +169,7 @@ function AdjustDueDateDialog({
                     invalid={errors.minutes ? true : false}
                     helperText="Additional minutes to extend the due date."
                   >
-                    <Input
-                      type="number"
-                      {...register("minutes", { min: 0, max: 59 })}
-                      defaultValue={0}
-                    />
+                    <Input type="number" {...register("minutes", { min: 0, max: 59 })} defaultValue={0} />
                   </Field>
                   <Field
                     label="Tokens to Consume"
@@ -292,7 +288,7 @@ export default function DueDateExceptions() {
     filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }],
     sorters: [{ field: "created_at", order: "desc" }]
   });
-  
+
   if (!assignment || !groups || !dueDateExceptions) {
     return <Skeleton height="400px" width="100%" />;
   }
@@ -304,25 +300,27 @@ export default function DueDateExceptions() {
     <Box>
       <Heading size="md">Due Date Exceptions</Heading>
       <Box mb={4} p={4} bg="bg.subtle" borderRadius="md">
-        <Heading size="sm" mb={2}>Assignment Due Date Information</Heading>
+        <Heading size="sm" mb={2}>
+          Assignment Due Date Information
+        </Heading>
         <Text mb={2}>
           <strong>Original Assignment Due Date:</strong> {originalDueDate.toLocaleString()}
         </Text>
         {hasLabScheduling && (
           <Text mb={2} color="blue.600">
-            <strong>Lab-Based Scheduling:</strong> This assignment uses lab-based due dates. 
-                         Each student&apos;s effective due date is calculated as {assignment.data.minutes_due_after_lab} minutes 
-            after their most recent lab meeting before the original due date.
+            <strong>Lab-Based Scheduling:</strong> This assignment uses lab-based due dates. Each student&apos;s
+            effective due date is calculated as {assignment.data.minutes_due_after_lab} minutes after their most recent
+            lab meeting before the original due date.
           </Text>
         )}
         <Text fontSize="sm" color="fg.muted">
           This assignment allows students to use up to {assignment?.data.max_late_tokens} late tokens to extend the due
           date. Each late token extends the due date by 24 hours. Students in the course are given a total of{" "}
           {course.classes.late_tokens_per_student} late tokens. You can view and edit the due date exceptions for each
-          student below. Extensions are applied on top of the {hasLabScheduling ? 'lab-based' : 'original'} due date.
+          student below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
         </Text>
       </Box>
-      
+
       <Table.Root>
         <Table.Header>
           <Table.Row>
@@ -342,23 +340,25 @@ export default function DueDateExceptions() {
                 exception.student_id === student.id ||
                 (group && exception.assignment_group_id === group.assignment_groups.id)
             );
-            
+
             // Calculate lab-based effective due date
-            const labBasedDueDate = courseController.isLoaded 
-              ? new TZDate(courseController.calculateEffectiveDueDate(assignment.data, { studentPrivateProfileId: student.id }))
+            const labBasedDueDate = courseController.isLoaded
+              ? new TZDate(
+                  courseController.calculateEffectiveDueDate(assignment.data, { studentPrivateProfileId: student.id })
+                )
               : originalDueDate;
-            
+
             // Calculate final due date with extensions
             const hoursExtended = exceptions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
             const minutesExtended = exceptions?.reduce((acc, exception) => acc + exception.minutes, 0) || 0;
             const finalDueDate = addMinutes(addHours(labBasedDueDate, hoursExtended), minutesExtended);
-            
+
             const grantors = exceptions?.map((exception) => exception.creator_id);
             const uniqueGrantors = [...new Set(grantors)];
-            
+
             const hasExtensions = hoursExtended > 0 || minutesExtended > 0;
             const isDifferentFromOriginal = hasLabScheduling && labBasedDueDate.getTime() !== originalDueDate.getTime();
-            
+
             return (
               <Table.Row key={student.id}>
                 <Table.Cell>{student.name}</Table.Cell>

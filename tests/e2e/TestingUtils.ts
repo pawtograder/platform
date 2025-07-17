@@ -22,13 +22,17 @@ export type TestingUser = {
 
 export async function createClass() {
   const className = `E2E Test Class ${getTestRunPrefix()}`;
-  const { data: classData, error: classError } = await supabase.from("classes").insert({
-    name: className,
-    start_date: new Date().toISOString(),
-    end_date: addDays(new Date(), 180).toISOString(),
-    late_tokens_per_student: 10,
-    time_zone: "America/New_York"
-  }).select("*").single();
+  const { data: classData, error: classError } = await supabase
+    .from("classes")
+    .insert({
+      name: className,
+      start_date: new Date().toISOString(),
+      end_date: addDays(new Date(), 180).toISOString(),
+      late_tokens_per_student: 10,
+      time_zone: "America/New_York"
+    })
+    .select("*")
+    .single();
   if (classError) {
     throw new Error(`Failed to create class: ${classError.message}`);
   }
@@ -38,15 +42,15 @@ export async function createClass() {
   return classData;
 }
 
-export async function createClassSection({
-  class_id
-}: {
-  class_id: number;
-}) {
-  const { data: sectionData, error: sectionError } = await supabase.from("class_sections").insert({
-    class_id: class_id,
-    name: `E2E Test Section ${getTestRunPrefix()}`
-  }).select("*").single();
+export async function createClassSection({ class_id }: { class_id: number }) {
+  const { data: sectionData, error: sectionError } = await supabase
+    .from("class_sections")
+    .insert({
+      class_id: class_id,
+      name: `E2E Test Section ${getTestRunPrefix()}`
+    })
+    .select("*")
+    .single();
   if (sectionError) {
     throw new Error(`Failed to create class section: ${sectionError.message}`);
   }
@@ -66,7 +70,10 @@ export async function updateClassSettings({
   end_date: string;
   late_tokens_per_student?: number;
 }) {
-  await supabase.from("classes").update({ start_date: start_date, end_date: end_date, late_tokens_per_student: late_tokens_per_student }).eq("id", class_id);
+  await supabase
+    .from("classes")
+    .update({ start_date: start_date, end_date: end_date, late_tokens_per_student: late_tokens_per_student })
+    .eq("id", class_id);
 }
 export async function loginAsUser(page: Page, testingUser: TestingUser) {
   await page.goto("/");
@@ -76,11 +83,7 @@ export async function loginAsUser(page: Page, testingUser: TestingUser) {
   await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
   await page.getByRole("button", { name: "Sign in with email" }).click();
 }
-export async function createUserInDemoClass({
-  role
-}: {
-  role: "student" | "instructor" | "grader";
-}) {
+export async function createUserInDemoClass({ role }: { role: "student" | "instructor" | "grader" }) {
   const class_id = 1;
   return createUserInClass({ role, class_id });
 }
@@ -108,21 +111,29 @@ export async function createUserInClass({
     throw new Error(`Failed to create user: ${userError.message}`);
   }
   if (class_id !== 1) {
-    const { data: publicProfileData, error: publicProfileError } = await supabase.from("profiles").insert({
-      name: `E2E Test User ${getTestRunPrefix()} Public Profile`,
-      avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
-      class_id: class_id,
-      is_private_profile: false
-    }).select("id").single();
+    const { data: publicProfileData, error: publicProfileError } = await supabase
+      .from("profiles")
+      .insert({
+        name: `E2E Test User ${getTestRunPrefix()} Public Profile`,
+        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+        class_id: class_id,
+        is_private_profile: false
+      })
+      .select("id")
+      .single();
     if (publicProfileError) {
       throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
     }
-    const { data: privateProfileData, error: privateProfileError } = await supabase.from("profiles").insert({
-      name: `E2E Test User ${getTestRunPrefix()} Private Profile`,
-      avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
-      class_id: class_id,
-      is_private_profile: true
-    }).select("id").single();
+    const { data: privateProfileData, error: privateProfileError } = await supabase
+      .from("profiles")
+      .insert({
+        name: `E2E Test User ${getTestRunPrefix()} Private Profile`,
+        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+        class_id: class_id,
+        is_private_profile: true
+      })
+      .select("id")
+      .single();
     if (privateProfileError) {
       throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
     }
@@ -139,10 +150,13 @@ export async function createUserInClass({
       lab_section_id: lab_section_id
     });
   } else if (section_id || lab_section_id) {
-    await supabase.from("user_roles").update({
-      class_section_id: section_id,
-      lab_section_id: lab_section_id
-    }).eq("user_id", userData.user.id)
+    await supabase
+      .from("user_roles")
+      .update({
+        class_section_id: section_id,
+        lab_section_id: lab_section_id
+      })
+      .eq("user_id", userData.user.id)
       .eq("class_id", class_id);
   }
   const { data: profileData, error: profileError } = await supabase
@@ -154,7 +168,9 @@ export async function createUserInClass({
   if (!profileData || profileError) {
     throw new Error(`Failed to get profile: ${profileError?.message}`);
   }
-  console.log(`Created ${role} ${email}, private_profile_id: ${profileData.private_profile_id}, public_profile_id: ${profileData.public_profile_id}`)
+  console.log(
+    `Created ${role} ${email}, private_profile_id: ${profileData.private_profile_id}, public_profile_id: ${profileData.public_profile_id}`
+  );
   return {
     email: email,
     user_id: userData.user.id,
@@ -407,101 +423,124 @@ export async function insertAssignment({
   if (assignmentError) {
     throw new Error(`Failed to create assignment: ${assignmentError.message}`);
   }
-  const { data: assignmentData } = await supabase.from("assignments").select("*").eq("id", insertedAssignmentData.id).single();
+  const { data: assignmentData } = await supabase
+    .from("assignments")
+    .select("*")
+    .eq("id", insertedAssignmentData.id)
+    .single();
   if (!assignmentData) {
     throw new Error("Failed to get assignment");
   }
-  await supabase.from("autograder").update({
-    config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
-  }).eq("id", assignmentData.id);
+  await supabase
+    .from("autograder")
+    .update({
+      config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
+    })
+    .eq("id", assignmentData.id);
 
-  const partsData = await supabase.from("rubric_parts").insert([{
-    class_id: 1,
-    name: "Self Review",
-    description: "Self review rubric",
-    ordinal: 0,
-    rubric_id: assignmentData.self_review_rubric_id || 0
-  }, {
-    class_id: 1,
-    name: "Grading Review",
-    description: "Grading review rubric",
-    ordinal: 1,
-    rubric_id: assignmentData.grading_rubric_id || 0
-  }]).select("id");
+  const partsData = await supabase
+    .from("rubric_parts")
+    .insert([
+      {
+        class_id: 1,
+        name: "Self Review",
+        description: "Self review rubric",
+        ordinal: 0,
+        rubric_id: assignmentData.self_review_rubric_id || 0
+      },
+      {
+        class_id: 1,
+        name: "Grading Review",
+        description: "Grading review rubric",
+        ordinal: 1,
+        rubric_id: assignmentData.grading_rubric_id || 0
+      }
+    ])
+    .select("id");
   if (partsData.error) {
     throw new Error(`Failed to create rubric parts: ${partsData.error.message}`);
   }
   const self_review_part_id = partsData.data?.[0]?.id;
   const grading_review_part_id = partsData.data?.[1]?.id;
-  const criteriaData = await supabase.from("rubric_criteria").insert([{
-    class_id: 1,
-    name: "Self Review Criteria",
-    description: "Criteria for self review evaluation",
-    ordinal: 0,
-    total_points: 10,
-    is_additive: true,
-    rubric_part_id: self_review_part_id || 0,
-    rubric_id: assignmentData.self_review_rubric_id || 0
-  }, {
-    class_id: 1,
-    name: "Grading Review Criteria",
-    description: "Criteria for grading review evaluation",
-    ordinal: 0,
-    total_points: 20,
-    is_additive: true,
-    rubric_part_id: grading_review_part_id || 0,
-    rubric_id: assignmentData.grading_rubric_id || 0
-  }]).select("id");
+  const criteriaData = await supabase
+    .from("rubric_criteria")
+    .insert([
+      {
+        class_id: 1,
+        name: "Self Review Criteria",
+        description: "Criteria for self review evaluation",
+        ordinal: 0,
+        total_points: 10,
+        is_additive: true,
+        rubric_part_id: self_review_part_id || 0,
+        rubric_id: assignmentData.self_review_rubric_id || 0
+      },
+      {
+        class_id: 1,
+        name: "Grading Review Criteria",
+        description: "Criteria for grading review evaluation",
+        ordinal: 0,
+        total_points: 20,
+        is_additive: true,
+        rubric_part_id: grading_review_part_id || 0,
+        rubric_id: assignmentData.grading_rubric_id || 0
+      }
+    ])
+    .select("id");
   if (criteriaData.error) {
     throw new Error(`Failed to create rubric criteria: ${criteriaData.error.message}`);
   }
   const selfReviewCriteriaId = criteriaData.data?.[0]?.id;
   const gradingReviewCriteriaId = criteriaData.data?.[1]?.id;
-  await supabase.from("rubric_checks").insert([{
-    rubric_criteria_id: selfReviewCriteriaId || 0,
-    name: "Self Review Check 1",
-    description: "First check for self review",
-    ordinal: 0,
-    points: 5,
-    is_annotation: true,
-    is_comment_required: false,
-    class_id: 1,
-    is_required: true
-  },
-  {
-    rubric_criteria_id: selfReviewCriteriaId || 0,
-    name: "Self Review Check 2",
-    description: "Second check for self review",
-    ordinal: 1,
-    points: 5,
-    is_annotation: false,
-    is_comment_required: false,
-    class_id: 1,
-    is_required: true
-  },
-  {
-    rubric_criteria_id: gradingReviewCriteriaId || 0,
-    name: "Grading Review Check 1",
-    description: "First check for grading review",
-    ordinal: 0,
-    points: 10,
-    is_annotation: true,
-    is_comment_required: false,
-    class_id: 1,
-    is_required: true
-  },
-  {
-    rubric_criteria_id: gradingReviewCriteriaId || 0,
-    name: "Grading Review Check 2",
-    description: "Second check for grading review",
-    ordinal: 1,
-    points: 10,
-    is_annotation: false,
-    is_comment_required: false,
-    class_id: 1,
-    is_required: true
-  }
-  ]).select("id");
+  await supabase
+    .from("rubric_checks")
+    .insert([
+      {
+        rubric_criteria_id: selfReviewCriteriaId || 0,
+        name: "Self Review Check 1",
+        description: "First check for self review",
+        ordinal: 0,
+        points: 5,
+        is_annotation: true,
+        is_comment_required: false,
+        class_id: 1,
+        is_required: true
+      },
+      {
+        rubric_criteria_id: selfReviewCriteriaId || 0,
+        name: "Self Review Check 2",
+        description: "Second check for self review",
+        ordinal: 1,
+        points: 5,
+        is_annotation: false,
+        is_comment_required: false,
+        class_id: 1,
+        is_required: true
+      },
+      {
+        rubric_criteria_id: gradingReviewCriteriaId || 0,
+        name: "Grading Review Check 1",
+        description: "First check for grading review",
+        ordinal: 0,
+        points: 10,
+        is_annotation: true,
+        is_comment_required: false,
+        class_id: 1,
+        is_required: true
+      },
+      {
+        rubric_criteria_id: gradingReviewCriteriaId || 0,
+        name: "Grading Review Check 2",
+        description: "Second check for grading review",
+        ordinal: 1,
+        points: 10,
+        is_annotation: false,
+        is_comment_required: false,
+        class_id: 1,
+        is_required: true
+      }
+    ])
+    .select("id");
 
   return assignmentData;
 }
@@ -581,8 +620,8 @@ export async function insertSubmissionViaAPI({
       Authorization: token_str
     }
   });
-  if ('error' in data) {
-    if ('details' in data.error) {
+  if ("error" in data) {
+    if ("details" in data.error) {
       throw new Error(data.error.details);
     }
     throw new Error("Failed to create submission");

@@ -144,24 +144,28 @@ export default function StudentPage() {
     return () => unsubscribe();
   }, [courseController]);
 
-  const assignmentsWithoutRepos = useMemo(() => githubIdentity
-    ? assignments?.filter((assignment) => {
-      if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
-        return false;
-      }
-      const hasIndividualRepo = assignment.repositories.length > 0;
-      const assignmentGroup = groups?.find((group) => group.assignment_id === assignment.id);
-      const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
-      if (assignmentGroup) {
-        return !hasGroupRepo;
-      }
-      //Don't try to create a repo for a group assignment if we don't have a group
-      if (assignment.group_config === "groups") {
-        return false;
-      }
-      return !hasIndividualRepo;
-    })
-    : null, [assignments, groups, githubIdentity]);
+  const assignmentsWithoutRepos = useMemo(
+    () =>
+      githubIdentity
+        ? assignments?.filter((assignment) => {
+            if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
+              return false;
+            }
+            const hasIndividualRepo = assignment.repositories.length > 0;
+            const assignmentGroup = groups?.find((group) => group.assignment_id === assignment.id);
+            const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
+            if (assignmentGroup) {
+              return !hasGroupRepo;
+            }
+            //Don't try to create a repo for a group assignment if we don't have a group
+            if (assignment.group_config === "groups") {
+              return false;
+            }
+            return !hasIndividualRepo;
+          })
+        : null,
+    [assignments, groups, githubIdentity]
+  );
 
   const hasLabSectionAssignments = useMemo(() => {
     return assignments?.some((assignment) => {
@@ -227,7 +231,10 @@ export default function StudentPage() {
       let effectiveDueDate: Date | undefined;
       if (private_profile_id && courseController.isLoaded && (labSectionsLoaded || !hasLabSectionAssignments)) {
         // Use the CourseController's lab-aware calculation
-        const labAwareDueDate = courseController.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: private_profile_id, labSectionId: lab_section_id ?? undefined });
+        const labAwareDueDate = courseController.calculateEffectiveDueDate(assignment, {
+          studentPrivateProfileId: private_profile_id,
+          labSectionId: lab_section_id ?? undefined
+        });
 
         // Apply due date extensions on top of the lab-aware due date
         const hoursExtended = assignment.assignment_due_date_exceptions.reduce((acc, curr) => acc + curr.hours, 0);
@@ -237,7 +244,9 @@ export default function StudentPage() {
         effectiveDueDate = undefined;
       }
 
-      const modifiedDueDate = effectiveDueDate ? new TZDate(effectiveDueDate, course?.time_zone ?? "America/New_York") : undefined;
+      const modifiedDueDate = effectiveDueDate
+        ? new TZDate(effectiveDueDate, course?.time_zone ?? "America/New_York")
+        : undefined;
       result.push({
         key: assignment.id.toString(),
         name: assignment.title,
@@ -257,7 +266,9 @@ export default function StudentPage() {
       });
 
       if (assignment.assignment_self_review_settings.enabled && assignment.review_assignments.length > 0) {
-        const evalDueDate = effectiveDueDate ? addHours(effectiveDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0) : undefined;
+        const evalDueDate = effectiveDueDate
+          ? addHours(effectiveDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0)
+          : undefined;
         result.push({
           key: assignment.id.toString() + "selfReview",
           name: "Self Review for " + assignment.title,
@@ -322,13 +333,39 @@ export default function StudentPage() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {(labSectionsLoaded && workInFuture.length === 0) && <Table.Row><Table.Cell colSpan={5}><EmptyState.Root size="md"><EmptyState.Content><EmptyState.Indicator><Icon as={FaCheckCircle} /></EmptyState.Indicator><EmptyState.Title>No upcoming deadlines available</EmptyState.Title><EmptyState.Description>Your instructor may not have released any upcoming assignments yet.</EmptyState.Description></EmptyState.Content></EmptyState.Root></Table.Cell></Table.Row>}
-          {(!labSectionsLoaded && hasLabSectionAssignments) && <Table.Row><Table.Cell colSpan={5}><Spinner /></Table.Cell></Table.Row>}
+          {labSectionsLoaded && workInFuture.length === 0 && (
+            <Table.Row>
+              <Table.Cell colSpan={5}>
+                <EmptyState.Root size="md">
+                  <EmptyState.Content>
+                    <EmptyState.Indicator>
+                      <Icon as={FaCheckCircle} />
+                    </EmptyState.Indicator>
+                    <EmptyState.Title>No upcoming deadlines available</EmptyState.Title>
+                    <EmptyState.Description>
+                      Your instructor may not have released any upcoming assignments yet.
+                    </EmptyState.Description>
+                  </EmptyState.Content>
+                </EmptyState.Root>
+              </Table.Cell>
+            </Table.Row>
+          )}
+          {!labSectionsLoaded && hasLabSectionAssignments && (
+            <Table.Row>
+              <Table.Cell colSpan={5}>
+                <Spinner />
+              </Table.Cell>
+            </Table.Row>
+          )}
           {workInFuture.map((work) => {
             const isCloseDeadline = work.due_date && differenceInHours(work.due_date, new Date()) < 24;
             return (
-              <Table.Row key={work.key} border={isCloseDeadline ? "2px solid" : "none"} borderColor={isCloseDeadline ? "border.info" : undefined}
-                bg={isCloseDeadline ? "bg.info" : undefined}>
+              <Table.Row
+                key={work.key}
+                border={isCloseDeadline ? "2px solid" : "none"}
+                borderColor={isCloseDeadline ? "border.info" : undefined}
+                bg={isCloseDeadline ? "bg.info" : undefined}
+              >
                 <Table.Cell>
                   <Link prefetch={true} href={work.due_date_link ?? ""}>
                     {work.due_date_component}
@@ -383,7 +420,20 @@ export default function StudentPage() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {workInPast.length === 0 && <Table.Row><Table.Cell colSpan={5}><EmptyState.Root size="md"><EmptyState.Content><EmptyState.Indicator><Icon as={FaCheckCircle} /></EmptyState.Indicator><EmptyState.Title>No due dates have passed</EmptyState.Title></EmptyState.Content></EmptyState.Root></Table.Cell></Table.Row>}
+          {workInPast.length === 0 && (
+            <Table.Row>
+              <Table.Cell colSpan={5}>
+                <EmptyState.Root size="md">
+                  <EmptyState.Content>
+                    <EmptyState.Indicator>
+                      <Icon as={FaCheckCircle} />
+                    </EmptyState.Indicator>
+                    <EmptyState.Title>No due dates have passed</EmptyState.Title>
+                  </EmptyState.Content>
+                </EmptyState.Root>
+              </Table.Cell>
+            </Table.Row>
+          )}
           {workInPast.map((work) => {
             return (
               <Table.Row key={work.key}>

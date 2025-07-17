@@ -36,7 +36,7 @@ export async function runHandler() {
       onComplete: () => {
         adminSupabase
           .schema("pgmq_public")
-          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id })
+          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
       }
     }));
     for (const studentColumn of studentColumns) {

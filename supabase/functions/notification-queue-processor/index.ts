@@ -81,7 +81,12 @@ async function sendEmail(params: {
   notification: QueueMessage<Notification>;
   emails: { email: string | null; user_id: string }[];
   courses: { name: string | null; slug: string | null; id: number }[];
-  userRoles: { user_id: string; class_section: string | null; lab_section_id: number | null; lab_section_name: string | null }[];
+  userRoles: {
+    user_id: string;
+    class_section: string | null;
+    lab_section_id: number | null;
+    lab_section_name: string | null;
+  }[];
 }) {
   const { adminSupabase, transporter, notification, emails, courses, userRoles } = params;
 
@@ -224,20 +229,28 @@ async function processNotificationQueue() {
         "id",
         Array.from(uniqueCourseIds).filter((id) => id)
       );
-    
+
     // Fetch user roles with class sections and lab sections
     const { data: userRoles, error: userRolesError } = await adminSupabase
       .schema("public")
       .from("user_roles")
-      .select(`
+      .select(
+        `
         user_id,
         class_section_id,
         lab_section_id,
         class_sections(name),
         lab_sections(name)
-      `)
-      .in("user_id", Array.from(uniqueEmails).filter((email) => email))
-      .in("class_id", Array.from(uniqueCourseIds).filter((id) => id));
+      `
+      )
+      .in(
+        "user_id",
+        Array.from(uniqueEmails).filter((email) => email)
+      )
+      .in(
+        "class_id",
+        Array.from(uniqueCourseIds).filter((id) => id)
+      );
 
     if (emailsError) {
       console.error(`Error fetching emails: ${emailsError?.message}`);
@@ -251,14 +264,15 @@ async function processNotificationQueue() {
       console.error(`Error fetching user roles: ${userRolesError?.message}`);
       return;
     }
-    
+
     // Transform user roles data to include section names
-    const transformedUserRoles = userRoles?.map(role => ({
-      user_id: role.user_id,
-      class_section: role.class_sections?.name || null,
-      lab_section_id: role.lab_section_id,
-      lab_section_name: role.lab_sections?.name || null
-    })) || [];
+    const transformedUserRoles =
+      userRoles?.map((role) => ({
+        user_id: role.user_id,
+        class_section: role.class_sections?.name || null,
+        lab_section_id: role.lab_section_id,
+        lab_section_name: role.lab_sections?.name || null
+      })) || [];
     const transporter = nodemailer.createTransport({
       pool: false,
       host: Deno.env.get("SMTP_HOST") || "",

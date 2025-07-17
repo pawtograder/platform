@@ -825,7 +825,7 @@ function GradebookColumnFilter({
   );
 }
 
-// Section filter component with enhanced select functionality  
+// Section filter component with enhanced select functionality
 function SectionFilter({
   columnName,
   columnModel,
@@ -841,29 +841,31 @@ function SectionFilter({
   onClose: () => void;
   triggerRef: React.RefObject<HTMLElement>;
   sections: ClassSection[] | LabSection[];
-  type: 'class' | 'lab';
+  type: "class" | "lab";
 }) {
   const selectOptions = useMemo(() => {
-    return sections.map((section) => ({ 
-      label: type === 'class' ? section.name : `${section.name}`,
-      value: String(section.id) 
+    return sections.map((section) => ({
+      label: type === "class" ? section.name : `${section.name}`,
+      value: String(section.id)
     }));
   }, [sections, type]);
 
   const currentValue = columnModel.getFilterValue() as string | string[];
   const selectedOptions = Array.isArray(currentValue)
     ? currentValue.map((val) => {
-        const section = sections.find(s => String(s.id) === val);
-        return { 
-          label: section ? (type === 'class' ? section.name : `${section.name}`) : val, 
-          value: val 
+        const section = sections.find((s) => String(s.id) === val);
+        return {
+          label: section ? (type === "class" ? section.name : `${section.name}`) : val,
+          value: val
         };
       })
     : currentValue
-      ? [{ 
-          label: sections.find(s => String(s.id) === currentValue)?.name || currentValue, 
-          value: currentValue 
-        }]
+      ? [
+          {
+            label: sections.find((s) => String(s.id) === currentValue)?.name || currentValue,
+            value: currentValue
+          }
+        ]
       : [];
 
   return (
@@ -1019,12 +1021,12 @@ function GenericGradebookColumnHeader({
 }) {
   const [showFilter, setShowFilter] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  
+
   // Determine if this is a section column
   const isClassSection = columnName === "class_section";
   const isLabSection = columnName === "lab_section";
   const isSectionColumn = isClassSection || isLabSection;
-  
+
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px">
       {/* Main header content */}
@@ -1084,8 +1086,8 @@ function GenericGradebookColumnHeader({
             isOpen={showFilter}
             onClose={() => setShowFilter(false)}
             triggerRef={ref}
-            sections={isClassSection ? (classSections || []) : (labSections || [])}
-            type={isClassSection ? 'class' : 'lab'}
+            sections={isClassSection ? classSections || [] : labSections || []}
+            type={isClassSection ? "class" : "lab"}
           />
         )}
         {showFilter && !isSectionColumn && (
@@ -1537,16 +1539,19 @@ export default function GradebookTable() {
 
   // Map profile id to section ids and names
   const profileIdToSectionData = useMemo(() => {
-    const map: Record<string, { 
-      classSection: { id: number | null; name: string };
-      labSection: { id: number | null; name: string };
-    }> = {};
-    
+    const map: Record<
+      string,
+      {
+        classSection: { id: number | null; name: string };
+        labSection: { id: number | null; name: string };
+      }
+    > = {};
+
     allVisibleRoles.forEach((role) => {
       if (role.role === "student") {
-        const classSection = classSections?.data?.find(s => s.id === role.class_section_id);
-        const labSection = labSections?.find(s => s.id === role.lab_section_id);
-        
+        const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
+        const labSection = labSections?.find((s) => s.id === role.lab_section_id);
+
         map[role.private_profile_id] = {
           classSection: {
             id: role.class_section_id ?? null,
@@ -1714,9 +1719,7 @@ export default function GradebookTable() {
         header: "Class Section",
         accessorFn: (row) => profileIdToSectionData[row.id]?.classSection?.name ?? "No Section",
         cell: ({ row }) => (
-          <Text fontSize="sm">
-            {profileIdToSectionData[row.original.id]?.classSection?.name ?? "No Section"}
-          </Text>
+          <Text fontSize="sm">{profileIdToSectionData[row.original.id]?.classSection?.name ?? "No Section"}</Text>
         ),
         enableColumnFilter: true,
         filterFn: (row, columnId, filterValue) => {
@@ -1734,13 +1737,11 @@ export default function GradebookTable() {
     // Only add lab section column if there are lab sections
     if (labSections && labSections.length > 0) {
       cols.push({
-        id: "lab_section", 
+        id: "lab_section",
         header: "Lab Section",
         accessorFn: (row) => profileIdToSectionData[row.id]?.labSection?.name ?? "No Lab Section",
         cell: ({ row }) => (
-          <Text fontSize="sm">
-            {profileIdToSectionData[row.original.id]?.labSection?.name ?? "No Lab Section"}
-          </Text>
+          <Text fontSize="sm">{profileIdToSectionData[row.original.id]?.labSection?.name ?? "No Lab Section"}</Text>
         ),
         enableColumnFilter: true,
         filterFn: (row, columnId, filterValue) => {
@@ -1814,7 +1815,15 @@ export default function GradebookTable() {
     });
 
     return cols;
-  }, [profileIdToSectionData, gradebookController, groupedColumns, collapsedGroups, findBestColumnToShow, classSections?.data, labSections]);
+  }, [
+    profileIdToSectionData,
+    gradebookController,
+    groupedColumns,
+    collapsedGroups,
+    findBestColumnToShow,
+    classSections?.data,
+    labSections
+  ]);
 
   // Table instance
   const table = useReactTable({

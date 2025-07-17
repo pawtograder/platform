@@ -12,7 +12,13 @@ import { addSeconds, format, isAfter } from "npm:date-fns@4";
 import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
 import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
-import { cloneRepository, getRepoTarballURL, GitHubOIDCToken, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
+import {
+  cloneRepository,
+  getRepoTarballURL,
+  GitHubOIDCToken,
+  updateCheckRun,
+  validateOIDCToken
+} from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -64,7 +70,7 @@ async function handleRequest(req: Request) {
   if (!token) {
     throw new UserVisibleError("No token provided");
   }
-  // Check if this is part of an 
+  // Check if this is part of an
   const decoded = await validateOIDCTokenOrAllowE2E(token);
   // Retrieve the student's submisison
   const { repository, sha, workflow_ref } = decoded;
@@ -116,14 +122,11 @@ async function handleRequest(req: Request) {
       console.log(`Assignment Group ID: ${repoData.assignment_group_id}`);
 
       // Use the database function to calculate the final due date (includes lab scheduling + extensions)
-      const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc(
-        'calculate_final_due_date',
-        {
-          assignment_id_param: repoData.assignment_id,
-          student_profile_id_param: repoData.profile_id || '',
-          assignment_group_id_param: repoData.assignment_group_id || undefined
-        }
-      );
+      const { data: finalDueDateResult, error: dueDateError } = await adminSupabase.rpc("calculate_final_due_date", {
+        assignment_id_param: repoData.assignment_id,
+        student_profile_id_param: repoData.profile_id || "",
+        assignment_group_id_param: repoData.assignment_group_id || undefined
+      });
 
       if (dueDateError) {
         throw new UserVisibleError(`Failed to calculate due date: ${dueDateError.message}`);
@@ -171,7 +174,9 @@ async function handleRequest(req: Request) {
               }
             });
           }
-          throw new UserVisibleError("This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension.");
+          throw new UserVisibleError(
+            "This assignment does not allow NOT-GRADED submissions. Please contact your instructor if you need an extension."
+          );
         } else {
           //Fail the check run
           if (!isE2ERun) {
@@ -312,7 +317,9 @@ async function handleRequest(req: Request) {
       const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
 
       // Check the SHA
-      const workflowFile = zip.files.find((file: { path: string }) => stripTopDir(file.path) === ".github/workflows/grade.yml");
+      const workflowFile = zip.files.find(
+        (file: { path: string }) => stripTopDir(file.path) === ".github/workflows/grade.yml"
+      );
       const hash = createHash("sha256");
       const contents = await workflowFile?.buffer();
       if (!contents) {

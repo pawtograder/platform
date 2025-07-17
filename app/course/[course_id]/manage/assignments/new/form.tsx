@@ -490,9 +490,7 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
-            <Field
-              helperText="Allow students to submit after the deadline by including #NOT-GRADED in their commit message. These submissions will not be graded and cannot become active, but students can still see autograder feedback."
-            >
+            <Field helperText="Allow students to submit after the deadline by including #NOT-GRADED in their commit message. These submissions will not be graded and cannot become active, but students can still see autograder feedback.">
               <Checkbox.Root {...register("allow_not_graded_submissions")} defaultChecked={true}>
                 <Checkbox.HiddenInput />
                 <Checkbox.Control>

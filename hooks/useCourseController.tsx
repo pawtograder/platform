@@ -195,8 +195,6 @@ export type UserProfileWithPrivateProfile = UserProfile & {
   private_profile?: UserProfile;
 };
 
-
-
 export class CourseController {
   private _isLoaded = false;
   private _isObfuscatedGrades: boolean = false;
@@ -258,11 +256,11 @@ export class CourseController {
   private genericDataTypeToId: { [key in string]: (item: unknown) => number } = {};
   private _course: Course | undefined;
 
-  set course(course: Course){
+  set course(course: Course) {
     this._course = course;
   }
-  get course(){
-    if(this._course === undefined){
+  get course() {
+    if (this._course === undefined) {
       throw new Error("Course not loaded");
     }
     return this._course;
@@ -319,7 +317,7 @@ export class CourseController {
       );
       if (relevantIds.length == 0) {
         return {
-          unsubscribe: () => { },
+          unsubscribe: () => {},
           data: undefined
         };
       } else if (relevantIds.length == 1) {
@@ -768,7 +766,10 @@ export class CourseController {
   /**
    * Gets lab section meetings with optional callback for updates
    */
-  listLabSectionMeetings(callback?: UpdateCallback<LabSectionMeeting[]>): { unsubscribe: Unsubscribe; data: LabSectionMeeting[] } {
+  listLabSectionMeetings(callback?: UpdateCallback<LabSectionMeeting[]>): {
+    unsubscribe: Unsubscribe;
+    data: LabSectionMeeting[];
+  } {
     if (callback) {
       this.labSectionMeetingListSubscribers.push(callback);
     }
@@ -792,9 +793,15 @@ export class CourseController {
   /**
    * Calculates the effective due date for an assignment and student, considering lab-based scheduling
    */
-  calculateEffectiveDueDate(assignment: Assignment, { studentPrivateProfileId, labSectionId: labSectionIdOverride }: { studentPrivateProfileId: string, labSectionId?: number }): Date {
+  calculateEffectiveDueDate(
+    assignment: Assignment,
+    {
+      studentPrivateProfileId,
+      labSectionId: labSectionIdOverride
+    }: { studentPrivateProfileId: string; labSectionId?: number }
+  ): Date {
     // If assignment doesn't use lab-based scheduling, return original due date
-    if(!studentPrivateProfileId && !labSectionIdOverride) {
+    if (!studentPrivateProfileId && !labSectionIdOverride) {
       throw new Error("No student private profile ID or lab section ID override provided");
     }
     if (!assignment.minutes_due_after_lab) {
@@ -808,18 +815,19 @@ export class CourseController {
       // Student not in a lab section, fall back to original due date
       return new Date(assignment.due_date);
     }
-    const labSection = this.labSections.find(section => section.id === labSectionId);
-    if(!labSection){
+    const labSection = this.labSections.find((section) => section.id === labSectionId);
+    if (!labSection) {
       throw new Error("Lab section not found");
     }
 
     // Find the most recent lab section meeting before the assignment's original due date
     const assignmentDueDate = new Date(assignment.due_date);
     const relevantMeetings = this.labSectionMeetings
-      .filter(meeting =>
-        meeting.lab_section_id === labSectionId &&
-        !meeting.cancelled &&
-        new Date(meeting.meeting_date) < assignmentDueDate
+      .filter(
+        (meeting) =>
+          meeting.lab_section_id === labSectionId &&
+          !meeting.cancelled &&
+          new Date(meeting.meeting_date) < assignmentDueDate
       )
       .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
 
@@ -830,7 +838,10 @@ export class CourseController {
 
     // Calculate lab-based due date
     const mostRecentLabMeeting = relevantMeetings[0];
-    const labMeetingDate = new TZDate(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time, this.course.time_zone ?? "America/New_York");
+    const labMeetingDate = new TZDate(
+      mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
+      this.course.time_zone ?? "America/New_York"
+    );
 
     // Add the minutes offset to the lab meeting date
     const effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
@@ -1184,13 +1195,20 @@ export function useAssignmentDueDate(assignment: Assignment) {
   }, [assignment, controller]);
 
   useEffect(() => {
-    const { data: labSectionMeetings, unsubscribe } = controller.listLabSectionMeetings((data) => setLabSectionMeetings(data));
+    const { data: labSectionMeetings, unsubscribe } = controller.listLabSectionMeetings((data) =>
+      setLabSectionMeetings(data)
+    );
     setLabSectionMeetings(labSectionMeetings);
     return () => unsubscribe();
   }, [controller]);
 
   const ret = useMemo(() => {
-    if (!dueDateExceptions || !assignment.due_date || !role.private_profile_id || (labSectionMeetings && labSectionMeetings.length === 0 && assignment.minutes_due_after_lab !== null)) {
+    if (
+      !dueDateExceptions ||
+      !assignment.due_date ||
+      !role.private_profile_id ||
+      (labSectionMeetings && labSectionMeetings.length === 0 && assignment.minutes_due_after_lab !== null)
+    ) {
       return {
         originalDueDate: undefined,
         dueDate: undefined,
@@ -1206,7 +1224,10 @@ export function useAssignmentDueDate(assignment: Assignment) {
     const originalDueDate = new TZDate(assignment.due_date);
 
     // Calculate the effective due date using the CourseController's local logic
-    const effectiveDueDate = controller.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: role.private_profile_id, labSectionId: role.lab_section_id ?? undefined });
+    const effectiveDueDate = controller.calculateEffectiveDueDate(assignment, {
+      studentPrivateProfileId: role.private_profile_id,
+      labSectionId: role.lab_section_id ?? undefined
+    });
     const effectiveDueDateTZ = new TZDate(effectiveDueDate);
 
     // Apply extensions on top of the effective due date

@@ -58,7 +58,6 @@ test.beforeAll(async () => {
   });
 });
 test.describe("Create submission", () => {
-
   test("If the deadline is in the future, the student can create a submission", async ({ page }) => {
     const submission = await insertSubmissionViaAPI({
       student_profile_id: student!.private_profile_id,
@@ -140,5 +139,4 @@ test.describe("Create submission", () => {
     await page.getByRole("link", { name: "Not for grading" }).click();
     await expect(page.getByText("Viewing a not-for-grading submission")).toBeVisible();
   });
-
 });

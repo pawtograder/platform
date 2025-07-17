@@ -369,7 +369,9 @@ function EmailsInnerPage() {
 
     // Calculate the lab-aware effective due date if CourseController is loaded
     if (courseController.isLoaded) {
-      effectiveDueDate = courseController.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: profile_id });
+      effectiveDueDate = courseController.calculateEffectiveDueDate(assignment, {
+        studentPrivateProfileId: profile_id
+      });
     } else {
       // Fallback to original due date if CourseController not loaded
       effectiveDueDate = new Date(assignment.due_date);
@@ -496,8 +498,8 @@ function EmailsInnerPage() {
             ? [submission.user_roles.users]
             : submission.assignment_groups
               ? submission.assignment_groups.assignment_groups_members.map((member) => {
-                return member.user_roles.users;
-              })
+                  return member.user_roles.users;
+                })
               : [];
         })
         .reduce((prev, next) => {
@@ -564,9 +566,9 @@ function EmailsInnerPage() {
     if (includeInstructors) {
       roles.push("instructor");
     }
-    const labSectionLeaders = labSectionsData?.data.filter(section =>
-      labSectionIds.includes(section.id)
-    ).map(section => section.lab_leader_id);
+    const labSectionLeaders = labSectionsData?.data
+      .filter((section) => labSectionIds.includes(section.id))
+      .map((section) => section.lab_leader_id);
     return (
       userRolesData?.data
         .filter((userRole) => {
@@ -581,8 +583,11 @@ function EmailsInnerPage() {
           }
 
           // Filter by lab section if any are selected
-          if (labSectionIds.length > 0 && !labSectionIds.includes(userRole.lab_section_id || 0)
-            && !labSectionLeaders?.includes(userRole.private_profile_id)) {
+          if (
+            labSectionIds.length > 0 &&
+            !labSectionIds.includes(userRole.lab_section_id || 0) &&
+            !labSectionLeaders?.includes(userRole.private_profile_id)
+          ) {
             return false;
           }
 
@@ -598,7 +603,8 @@ function EmailsInnerPage() {
     <Box>
       <Heading size="lg">Create and Send Emails</Heading>
       <Text fontSize="sm" color="gray.600" mb="2">
-        Send emails to the entire class or to a subset. After preparing your message, you will be able to preview it before sending it.
+        Send emails to the entire class or to a subset. After preparing your message, you will be able to preview it
+        before sending it.
       </Text>
       <Fieldset.Root size="lg" maxW="md">
         <Fieldset.Content>
@@ -675,13 +681,9 @@ function EmailsInnerPage() {
           )}
 
           {choice?.value &&
-            [
-              Audience.All,
-              Audience.CourseStaff,
-              Audience.Graders,
-              Audience.Instructors,
-              Audience.Students
-            ].includes(choice.value) && (
+            [Audience.All, Audience.CourseStaff, Audience.Graders, Audience.Instructors, Audience.Students].includes(
+              choice.value
+            ) && (
               <>
                 <Field.Root>
                   <Field.Label>Select class section(s)</Field.Label>
@@ -716,7 +718,7 @@ function EmailsInnerPage() {
                     }}
                     options={labSectionsData?.data.map((section) => {
                       return {
-                        label: `${section.name} (${section.profiles?.name || 'No leader'})`,
+                        label: `${section.name} (${section.profiles?.name || "No leader"})`,
                         value: section.id
                       };
                     })}

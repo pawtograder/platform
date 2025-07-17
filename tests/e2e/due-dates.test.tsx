@@ -9,7 +9,7 @@ import {
   insertAssignment,
   loginAsUser,
   TestingUser,
-  updateClassSettings,
+  updateClassSettings
 } from "./TestingUtils";
 
 let student: TestingUser | undefined;
@@ -52,7 +52,9 @@ function getDueDateString(date: Date) {
   return formatInTimeZone(date, "America/New_York", "MMM d h:mm aaa");
 }
 test.describe("Assignment due dates", () => {
-  test("Lab-section and non-lab-section assignment due dates are calculated correctly on the assignments page", async ({ page }) => {
+  test("Lab-section and non-lab-section assignment due dates are calculated correctly on the assignments page", async ({
+    page
+  }) => {
     await loginAsUser(page, student!);
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
@@ -62,36 +64,45 @@ test.describe("Assignment due dates", () => {
     await expect(cell).toBeVisible();
 
     const row = page.getByRole("row").filter({ has: cell });
-    await expect(row.getByText(getDueDateString(new TZDate(testAssignment!.due_date, "America/New_York")))).toBeVisible();
-    
+    await expect(
+      row.getByText(getDueDateString(new TZDate(testAssignment!.due_date, "America/New_York")))
+    ).toBeVisible();
+
     const labRow = page.getByRole("row").filter({ has: page.getByText(testLabAssignment!.title) });
-    await expect(labRow.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))).toBeVisible();
+    await expect(
+      labRow.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
+    ).toBeVisible();
   });
   test("When students extend their due date, the due date is updated on the assignments page", async ({ page }) => {
-
     //Test with the lab section assignment
     await loginAsUser(page, student!);
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
-    await page.getByRole("link", {name: testLabAssignment!.title}).click();
+    await page.getByRole("link", { name: testLabAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
-    await expect(page.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))).toBeVisible();
-    await page.getByRole('button', { name: 'Extend Due Date' }).click();
+    await expect(
+      page.getByText(getDueDateString(new TZDate(expectedLabAssignmentDueDate, "America/New_York")))
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await page.getByRole('button', { name: 'Consume a late token for a 24' }).click();
-    await expect(page.getByText(getDueDateString(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))).toBeVisible();
+    await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(
+      page.getByText(getDueDateString(addHours(new TZDate(expectedLabAssignmentDueDate, "America/New_York"), 24)))
+    ).toBeVisible();
 
     //Test with the non-lab section assignment
     await link.click();
-    await page.getByRole("link", {name: testAssignment!.title}).click();
+    await page.getByRole("link", { name: testAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();
     await expect(page.getByText(getDueDateString(new TZDate(assignmentDueDate, "America/New_York")))).toBeVisible();
-    await page.getByRole('button', { name: 'Extend Due Date' }).click();
+    await page.getByRole("button", { name: "Extend Due Date" }).click();
     await expect(page.getByText("You can extend the due date for this assignment")).toBeVisible();
-    await page.getByRole('button', { name: 'Consume a late token for a 24' }).click();
-    await expect(page.getByText(getDueDateString(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))).toBeVisible();
+    await page.getByRole("button", { name: "Consume a late token for a 24" }).click();
+    await expect(
+      page.getByText(getDueDateString(addHours(new TZDate(assignmentDueDate, "America/New_York"), 24)))
+    ).toBeVisible();
   });
 });

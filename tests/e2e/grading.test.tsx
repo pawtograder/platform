@@ -3,7 +3,13 @@ import percySnapshot from "@percy/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
-import { createUserInDemoClass, insertAssignment, insertPreBakedSubmission, TestingUser, updateClassSettings } from "./TestingUtils";
+import {
+  createUserInDemoClass,
+  insertAssignment,
+  insertPreBakedSubmission,
+  TestingUser,
+  updateClassSettings
+} from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
 // Helper function to retry clicks that should make textboxes appear
@@ -30,7 +36,6 @@ async function clickWithTextboxRetry(
   }
 }
 
-
 let student: TestingUser | undefined;
 let instructor: TestingUser | undefined;
 let submission_id: number | undefined;
@@ -51,14 +56,15 @@ test.beforeAll(async () => {
   const submission_res = await insertPreBakedSubmission({
     student_profile_id: student.private_profile_id,
     assignment_id: assignment!.id
-  })
-  submission_id = submission_res.submission_id
+  });
+  submission_id = submission_res.submission_id;
 });
 
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
 const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glove test";
 const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great job on making your logic understandable!";
-const GRADING_REVIEW_COMMENT_2 = "This is the kind of code that makes grading enjoyable: well-structured and thoughtful work!";
+const GRADING_REVIEW_COMMENT_2 =
+  "This is the kind of code that makes grading enjoyable: well-structured and thoughtful work!";
 
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
@@ -78,9 +84,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
 
-
     await page.getByRole("link", { name: assignment!.title }).click();
-
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await percySnapshot(page, "Student can submit self-review early");
@@ -140,7 +144,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Sign in password" }).fill(instructor!.password);
     await page.getByRole("button", { name: "Sign in with email" }).click();
 
-
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.goto(`/course/1/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
@@ -196,13 +199,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
-    await page.getByRole("link", { name: assignment!.title, exact: true}).click();
+    await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
-    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText("Grading Review Criteria 20/20");
+    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(
+      "Grading Review Criteria 20/20"
+    );
     await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(GRADING_REVIEW_COMMENT_1);
     await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(GRADING_REVIEW_COMMENT_2);
     await percySnapshot(page, "Student can view their grading results");

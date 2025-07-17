@@ -49,14 +49,14 @@ const DAYS_OF_WEEK: { value: DayOfWeek; label: string }[] = [
   { value: "sunday", label: "Sunday" }
 ];
 
-function CreateLabSectionModal({ 
-  isOpen, 
-  onClose, 
+function CreateLabSectionModal({
+  isOpen,
+  onClose,
   onSuccess,
   initialData
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
+}: {
+  isOpen: boolean;
+  onClose: () => void;
   onSuccess: () => void;
   initialData?: EditLabSectionData;
 }) {
@@ -85,8 +85,8 @@ function CreateLabSectionModal({
     resource: "user_roles",
     filters: [
       { field: "class_id", operator: "eq", value: course_id as string },
-      { 
-        operator: "or", 
+      {
+        operator: "or",
         value: [
           { field: "role", operator: "eq", value: "instructor" },
           { field: "role", operator: "eq", value: "grader" }
@@ -120,41 +120,44 @@ function CreateLabSectionModal({
     }
   }, [initialData, isOpen, reset]);
 
-  const onSubmit = useCallback(async (data: CreateLabSectionData) => {
-    try {
-      if (initialData) {
-        await updateLabSection({
-          resource: "lab_sections",
-          id: initialData.id,
-          values: {
-            ...data,
-            class_id: Number(course_id)
-          }
-        });
-        toaster.success({
-          title: "Lab section updated successfully"
-        });
-      } else {
-        await createLabSection({
-          resource: "lab_sections",
-          values: {
-            ...data,
-            class_id: Number(course_id)
-          }
-        });
-        toaster.success({
-          title: "Lab section created successfully"
+  const onSubmit = useCallback(
+    async (data: CreateLabSectionData) => {
+      try {
+        if (initialData) {
+          await updateLabSection({
+            resource: "lab_sections",
+            id: initialData.id,
+            values: {
+              ...data,
+              class_id: Number(course_id)
+            }
+          });
+          toaster.success({
+            title: "Lab section updated successfully"
+          });
+        } else {
+          await createLabSection({
+            resource: "lab_sections",
+            values: {
+              ...data,
+              class_id: Number(course_id)
+            }
+          });
+          toaster.success({
+            title: "Lab section created successfully"
+          });
+        }
+        onSuccess();
+        onClose();
+      } catch (error) {
+        toaster.error({
+          title: "Error saving lab section",
+          description: error instanceof Error ? error.message : "An unknown error occurred"
         });
       }
-      onSuccess();
-      onClose();
-    } catch (error) {
-      toaster.error({
-        title: "Error saving lab section",
-        description: error instanceof Error ? error.message : "An unknown error occurred"
-      });
-    }
-  }, [initialData, updateLabSection, createLabSection, course_id, onSuccess, onClose]);
+    },
+    [initialData, updateLabSection, createLabSection, course_id, onSuccess, onClose]
+  );
 
   return (
     <Portal>
@@ -170,10 +173,7 @@ function CreateLabSectionModal({
                 <VStack gap={4}>
                   <Field.Root invalid={!!errors.name}>
                     <Field.Label>Name</Field.Label>
-                    <Input
-                      placeholder="e.g., Lab Section A"
-                      {...register("name", { required: "Name is required" })}
-                    />
+                    <Input placeholder="e.g., Lab Section A" {...register("name", { required: "Name is required" })} />
                     <Field.ErrorText>{errors.name?.message}</Field.ErrorText>
                   </Field.Root>
 
@@ -194,19 +194,13 @@ function CreateLabSectionModal({
                   <HStack gap={4} width="100%">
                     <Field.Root invalid={!!errors.start_time}>
                       <Field.Label>Start Time</Field.Label>
-                      <Input
-                        type="time"
-                        {...register("start_time", { required: "Start time is required" })}
-                      />
+                      <Input type="time" {...register("start_time", { required: "Start time is required" })} />
                       <Field.ErrorText>{errors.start_time?.message}</Field.ErrorText>
                     </Field.Root>
 
                     <Field.Root invalid={!!errors.end_time}>
                       <Field.Label>End Time</Field.Label>
-                      <Input
-                        type="time"
-                        {...register("end_time")}
-                      />
+                      <Input type="time" {...register("end_time")} />
                       <Field.ErrorText>{errors.end_time?.message}</Field.ErrorText>
                     </Field.Root>
                   </HStack>
@@ -228,10 +222,7 @@ function CreateLabSectionModal({
 
                   <Field.Root invalid={!!errors.description}>
                     <Field.Label>Description (Optional)</Field.Label>
-                    <Input
-                      placeholder="Optional description"
-                      {...register("description")}
-                    />
+                    <Input placeholder="Optional description" {...register("description")} />
                     <Field.ErrorText>{errors.description?.message}</Field.ErrorText>
                   </Field.Root>
                 </VStack>
@@ -243,11 +234,7 @@ function CreateLabSectionModal({
                   Cancel
                 </Button>
               </Dialog.ActionTrigger>
-              <Button 
-                onClick={handleSubmit(onSubmit)}
-                loading={isCreating || isUpdating}
-                colorPalette="blue"
-              >
+              <Button onClick={handleSubmit(onSubmit)} loading={isCreating || isUpdating} colorPalette="blue">
                 {initialData ? "Update" : "Create"}
               </Button>
             </Dialog.Footer>
@@ -326,7 +313,7 @@ function LabSectionsTable() {
   };
 
   const getDayDisplayName = (day: string) => {
-    return DAYS_OF_WEEK.find(d => d.value === day)?.label || day;
+    return DAYS_OF_WEEK.find((d) => d.value === day)?.label || day;
   };
 
   if (isLoading) {
@@ -368,7 +355,9 @@ function LabSectionsTable() {
                     <VStack gap={1} align="start">
                       <Text fontWeight="medium">{labSection.name}</Text>
                       {labSection.description && (
-                        <Text fontSize="sm" color="fg.muted">{labSection.description}</Text>
+                        <Text fontSize="sm" color="fg.muted">
+                          {labSection.description}
+                        </Text>
                       )}
                     </VStack>
                   </Table.Cell>
@@ -386,18 +375,13 @@ function LabSectionsTable() {
                   </Table.Cell>
                   <Table.Cell>
                     <Text fontSize="sm" color="fg.muted">
-                      {/* TODO: Add student count */}
-                      0 students
+                      {/* TODO: Add student count */}0 students
                     </Text>
                   </Table.Cell>
                   <Table.Cell>
                     <HStack gap={2}>
                       <Tooltip content="Edit lab section">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleEdit(labSection)}
-                        >
+                        <Button size="sm" variant="ghost" onClick={() => handleEdit(labSection)}>
                           <FaEdit />
                         </Button>
                       </Tooltip>
@@ -438,4 +422,4 @@ export default function LabSectionsPage() {
       <Toaster />
     </Container>
   );
-} 
+}

@@ -9,11 +9,11 @@ console.log(process.argv);
 
 const supabase = createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 async function main() {
-  if(!userEmail) {
+  if (!userEmail) {
     console.error("No user email provided");
     return;
   }
-  if(!courseID) {
+  if (!courseID) {
     console.error("No course ID provided");
     return;
   }
