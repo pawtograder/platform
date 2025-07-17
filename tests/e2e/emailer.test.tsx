@@ -1,16 +1,15 @@
-import { test, expect, type Page } from "@playwright/test";
+import { EmailNotification } from "@/components/ui/notifications/notification-teaser";
+import { ClassSection, Course, LabSection } from "@/utils/supabase/DatabaseTypes";
+import { expect, test, type Page } from "@playwright/test";
 import {
   createClass,
   createClassSection,
   createLabSectionWithStudents,
   createUserInClass,
-  createUserInDemoClass,
   loginAsUser,
   supabase,
   TestingUser
 } from "./TestingUtils";
-import { ClassSection, Course, LabSection } from "@/utils/supabase/DatabaseTypes";
-import { EmailNotification } from "@/components/ui/notifications/notification-teaser";
 
 let course: Course;
 let section1: ClassSection;
@@ -193,7 +192,7 @@ async function expectStudentsReceivedExactlyTheseEmails({
 }
 test.describe("Emailer", () => {
   test("Emailing students in a class section or lab section", async ({ page }) => {
-    await loginAsUser(page, instructor);
+    await loginAsUser(page, instructor, course);
     await expect(page.getByText(course!.name!)).toBeVisible();
     await page.goto(`/course/${course.id}/manage/course/emails`);
     const section1Message = await sendBatchEmails({ page, target_text: "Students", class_section_text: section1.name });

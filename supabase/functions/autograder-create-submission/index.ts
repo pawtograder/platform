@@ -312,7 +312,7 @@ async function handleRequest(req: Request) {
     try {
       // Clone the repository
       const repoToClone = getRepoToCloneConsideringE2E(repository);
-      const repo = await cloneRepository(repoToClone, sha);
+      const repo = await cloneRepository(repoToClone, isE2ERun ? "HEAD" : sha);
       const zip = await openZip.buffer(repo);
       const stripTopDir = (str: string) => str.split("/").slice(1).join("/");
 

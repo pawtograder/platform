@@ -1,4 +1,4 @@
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
@@ -7,17 +7,22 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+console.log(process.env.SUPABASE_URL);
+console.log(process.env.SUPABASE_SERVICE_ROLE_KEY);
 export function getTestRunPrefix() {
   const test_run_batch = format(new Date(), "yyyy-MM-dd.HH.mm.ss") + "#" + Math.random().toString(36).substring(2, 6);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined";
   return `e2e-${test_run_batch}-${workerIndex}`;
 }
 export type TestingUser = {
+  private_profile_name: string;
+  public_profile_name: string;
   email: string;
   password: string;
   user_id: string;
   private_profile_id: string;
   public_profile_id: string;
+  class_id: number;
 };
 
 export async function createClass() {
@@ -26,7 +31,7 @@ export async function createClass() {
     .from("classes")
     .insert({
       name: className,
-      start_date: new Date().toISOString(),
+      start_date: addDays(new Date(), -30).toISOString(),
       end_date: addDays(new Date(), 180).toISOString(),
       late_tokens_per_student: 10,
       time_zone: "America/New_York"
@@ -75,18 +80,20 @@ export async function updateClassSettings({
     .update({ start_date: start_date, end_date: end_date, late_tokens_per_student: late_tokens_per_student })
     .eq("id", class_id);
 }
-export async function loginAsUser(page: Page, testingUser: TestingUser) {
+export async function loginAsUser(page: Page, testingUser: TestingUser, course: Course) {
   await page.goto("/");
   await page.getByRole("textbox", { name: "Sign in email" }).click();
   await page.getByRole("textbox", { name: "Sign in email" }).fill(testingUser.email);
   await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
   await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
   await page.getByRole("button", { name: "Sign in with email" }).click();
+  await page.getByRole("link", { name: course.name! }).click();
 }
 export async function createUserInDemoClass({ role }: { role: "student" | "instructor" | "grader" }) {
   const class_id = 1;
   return createUserInClass({ role, class_id });
 }
+let userIdx = 0;
 export async function createUserInClass({
   role,
   class_id,
@@ -98,23 +105,28 @@ export async function createUserInClass({
   section_id?: number;
   lab_section_id?: number;
 }): Promise<TestingUser> {
-  const password = "test";
+  const password = process.env.TEST_PASSWORD || "change-it";
   const extra_randomness = Math.random().toString(36).substring(2, 15);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const email = `${role}-${workerIndex}-${extra_randomness}@pawtograder.net`;
+  const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx}@pawtograder.net`;
+  const name = `${getTestRunPrefix()}-${userIdx}.${extra_randomness}`;
+  const public_profile_name = `Public-${name}`;
+  const private_profile_name = `Private-${name}`;
+  userIdx++;
   const { data: userData, error: userError } = await supabase.auth.admin.createUser({
     email: email,
     password: password,
     email_confirm: true
   });
   if (userError) {
+    console.error(userError);
     throw new Error(`Failed to create user: ${userError.message}`);
   }
   if (class_id !== 1) {
     const { data: publicProfileData, error: publicProfileError } = await supabase
       .from("profiles")
       .insert({
-        name: `E2E Test User ${getTestRunPrefix()} Public Profile`,
+        name: public_profile_name,
         avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
         class_id: class_id,
         is_private_profile: false
@@ -127,7 +139,7 @@ export async function createUserInClass({
     const { data: privateProfileData, error: privateProfileError } = await supabase
       .from("profiles")
       .insert({
-        name: `E2E Test User ${getTestRunPrefix()} Private Profile`,
+        name: private_profile_name,
         avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
         class_id: class_id,
         is_private_profile: true
@@ -172,22 +184,27 @@ export async function createUserInClass({
     `Created ${role} ${email}, private_profile_id: ${profileData.private_profile_id}, public_profile_id: ${profileData.public_profile_id}`
   );
   return {
+    private_profile_name: private_profile_name,
+    public_profile_name: public_profile_name,
     email: email,
     user_id: userData.user.id,
     private_profile_id: profileData.private_profile_id,
     public_profile_id: profileData.public_profile_id,
-    password: password
+    password: password,
+    class_id: class_id
   };
 }
 
 export async function insertPreBakedSubmission({
   student_profile_id,
   assignment_group_id,
-  assignment_id
+  assignment_id,
+  class_id
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
   assignment_id: number;
+  class_id: number;
 }): Promise<{
   submission_id: number;
   repository_name: string;
@@ -199,7 +216,7 @@ export async function insertPreBakedSubmission({
     .insert({
       assignment_id: assignment_id,
       repository: repository,
-      class_id: 1,
+      class_id: class_id,
       assignment_group_id,
       profile_id: student_profile_id,
       synced_handout_sha: "none"
@@ -214,7 +231,7 @@ export async function insertPreBakedSubmission({
   const { data: checkRunData, error: checkRunError } = await supabase
     .from("repository_check_runs")
     .insert({
-      class_id: 1,
+      class_id: class_id,
       repository_id: repository_id,
       check_run_id: 1,
       status: "{}",
@@ -238,7 +255,7 @@ export async function insertPreBakedSubmission({
       repository: repository,
       run_attempt: 1,
       run_number: 1,
-      class_id: 1,
+      class_id: class_id,
       repository_check_run_id: check_run_id,
       repository_id: repository_id
     })
@@ -278,7 +295,7 @@ public class Entrypoint {
       return "Hello, World!";
   }
 }`,
-    class_id: 1,
+    class_id: class_id,
     submission_id: submission_id,
     profile_id: student_profile_id,
     assignment_group_id: assignment_group_id
@@ -292,7 +309,7 @@ public class Entrypoint {
     .insert({
       submission_id: submission_id,
       score: 5,
-      class_id: 1,
+      class_id: class_id,
       profile_id: student_profile_id,
       assignment_group_id: assignment_group_id,
       lint_passed: true,
@@ -314,7 +331,7 @@ public class Entrypoint {
       name_format: "text",
       output: "here is a bunch of output\n**wow**",
       output_format: "markdown",
-      class_id: 1,
+      class_id: class_id,
       student_id: student_profile_id,
       assignment_group_id,
       grader_result_id: graderResultData.id,
@@ -327,7 +344,7 @@ public class Entrypoint {
       name_format: "text",
       output: "here is a bunch of output\n**wow**",
       output_format: "markdown",
-      class_id: 1,
+      class_id: class_id,
       student_id: student_profile_id,
       assignment_group_id,
       grader_result_id: graderResultData.id,
@@ -391,11 +408,13 @@ let assignmentIdx = 0;
 export async function insertAssignment({
   due_date,
   lab_due_date_offset,
-  allow_not_graded_submissions
+  allow_not_graded_submissions,
+  class_id
 }: {
   due_date: string;
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
+  class_id: number;
 }): Promise<Assignment> {
   const test_run_prefix = getTestRunPrefix() + "#" + assignmentIdx;
   const title = `Test ${test_run_prefix}`;
@@ -412,7 +431,7 @@ export async function insertAssignment({
       total_points: 100,
       max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
-      class_id: 1,
+      class_id: class_id,
       slug: test_run_prefix,
       group_config: "individual",
       self_review_setting_id: 1,
@@ -442,14 +461,14 @@ export async function insertAssignment({
     .from("rubric_parts")
     .insert([
       {
-        class_id: 1,
+        class_id: class_id,
         name: "Self Review",
         description: "Self review rubric",
         ordinal: 0,
         rubric_id: assignmentData.self_review_rubric_id || 0
       },
       {
-        class_id: 1,
+        class_id: class_id,
         name: "Grading Review",
         description: "Grading review rubric",
         ordinal: 1,
@@ -466,7 +485,7 @@ export async function insertAssignment({
     .from("rubric_criteria")
     .insert([
       {
-        class_id: 1,
+        class_id: class_id,
         name: "Self Review Criteria",
         description: "Criteria for self review evaluation",
         ordinal: 0,
@@ -476,7 +495,7 @@ export async function insertAssignment({
         rubric_id: assignmentData.self_review_rubric_id || 0
       },
       {
-        class_id: 1,
+        class_id: class_id,
         name: "Grading Review Criteria",
         description: "Criteria for grading review evaluation",
         ordinal: 0,
@@ -503,7 +522,7 @@ export async function insertAssignment({
         points: 5,
         is_annotation: true,
         is_comment_required: false,
-        class_id: 1,
+        class_id: class_id,
         is_required: true
       },
       {
@@ -514,7 +533,7 @@ export async function insertAssignment({
         points: 5,
         is_annotation: false,
         is_comment_required: false,
-        class_id: 1,
+        class_id: class_id,
         is_required: true
       },
       {
@@ -525,7 +544,7 @@ export async function insertAssignment({
         points: 10,
         is_annotation: true,
         is_comment_required: false,
-        class_id: 1,
+        class_id: class_id,
         is_required: true
       },
       {
@@ -536,7 +555,7 @@ export async function insertAssignment({
         points: 10,
         is_annotation: false,
         is_comment_required: false,
-        class_id: 1,
+        class_id: class_id,
         is_required: true
       }
     ])
@@ -550,13 +569,15 @@ export async function insertSubmissionViaAPI({
   assignment_group_id,
   sha,
   commit_message,
-  assignment_id = 1
+  assignment_id = 1,
+  class_id
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
   sha?: string;
   commit_message?: string;
   assignment_id?: number;
+  class_id: number;
 }): Promise<{
   submission_id: number;
   repository_name: string;
@@ -569,7 +590,7 @@ export async function insertSubmissionViaAPI({
     .insert({
       assignment_id: assignment_id,
       repository: repository,
-      class_id: 1,
+      class_id: class_id,
       assignment_group_id,
       profile_id: student_profile_id,
       synced_handout_sha: "none"
@@ -584,7 +605,7 @@ export async function insertSubmissionViaAPI({
   const { error: checkRunError } = await supabase
     .from("repository_check_runs")
     .insert({
-      class_id: 1,
+      class_id: class_id,
       repository_id: repository_id,
       check_run_id: 1,
       status: "{}",
@@ -600,7 +621,7 @@ export async function insertSubmissionViaAPI({
   // Prepare a JWT token to invoke the edge function
   const payload = {
     repository: repository,
-    sha: "HEAD",
+    sha: sha || "HEAD",
     workflow_ref: ".github/workflows/grade.yml-e2e-test",
     run_id: 1,
     run_attempt: 1
@@ -620,6 +641,9 @@ export async function insertSubmissionViaAPI({
       Authorization: token_str
     }
   });
+  if (data == null) {
+    throw new Error("Failed to create submission, no data returned");
+  }
   if ("error" in data) {
     if ("details" in data.error) {
       throw new Error(data.error.details);

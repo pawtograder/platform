@@ -1,14 +1,15 @@
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import percySnapshot from "@percy/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
-  createUserInDemoClass,
+  createClass,
+  createUserInClass,
   insertAssignment,
   insertPreBakedSubmission,
-  TestingUser,
-  updateClassSettings
+  loginAsUser,
+  TestingUser
 } from "./TestingUtils";
 
 dotenv.config({ path: ".env.local" });
@@ -36,26 +37,24 @@ async function clickWithTextboxRetry(
   }
 }
 
+let course: Course;
 let student: TestingUser | undefined;
 let instructor: TestingUser | undefined;
 let submission_id: number | undefined;
 let assignment: Assignment | undefined;
 test.beforeAll(async () => {
-  await updateClassSettings({
-    class_id: 1,
-    start_date: addDays(new Date(), -30).toUTCString(),
-    end_date: addDays(new Date(), 90).toUTCString(),
-    late_tokens_per_student: 10
-  });
-  student = await createUserInDemoClass({ role: "student" });
-  instructor = await createUserInDemoClass({ role: "instructor" });
+  course = await createClass();
+  student = await createUserInClass({ role: "student", class_id: course.id });
+  instructor = await createUserInClass({ role: "instructor", class_id: course.id });
   assignment = await insertAssignment({
-    due_date: addDays(new Date(), 1).toUTCString()
+    due_date: addDays(new Date(), 1).toUTCString(),
+    class_id: course.id
   });
 
   const submission_res = await insertPreBakedSubmission({
     student_profile_id: student.private_profile_id,
-    assignment_id: assignment!.id
+    assignment_id: assignment!.id,
+    class_id: course.id
   });
   submission_id = submission_res.submission_id;
 });
@@ -69,13 +68,7 @@ const GRADING_REVIEW_COMMENT_2 =
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
   test("Students can submit self-review early", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(student!.email);
-    await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(student!.password);
-    await page.getByRole("textbox", { name: "Sign in password" }).press("Enter");
-    await page.getByRole("button", { name: "Sign in with email" }).click();
+    await loginAsUser(page, student!, course);
     //Wait for the realtime connection status to be connected
     await expect(
       page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
@@ -137,18 +130,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   });
 
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(instructor!.email);
-    await page.getByRole("textbox", { name: "Sign in password" }).click();
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(instructor!.password);
-    await page.getByRole("button", { name: "Sign in with email" }).click();
+    await loginAsUser(page, instructor!, course);
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
-    await page.goto(`/course/1/assignments/${assignment!.id}/submissions/${submission_id}`);
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
-    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(`${student!.email} applied today at`);
+    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(
+      `${student!.private_profile_name} applied today at`
+    );
     //Make sure that we get a very nice screenshot with a fully-loaded page
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
@@ -190,12 +180,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
   test("Students can view their grading results", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(student!.email);
-    await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(student!.password);
-    await page.getByRole("button", { name: "Sign in with email" }).click();
+    await loginAsUser(page, student!, course);
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
@@ -212,6 +197,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(GRADING_REVIEW_COMMENT_2);
     await percySnapshot(page, "Student can view their grading results");
 
-    await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(`${instructor!.email} applied today`);
+    await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(
+      `${instructor!.private_profile_name} applied today`
+    );
   });
 });
