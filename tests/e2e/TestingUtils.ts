@@ -80,14 +80,16 @@ export async function updateClassSettings({
     .update({ start_date: start_date, end_date: end_date, late_tokens_per_student: late_tokens_per_student })
     .eq("id", class_id);
 }
-export async function loginAsUser(page: Page, testingUser: TestingUser, course: Course) {
+export async function loginAsUser(page: Page, testingUser: TestingUser, course?: Course) {
   await page.goto("/");
   await page.getByRole("textbox", { name: "Sign in email" }).click();
   await page.getByRole("textbox", { name: "Sign in email" }).fill(testingUser.email);
   await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
   await page.getByRole("textbox", { name: "Sign in password" }).fill(testingUser.password);
   await page.getByRole("button", { name: "Sign in with email" }).click();
-  await page.getByRole("link", { name: course.name! }).click();
+  if (course) {
+    await page.getByRole("link", { name: course.name! }).click();
+  }
 }
 export async function createUserInDemoClass({ role }: { role: "student" | "instructor" | "grader" }) {
   const class_id = 1;
