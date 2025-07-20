@@ -8,12 +8,7 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import {
-  Assignment,
-  AssignmentGroup,
-  AssignmentGroupMember,
-  Repo
-} from "@/utils/supabase/DatabaseTypes";
+import { Assignment, AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Container, EmptyState, Heading, Icon, Spinner, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
@@ -43,7 +38,10 @@ type AssignmentUnit = {
   group: string;
 };
 
-export type AssignmentsForStudentDashboard = Omit<Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"], 'id'> & {
+export type AssignmentsForStudentDashboard = Omit<
+  Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"],
+  "id"
+> & {
   id: number;
 };
 
@@ -182,7 +180,7 @@ export default function StudentPage() {
 
       if (assignment.self_review_setting_id && assignment.review_assignment_id) {
         const evalDueDate = assignment.due_date
-          ? addHours(new Date(assignment.due_date), (assignment.self_review_deadline_offset ?? 0))
+          ? addHours(new Date(assignment.due_date), assignment.self_review_deadline_offset ?? 0)
           : undefined;
         result.push({
           key: assignment.id.toString() + "selfReview",
@@ -192,9 +190,7 @@ export default function StudentPage() {
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
           name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_submission_id}/files?review_assignment_id=${assignment.review_assignment_id}`,
-          submission_text: assignment.submission_review_completed_at
-            ? "Submitted"
-            : "Not Submitted",
+          submission_text: assignment.submission_review_completed_at ? "Submitted" : "Not Submitted",
           group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
         });
       }

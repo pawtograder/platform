@@ -1201,8 +1201,8 @@ export function useAssignmentDueDate(
 
   // Get lab sections and meetings
   useEffect(() => {
-    const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections(
-      (data) => setLabSections(data)
+    const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections((data) =>
+      setLabSections(data)
     );
     setLabSections(labSections);
 
@@ -1263,10 +1263,7 @@ export function useAssignmentDueDate(
           if (relevantMeetings.length > 0 && assignment.minutes_due_after_lab !== null) {
             // Calculate lab-based due date
             const mostRecentLabMeeting = relevantMeetings[0];
-            const labMeetingDate = new TZDate(
-              mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
-              time_zone
-            );
+            const labMeetingDate = new TZDate(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time, time_zone);
 
             // Add the minutes offset to the lab meeting date
             effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);

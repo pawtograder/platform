@@ -283,8 +283,7 @@ function StudentRow({
   const group = groups?.find((group) => group.profile_id === student.id);
   const exceptions = dueDateExceptions?.filter(
     (exception) =>
-      exception.student_id === student.id ||
-      (group && exception.assignment_group_id === group.assignment_groups.id)
+      exception.student_id === student.id || (group && exception.assignment_group_id === group.assignment_groups.id)
   );
 
   const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;

@@ -198,7 +198,9 @@ export function AssignmentDueDate({
   showDue?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
-  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, { studentPrivateProfileId: private_profile_id });
+  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, {
+    studentPrivateProfileId: private_profile_id
+  });
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
@@ -233,7 +235,9 @@ export function SelfReviewDueDate({
   showTimeZone?: boolean;
 }) {
   const { private_profile_id } = useClassProfiles();
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, { studentPrivateProfileId: private_profile_id });
+  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, {
+    studentPrivateProfileId: private_profile_id
+  });
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }

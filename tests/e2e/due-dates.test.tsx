@@ -58,10 +58,10 @@ test.describe("Assignment due dates", () => {
     page
   }) => {
     await loginAsUser(page, student!, course);
-    await expect(page.locator('body')).toContainText(
+    await expect(page.locator("body")).toContainText(
       `${testAssignment!.title}Due${getDueDateShortString(new TZDate(testAssignment!.due_date, "America/New_York"))}Most recent submissionNo submissions`
     );
-    await expect(page.locator('body')).toContainText(
+    await expect(page.locator("body")).toContainText(
       `${testLabAssignment!.title}Due${getDueDateShortString(new TZDate(expectedLabAssignmentDueDate, "America/New_York"))}Most recent submissionNo submissions`
     );
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
