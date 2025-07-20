@@ -13,12 +13,13 @@ import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { toaster, Toaster } from "./toaster";
+import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
-  const dueDate = useAssignmentDueDate(assignment);
+  const { private_profile_id, role } = useClassProfiles();
+  const dueDate = useAssignmentDueDate(assignment, { studentPrivateProfileId: private_profile_id });
   const lateTokens = useLateTokens();
   const [open, setOpen] = useState(false);
-  const { private_profile_id, role } = useClassProfiles();
   const course = role.classes;
   const { data: assignmentGroup } = useList<AssignmentGroup>({
     resource: "assignment_groups",
@@ -196,7 +197,8 @@ export function AssignmentDueDate({
   showTimeZone?: boolean;
   showDue?: boolean;
 }) {
-  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment);
+  const { private_profile_id } = useClassProfiles();
+  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, { studentPrivateProfileId: private_profile_id });
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
@@ -227,32 +229,19 @@ export function SelfReviewDueDate({
   assignment,
   showTimeZone = false
 }: {
-  assignment: Assignment;
+  assignment: AssignmentsForStudentDashboard;
   showTimeZone?: boolean;
 }) {
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment);
-  const { data: reviewAssignment } = useList<{ deadline_offset: number }>({
-    resource: "assignment_self_review_settings",
-    meta: {
-      select: "deadline_offset"
-    },
-    filters: [
-      {
-        field: "id",
-        operator: "eq",
-        value: assignment.self_review_setting_id
-      }
-    ]
-  });
-
-  if (!dueDate || !originalDueDate || !reviewAssignment?.data[0]) {
+  const { private_profile_id } = useClassProfiles();
+  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, { studentPrivateProfileId: private_profile_id });
+  if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
   return (
     <HStack gap={1}>
       <Text>
         {formatInTimeZone(
-          new TZDate(addHours(dueDate, reviewAssignment.data[0].deadline_offset)),
+          new TZDate(addHours(dueDate, assignment.self_review_deadline_offset ?? 0)),
           time_zone || "America/New_York",
           "MMM d h:mm aaa"
         )}

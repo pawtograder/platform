@@ -20,7 +20,7 @@ export default function SelfReviewDueDateInformation() {
   const myReviews = useWritableSubmissionReviews();
   const { private_profile_id } = useClassProfiles();
   const { assignment } = useAssignmentController();
-  const dueDate = useAssignmentDueDate(assignment);
+  const dueDate = useAssignmentDueDate(assignment, { studentPrivateProfileId: private_profile_id });
   const selfReviewDueDate = addHours(dueDate.dueDate || new Date(), settings.deadline_offset || 0);
   const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
   const [isLoading, setIsLoading] = useState(false);

@@ -4,6 +4,8 @@
 -- 2. Students can be assigned to at most one lab section per class
 -- 3. Assignments can have a due date offset based on lab section meetings
 -- 4. Lab section meetings are tracked to compute dynamic due dates
+ALTER TABLE "public"."classes"
+    ALTER COLUMN "time_zone" SET NOT NULL;
 
 -- Create enum for day of week
 CREATE TYPE "public"."day_of_week" AS ENUM (
@@ -232,7 +234,10 @@ DECLARE
     assignment_record RECORD;
     student_lab_section_id bigint;
     most_recent_lab_meeting_date date;
+    lab_section_record RECORD;
+    course_record RECORD;
     lab_based_due_date timestamp with time zone;
+    lab_meeting_timestamp timestamp with time zone;
 BEGIN
     -- Get assignment details
     SELECT * INTO assignment_record 
@@ -260,6 +265,24 @@ BEGIN
         RETURN assignment_record.due_date;
     END IF;
     
+    -- Get lab section details (for start_time)
+    SELECT * INTO lab_section_record
+    FROM public.lab_sections
+    WHERE id = student_lab_section_id;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Lab section with id % not found', student_lab_section_id;
+    END IF;
+    
+    -- Get course details (for time_zone)
+    SELECT * INTO course_record
+    FROM public.classes
+    WHERE id = assignment_record.class_id;
+    
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Class with id % not found', assignment_record.class_id;
+    END IF;
+    
     -- Find the most recent lab section meeting before the assignment's original due date
     SELECT meeting_date INTO most_recent_lab_meeting_date
     FROM public.lab_section_meetings lsm
@@ -274,8 +297,13 @@ BEGIN
         RETURN assignment_record.due_date;
     END IF;
     
+    -- Combine meeting date with lab section start time and apply course time zone
+    lab_meeting_timestamp := (
+        most_recent_lab_meeting_date::text || ' ' || lab_section_record.end_time::text
+    )::timestamp AT TIME ZONE course_record.time_zone;
+    
     -- Calculate lab-based due date
-    lab_based_due_date := most_recent_lab_meeting_date::timestamp with time zone 
+    lab_based_due_date := lab_meeting_timestamp 
                          + (assignment_record.minutes_due_after_lab * INTERVAL '1 minute');
     
     -- Return the lab-based due date

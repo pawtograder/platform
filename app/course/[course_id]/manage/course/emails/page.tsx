@@ -77,7 +77,6 @@ function EmailsInnerPage() {
   const [body, setBody] = useState<string>("");
   const tags = useTags();
   const { role: enrollment } = useClassProfiles();
-  const courseController = useCourseController();
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
   const [labSectionIds, setLabSectionIds] = useState<number[]>([]);
   const [ccList, setCcList] = useState<{ email: string; user_id: string }[]>([]);
@@ -264,6 +263,8 @@ function EmailsInnerPage() {
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: assignment?.id }]
   });
+
+  const courseController = useCourseController();
 
   /**
    * Adds all mail to the "preview" section based on the current values in form.

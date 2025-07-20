@@ -585,3 +585,194 @@ BEGIN
    
 END
 $$;
+
+CREATE OR REPLACE VIEW "public"."assignments_for_student_dashboard" 
+WITH ("security_invoker"='true') 
+AS 
+WITH latest_submissions AS (
+    -- Get the latest submission for each assignment-student combination
+    SELECT DISTINCT ON (s.assignment_id, COALESCE(s.profile_id, agm.profile_id))
+        s.id,
+        s.assignment_id,
+        s.created_at,
+        s.is_active,
+        s.ordinal,
+        s.profile_id,
+        s.assignment_group_id,
+        COALESCE(s.profile_id, agm.profile_id) AS student_profile_id
+    FROM "public"."submissions" s
+    LEFT JOIN "public"."assignment_groups_members" agm ON agm.assignment_group_id = s.assignment_group_id
+    ORDER BY s.assignment_id, COALESCE(s.profile_id, agm.profile_id), s.created_at DESC
+),
+student_repositories AS (
+    -- Get repositories for each student (individual or group)
+    SELECT DISTINCT
+        r.assignment_id,
+        ur.private_profile_id AS student_profile_id,
+        r.id AS repository_id,
+        r.repository
+    FROM "public"."repositories" r
+    LEFT JOIN "public"."user_roles" ur ON ur.private_profile_id = r.profile_id
+    WHERE r.profile_id IS NOT NULL
+    
+    UNION
+    
+    SELECT DISTINCT
+        r.assignment_id,
+        agm.profile_id AS student_profile_id,
+        r.id AS repository_id,
+        r.repository
+    FROM "public"."repositories" r
+    JOIN "public"."assignment_groups_members" agm ON agm.assignment_group_id = r.assignment_group_id
+    WHERE r.assignment_group_id IS NOT NULL
+)
+SELECT 
+    a.id,
+    a.created_at,
+    a.class_id,
+    a.title,
+    a.release_date,
+    -- Use effective due date instead of original due date
+    public.calculate_effective_due_date(a.id, ur.private_profile_id) AS due_date,
+    a.student_repo_prefix,
+    a.total_points,
+    a.has_autograder,
+    a.has_handgrader,
+    a.description,
+    a.slug,
+    a.template_repo,
+    a.allow_student_formed_groups,
+    a.group_config,
+    a.group_formation_deadline,
+    a.max_group_size,
+    a.min_group_size,
+    a.archived_at,
+    a.autograder_points,
+    a.grading_rubric_id,
+    a.max_late_tokens,
+    a.latest_template_sha,
+    a.meta_grading_rubric_id,
+    a.self_review_rubric_id,
+    a.self_review_setting_id,
+    a.gradebook_column_id,
+    a.minutes_due_after_lab,
+    a.allow_not_graded_submissions,
+    
+    -- Student information
+    ur.private_profile_id AS student_profile_id,
+    ur.user_id AS student_user_id,
+    
+    -- Latest submission information
+    ls.id AS submission_id,
+    ls.created_at AS submission_created_at,
+    ls.is_active AS submission_is_active,
+    ls.ordinal AS submission_ordinal,
+    
+    -- Grader results for the latest submission
+    gr.id AS grader_result_id,
+    gr.score AS grader_result_score,
+    gr.max_score AS grader_result_max_score,
+    
+    -- Repository information
+    sr.repository_id,
+    sr.repository,
+    
+    -- Assignment self review settings
+    asrs.id AS assignment_self_review_setting_id,
+    asrs.enabled AS self_review_enabled,
+    asrs.deadline_offset AS self_review_deadline_offset,
+    
+    -- Review assignment information
+    ra.id AS review_assignment_id,
+    ra.submission_id AS review_submission_id,
+    
+    -- Submission review information
+    sr_review.id AS submission_review_id,
+    sr_review.completed_at AS submission_review_completed_at,
+    
+    -- Assignment due date exceptions
+    ade.id AS due_date_exception_id,
+    ade.hours AS exception_hours,
+    ade.minutes AS exception_minutes,
+    ade.tokens_consumed AS exception_tokens_consumed,
+    ade.created_at AS exception_created_at,
+    ade.creator_id AS exception_creator_id,
+    ade.note AS exception_note
+
+FROM "public"."assignments" a
+INNER JOIN "public"."user_roles" ur ON ur.class_id = a.class_id AND ur.role = 'student'
+LEFT JOIN latest_submissions ls ON ls.assignment_id = a.id AND ls.student_profile_id = ur.private_profile_id
+LEFT JOIN "public"."grader_results" gr ON gr.submission_id = ls.id
+LEFT JOIN student_repositories sr ON sr.assignment_id = a.id AND sr.student_profile_id = ur.private_profile_id
+LEFT JOIN "public"."assignment_self_review_settings" asrs ON asrs.id = a.self_review_setting_id
+LEFT JOIN "public"."review_assignments" ra ON ra.assignment_id = a.id AND ra.assignee_profile_id = ur.private_profile_id
+LEFT JOIN "public"."submission_reviews" sr_review ON sr_review.id = ra.submission_review_id
+LEFT JOIN "public"."assignment_due_date_exceptions" ade ON ade.assignment_id = a.id 
+    AND (ade.student_id = ur.private_profile_id OR ade.assignment_group_id IN (
+        SELECT agm.assignment_group_id 
+        FROM "public"."assignment_groups_members" agm 
+        WHERE agm.profile_id = ur.private_profile_id AND agm.assignment_id = a.id
+    ))
+WHERE a.archived_at IS NULL;
+
+COMMENT ON VIEW "public"."assignments_for_student_dashboard" IS 'Comprehensive view for student assignment dashboard with effective due dates and all related data';
+COMMENT ON COLUMN "public"."assignments_for_student_dashboard"."due_date" IS 'Lab-aware effective due date calculated for each student';
+COMMENT ON COLUMN "public"."assignments_for_student_dashboard"."submission_id" IS 'ID of the latest submission for this assignment';
+COMMENT ON COLUMN "public"."assignments_for_student_dashboard"."repository" IS 'Repository name for this student/assignment';
+COMMENT ON COLUMN "public"."assignments_for_student_dashboard"."exception_hours" IS 'Hours extended via due date exceptions'; 
+
+-- Migration to create a view that shows assignments with effective due dates per student
+-- This view provides all assignment data but replaces due_date with the lab-aware effective due date
+
+-- Create a view that shows assignments with effective due dates for each student
+CREATE OR REPLACE VIEW "public"."assignments_with_effective_due_dates" 
+WITH ("security_invoker"='true') 
+AS SELECT 
+    a.id,
+    a.created_at,
+    a.class_id,
+    a.title,
+    a.release_date,
+    -- Replace due_date with effective due date
+    public.calculate_effective_due_date(a.id, ur.private_profile_id) AS due_date,
+    a.student_repo_prefix,
+    a.total_points,
+    a.has_autograder,
+    a.has_handgrader,
+    a.description,
+    a.slug,
+    a.template_repo,
+    a.allow_student_formed_groups,
+    a.group_config,
+    a.group_formation_deadline,
+    a.max_group_size,
+    a.min_group_size,
+    a.archived_at,
+    a.autograder_points,
+    a.grading_rubric_id,
+    a.max_late_tokens,
+    a.latest_template_sha,
+    a.meta_grading_rubric_id,
+    a.self_review_rubric_id,
+    a.self_review_setting_id,
+    a.gradebook_column_id,
+    a.minutes_due_after_lab,
+    -- Add student profile ID for filtering
+    ur.private_profile_id AS student_profile_id
+
+FROM "public"."assignments" a
+CROSS JOIN "public"."user_roles" ur
+WHERE ur.class_id = a.class_id 
+  AND ur.role = 'student'
+  AND a.archived_at IS NULL;
+
+-- Grant permissions on the view
+GRANT ALL ON TABLE "public"."assignments_with_effective_due_dates" TO "authenticated";
+GRANT ALL ON TABLE "public"."assignments_with_effective_due_dates" TO "service_role";
+GRANT ALL ON TABLE "public"."assignments_with_effective_due_dates" TO "anon";
+
+
+-- Add comments for documentation
+COMMENT ON VIEW "public"."assignments_with_effective_due_dates" IS 'View showing all assignment columns but with due_date replaced by the lab-aware effective due date for each student';
+COMMENT ON COLUMN "public"."assignments_with_effective_due_dates"."due_date" IS 'Lab-aware effective due date calculated for each student';
+COMMENT ON COLUMN "public"."assignments_with_effective_due_dates"."student_profile_id" IS 'Student profile ID for filtering assignments by student';

@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCourse } from "@/hooks/useAuthState";
 import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
-import { useCourseController } from "@/hooks/useCourseController";
+import { useAssignmentDueDate } from "@/hooks/useCourseController";
 import {
   Assignment,
   AssignmentDueDateException,
@@ -49,15 +49,13 @@ function AdjustDueDateDialog({
   course: Course;
   extensions: AssignmentDueDateException[];
 }) {
-  const courseController = useCourseController();
   const studentOrGroup = group ? "group" : "student";
   const dueDateFor = group ? `Group: ${group.name}` : `Student: ${student.name}`;
 
-  // Calculate lab-based effective due date
+  // Calculate lab-based effective due date using the hook
+  const dueDateInfo = useAssignmentDueDate(assignment, { studentPrivateProfileId: student.id });
   const originalDueDate = new TZDate(assignment.due_date!);
-  const labBasedDueDate = courseController.isLoaded
-    ? new TZDate(courseController.calculateEffectiveDueDate(assignment, { studentPrivateProfileId: student.id }))
-    : originalDueDate;
+  const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
 
   // Calculate final due date with extensions
   const hoursExtended = extensions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
@@ -264,9 +262,87 @@ function AdjustDueDateDialog({
   );
 }
 
+function StudentRow({
+  student,
+  assignment,
+  groups,
+  dueDateExceptions,
+  hasLabScheduling,
+  originalDueDate,
+  course
+}: {
+  student: UserProfile;
+  assignment: Assignment;
+  groups: AssignmentGroupMembersWithGroup[];
+  dueDateExceptions: AssignmentDueDateException[];
+  hasLabScheduling: boolean;
+  originalDueDate: TZDate;
+  course: Course;
+}) {
+  const dueDateInfo = useAssignmentDueDate(assignment, { studentPrivateProfileId: student.id });
+  const group = groups?.find((group) => group.profile_id === student.id);
+  const exceptions = dueDateExceptions?.filter(
+    (exception) =>
+      exception.student_id === student.id ||
+      (group && exception.assignment_group_id === group.assignment_groups.id)
+  );
+
+  const labBasedDueDate = dueDateInfo.effectiveDueDate || originalDueDate;
+  const hoursExtended = exceptions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
+  const minutesExtended = exceptions?.reduce((acc, exception) => acc + exception.minutes, 0) || 0;
+  const finalDueDate = addMinutes(addHours(labBasedDueDate, hoursExtended), minutesExtended);
+
+  const grantors = exceptions?.map((exception) => exception.creator_id);
+  const uniqueGrantors = [...new Set(grantors)];
+
+  const hasExtensions = hoursExtended > 0 || minutesExtended > 0;
+  const isDifferentFromOriginal = hasLabScheduling && labBasedDueDate.getTime() !== originalDueDate.getTime();
+
+  return (
+    <Table.Row key={student.id}>
+      <Table.Cell>{student.name}</Table.Cell>
+      <Table.Cell>{group?.assignment_groups.name}</Table.Cell>
+      {hasLabScheduling && (
+        <Table.Cell>
+          <Text>{labBasedDueDate.toLocaleString()}</Text>
+          {isDifferentFromOriginal && (
+            <Text fontSize="xs" color="blue.500">
+              (lab-adjusted)
+            </Text>
+          )}
+        </Table.Cell>
+      )}
+      <Table.Cell>
+        <Text>{hasExtensions ? finalDueDate.toLocaleString() : ""}</Text>
+        {hasExtensions && (
+          <Text fontSize="xs" color="orange.500">
+            (+{hoursExtended}h {minutesExtended}m)
+          </Text>
+        )}
+      </Table.Cell>
+      <Table.Cell>
+        <HStack>
+          {hasExtensions ? `${hoursExtended}h ${minutesExtended}m` : ""}
+          {uniqueGrantors.map((grantor) => (
+            <PersonAvatar key={grantor} uid={grantor} size="2xs" />
+          ))}
+        </HStack>
+      </Table.Cell>
+      <Table.Cell>
+        <AdjustDueDateDialog
+          student={student}
+          group={group?.assignment_groups}
+          assignment={assignment}
+          course={course}
+          extensions={exceptions}
+        />
+      </Table.Cell>
+    </Table.Row>
+  );
+}
+
 export default function DueDateExceptions() {
   const course = useCourse();
-  const courseController = useCourseController();
   const { assignment_id } = useParams();
   const students = useStudentRoster();
   const { data: assignment } = useOne<Assignment>({
@@ -333,74 +409,18 @@ export default function DueDateExceptions() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {students.map((student) => {
-            const group = groups.data?.find((group) => group.profile_id === student.id);
-            const exceptions = dueDateExceptions?.data.filter(
-              (exception) =>
-                exception.student_id === student.id ||
-                (group && exception.assignment_group_id === group.assignment_groups.id)
-            );
-
-            // Calculate lab-based effective due date
-            const labBasedDueDate = courseController.isLoaded
-              ? new TZDate(
-                  courseController.calculateEffectiveDueDate(assignment.data, { studentPrivateProfileId: student.id })
-                )
-              : originalDueDate;
-
-            // Calculate final due date with extensions
-            const hoursExtended = exceptions?.reduce((acc, exception) => acc + exception.hours, 0) || 0;
-            const minutesExtended = exceptions?.reduce((acc, exception) => acc + exception.minutes, 0) || 0;
-            const finalDueDate = addMinutes(addHours(labBasedDueDate, hoursExtended), minutesExtended);
-
-            const grantors = exceptions?.map((exception) => exception.creator_id);
-            const uniqueGrantors = [...new Set(grantors)];
-
-            const hasExtensions = hoursExtended > 0 || minutesExtended > 0;
-            const isDifferentFromOriginal = hasLabScheduling && labBasedDueDate.getTime() !== originalDueDate.getTime();
-
-            return (
-              <Table.Row key={student.id}>
-                <Table.Cell>{student.name}</Table.Cell>
-                <Table.Cell>{group?.assignment_groups.name}</Table.Cell>
-                {hasLabScheduling && (
-                  <Table.Cell>
-                    <Text>{labBasedDueDate.toLocaleString()}</Text>
-                    {isDifferentFromOriginal && (
-                      <Text fontSize="xs" color="blue.500">
-                        (lab-adjusted)
-                      </Text>
-                    )}
-                  </Table.Cell>
-                )}
-                <Table.Cell>
-                  <Text>{hasExtensions ? finalDueDate.toLocaleString() : ""}</Text>
-                  {hasExtensions && (
-                    <Text fontSize="xs" color="orange.500">
-                      (+{hoursExtended}h {minutesExtended}m)
-                    </Text>
-                  )}
-                </Table.Cell>
-                <Table.Cell>
-                  <HStack>
-                    {hasExtensions ? `${hoursExtended}h ${minutesExtended}m` : ""}
-                    {uniqueGrantors.map((grantor) => (
-                      <PersonAvatar key={grantor} uid={grantor} size="2xs" />
-                    ))}
-                  </HStack>
-                </Table.Cell>
-                <Table.Cell>
-                  <AdjustDueDateDialog
-                    student={student}
-                    group={group?.assignment_groups}
-                    assignment={assignment.data}
-                    course={course.classes}
-                    extensions={exceptions}
-                  />
-                </Table.Cell>
-              </Table.Row>
-            );
-          })}
+          {students.map((student) => (
+            <StudentRow
+              key={student.id}
+              student={student}
+              assignment={assignment.data}
+              groups={groups.data}
+              dueDateExceptions={dueDateExceptions.data}
+              hasLabScheduling={hasLabScheduling}
+              originalDueDate={originalDueDate}
+              course={course.classes}
+            />
+          ))}
         </Table.Body>
       </Table.Root>
     </Box>
