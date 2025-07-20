@@ -292,11 +292,8 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
     ) as (keyof T)[];
 }
 export default function RubricPage() {
-  const { assignment_id } = useParams();
   return (
-    <AssignmentProvider assignment_id={Number(assignment_id)}>
-      <InnerRubricPage />
-    </AssignmentProvider>
+    <InnerRubricPage />
   );
 }
 const MemoizedRubricSidebar = memo(RubricSidebar);
@@ -1534,7 +1531,7 @@ parts:
             is_required: false
             is_comment_required: true
             points: 2
-            student_visibility: never
+            student_visibility: if_applied
       - description: Some use-cases might call for having graders tick boxes to deduct
           points. This will require at least 2 and at most 4 boxes to be ticked.
         is_additive: false
@@ -1574,12 +1571,12 @@ parts:
             is_required: false
             is_comment_required: true
             points: 2
-            student_visibility: never
+            student_visibility: if_applied
           - name: Some option 6
             is_annotation: false
             is_required: false
             is_comment_required: true
             points: 2
-            student_visibility: never
+            student_visibility: if_applied
 is_private: false
 `;

@@ -66,6 +66,11 @@ export function useIsGraderOrInstructor() {
   return role.role === "grader" || role.role === "instructor";
 }
 
+export function useRoleByPrivateProfileId(private_profile_id: string) {
+  const { allVisibleRoles } = useClassProfiles();
+  return allVisibleRoles.find((r) => r.private_profile_id === private_profile_id);
+}
+
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const { user, roles: myRoles } = useAuthState();

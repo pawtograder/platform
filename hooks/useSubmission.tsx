@@ -438,6 +438,68 @@ export function useSubmissionArtifactComments({
   return comments;
 }
 
+export function useSubmissionRegradeRequestComments({
+  submission_regrade_request_id,
+  onEnter,
+  onLeave,
+  onUpdate
+}: {
+  submission_regrade_request_id?: number;
+  onEnter?: (comment: Tables<"submission_regrade_request_comments">[]) => void;
+  onLeave?: (comment: Tables<"submission_regrade_request_comments">[]) => void;
+  onUpdate?: (comment: Tables<"submission_regrade_request_comments">[]) => void;
+}) {
+  const [comments, setComments] = useState<Tables<"submission_regrade_request_comments">[]>([]);
+  const ctx = useContext(SubmissionContext);
+  const submissionController = ctx?.submissionController;
+
+  useEffect(() => {
+    if (!submissionController) {
+      setComments([]);
+      return;
+    }
+    const { unsubscribe, data } = submissionController.listGenericData<Tables<"submission_regrade_request_comments">>(
+      "submission_regrade_request_comments",
+      (data, { entered, left, updated }) => {
+        const filteredData = data.filter((comment) => 
+          submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
+        );
+        setComments(filteredData);
+        if (onEnter) {
+          onEnter(entered.filter((comment) => 
+            submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
+          ));
+        }
+        if (onLeave) {
+          onLeave(left.filter((comment) => 
+            submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
+          ));
+        }
+        if (onUpdate) {
+          onUpdate(updated.filter((comment) => 
+            submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
+          ));
+        }
+      },
+      (item) => submission_regrade_request_id === undefined || item.submission_regrade_request_id === submission_regrade_request_id
+    );
+    setComments(data.filter((comment) => 
+      submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
+    ));
+    if (onEnter) {
+      onEnter(data.filter((comment) => 
+        submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
+      ));
+    }
+    return () => unsubscribe();
+  }, [submissionController, submission_regrade_request_id, onEnter, onLeave, onUpdate]);
+
+  if (!submissionController) {
+    return [];
+  }
+  return comments;
+}
+
 function SubmissionControllerCreator({
   submission_id,
   setReady
@@ -468,9 +530,13 @@ function SubmissionControllerCreator({
     "submission_artifact_comments",
     (item: unknown) => (item as SubmissionArtifactComment).id
   );
+  submissionController.registerGenericDataType(
+    "submission_regrade_request_comments",
+    (item: unknown) => (item as Tables<"submission_regrade_request_comments">).id
+  );
 
   // Single comprehensive query to load all data upfront
-  const { query } = useShow<SubmissionWithAllRelatedData>({
+  const { query } = useShow<SubmissionWithAllRelatedData & { submission_regrade_request_comments?: Tables<"submission_regrade_request_comments">[] }>({
     resource: "submissions",
     id: submission_id,
     meta: {
@@ -484,7 +550,8 @@ function SubmissionControllerCreator({
         submission_file_comments(*),
         submission_comments(*),
         submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))),
-        submission_artifact_comments!submission_artifact_comments_submission_id_fkey(*)
+        submission_artifact_comments!submission_artifact_comments_submission_id_fkey(*),
+        submission_regrade_request_comments(*)
       `.trim()
     }
   });
@@ -577,12 +644,32 @@ function SubmissionControllerCreator({
       submissionController.handleGenericDataEvent("submission_artifact_comments", event);
     }
   });
+
+  useList<Tables<"submission_regrade_request_comments">>({
+    resource: "submission_regrade_request_comments",
+    filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
+    pagination: {
+      pageSize: 1000
+    },
+    liveMode: "manual",
+    queryOptions: {
+      enabled: true, // Need to enable to receive live events
+      refetchOnMount: false,
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    onLiveEvent: (event) => {
+      submissionController.handleGenericDataEvent("submission_regrade_request_comments", event);
+    }
+  });
   const invalidate = useInvalidate();
 
   // Process the main query data once it's loaded
   useEffect(() => {
     if (query.data?.data && !query.isLoading) {
-      const data = query.data.data;
+      const data = query.data.data; 
 
       // Set the main submission data (without the extra fields)
       const {
@@ -590,6 +677,7 @@ function SubmissionControllerCreator({
         submission_comments,
         submission_reviews,
         submission_artifact_comments,
+        submission_regrade_request_comments,
         ...submissionData
       } = data;
 
@@ -607,6 +695,9 @@ function SubmissionControllerCreator({
       }
       if (submission_artifact_comments) {
         submissionController.setGeneric("submission_artifact_comments", submission_artifact_comments);
+      }
+      if (submission_regrade_request_comments) {
+        submissionController.setGeneric("submission_regrade_request_comments", submission_regrade_request_comments);
       }
 
       const unsubscribeFromReviewAssignmentsChanges = assignmentController.getReviewAssignments((reviewAssignments) => {

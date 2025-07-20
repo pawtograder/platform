@@ -143,7 +143,7 @@ export function CompleteReviewButton() {
               {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
                 <Text>All checks have been applied. Click the button below to mark the review as complete.</Text>
               )}
-              {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
+              {missing_required_checks.length == 0 && (
                 <Button
                   variant="solid"
                   colorPalette="green"

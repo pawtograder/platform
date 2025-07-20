@@ -8,6 +8,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
 import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
+import { AssignmentProvider } from "@/hooks/useAssignment";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
@@ -24,6 +25,7 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaCalendar
   },
   { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
+  { label: "Manage Regrade Requests", href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`, icon: FaPooStorm },
   { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
   {
     label: "Rerun Autograder",
@@ -47,7 +49,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
   const router = useRouter();
 
   return (
-    <>
+    <AssignmentProvider assignment_id={Number(assignment_id)}>
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
         <Box w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
@@ -106,6 +108,6 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
           <Box>{children}</Box>
         </Box>
       </Flex>
-    </>
+    </AssignmentProvider>
   );
 }

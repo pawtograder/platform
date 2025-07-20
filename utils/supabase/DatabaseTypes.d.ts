@@ -196,6 +196,7 @@ export type SubmissionWithAllRelatedData = SubmissionWithFilesGraderResultsOutpu
   submission_comments: SubmissionComments[];
   submission_reviews: SubmissionReviewWithRubric[];
   submission_artifact_comments: SubmissionArtifactComment[];
+  submission_regrade_request_comments: SubmissionRegradeRequestComment[];
 };
 export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"],
@@ -703,3 +704,7 @@ export type Course = GetResult<
   Database["public"]["Tables"]["classes"]["Relationships"],
   "*"
 >;
+
+export type RegradeStatus = Database["public"]["Enums"]["regrade_status"];
+export type RegradeRequest = Database["public"]["Tables"]["submission_regrade_requests"]["Row"];
+export type RegradeRequestComment = Database["public"]["Tables"]["submission_regrade_request_comments"]["Row"];

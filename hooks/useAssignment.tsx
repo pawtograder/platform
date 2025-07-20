@@ -2,8 +2,10 @@
 import {
   ActiveSubmissionsWithGradesForAssignment,
   AssignmentWithRubricsAndReferences,
+  RegradeRequest,
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
+
 import { Text } from "@chakra-ui/react";
 import { LiveEvent, useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -96,6 +98,42 @@ export function useReferencingRubricChecks(rubric_check_id: number | null | unde
   return controller.referencingChecksById.get(rubric_check_id);
 }
 
+export function useRegradeRequests() {
+  const controller = useAssignmentController();
+  const [regradeRequests, setRegradeRequests] = useState<RegradeRequest[]>(controller.regradeRequests);
+  
+  useEffect(() => {
+    const { unsubscribe } = controller.getRegradeRequests(setRegradeRequests);
+    setRegradeRequests(controller.regradeRequests);
+    return () => unsubscribe();
+  }, [controller]);
+  
+  return regradeRequests;
+}
+
+export function useRegradeRequest(regrade_request_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const [regradeRequest, setRegradeRequest] = useState<RegradeRequest | undefined>(regrade_request_id ? controller.regradeRequests.find((rr) => rr.id === regrade_request_id) : undefined);
+  
+  useEffect(() => {
+    if (!regrade_request_id) {
+      setRegradeRequest(undefined);
+      return;
+    }
+    
+    const { unsubscribe, data } = controller.getRegradeRequest(regrade_request_id, setRegradeRequest);
+    setRegradeRequest(data);
+    return () => unsubscribe();
+  }, [controller, regrade_request_id]);
+  
+  return regradeRequest;
+}
+
+export function useRegradeRequestsBySubmission(submission_id: number | null | undefined) {
+  const regradeRequests = useRegradeRequests();
+  return useMemo(() => regradeRequests.filter((rr) => rr.submission_id === submission_id), [regradeRequests, submission_id]);
+}
+
 type OurRubricCheck =
   AssignmentWithRubricsAndReferences["rubrics"][number]["rubric_parts"][number]["rubric_criteria"][number]["rubric_checks"][number];
 class AssignmentController {
@@ -107,6 +145,10 @@ class AssignmentController {
   private _reviewAssignmentListSubscribers: ((
     reviewAssignments: AssignmentWithRubricsAndReferences["review_assignments"]
   ) => void)[] = [];
+
+  private _regradeRequests: RegradeRequest[] = [];
+  private _regradeRequestListSubscribers: ((regradeRequests: RegradeRequest[]) => void)[] = [];
+  private _regradeRequestByIdSubscribers: Map<number, ((regradeRequest: RegradeRequest | undefined) => void)[]> = new Map();
 
   rubricCheckById: Map<number, OurRubricCheck> = new Map();
   rubricCriteriaById: Map<
@@ -138,6 +180,46 @@ class AssignmentController {
     };
   }
 
+  getRegradeRequests(callback?: (regradeRequests: RegradeRequest[]) => void) {
+    if (callback) {
+      this._regradeRequestListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this._regradeRequestListSubscribers = this._regradeRequestListSubscribers.filter((cb) => cb !== callback);
+      },
+      data: this._regradeRequests
+    };
+  }
+
+  getRegradeRequest(
+    regradeRequestId: number,
+    callback?: (regradeRequest: RegradeRequest | undefined) => void
+  ) {
+    if (callback) {
+      if (!this._regradeRequestByIdSubscribers.has(regradeRequestId)) {
+        this._regradeRequestByIdSubscribers.set(regradeRequestId, []);
+      }
+      this._regradeRequestByIdSubscribers.get(regradeRequestId)!.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        if (callback) {
+          const subscribers = this._regradeRequestByIdSubscribers.get(regradeRequestId);
+          if (subscribers) {
+            const filtered = subscribers.filter((cb) => cb !== callback);
+            if (filtered.length === 0) {
+              this._regradeRequestByIdSubscribers.delete(regradeRequestId);
+            } else {
+              this._regradeRequestByIdSubscribers.set(regradeRequestId, filtered);
+            }
+          }
+        }
+      },
+      data: this._regradeRequests.find((rr) => rr.id === regradeRequestId)
+    };
+  }
+
   handleReviewAssignmentEvent(event: LiveEvent) {
     const body = event.payload as AssignmentWithRubricsAndReferences["review_assignments"][number]; // Assertion for event.payload
     const id = body.id;
@@ -149,6 +231,41 @@ class AssignmentController {
       if (index !== -1) {
         this._reviewAssignments = this._reviewAssignments.map((ra) => (ra.id === id ? body : ra));
         this._reviewAssignmentListSubscribers.forEach((cb) => cb(this._reviewAssignments));
+      }
+    }
+  }
+
+  handleRegradeRequestEvent(event: LiveEvent) {
+    const body = event.payload as RegradeRequest; // Assertion for event.payload
+    const id = body.id;
+    console.log("handleRegradeRequestEvent", event.type, body);
+    
+    if (event.type === "created") {
+      this._regradeRequests = [...this._regradeRequests, body];
+      this._regradeRequestListSubscribers.forEach((cb) => cb(this._regradeRequests));
+      // Notify individual subscribers for this specific regrade request
+      const idSubscribers = this._regradeRequestByIdSubscribers.get(id);
+      if (idSubscribers) {
+        idSubscribers.forEach((cb) => cb(body));
+      }
+    } else if (event.type === "updated") {
+      const index = this._regradeRequests.findIndex((rr) => rr.id === id);
+      if (index !== -1) {
+        this._regradeRequests = this._regradeRequests.map((rr) => (rr.id === id ? body : rr));
+        this._regradeRequestListSubscribers.forEach((cb) => cb(this._regradeRequests));
+        // Notify individual subscribers for this specific regrade request
+        const idSubscribers = this._regradeRequestByIdSubscribers.get(id);
+        if (idSubscribers) {
+          idSubscribers.forEach((cb) => cb(body));
+        }
+      }
+    } else if (event.type === "deleted") {
+      this._regradeRequests = this._regradeRequests.filter((rr) => rr.id !== id);
+      this._regradeRequestListSubscribers.forEach((cb) => cb(this._regradeRequests));
+      // Notify individual subscribers for this specific regrade request
+      const idSubscribers = this._regradeRequestByIdSubscribers.get(id);
+      if (idSubscribers) {
+        idSubscribers.forEach((cb) => cb(undefined));
       }
     }
   }
@@ -197,6 +314,13 @@ class AssignmentController {
   }
   get submissions() {
     return this._submissions;
+  }
+  // Regrade Requests
+  set regradeRequests(regradeRequests: RegradeRequest[]) {
+    this._regradeRequests = regradeRequests;
+  }
+  get regradeRequests() {
+    return this._regradeRequests;
   }
   get isReady() {
     return !!this._assignment && this._rubrics.length > 0;
@@ -281,6 +405,49 @@ function AssignmentControllerCreator({
     }
   });
 
+  // Regrade Requests with pagination to fetch all data
+  const [regradeRequestsData, setRegradeRequestsData] = useState<RegradeRequest[]>([]);
+  const [regradeRequestsLoading, setRegradeRequestsLoading] = useState(false);
+  const [regradeRequestsPage, setRegradeRequestsPage] = useState(1);
+  const [regradeRequestsHasMore, setRegradeRequestsHasMore] = useState(true);
+  
+  const { data: currentRegradeRequestsData, isLoading: isCurrentRegradeRequestsLoading } = useList<RegradeRequest>({
+    resource: "submission_regrade_requests",
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
+    pagination: { current: regradeRequestsPage, pageSize: 1000 },
+    queryOptions: { enabled: true },
+    liveMode: "manual",
+    onLiveEvent: (event) => {
+      controller.handleRegradeRequestEvent(event);
+    }
+  });
+
+  // Handle pagination for regrade requests
+  useEffect(() => {
+    if (currentRegradeRequestsData?.data && !isCurrentRegradeRequestsLoading) {
+      const newData = currentRegradeRequestsData.data;
+      console.log("newData", newData);
+      console.log("regradeRequestsPage", regradeRequestsPage);
+      if (regradeRequestsPage === 1) {
+        setRegradeRequestsData(newData);
+      } else {
+        setRegradeRequestsData(prev => [...prev, ...newData]);
+      }
+      
+      // Check if we have more data to fetch
+      if (newData.length < 1000) {
+        setRegradeRequestsHasMore(false);
+      } else {
+        setRegradeRequestsPage(prev => prev + 1);
+      }
+    }
+  }, [currentRegradeRequestsData, isCurrentRegradeRequestsLoading, regradeRequestsPage]);
+
+  // Update loading state
+  useEffect(() => {
+    setRegradeRequestsLoading(isCurrentRegradeRequestsLoading && regradeRequestsHasMore);
+  }, [isCurrentRegradeRequestsLoading, regradeRequestsHasMore]);
+
   // Set data in controller
   useEffect(() => {
     if (assignmentQuery.data?.data) {
@@ -290,10 +457,11 @@ function AssignmentControllerCreator({
     if (submissionsData?.data) {
       controller.submissions = submissionsData.data;
     }
-    if (!assignmentQuery.isLoading && assignmentQuery.data?.data) {
+    controller.regradeRequests = regradeRequestsData;
+    if (!assignmentQuery.isLoading && assignmentQuery.data?.data && !regradeRequestsLoading) {
       setReady(true);
     }
-  }, [assignmentQuery.data, assignmentQuery.isLoading, submissionsData, controller, setReady]);
+  }, [assignmentQuery.data, assignmentQuery.isLoading, submissionsData, regradeRequestsData, regradeRequestsLoading, controller, setReady]);
 
   return null;
 }
