@@ -7,8 +7,6 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-console.log(process.env.SUPABASE_URL);
-console.log(process.env.SUPABASE_SERVICE_ROLE_KEY);
 export function getTestRunPrefix() {
   const test_run_batch = format(new Date(), "yyyy-MM-dd.HH.mm.ss") + "#" + Math.random().toString(36).substring(2, 6);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined";
@@ -182,9 +180,6 @@ export async function createUserInClass({
   if (!profileData || profileError) {
     throw new Error(`Failed to get profile: ${profileError?.message}`);
   }
-  console.log(
-    `Created ${role} ${email}, private_profile_id: ${profileData.private_profile_id}, public_profile_id: ${profileData.public_profile_id}`
-  );
   return {
     private_profile_name: private_profile_name,
     public_profile_name: public_profile_name,

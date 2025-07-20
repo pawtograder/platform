@@ -1,20 +1,21 @@
 "use client";
 import LinkAccount from "@/components/github/link-account";
 import { Alert } from "@/components/ui/alert";
-import { AssignmentDueDate, SelfReviewDueDate } from "@/components/ui/assignment-due-date";
+import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment, AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
+import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Container, EmptyState, Heading, Icon, Spinner, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
 import { UserIdentity } from "@supabase/supabase-js";
 import { addHours, differenceInHours } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { FaCheckCircle } from "react-icons/fa";
@@ -51,7 +52,7 @@ export default function StudentPage() {
   const { user } = useAuthState();
   const { role } = useClassProfiles();
   const supabase = createClient();
-  const { data: courseData } = useList({
+  const { data: courseData } = useList<{ time_zone: string }>({
     resource: "classes",
     meta: {
       select: "time_zone",
@@ -165,7 +166,12 @@ export default function StudentPage() {
         name: assignment.title!,
         type: "assignment",
         due_date: modifiedDueDate,
-        due_date_component: <AssignmentDueDate assignment={assignment as Assignment} />,
+        due_date_component: (
+          <>
+            {modifiedDueDate &&
+              formatInTimeZone(modifiedDueDate, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}
+          </>
+        ),
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,

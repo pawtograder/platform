@@ -92,14 +92,14 @@ async function sendBatchEmails({
   const randomString2 = Math.random().toString(36).substring(2, 15);
   const message_subject = `E2E Test Email ${target_text} ${class_section_text ? `in ${class_section_text}` : ""} ${lab_section_text ? `in ${lab_section_text}` : ""}. ${randomString1}`;
   const message_body = `This is a test email to ${target_text} ${class_section_text ? `in ${class_section_text}` : ""} ${lab_section_text ? `in ${lab_section_text}` : ""} ${randomString2}`;
-  await page.getByRole("combobox", { name: "Email To" }).click();
+  await page.getByRole("combobox", { name: "Email To" }).click({ force: true });
   await page.getByRole("option", { name: "Students", exact: true }).click();
   if (class_section_text) {
-    await page.getByRole("combobox", { name: "Select class section(s)" }).click();
+    await page.getByRole("combobox", { name: "Select class section(s)" }).click({ force: true });
     await page.getByRole("option", { name: class_section_text }).click();
   }
   if (lab_section_text) {
-    await page.getByRole("combobox", { name: "Select lab section(s)" }).click();
+    await page.getByRole("combobox", { name: "Select lab section(s)" }).click({ force: true });
     await page.getByRole("option", { name: lab_section_text }).click();
   }
   await page.getByRole("textbox", { name: "Subject" }).click();

@@ -14,7 +14,7 @@ import {
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
 
-import { TZDate } from "@date-fns/tz";
+import { constructFromSymbol, TZDate } from "@date-fns/tz";
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -1181,8 +1181,7 @@ export function useAssignmentDueDate(
 ) {
   const controller = useCourseController();
   const course = useCourse();
-  const { role } = useClassProfiles();
-  const time_zone = course.time_zone || "America/New_York";
+  const time_zone = course.time_zone;
   const [dueDateExceptions, setDueDateExceptions] = useState<AssignmentDueDateException[]>();
   const [labSections, setLabSections] = useState<LabSection[]>();
   const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
@@ -1231,7 +1230,7 @@ export function useAssignmentDueDate(
       };
     }
 
-    const originalDueDate = new TZDate(assignment.due_date);
+    const originalDueDate = new TZDate(assignment.due_date, time_zone);
     const hasLabScheduling = assignment.minutes_due_after_lab !== null;
 
     // Calculate effective due date (lab-based or original)
@@ -1263,7 +1262,16 @@ export function useAssignmentDueDate(
           if (relevantMeetings.length > 0 && assignment.minutes_due_after_lab !== null) {
             // Calculate lab-based due date
             const mostRecentLabMeeting = relevantMeetings[0];
-            const labMeetingDate = new TZDate(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time, time_zone);
+            const nonTZDate = new Date(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time);
+
+            const labMeetingDate = new TZDate(
+              nonTZDate.getFullYear(),
+              nonTZDate.getMonth(),
+              nonTZDate.getDate(),
+              nonTZDate.getHours(),
+              nonTZDate.getMinutes(),
+              time_zone
+            );
 
             // Add the minutes offset to the lab meeting date
             effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);

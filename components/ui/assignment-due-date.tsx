@@ -204,13 +204,13 @@ export function AssignmentDueDate({
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
+  console.log(dueDate, time_zone);
+  console.log(formatInTimeZone(new TZDate(dueDate, time_zone), time_zone, "MMM d h:mm aaa"));
   return (
     <Flex gap={1} wrap="wrap" maxWidth="100%">
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
-        <Text minWidth={0}>
-          {formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}
-        </Text>
+        <Text minWidth={0}>{formatInTimeZone(new TZDate(dueDate, time_zone), time_zone, "MMM d h:mm aaa")}</Text>
         {showTimeZone && (
           <Text fontSize="sm" flexShrink={0}>
             ({time_zone})
