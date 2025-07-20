@@ -50,11 +50,20 @@ expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);
 function getDueDateString(date: Date) {
   return formatInTimeZone(date, "America/New_York", "MMM d h:mm aaa");
 }
+function getDueDateShortString(date: Date) {
+  return formatInTimeZone(date, "America/New_York", "MM/dd/yyyy, h:mm a");
+}
 test.describe("Assignment due dates", () => {
-  test("Lab-section and non-lab-section assignment due dates are calculated correctly on the assignments page", async ({
+  test("Lab-section and non-lab-section assignment due dates are calculated correctly on the course landing page and on the assignments page", async ({
     page
   }) => {
     await loginAsUser(page, student!, course);
+    await expect(page.locator('body')).toContainText(
+      `${testAssignment!.title}Due${getDueDateShortString(new TZDate(testAssignment!.due_date, "America/New_York"))}Most recent submissionNo submissions`
+    );
+    await expect(page.locator('body')).toContainText(
+      `${testLabAssignment!.title}Due${getDueDateShortString(new TZDate(expectedLabAssignmentDueDate, "America/New_York"))}Most recent submissionNo submissions`
+    );
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
     await link.click();

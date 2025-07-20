@@ -789,6 +789,66 @@ export class CourseController {
     // lab_section_id should be available on UserRoleWithUser after database types regeneration
     return userRole?.lab_section_id || null;
   }
+
+  /**
+   * Calculates the effective due date for an assignment and student, considering lab-based scheduling
+   * WARNING: If lab sections are not yet loaded, this will throw an error. Clients must check isLoaded first.
+   */
+  calculateEffectiveDueDate(
+    assignment: Assignment,
+    {
+      studentPrivateProfileId,
+      labSectionId: labSectionIdOverride
+    }: { studentPrivateProfileId: string; labSectionId?: number }
+  ): Date {
+    // If assignment doesn't use lab-based scheduling, return original due date
+    if (!studentPrivateProfileId && !labSectionIdOverride) {
+      throw new Error("No student private profile ID or lab section ID override provided");
+    }
+    if (!assignment.minutes_due_after_lab) {
+      return new Date(assignment.due_date);
+    }
+
+    // Get student's lab section
+    const labSectionId = labSectionIdOverride || this.getStudentLabSectionId(studentPrivateProfileId);
+    if (!labSectionId) {
+      console.log("Student not in a lab section, falling back to original due date");
+      // Student not in a lab section, fall back to original due date
+      return new Date(assignment.due_date);
+    }
+    const labSection = this.labSections.find((section) => section.id === labSectionId);
+    if (!labSection) {
+      throw new Error("Lab section not found");
+    }
+
+    // Find the most recent lab section meeting before the assignment's original due date
+    const assignmentDueDate = new Date(assignment.due_date);
+    const relevantMeetings = this.labSectionMeetings
+      .filter(
+        (meeting) =>
+          meeting.lab_section_id === labSectionId &&
+          !meeting.cancelled &&
+          new Date(meeting.meeting_date) < assignmentDueDate
+      )
+      .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
+
+    if (relevantMeetings.length === 0) {
+      // No lab meeting found before due date, fall back to original due date
+      return new Date(assignment.due_date);
+    }
+
+    // Calculate lab-based due date
+    const mostRecentLabMeeting = relevantMeetings[0];
+    const labMeetingDate = new TZDate(
+      mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
+      this.course.time_zone ?? "America/New_York"
+    );
+
+    // Add the minutes offset to the lab meeting date
+    const effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
+
+    return effectiveDueDate;
+  }
 }
 
 function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
