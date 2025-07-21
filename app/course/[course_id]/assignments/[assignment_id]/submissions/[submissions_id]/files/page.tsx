@@ -31,6 +31,7 @@ import {
   useRubricCheck,
   useSubmission,
   useSubmissionArtifactComments,
+  useSubmissionController,
   useSubmissionFileComments,
   useSubmissionMaybe,
   useSubmissionReviewByAssignmentId,
@@ -64,7 +65,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
+import { useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
 import JSZip from "jszip";
@@ -208,7 +209,9 @@ function ArtifactAnnotation({
     resource: "submission_artifact_comments"
   });
   const { reviewAssignment, isLoading: reviewAssignmentLoading } = useReviewAssignment(reviewAssignmentId);
-  const gradingReview = useSubmissionReviewOrGradingReview(comment.submission_review_id);
+  if (!comment.submission_review_id) {
+    throw new Error("No submission review ID found");
+  }
 
   if (reviewAssignmentLoading) {
     return <Skeleton height="100px" width="100%" />;
@@ -219,7 +222,7 @@ function ArtifactAnnotation({
   }
 
   const reviewName = comment.submission_review_id
-    ? reviewAssignment?.rubrics?.name || gradingReview?.rubrics?.name || gradingReview?.name || "Review"
+    ? reviewAssignment?.rubrics?.name || "Grading Review" || "Review"
     : "Self-Review";
 
   const pointsText = rubricCriteria.is_additive ? `+${comment.points}` : `-${comment.points}`;
@@ -425,34 +428,32 @@ function ArtifactCommentsForm({
   defaultValue: string;
   reviewAssignmentId?: number;
 }) {
-  const invalidate = useInvalidate();
-  const reviewContext = useSubmissionReviewOrGradingReview();
+  if (!submission.grading_review_id) {
+    throw new Error("No grading review ID found");
+  }
+  const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
-
-  const { mutateAsync: createComment } = useCreate<SubmissionArtifactComment>({
-    resource: "submission_artifact_comments"
-  });
+  const submissionController = useSubmissionController();
 
   const postComment = useCallback(
     async (message: string, author_id: string) => {
       const finalReviewAssignmentId = reviewAssignmentId ?? reviewContext?.id;
 
-      await createComment({
-        values: {
-          submission_id: submission.id,
-          submission_artifact_id: artifact.id,
-          class_id: submission.assignments.class_id,
-          author: author_id,
-          comment: message,
-          submission_review_id: finalReviewAssignmentId,
-          released: reviewContext ? reviewContext.released : true,
-          eventually_visible: eventuallyVisible
-        }
+      await submissionController.submission_artifact_comments.create({
+        submission_id: submission.id,
+        submission_artifact_id: artifact.id,
+        class_id: submission.assignments.class_id,
+        author: author_id,
+        comment: message,
+        submission_review_id: finalReviewAssignmentId ?? null,
+        released: reviewContext ? reviewContext.released : true,
+        eventually_visible: eventuallyVisible,
+        rubric_check_id: null,
+        points: null
       });
-      invalidate({ resource: "submission_artifacts", id: artifact.id, invalidates: ["detail"] });
     },
-    [createComment, submission, artifact, invalidate, reviewContext, eventuallyVisible, reviewAssignmentId]
+    [submissionController, submission, artifact, reviewContext, eventuallyVisible, reviewAssignmentId]
   );
 
   return (
@@ -486,18 +487,18 @@ function ArtifactCheckPopover({
   reviewAssignmentId?: number;
 }) {
   const submission = useSubmission();
-  const reviewContext = useSubmissionReviewOrGradingReview();
+  if (!submission.grading_review_id) {
+    throw new Error("No grading review ID found");
+  }
+  const reviewContext = useSubmissionReviewOrGradingReview(submission.grading_review_id);
   const [selectedCheckOption, setSelectedCheckOption] = useState<RubricCheckSelectOption | null>(null);
   const [selectedSubOption, setSelectedSubOption] = useState<RubricCheckSubOptions | null>(null);
+  const submissionController = useSubmissionController();
 
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const [eventuallyVisible, setEventuallyVisible] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
-
-  const { mutateAsync: createComment } = useCreate<SubmissionArtifactComment>({
-    resource: "submission_artifact_comments"
-  });
 
   useEffect(() => {
     if (isOpen && messageInputRef.current && selectedCheckOption) {
@@ -664,17 +665,17 @@ function ArtifactCheckPopover({
 
                     const values = {
                       comment: commentText,
-                      rubric_check_id: selectedCheckOption.check?.id,
+                      rubric_check_id: selectedCheckOption.check?.id ?? null,
                       class_id: submission.assignments.class_id,
                       submission_id: submission.id,
                       submission_artifact_id: artifact.id,
                       author: profile_id,
                       released: reviewContext ? reviewContext.released : true,
-                      points,
-                      submission_review_id: finalReviewAssignmentId,
+                      points: points ?? null,
+                      submission_review_id: finalReviewAssignmentId ?? null,
                       eventually_visible: eventuallyVisible
                     };
-                    await createComment({ values });
+                    await submissionController.submission_artifact_comments.create(values);
                     setIsOpen(false);
                   }}
                 />

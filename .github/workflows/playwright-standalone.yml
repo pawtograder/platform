@@ -1,22 +1,25 @@
-name: Deploy Branch Preview
+name: Standalone E2E Tests
 on:
-  push:
   workflow_dispatch:
 jobs:
-  deploy:
+  test:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
+    outputs:
+      service_uuid: ${{ steps.deploy.outputs.service_uuid }}
+      app_uuid: ${{ steps.deploy.outputs.app_uuid }}
     steps:
       - uses: actions/checkout@v4
-      - uses: supabase/setup-cli@v1
+      - uses: actions/setup-node@v4
         with:
-          version: latest
+          node-version: lts/*
       - name: Install dependencies
         run: npm ci
-      - name: Deploy a branch preview environment
+      - name: Deploy an E2E testing environment
         id: deploy
         uses: pawtograder/coolify-supabase-deployment-action@main
         with:
-          ephemeral: false
+          ephemeral: true
           coolify_api_url: https://coolify.in.ripley.cloud/api/v1
           coolify_server_uuid: ${{ secrets.COOLIFY_SERVER_UUID }}
           coolify_api_token: ${{ secrets.COOLIFY_API_TOKEN }}
@@ -41,3 +44,21 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 30
+  teardown:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Teardown E2E testing environment
+        uses: pawtograder/coolify-supabase-deployment-action@main
+        with:
+          coolify_api_url: https://coolify.in.ripley.cloud/api/v1
+          coolify_server_uuid: ${{ secrets.COOLIFY_SERVER_UUID }}
+          coolify_api_token: ${{ secrets.COOLIFY_API_TOKEN }}
+          coolify_project_uuid: ${{ secrets.COOLIFY_PROJECT_UUID }}
+          coolify_environment_name: ${{ secrets.COOLIFY_ENVIRONMENT_NAME }}
+          coolify_environment_uuid: ${{ secrets.COOLIFY_ENVIRONMENT_UUID }}
+          coolify_supabase_api_url: ${{ secrets.COOLIFY_SUPABASE_API_URL }}
+          deployment_app_uuid: ${{ secrets.COOLIFY_DEPLOYMENT_APP_UUID }}
+          cleanup_service_uuid: ${{ needs.test.outputs.service_uuid }}
+          cleanup_app_uuid: ${{ needs.test.outputs.app_uuid }}

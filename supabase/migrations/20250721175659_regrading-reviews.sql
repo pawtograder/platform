@@ -824,8 +824,6 @@ as permissive
 for select
 to public
 using ((authorizeforclassgrader(class_id) OR authorize_for_submission(submission_id)));
-alter publication "supabase_realtime" add table "public"."submission_regrade_requests";
-alter publication "supabase_realtime" add table "public"."submission_regrade_request_comments";
 
 -- Assignment overview view with submission and regrade request statistics
 CREATE OR REPLACE VIEW "public"."assignment_overview" 

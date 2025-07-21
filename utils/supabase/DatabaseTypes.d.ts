@@ -15,7 +15,7 @@ export type AssignmentWithRubricsAndReferences = GetResult<
   Database["public"]["Tables"]["assignments"]["Row"],
   "assignments",
   Database["public"]["Tables"]["assignments"]["Relationships"],
-  "*, assignment_self_review_settings(*), review_assignments!review_assignments_assignment_id_fkey(*, review_assignment_rubric_parts(*)), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
+  "*, assignment_self_review_settings(*), rubrics!rubrics_assignment_id_fkey(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*, rubric_criteria(is_additive, rubric_id), rubric_check_references!referencing_rubric_check_id(*)))))"
 >;
 
 export type AggregatedSubmissions = Database["public"]["Views"]["submissions_agg"]["Row"];
@@ -191,13 +191,6 @@ export type SubmissionWithFilesGraderResultsOutputTestsAndRubric = GetResult<
   Database["public"]["Tables"]["submissions"]["Relationships"],
   "*, assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))), assignments(*, rubrics!grading_rubric_id(*,rubric_criteria(*,rubric_checks(*)))), grader_results(*, grader_result_tests(*), grader_result_output(*)), submission_files(*), submission_artifacts(*)"
 >;
-export type SubmissionWithAllRelatedData = SubmissionWithFilesGraderResultsOutputTestsAndRubric & {
-  submission_file_comments: SubmissionFileComment[];
-  submission_comments: SubmissionComments[];
-  submission_reviews: SubmissionReviewWithRubric[];
-  submission_artifact_comments: SubmissionArtifactComment[];
-  submission_regrade_request_comments: SubmissionRegradeRequestComment[];
-};
 export type SubmissionWithGraderResultsAndReview = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
@@ -678,6 +671,13 @@ export type ReviewAssignments = GetResult<
   Database["public"]["Tables"]["review_assignments"]["Row"],
   "review_assignments",
   Database["public"]["Tables"]["review_assignments"]["Relationships"],
+  "*"
+>;
+export type ReviewAssignmentParts = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["review_assignment_rubric_parts"]["Row"],
+  "review_assignment_rubric_parts",
+  Database["public"]["Tables"]["review_assignment_rubric_parts"]["Relationships"],
   "*"
 >;
 

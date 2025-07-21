@@ -5825,10 +5825,6 @@ export type Database = {
         Args: { profile_id: string }
         Returns: boolean
       }
-      auto_assign_self_reviews: {
-        Args: { this_assignment_id: number; this_profile_id: string }
-        Returns: undefined
-      }
       call_edge_function_internal: {
         Args: {
           url_path: string
@@ -5848,6 +5844,10 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: undefined
       }
+      check_unified_realtime_authorization: {
+        Args: { topic_text: string }
+        Returns: boolean
+      }
       create_regrade_request: {
         Args: {
           private_profile_id: string
@@ -5859,6 +5859,10 @@ export type Database = {
       }
       custom_access_token_hook: {
         Args: { event: Json }
+        Returns: Json
+      }
+      finalize_submission_early: {
+        Args: { this_assignment_id: number; this_profile_id: string }
         Returns: Json
       }
       generate_anon_name: {
