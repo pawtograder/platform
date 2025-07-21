@@ -152,7 +152,7 @@ export function useRegradeRequests() {
 
 export function useRegradeRequest(regrade_request_id: number | null | undefined) {
   const controller = useAssignmentController();
-  const [regradeRequest, setRegradeRequest] = useState<RegradeRequest | undefined>(regrade_request_id ? controller.regradeRequests.find((rr) => rr.id === regrade_request_id) : undefined);
+  const [regradeRequest, setRegradeRequest] = useState<RegradeRequest | undefined>(regrade_request_id ? controller.regradeRequests.rows.find((rr) => rr.id === regrade_request_id) : undefined);
   
   useEffect(() => {
     if (!regrade_request_id) {
@@ -160,7 +160,7 @@ export function useRegradeRequest(regrade_request_id: number | null | undefined)
       return;
     }
     
-    const { unsubscribe, data } = controller.getRegradeRequest(regrade_request_id, setRegradeRequest);
+    const { unsubscribe, data } = controller.regradeRequests.getById(regrade_request_id, setRegradeRequest);
     setRegradeRequest(data);
     return () => unsubscribe();
   }, [controller, regrade_request_id]);

@@ -853,3 +853,184 @@ LEFT JOIN (
     WHERE status IN ('opened', 'escalated')
     GROUP BY assignment_id
 ) open_regrade_requests ON a.id = open_regrade_requests.assignment_id;
+
+-- Create unified broadcast function for regrade requests (class-level)
+CREATE OR REPLACE FUNCTION broadcast_regrade_request_data_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    class_id BIGINT;
+    assignee_profile_id UUID;
+    profile_id UUID;
+    affected_profile_ids UUID[];
+    staff_payload JSONB;
+    user_payload JSONB;
+BEGIN
+    -- Get the class_id and assignee_profile_id
+    IF TG_OP = 'INSERT' THEN
+        class_id := NEW.class_id;
+        assignee_profile_id := NEW.assignee;
+    ELSIF TG_OP = 'UPDATE' THEN
+        class_id := COALESCE(NEW.class_id, OLD.class_id);
+        assignee_profile_id := COALESCE(NEW.assignee, OLD.assignee);
+    ELSIF TG_OP = 'DELETE' THEN
+        class_id := OLD.class_id;
+        assignee_profile_id := OLD.assignee;
+    END IF;
+
+    IF class_id IS NOT NULL THEN
+        -- Create payload with multiplexing information
+        staff_payload := jsonb_build_object(
+            'type', 'table_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
+            'data', CASE 
+                WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+                ELSE to_jsonb(NEW)
+            END,
+            'class_id', class_id,
+            'timestamp', NOW()
+        );
+
+        -- Broadcast to staff channel
+        PERFORM realtime.send(
+            staff_payload,
+            'broadcast',
+            'class:' || class_id || ':staff',
+            true
+        );
+
+        -- Also broadcast to the submission owner's channel and all group members
+        IF TG_OP = 'INSERT' THEN
+            -- Get all affected profile IDs (submission owner + group members)
+            SELECT ARRAY(
+                SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                FROM submissions s
+                LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                WHERE s.id = NEW.submission_id
+            ) INTO affected_profile_ids;
+            
+            -- Broadcast to all affected users
+            IF array_length(affected_profile_ids, 1) > 0 THEN
+                user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                -- Send to each affected user
+                FOREACH profile_id IN ARRAY affected_profile_ids
+                LOOP
+                    IF profile_id IS NOT NULL THEN
+                        PERFORM realtime.send(
+                            user_payload,
+                            'broadcast',
+                            'class:' || class_id || ':user:' || profile_id,
+                            true
+                        );
+                    END IF;
+                END LOOP;
+            END IF;
+        ELSIF TG_OP = 'UPDATE' THEN
+            -- For updates, check both old and new submission owners and group members
+            DECLARE
+                old_affected_profile_ids UUID[];
+                new_affected_profile_ids UUID[];
+            BEGIN
+                -- Get old affected profile IDs (submission owner + group members)
+                SELECT ARRAY(
+                    SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                    FROM submissions s
+                    LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                    LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                    WHERE s.id = OLD.submission_id
+                ) INTO old_affected_profile_ids;
+                
+                -- Get new affected profile IDs (submission owner + group members)
+                SELECT ARRAY(
+                    SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                    FROM submissions s
+                    LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                    LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                    WHERE s.id = NEW.submission_id
+                ) INTO new_affected_profile_ids;
+                
+                -- Broadcast to old affected users if submission_id changed
+                IF OLD.submission_id != NEW.submission_id AND array_length(old_affected_profile_ids, 1) > 0 THEN
+                    user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                    FOREACH profile_id IN ARRAY old_affected_profile_ids
+                    LOOP
+                        IF profile_id IS NOT NULL THEN
+                            PERFORM realtime.send(
+                                user_payload,
+                                'broadcast',
+                                'class:' || class_id || ':user:' || profile_id,
+                                true
+                            );
+                        END IF;
+                    END LOOP;
+                END IF;
+                
+                -- Broadcast to new affected users
+                IF array_length(new_affected_profile_ids, 1) > 0 THEN
+                    user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                    FOREACH profile_id IN ARRAY new_affected_profile_ids
+                    LOOP
+                        IF profile_id IS NOT NULL THEN
+                            PERFORM realtime.send(
+                                user_payload,
+                                'broadcast',
+                                'class:' || class_id || ':user:' || profile_id,
+                                true
+                            );
+                        END IF;
+                    END LOOP;
+                END IF;
+            END;
+        ELSIF TG_OP = 'DELETE' THEN
+            -- For deletes, broadcast to the submission owner and all group members
+            SELECT ARRAY(
+                SELECT DISTINCT COALESCE(s.profile_id, agm.profile_id)
+                FROM submissions s
+                LEFT JOIN assignment_groups ag ON s.assignment_group_id = ag.id
+                LEFT JOIN assignment_groups_members agm ON ag.id = agm.assignment_group_id
+                WHERE s.id = OLD.submission_id
+            ) INTO affected_profile_ids;
+            
+            -- Broadcast to all affected users
+            IF array_length(affected_profile_ids, 1) > 0 THEN
+                user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+                FOREACH profile_id IN ARRAY affected_profile_ids
+                LOOP
+                    IF profile_id IS NOT NULL THEN
+                        PERFORM realtime.send(
+                            user_payload,
+                            'broadcast',
+                            'class:' || class_id || ':user:' || profile_id,
+                            true
+                        );
+                    END IF;
+                END LOOP;
+            END IF;
+        END IF;
+    END IF;
+
+    -- Return the appropriate record
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create trigger for regrade requests
+CREATE OR REPLACE TRIGGER broadcast_regrade_requests_unified
+    AFTER INSERT OR UPDATE OR DELETE ON "public"."submission_regrade_requests"
+    FOR EACH ROW
+    EXECUTE FUNCTION broadcast_regrade_request_data_change();
+
+-- Create trigger for regrade request comments
+CREATE OR REPLACE TRIGGER broadcast_regrade_comments_unified
+    AFTER INSERT OR UPDATE OR DELETE ON "public"."submission_regrade_request_comments"
+    FOR EACH ROW
+    EXECUTE FUNCTION broadcast_submission_data_change();
+
+-- Add comments for documentation
+COMMENT ON FUNCTION broadcast_regrade_request_data_change() IS 
+'Broadcasts changes to submission_regrade_requests table using unified channel system. Messages are sent to both staff channel and assignee/user channels. Regrade requests are class-level events.';
