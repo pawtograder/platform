@@ -745,180 +745,37 @@ export type Course = GetResult<
   "*"
 >;
 
-/**
- * Additional office hours related types for realtime functionality
- */
-export type HelpRequestStudent = GetResult<
+// Lab Sections Types
+export type LabSection = GetResult<
   Database["public"],
-  Database["public"]["Tables"]["help_request_students"]["Row"],
-  "help_request_students",
-  Database["public"]["Tables"]["help_request_students"]["Relationships"],
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
   "*"
 >;
 
-export type HelpRequestModeration = GetResult<
+export type LabSectionMeeting = GetResult<
   Database["public"],
-  Database["public"]["Tables"]["help_request_moderation"]["Row"],
-  "help_request_moderation",
-  Database["public"]["Tables"]["help_request_moderation"]["Relationships"],
+  Database["public"]["Tables"]["lab_section_meetings"]["Row"],
+  "lab_section_meetings",
+  Database["public"]["Tables"]["lab_section_meetings"]["Relationships"],
   "*"
 >;
 
-export type HelpRequestMessageReadReceipt = GetResult<
+export type LabSectionWithLeader = GetResult<
   Database["public"],
-  Database["public"]["Tables"]["help_request_message_read_receipts"]["Row"],
-  "help_request_message_read_receipts",
-  Database["public"]["Tables"]["help_request_message_read_receipts"]["Relationships"],
-  "*"
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
+  "*, profiles!lab_sections_lab_leader_id_fkey(*)"
 >;
 
-export type HelpQueueAssignment = GetResult<
+export type LabSectionWithMeetings = GetResult<
   Database["public"],
-  Database["public"]["Tables"]["help_queue_assignments"]["Row"],
-  "help_queue_assignments",
-  Database["public"]["Tables"]["help_queue_assignments"]["Relationships"],
-  "*"
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
+  "*, lab_section_meetings(*)"
 >;
 
-export type StudentKarmaNotes = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["student_karma_notes"]["Row"],
-  "student_karma_notes",
-  Database["public"]["Tables"]["student_karma_notes"]["Relationships"],
-  "*"
->;
-
-export type VideoMeetingSession = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["video_meeting_sessions"]["Row"],
-  "video_meeting_sessions",
-  Database["public"]["Tables"]["video_meeting_sessions"]["Relationships"],
-  "*"
->;
-
-export type StudentHelpActivity = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["student_help_activity"]["Row"],
-  "student_help_activity",
-  Database["public"]["Tables"]["student_help_activity"]["Relationships"],
-  "*"
->;
-
-/**
- * Office hours realtime broadcast message types based on migration patterns
- */
-export type OfficeHoursBroadcastMessage = {
-  type: "table_change" | "staff_data_change" | "queue_change" | "channel_created" | "system";
-  operation?: "INSERT" | "UPDATE" | "DELETE";
-  table?: string;
-  row_id?: number | string;
-  data?: Record<string, unknown>;
-  help_request_id?: number;
-  help_queue_id?: number;
-  class_id: number;
-  student_profile_id?: string;
-  timestamp: string;
-};
-
-export type HelpRequestDataChangeMessage = OfficeHoursBroadcastMessage & {
-  type: "table_change";
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  table:
-    | "help_requests"
-    | "help_request_messages"
-    | "help_request_message_read_receipts"
-    | "help_request_file_references"
-    | "help_request_students";
-  help_request_id: number;
-};
-
-export type HelpRequestStaffDataChangeMessage = OfficeHoursBroadcastMessage & {
-  type: "staff_data_change";
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  table: "help_request_moderation" | "student_karma_notes";
-  student_profile_id: string;
-  help_request_id?: number;
-};
-
-export type HelpQueueDataChangeMessage = OfficeHoursBroadcastMessage & {
-  type: "queue_change";
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  table: "help_queues" | "help_queue_assignments" | "help_requests";
-  help_queue_id: number;
-};
-
-/**
- * Channel subscription filter options for office hours
- */
-export type OfficeHoursMessageFilter = {
-  type?: OfficeHoursBroadcastMessage["type"];
-  table?: string;
-  help_request_id?: number;
-  help_queue_id?: number;
-  student_profile_id?: string;
-};
-
-export type OfficeHoursMessageCallback = (message: OfficeHoursBroadcastMessage) => void;
-
-export type OfficeHoursSubscription = {
-  id: string;
-  filter: OfficeHoursMessageFilter;
-  callback: OfficeHoursMessageCallback;
-};
-
-/**
- * Connection status for office hours realtime controller
- */
-export type OfficeHoursChannelStatus = {
-  name: string;
-  state: "closed" | "errored" | "joined" | "joining" | "leaving";
-  type: "help_request" | "help_request_staff" | "help_queue" | "help_queues";
-  help_request_id?: number;
-  help_queue_id?: number;
-};
-
-export type OfficeHoursConnectionStatus = {
-  overall: "connected" | "connecting" | "disconnected" | "partial";
-  channels: OfficeHoursChannelStatus[];
-  lastUpdate: Date;
-};
-
-/**
- * Office hours form and UI helper types
- */
-export type HelpRequestFormFileReference = {
-  submission_file_id: number;
-  line_number?: number;
-};
-
-export type HelpRequestWithStudentCount = HelpRequest & {
-  student_count: number;
-};
-
-export type HelpRequestFormTemplateOption = {
-  label: string;
-  value: string;
-};
-
-export type HelpRequestFormSubmissionOption = {
-  label: string;
-  value: string;
-};
-
-export type HelpRequestFormFileOption = {
-  label: string;
-  value: string;
-};
-
-export type HelpRequestFormQueueOption = {
-  label: string;
-  value: string;
-};
-
-/**
- * Office hours UI component prop types
- */
-export type HelpRequestHistoryProps = {
-  requests: HelpRequest[];
-  showPrivacyIndicator?: boolean;
-};
+export type DayOfWeek = "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";

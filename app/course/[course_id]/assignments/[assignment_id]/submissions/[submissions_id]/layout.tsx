@@ -231,6 +231,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                       <Table.Cell>
                         {historical_submission.is_active ? (
                           <>This submission is active</>
+                        ) : historical_submission.is_not_graded ? (
+                          <>Not for grading</>
                         ) : (
                           <Button
                             variant="outline"
@@ -597,7 +599,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             </HStack>
           </VStack>
         </Box>
-        {!submission.is_active && (
+        {submission.is_not_graded && (
+          <Box flexShrink={1} maxW="lg" rounded="sm" bg="fg.warning" color="fg.inverted" p={2} textAlign="center" m={0}>
+            <Heading size="md">Viewing a not-for-grading submission.</Heading>
+            <Text fontSize="xs">
+              This submission was created with #NOT-GRADED in the commit message and cannot ever become active. It will
+              not be graded. You can still see autograder feedback.
+            </Text>
+          </Box>
+        )}
+        {!submission.is_active && !submission.is_not_graded && (
           <Box rounded="sm" bg="red.fg" color="fg.inverted" px={6} py={2} textAlign="center" m={0}>
             <Heading size="md">Viewing a previous submission.</Heading>
             <Text fontSize="xs">
