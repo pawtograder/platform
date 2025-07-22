@@ -284,10 +284,13 @@ BEGIN
     END IF;
     
     -- Find the most recent lab section meeting before the assignment's original due date
+    -- Convert meeting date + lab section end time to timestamp in course timezone
     SELECT meeting_date INTO most_recent_lab_meeting_date
     FROM public.lab_section_meetings lsm
     WHERE lsm.lab_section_id = student_lab_section_id
-    AND lsm.meeting_date < assignment_record.due_date::date
+    AND (
+        (lsm.meeting_date::text || ' ' || lab_section_record.end_time::text)::timestamp AT TIME ZONE course_record.time_zone
+    ) <= assignment_record.due_date
     AND NOT lsm.cancelled
     ORDER BY lsm.meeting_date DESC
     LIMIT 1;
