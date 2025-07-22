@@ -36,10 +36,7 @@ export async function runHandler() {
       onComplete: () => {
         adminSupabase
           .schema("pgmq_public")
-          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id })
-          .then((res) => {
-            console.log(`Archived message ${s.msg_id} after ${Date.now() - startTime}ms`);
-          });
+          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
       }
     }));
     for (const studentColumn of studentColumns) {
