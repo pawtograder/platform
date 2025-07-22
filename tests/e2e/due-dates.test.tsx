@@ -44,7 +44,10 @@ test.beforeAll(async () => {
     class_id: course.id
   });
 });
-const expectedLabAssignmentDueDate = previousMonday(labAssignmentDueDate);
+const expectedLabAssignmentDueDate =
+  labAssignmentDueDate.getDay() === 1
+    ? labAssignmentDueDate
+    : previousMonday(labAssignmentDueDate);
 expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);
 
 function getDueDateString(date: Date) {
