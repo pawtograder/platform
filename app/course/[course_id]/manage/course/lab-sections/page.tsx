@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import useModalManager from "@/hooks/useModalManager";
 import { DayOfWeek, LabSectionWithLeader, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -325,7 +326,7 @@ function LabSectionsTable() {
       <VStack gap={4}>
         <HStack justify="space-between" width="100%">
           <Heading size="lg">Lab Sections</Heading>
-          <Button onClick={handleCreateNew} colorPalette="blue" size="sm">
+          <Button onClick={handleCreateNew} size="sm">
             <FaPlus /> Create Lab Section
           </Button>
         </HStack>
@@ -385,17 +386,23 @@ function LabSectionsTable() {
                           <FaEdit />
                         </Button>
                       </Tooltip>
-                      <Tooltip content="Delete lab section">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          colorPalette="red"
-                          onClick={() => handleDelete(labSection.id)}
-                          loading={isDeleting}
-                        >
-                          <FaTrash />
-                        </Button>
-                      </Tooltip>
+                      <PopConfirm
+                        triggerLabel="Delete lab section"
+                        trigger={
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              colorPalette="red"
+                              loading={isDeleting}
+                            >
+                              <FaTrash />
+                            </Button>
+                        }
+                        confirmHeader="Delete Lab Section"
+                        confirmText={`Are you sure you want to delete "${labSection.name}"? This action cannot be undone.`}
+                        onConfirm={() => handleDelete(labSection.id)}
+                        onCancel={() => {}}
+                      />
                     </HStack>
                   </Table.Cell>
                 </Table.Row>
