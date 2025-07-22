@@ -8,13 +8,12 @@ import {
     HStack,
     Icon,
     Input,
-    NativeSelectField,
-    NativeSelectRoot,
     Table,
     Tag,
     Text,
     VStack
 } from "@chakra-ui/react";
+import { Select } from "chakra-react-select";
 import { useTable } from "@refinedev/react-table";
 import { ColumnDef, flexRender, getFilteredRowModel, getCoreRowModel, getPaginationRowModel } from "@tanstack/react-table";
 import { formatRelative } from "date-fns";
@@ -25,7 +24,7 @@ import { useMemo, useState } from "react";
 import { FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaCheck, FaTimes } from "react-icons/fa";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { useRubricCheck } from "@/hooks/useAssignment";
+import { useAssignmentController, useRubricCheck } from "@/hooks/useAssignment";
 
 // Status configuration
 const statusConfig: Record<RegradeStatus, {
@@ -148,6 +147,35 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
 export default function RegradeRequestsTable() {
     const { assignment_id } = useParams();
     const [pageCount, setPageCount] = useState(0);
+    const assignmentController = useAssignmentController();
+    
+    // Get all rubric checks for the assignment
+    const allRubricChecks = useMemo(() => {
+        if (!assignmentController.isReady) return [];
+        return Array.from(assignmentController.rubricCheckById.values());
+    }, [assignmentController]);
+
+    // Create options for status filter
+    const statusOptions = useMemo(() => [
+        { label: "Draft", value: "draft" },
+        { label: "Pending", value: "opened" },
+        { label: "Resolved", value: "resolved" },
+        { label: "Appealed", value: "escalated" },
+        { label: "Closed", value: "closed" }
+    ], []);
+
+    // Create options for appeal granted filter
+    const appealGrantedOptions = useMemo(() => [
+        { label: "Yes", value: "yes" },
+        { label: "No", value: "no" }
+    ], []);
+
+    // Create options for rubric check filter
+    const rubricCheckOptions = useMemo(() => 
+        allRubricChecks.map((check) => ({
+            label: check.name,
+            value: check.id.toString()
+        })), [allRubricChecks]);
     
     const columns = useMemo<ColumnDef<RegradeRequestRow>[]>(
         () => [
@@ -169,9 +197,18 @@ export default function RegradeRequestsTable() {
                     return row.original.status === filterValue;
                 }
             },
-            { id: "rubric_check",
+            { 
+                id: "rubric_check",
                 header: "Rubric Check",
-                cell: ({ row }) => <RubricCheckCell row={row.original} />
+                cell: ({ row }) => <RubricCheckCell row={row.original} />,
+                enableColumnFilter: true,
+                filterFn: (row, id, filterValue) => {
+                    if (!filterValue) return true;
+                    const rubricCheckId = row.original.submission_file_comments?.[0]?.rubric_check_id || 
+                                        row.original.submission_artifact_comments?.[0]?.rubric_check_id || 
+                                        row.original.submission_comments?.[0]?.rubric_check_id;
+                    return rubricCheckId === parseInt(filterValue as string);
+                }
             },
             {
                 id: "student",
@@ -192,10 +229,11 @@ export default function RegradeRequestsTable() {
                 filterFn: (row, id, filterValue) => {
                     const filterString = String(filterValue).toLowerCase();
                     const studentName = row.original.submissions?.profiles?.name?.toLowerCase();
-                    const groupName = row.original.submissions?.assignment_groups?.name?.toLowerCase();
+                    const groupMembers = row.original.submissions?.assignment_groups?.assignment_groups_members;
+                    const groupNames = groupMembers?.map(member => member.profiles.name).join(", ").toLowerCase();
                     
                     if (studentName && studentName.includes(filterString)) return true;
-                    if (groupName && groupName.includes(filterString)) return true;
+                    if (groupNames && groupNames.includes(filterString)) return true;
                     return false;
                 }
             },
@@ -257,19 +295,12 @@ export default function RegradeRequestsTable() {
                 cell: ({ getValue }) => formatRelative(new Date(getValue() as string), new Date())
             },
             {
-                id: "last_updated",
+                id: "last_updated_at",
                 header: "Last Updated",
-                accessorFn: (row) => {
-                    if (row.closed_at) return row.closed_at;
-                    if (row.escalated_at) return row.escalated_at;
-                    if (row.resolved_at) return row.resolved_at;
-                    if (row.opened_at) return row.opened_at;
-                    return row.created_at;
-                },
                 cell: ({ getValue }) => formatRelative(new Date(getValue() as string), new Date())
             }
         ],
-        [assignment_id]
+        []
     );
 
     const {
@@ -294,7 +325,7 @@ export default function RegradeRequestsTable() {
             ],
             pagination: {
                 pageIndex: 0,
-                pageSize: 50
+                pageSize: 500
             },
             sorting: [{ id: "created_at", desc: false }]
         },
@@ -344,23 +375,21 @@ export default function RegradeRequestsTable() {
                     <Text fontSize="sm" fontWeight="medium" mb={1}>
                         Filter by Status:
                     </Text>
-                    <NativeSelectRoot size="sm" width="150px">
-                        <NativeSelectField
-                            value={getColumn("status")?.getFilterValue() as string || ""}
-                            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                                const value = e.target.value;
-                                getColumn("status")?.setFilterValue(value === "" ? undefined : value);
-                            }}
+                    <Box width="150px">
+                        <Select
+                            size="sm"
                             placeholder="All statuses"
-                        >
-                            <option value="">All statuses</option>
-                            <option value="draft">Draft</option>
-                            <option value="opened">Pending</option>
-                            <option value="resolved">Resolved</option>
-                            <option value="escalated">Appealed</option>
-                            <option value="closed">Closed</option>
-                        </NativeSelectField>
-                    </NativeSelectRoot>
+                            value={getColumn("status")?.getFilterValue() as string ? 
+                                statusOptions.filter(opt => (getColumn("status")?.getFilterValue() as string) === opt.value) : []}
+                            onChange={(options) => {
+                                const values = Array.isArray(options) ? options.map(opt => opt.value) : [];
+                                getColumn("status")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+                            }}
+                            options={statusOptions}
+                            isClearable
+                            isMulti
+                        />
+                    </Box>
                 </Box>
                 
                 <Box>
@@ -380,20 +409,42 @@ export default function RegradeRequestsTable() {
                     <Text fontSize="sm" fontWeight="medium" mb={1}>
                         Appeal Granted:
                     </Text>
-                    <NativeSelectRoot size="sm" width="120px">
-                        <NativeSelectField
-                            value={getColumn("appeal_granted")?.getFilterValue() as string || ""}
-                            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                                const value = e.target.value;
-                                getColumn("appeal_granted")?.setFilterValue(value === "" ? undefined : value);
-                            }}
+                    <Box width="120px">
+                        <Select
+                            size="sm"
                             placeholder="All"
-                        >
-                            <option value="">All</option>
-                            <option value="yes">Yes</option>
-                            <option value="no">No</option>
-                        </NativeSelectField>
-                    </NativeSelectRoot>
+                            value={getColumn("appeal_granted")?.getFilterValue() as string ? 
+                                appealGrantedOptions.filter(opt => (getColumn("appeal_granted")?.getFilterValue() as string) === opt.value) : []}
+                            onChange={(options) => {
+                                const values = Array.isArray(options) ? options.map(opt => opt.value) : [];
+                                getColumn("appeal_granted")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+                            }}
+                            options={appealGrantedOptions}
+                            isClearable
+                            isMulti
+                        />
+                    </Box>
+                </Box>
+
+                <Box>
+                    <Text fontSize="sm" fontWeight="medium" mb={1}>
+                        Rubric Check:
+                    </Text>
+                    <Box width="200px">
+                        <Select
+                            size="sm"
+                            placeholder="All rubric checks"
+                            value={getColumn("rubric_check")?.getFilterValue() as string ? 
+                                rubricCheckOptions.filter(opt => (getColumn("rubric_check")?.getFilterValue() as string) === opt.value) : []}
+                            onChange={(options) => {
+                                const values = Array.isArray(options) ? options.map(opt => opt.value) : [];
+                                getColumn("rubric_check")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+                            }}
+                            options={rubricCheckOptions}
+                            isClearable
+                            isMulti
+                        />
+                    </Box>
                 </Box>
 
                 <Box>

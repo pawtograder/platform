@@ -4605,6 +4605,7 @@ export type Database = {
           initial_points: number | null
           last_commented_at: string | null
           last_commented_by: string | null
+          last_updated_at: string
           opened_at: string | null
           resolved_at: string | null
           resolved_by: string | null
@@ -4630,6 +4631,7 @@ export type Database = {
           initial_points?: number | null
           last_commented_at?: string | null
           last_commented_by?: string | null
+          last_updated_at?: string
           opened_at?: string | null
           resolved_at?: string | null
           resolved_by?: string | null
@@ -4655,6 +4657,7 @@ export type Database = {
           initial_points?: number | null
           last_commented_at?: string | null
           last_commented_by?: string | null
+          last_updated_at?: string
           opened_at?: string | null
           resolved_at?: string | null
           resolved_by?: string | null

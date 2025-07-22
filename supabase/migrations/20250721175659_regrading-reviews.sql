@@ -42,7 +42,8 @@ create table "public"."submission_regrade_requests" (
     "last_commented_by" uuid,
     "initial_points" integer,
     "resolved_points" integer,
-    "closed_points" integer
+    "closed_points" integer,
+    "last_updated_at" timestamp with time zone not null default now()
 );
 
 
@@ -297,7 +298,8 @@ begin
             -- Update with opened timestamp
             update public.submission_regrade_requests
             set status = new_status,
-                opened_at = now()
+                opened_at = now(),
+                last_updated_at = now()
             where id = regrade_request_id;
             
             -- Notify the author of the comment that triggered this regrade request
@@ -345,7 +347,8 @@ begin
             set status = new_status,
                 resolved_by = profile_id,
                 resolved_at = now(),
-                resolved_points = param_resolved_points
+                resolved_points = param_resolved_points,
+                last_updated_at = now()
             where id = regrade_request_id;
             
             -- Update the original comment's points
@@ -376,7 +379,8 @@ begin
             update public.submission_regrade_requests
             set status = new_status,
                 escalated_by = profile_id,
-                escalated_at = now()
+                escalated_at = now(),
+                last_updated_at = now()
             where id = regrade_request_id;
             
         when 'closed' then
@@ -396,7 +400,8 @@ begin
             set status = new_status,
                 closed_by = profile_id,
                 closed_at = now(),
-                closed_points = param_closed_points
+                closed_points = param_closed_points,
+                last_updated_at = now()
             where id = regrade_request_id;
             
             -- Update the original comment's points
