@@ -1,80 +1,39 @@
 "use client";
 
-import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { redirect } from "next/navigation";
 import { Box, Card, Container, Heading, Stack, Text, Grid, Badge, Button, HStack, VStack } from "@chakra-ui/react";
 import NextLink from "next/link";
 import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonBadge } from "react-icons/bs";
 import PersonAvatar from "@/components/ui/person-avatar";
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-
-type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"]["Row"];
-type HelpRequestStudent = Database["public"]["Tables"]["help_request_students"]["Row"];
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import type { HelpRequest, HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
+  const classId = Number(course_id);
 
-  const queues = useList<HelpQueue>({
-    resource: "help_queues",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "available", operator: "eq", value: true }
-    ]
+  // Use the enhanced office hours realtime hook
+  const { data, isLoading, connectionStatus, connectionError } = useOfficeHoursRealtime({
+    classId,
+    enableGlobalQueues: true,
+    onlyAvailableQueues: true,
+    onlyActiveAssignments: true,
+    enableActiveRequests: true,
+    enableStaffData: false // Page doesn't need staff data
   });
 
-  // Fetch active help requests for all queues
-  const activeRequests = useList<HelpRequest>({
-    resource: "help_requests",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "status", operator: "in", value: ["open", "in_progress"] }
-    ],
-    sorters: [{ field: "created_at", order: "asc" }],
-    pagination: { pageSize: 1000 } // Get all active requests
-  });
+  const { helpQueues, helpQueueAssignments, activeHelpRequests, helpRequestStudents } = data;
 
-  // Get active request IDs to optimize the help_request_students query
-  const activeRequestIds = useMemo(() => {
-    return activeRequests.data?.data?.map((request) => request.id) || [];
-  }, [activeRequests.data?.data]);
-
-  // Fetch help request students only for active requests to optimize performance
-  const helpRequestStudents = useList<HelpRequestStudent>({
-    resource: "help_request_students",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      ...(activeRequestIds.length > 0
-        ? [{ field: "help_request_id", operator: "in" as const, value: activeRequestIds }]
-        : [])
-    ],
-    pagination: { pageSize: 1000 },
-    queryOptions: {
-      enabled: activeRequestIds.length > 0 // Only run this query if we have active requests
-    }
-  });
-
-  // Fetch active queue assignments (staff currently working)
-  const activeAssignments = useList<HelpQueueAssignment>({
-    resource: "help_queue_assignments",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "is_active", operator: "eq", value: true }
-    ],
-    sorters: [{ field: "started_at", order: "asc" }],
-    pagination: { pageSize: 1000 }
-  });
-
-  // Group active requests by queue and include student information
+  // Memoize computation-heavy operations with proper dependencies
   const activeRequestsByQueue = useMemo(() => {
-    if (!activeRequests.data?.data) return {};
+    if (!activeHelpRequests?.length || !helpRequestStudents?.length) return {};
 
     // Create mapping of request ID to student profile IDs
-    const studentsByRequestId = (helpRequestStudents.data?.data || []).reduce(
+    const studentsByRequestId = helpRequestStudents.reduce(
       (acc, student) => {
         if (!acc[student.help_request_id]) {
           acc[student.help_request_id] = [];
@@ -86,9 +45,9 @@ export default function OfficeHoursPage() {
     );
 
     // Group requests by queue ID, ensuring consistent number types
-    return activeRequests.data.data.reduce(
+    return activeHelpRequests.reduce(
       (acc, request) => {
-        const queueId = Number(request.help_queue); // Ensure it's a number
+        const queueId = Number(request.help_queue);
         if (!acc[queueId]) {
           acc[queueId] = [];
         }
@@ -100,13 +59,13 @@ export default function OfficeHoursPage() {
       },
       {} as Record<number, (HelpRequest & { students: string[] })[]>
     );
-  }, [activeRequests.data?.data, helpRequestStudents.data?.data]);
+  }, [activeHelpRequests, helpRequestStudents]);
 
-  // Group active assignments by queue
+  // Group active assignments by queue with proper dependencies
   const activeAssignmentsByQueue = useMemo(() => {
-    if (!activeAssignments.data?.data) return {};
+    if (!helpQueueAssignments?.length) return {};
 
-    return activeAssignments.data.data.reduce(
+    return helpQueueAssignments.reduce(
       (acc, assignment) => {
         const queueId = assignment.help_queue_id;
         if (!acc[queueId]) {
@@ -117,30 +76,10 @@ export default function OfficeHoursPage() {
       },
       {} as Record<number, HelpQueueAssignment[]>
     );
-  }, [activeAssignments.data?.data]);
+  }, [helpQueueAssignments]);
 
-  if (queues.isLoading || activeRequests.isLoading || activeAssignments.isLoading) {
-    return (
-      <Container>
-        <Text>Loading help queues...</Text>
-      </Container>
-    );
-  }
-  if (queues.error) {
-    return (
-      <Container>
-        <Text color="red.500">Error: {queues.error.message}</Text>
-      </Container>
-    );
-  }
-
-  const availableQueues = queues.data?.data ?? [];
-
-  if (availableQueues.length === 1) {
-    redirect(`/course/${course_id}/office-hours/${availableQueues[0].id}`);
-  }
-
-  const getQueueIcon = (type: string) => {
+  // Memoize helper functions to prevent unnecessary re-renders
+  const getQueueIcon = useCallback((type: string) => {
     switch (type) {
       case "video":
         return <BsCameraVideo />;
@@ -149,9 +88,9 @@ export default function OfficeHoursPage() {
       default:
         return <BsChatText />;
     }
-  };
+  }, []);
 
-  const getQueueDescription = (type: string) => {
+  const getQueueDescription = useCallback((type: string) => {
     switch (type) {
       case "video":
         return "Live video chat with TAs";
@@ -162,11 +101,47 @@ export default function OfficeHoursPage() {
       default:
         return "Get help from TAs and instructors";
     }
-  };
+  }, []);
+
+  // Show loading state
+  if (isLoading) {
+    return (
+      <Container>
+        <Box textAlign="center" py={8}>
+          <Text>Loading help queues...</Text>
+        </Box>
+      </Container>
+    );
+  }
+
+  // Show error state if connection failed
+  if (connectionError || connectionStatus?.overall === "disconnected") {
+    return (
+      <Container>
+        <Box textAlign="center" py={8}>
+          <Card.Root variant="outline" borderColor="red.200">
+            <Card.Body>
+              <Text color="red.500">{connectionError || "Connection error. Please try refreshing the page."}</Text>
+              <Button mt={4} onClick={() => window.location.reload()}>
+                Refresh Page
+              </Button>
+            </Card.Body>
+          </Card.Root>
+        </Box>
+      </Container>
+    );
+  }
+
+  const availableQueues = helpQueues ?? [];
+
+  // Redirect to single queue if only one available
+  if (availableQueues.length === 1) {
+    redirect(`/course/${course_id}/office-hours/${availableQueues[0].id}`);
+  }
 
   return (
     <ClassProfileProvider>
-      <ModerationBanNotice classId={Number(course_id)}>
+      <ModerationBanNotice classId={classId}>
         <Container maxW="4xl" py={8}>
           <Stack spaceY={6}>
             <Box textAlign="center">
@@ -192,7 +167,11 @@ export default function OfficeHoursPage() {
                   const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
 
                   return (
-                    <Card.Root key={queue.id} variant="outline" _hover={{ borderColor: "border.emphasized" }}>
+                    <Card.Root
+                      key={`queue-${queue.id}-${queue.name}`}
+                      variant="outline"
+                      _hover={{ borderColor: "border.emphasized" }}
+                    >
                       <Card.Body>
                         <Stack spaceY={4}>
                           <Stack direction="row" align="center" justify="space-between">
@@ -227,12 +206,14 @@ export default function OfficeHoursPage() {
                             {activeStaff.length > 0 ? (
                               <HStack wrap="wrap" gap={2}>
                                 {activeStaff.slice(0, 4).map((staffId, index) => (
-                                  <PersonAvatar key={`staff-${staffId}-${index}`} uid={staffId} size="sm" />
+                                  <PersonAvatar key={`staff-${staffId}-${index}-${queue.id}`} uid={staffId} size="sm" />
                                 ))}
                                 {activeStaff.length > 4 && <Text fontSize="xs">+{activeStaff.length - 4} more</Text>}
                               </HStack>
                             ) : (
-                              <Text fontSize="xs">No staff currently on duty</Text>
+                              <Text fontSize="xs" color="gray.500">
+                                No staff currently on duty
+                              </Text>
                             )}
                           </VStack>
 
@@ -248,12 +229,14 @@ export default function OfficeHoursPage() {
                             {activeUsers.length > 0 ? (
                               <HStack wrap="wrap" gap={2}>
                                 {activeUsers.slice(0, 6).map((userId, index) => (
-                                  <PersonAvatar key={`${userId}-${index}`} uid={userId} size="xs" />
+                                  <PersonAvatar key={`user-${userId}-${index}-${queue.id}`} uid={userId} size="xs" />
                                 ))}
                                 {activeUsers.length > 6 && <Text fontSize="xs">+{activeUsers.length - 6} more</Text>}
                               </HStack>
                             ) : (
-                              <Text fontSize="xs">No one currently in queue</Text>
+                              <Text fontSize="xs" color="gray.500">
+                                No one currently in queue
+                              </Text>
                             )}
                           </VStack>
 

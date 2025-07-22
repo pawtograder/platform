@@ -7,36 +7,26 @@ import { Fieldset, Button, Heading, Text, Box, Stack, Input, IconButton } from "
 import {
   HelpRequest,
   HelpRequestTemplate,
-  HelpQueue,
   Submission,
   SubmissionFile,
-  HelpRequestLocationType
+  HelpRequestLocationType,
+  HelpRequestFormFileReference,
+  HelpRequestWithStudentCount,
+  HelpRequestFormTemplateOption,
+  HelpRequestFormSubmissionOption,
+  HelpRequestFormFileOption,
+  HelpRequestFormQueueOption
 } from "@/utils/supabase/DatabaseTypes";
 import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
 import MdEditor from "@/components/ui/md-editor";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "chakra-react-select";
 import { toaster } from "@/components/ui/toaster";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { X } from "lucide-react";
-
-type TemplateOption = { label: string; value: string };
-type SubmissionOption = { label: string; value: string };
-type FileOption = { label: string; value: string };
-type QueueOption = { label: string; value: string };
-
-// Form state for file references
-type FileReference = {
-  submission_file_id: number;
-  line_number?: number;
-};
-
-// Extended help request type to include student count
-type HelpRequestWithStudentCount = HelpRequest & {
-  student_count: number;
-};
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
@@ -65,7 +55,7 @@ export default function HelpRequestForm() {
     formState: { errors, isSubmitting },
     handleSubmit,
     refineCore: { onFinish }
-  } = useForm<HelpRequest & { file_references?: FileReference[] }>({
+  } = useForm<HelpRequest & { file_references?: HelpRequestFormFileReference[] }>({
     defaultValues: async () => {
       return {
         help_queue: Number.parseInt(queue_id as string),
@@ -190,6 +180,21 @@ export default function HelpRequestForm() {
 
   const { private_profile_id } = useClassProfiles();
 
+  // Use realtime hook to get available help queues with proper error handling
+  const {
+    data: realtimeData,
+    isLoading: isLoadingQueues,
+    connectionError
+  } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    enableGlobalQueues: true,
+    onlyAvailableQueues: true,
+    enableActiveRequests: false,
+    enableStaffData: false
+  });
+
+  const { helpQueues } = realtimeData;
+
   // Initialize selected students with current user when profile is available
   useEffect(() => {
     if (private_profile_id && selectedStudents.length === 0) {
@@ -202,59 +207,76 @@ export default function HelpRequestForm() {
     if (!private_profile_id) return;
 
     const fetchUserRequests = async () => {
-      // First, fetch the help request IDs for this user
-      const { data: userRequestIds } = await supabase
-        .from("help_request_students")
-        .select("help_request_id")
-        .eq("profile_id", private_profile_id);
+      try {
+        // First, fetch the help request IDs for this user
+        const { data: userRequestIds, error: fetchError } = await supabase
+          .from("help_request_students")
+          .select("help_request_id")
+          .eq("profile_id", private_profile_id);
 
-      if (!userRequestIds || userRequestIds.length === 0) {
-        setUserPreviousRequests([]);
-        setUserActiveRequests([]);
-        return;
-      }
-
-      const requestIds = userRequestIds.map((item) => item.help_request_id);
-
-      // Fetch previous requests (resolved/closed)
-      const { data: previousRequestsData } = await supabase
-        .from("help_requests")
-        .select("*")
-        .eq("class_id", Number.parseInt(course_id as string))
-        .in("status", ["resolved", "closed"])
-        .in("id", requestIds)
-        .order("resolved_at", { ascending: false })
-        .limit(20);
-
-      if (previousRequestsData) {
-        setUserPreviousRequests(previousRequestsData);
-      }
-
-      // Fetch active requests with student counts
-      const { data: activeRequestsData } = await supabase
-        .from("help_requests")
-        .select("*")
-        .eq("class_id", Number.parseInt(course_id as string))
-        .in("status", ["open", "in_progress"])
-        .in("id", requestIds);
-
-      if (activeRequestsData) {
-        // Get student counts for each active request
-        const activeRequestsWithCount: HelpRequestWithStudentCount[] = [];
-
-        for (const request of activeRequestsData) {
-          const { count } = await supabase
-            .from("help_request_students")
-            .select("*", { count: "exact", head: true })
-            .eq("help_request_id", request.id);
-
-          activeRequestsWithCount.push({
-            ...request,
-            student_count: count || 0
-          });
+        if (fetchError) {
+          console.error("Error fetching user request IDs:", fetchError);
+          return;
         }
 
-        setUserActiveRequests(activeRequestsWithCount);
+        if (!userRequestIds || userRequestIds.length === 0) {
+          setUserPreviousRequests([]);
+          setUserActiveRequests([]);
+          return;
+        }
+
+        const requestIds = userRequestIds.map((item) => item.help_request_id);
+
+        // Fetch previous requests (resolved/closed)
+        const { data: previousRequestsData, error: previousError } = await supabase
+          .from("help_requests")
+          .select("*")
+          .eq("class_id", Number.parseInt(course_id as string))
+          .in("status", ["resolved", "closed"])
+          .in("id", requestIds)
+          .order("resolved_at", { ascending: false })
+          .limit(20);
+
+        if (previousError) {
+          console.error("Error fetching previous requests:", previousError);
+        } else if (previousRequestsData) {
+          setUserPreviousRequests(previousRequestsData);
+        }
+
+        // Fetch active requests with student counts
+        const { data: activeRequestsData, error: activeError } = await supabase
+          .from("help_requests")
+          .select("*")
+          .eq("class_id", Number.parseInt(course_id as string))
+          .in("status", ["open", "in_progress"])
+          .in("id", requestIds);
+
+        if (activeError) {
+          console.error("Error fetching active requests:", activeError);
+        } else if (activeRequestsData) {
+          // Get student counts for each active request
+          const activeRequestsWithCount: HelpRequestWithStudentCount[] = [];
+
+          for (const request of activeRequestsData) {
+            const { count, error: countError } = await supabase
+              .from("help_request_students")
+              .select("*", { count: "exact", head: true })
+              .eq("help_request_id", request.id);
+
+            if (countError) {
+              console.error("Error counting students for request:", countError);
+            }
+
+            activeRequestsWithCount.push({
+              ...request,
+              student_count: count || 0
+            });
+          }
+
+          setUserActiveRequests(activeRequestsWithCount);
+        }
+      } catch (error) {
+        console.error("Error in fetchUserRequests:", error);
       }
     };
 
@@ -266,16 +288,6 @@ export default function HelpRequestForm() {
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
       { field: "is_active", operator: "eq", value: true }
-    ]
-  });
-
-  // Fetch available help queues for the class
-  const { data: helpQueues } = useList<HelpQueue>({
-    resource: "help_queues",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "is_active", operator: "eq", value: true },
-      { field: "available", operator: "eq", value: true }
     ]
   });
 
@@ -394,15 +406,31 @@ export default function HelpRequestForm() {
     ]
   );
 
+  // Show loading state if queries are still loading
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;
   }
   if (templatesError) {
     return <div>Error: {templatesError.message}</div>;
   }
+  if (!query || formLoading || isLoadingQueues) {
+    return (
+      <Box textAlign="center" py={8}>
+        <Text>Loading form data...</Text>
+      </Box>
+    );
+  }
 
-  if (!query || formLoading) {
-    return <div>Loading...</div>;
+  // Show connection error if realtime data failed to load
+  if (connectionError) {
+    return (
+      <Box textAlign="center" py={8}>
+        <Text color="red.500">Failed to load help queues: {connectionError}</Text>
+        <Button mt={4} onClick={() => window.location.reload()}>
+          Refresh Page
+        </Button>
+      </Box>
+    );
   }
 
   // Check if the selected queue would conflict with current requests
@@ -443,23 +471,23 @@ export default function HelpRequestForm() {
                   isMulti={false}
                   placeholder="Select a help queue"
                   options={
-                    helpQueues?.data?.map(
+                    helpQueues?.map(
                       (queue) =>
                         ({
                           label: `${queue.name} - ${queue.description}`,
                           value: queue.id.toString()
-                        }) as QueueOption
+                        }) as HelpRequestFormQueueOption
                     ) ?? []
                   }
                   value={
                     field.value
                       ? ({
-                          label: helpQueues?.data?.find((q) => q.id === field.value)?.name || "Unknown",
+                          label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
                           value: field.value.toString()
-                        } as QueueOption)
+                        } as HelpRequestFormQueueOption)
                       : null
                   }
-                  onChange={(option: QueueOption | null) => {
+                  onChange={(option: HelpRequestFormQueueOption | null) => {
                     const val = option?.value ?? "";
                     field.onChange(val === "" ? undefined : Number.parseInt(val));
                   }}
@@ -522,7 +550,7 @@ export default function HelpRequestForm() {
                         ({
                           label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
                           value: submission.id.toString()
-                        }) as SubmissionOption
+                        }) as HelpRequestFormSubmissionOption
                     ) ?? []
                   }
                   value={
@@ -530,10 +558,10 @@ export default function HelpRequestForm() {
                       ? ({
                           label: submissions?.data?.find((s) => s.id === field.value)?.repository || "Unknown",
                           value: field.value.toString()
-                        } as SubmissionOption)
+                        } as HelpRequestFormSubmissionOption)
                       : null
                   }
-                  onChange={(option: SubmissionOption | null) => {
+                  onChange={(option: HelpRequestFormSubmissionOption | null) => {
                     const val = option?.value ?? "";
                     field.onChange(val === "" ? undefined : Number.parseInt(val));
                   }}
@@ -563,15 +591,18 @@ export default function HelpRequestForm() {
                         placeholder="Select a file to add"
                         options={submissionFiles.data
                           .filter(
-                            (file) => !field.value?.some((ref: FileReference) => ref.submission_file_id === file.id)
+                            (file) =>
+                              !field.value?.some(
+                                (ref: HelpRequestFormFileReference) => ref.submission_file_id === file.id
+                              )
                           )
                           .map((file) => ({
                             label: file.name,
                             value: file.id.toString()
                           }))}
-                        onChange={(option: FileOption | null) => {
+                        onChange={(option: HelpRequestFormFileOption | null) => {
                           if (option) {
-                            const newRef: FileReference = {
+                            const newRef: HelpRequestFormFileReference = {
                               submission_file_id: Number.parseInt(option.value),
                               line_number: undefined
                             };
@@ -586,11 +617,17 @@ export default function HelpRequestForm() {
                     {/* Display current file references */}
                     {field.value && field.value.length > 0 && (
                       <Stack gap={2}>
-                        {field.value.map((ref: FileReference, index: number) => {
+                        {field.value.map((ref: HelpRequestFormFileReference, index: number) => {
                           const fileName =
                             submissionFiles.data.find((f) => f.id === ref.submission_file_id)?.name || "Unknown";
                           return (
-                            <Box key={index} p={3} border="1px solid" borderColor="gray.200" borderRadius="md">
+                            <Box
+                              key={`file-ref-${index}-${ref.submission_file_id}`}
+                              p={3}
+                              border="1px solid"
+                              borderColor="gray.200"
+                              borderRadius="md"
+                            >
                               <Stack direction="row" gap={3} align="center">
                                 <Text flex={1} fontWeight="medium">
                                   {fileName}
@@ -616,7 +653,9 @@ export default function HelpRequestForm() {
                                   colorScheme="red"
                                   variant="ghost"
                                   onClick={() => {
-                                    const newRefs = field.value.filter((_: FileReference, i: number) => i !== index);
+                                    const newRefs = field.value.filter(
+                                      (_: HelpRequestFormFileReference, i: number) => i !== index
+                                    );
                                     field.onChange(newRefs);
                                   }}
                                 >
@@ -713,17 +752,17 @@ export default function HelpRequestForm() {
                     isMulti={false}
                     placeholder="Choose a template"
                     options={templates.data.map(
-                      (tmpl) => ({ label: tmpl.name, value: tmpl.id.toString() }) as TemplateOption
+                      (tmpl) => ({ label: tmpl.name, value: tmpl.id.toString() }) as HelpRequestFormTemplateOption
                     )}
                     value={
                       field.value
                         ? ({
                             label: templates.data.find((t) => t.id === field.value)!.name,
                             value: field.value.toString()
-                          } as TemplateOption)
+                          } as HelpRequestFormTemplateOption)
                         : null
                     }
-                    onChange={(option: TemplateOption | null) => {
+                    onChange={(option: HelpRequestFormTemplateOption | null) => {
                       // option can be null if cleared
                       const val = option?.value ?? "";
                       field.onChange(val === "" ? undefined : Number.parseInt(val));
@@ -755,7 +794,7 @@ export default function HelpRequestForm() {
                         ({
                           label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${new Date(req.resolved_at!).toLocaleDateString()})`,
                           value: req.id.toString()
-                        }) as TemplateOption
+                        }) as HelpRequestFormTemplateOption
                     )}
                     value={
                       field.value
@@ -764,10 +803,10 @@ export default function HelpRequestForm() {
                               userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
                                 "..." || "",
                             value: field.value.toString()
-                          } as TemplateOption)
+                          } as HelpRequestFormTemplateOption)
                         : null
                     }
-                    onChange={(option: TemplateOption | null) => {
+                    onChange={(option: HelpRequestFormTemplateOption | null) => {
                       const val = option?.value ?? "";
                       field.onChange(val === "" ? undefined : Number.parseInt(val));
                     }}

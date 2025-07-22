@@ -1,57 +1,60 @@
 import { DataList, Flex, HStack, Badge, Icon, Text } from "@chakra-ui/react";
 import { Box } from "@chakra-ui/react";
-import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
-import { useList } from "@refinedev/core";
 import { BsPersonCheck, BsPersonDash } from "react-icons/bs";
+import { useMemo } from "react";
 
-export default function CurrentRequest({ queue, request }: { queue: HelpQueue; request: HelpRequest }) {
+export default function CurrentRequest({ request, position }: { request: HelpRequest; position: number }) {
   const assignee = useUserProfile(request.assignee);
-  // Fetch active requests in this queue to compute position (oldest first)
-  const { data: openRequestsData } = useList<HelpRequest>({
-    resource: "help_requests",
-    filters: [
-      { field: "help_queue", operator: "eq", value: queue.id },
-      { field: "status", operator: "in", value: ["open", "in_progress"] }
-    ],
-    sorters: [{ field: "created_at", order: "asc" }],
-    pagination: { current: 1, pageSize: 1000 }
-  });
 
-  const activeRequests = openRequestsData?.data ?? [];
-  const position = activeRequests.findIndex((r) => r.id === request.id) + 1;
+  // Memoize position display to prevent unnecessary recalculations
+  const positionDisplay = useMemo(() => {
+    return position > 0 ? position : "-";
+  }, [position]);
+
+  // Memoize assignment status to prevent unnecessary recalculations
+  const assignmentStatus = useMemo(() => {
+    if (assignee) {
+      return {
+        badge: (
+          <Badge colorPalette="green" variant="solid" fontSize="sm">
+            <Icon as={BsPersonCheck} mr={1} />
+            Assigned
+          </Badge>
+        ),
+        text: `${assignee.name} is working on this`
+      };
+    } else {
+      return {
+        badge: (
+          <Badge colorPalette="gray" variant="outline" fontSize="sm">
+            <Icon as={BsPersonDash} mr={1} />
+            Not Assigned
+          </Badge>
+        ),
+        text: "Waiting for a TA/instructor to pick this up"
+      };
+    }
+  }, [assignee]);
+
   return (
     <Box width="100%">
       <DataList.Root>
         <DataList.Item>
           <DataList.ItemLabel>Your position in the queue</DataList.ItemLabel>
-          <DataList.ItemValue>{position > 0 ? position : "-"}</DataList.ItemValue>
+          <DataList.ItemValue>{positionDisplay}</DataList.ItemValue>
         </DataList.Item>
         <DataList.Item>
           <DataList.ItemLabel>Assignment Status:</DataList.ItemLabel>
           <DataList.ItemValue>
-            {assignee ? (
-              <HStack gap={2}>
-                <Badge colorPalette="green" variant="solid" fontSize="sm">
-                  <Icon as={BsPersonCheck} mr={1} />
-                  Assigned
-                </Badge>
-                <Text fontSize="sm" fontWeight="medium">
-                  {assignee.name} is working on this
-                </Text>
-              </HStack>
-            ) : (
-              <HStack gap={2}>
-                <Badge colorPalette="gray" variant="outline" fontSize="sm">
-                  <Icon as={BsPersonDash} mr={1} />
-                  Not Assigned
-                </Badge>
-                <Text fontSize="sm" color="fg.muted">
-                  Waiting for a TA/instructor to pick this up
-                </Text>
-              </HStack>
-            )}
+            <HStack gap={2}>
+              {assignmentStatus.badge}
+              <Text fontSize="sm" fontWeight="medium" color={assignee ? "fg.default" : "fg.muted"}>
+                {assignmentStatus.text}
+              </Text>
+            </HStack>
           </DataList.ItemValue>
         </DataList.Item>
       </DataList.Root>

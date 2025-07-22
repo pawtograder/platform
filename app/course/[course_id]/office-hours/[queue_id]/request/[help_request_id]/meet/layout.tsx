@@ -12,6 +12,7 @@ import { FC, PropsWithChildren } from "react";
 import { demoDarkTheme } from "@/lib/aws-chime-sdk-meeting/theme/demoTheme";
 import { demoLightTheme } from "@/lib/aws-chime-sdk-meeting/theme/demoTheme";
 import { ThemeProvider } from "styled-components";
+
 const Theme: React.FC<PropsWithChildren> = ({ children }) => {
   const { theme } = useAppState();
 

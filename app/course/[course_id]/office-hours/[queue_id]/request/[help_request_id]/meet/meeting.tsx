@@ -1,6 +1,7 @@
 import Roster from "@/components/videocall/roster";
 import VideoGrid from "@/components/videocall/videogrid";
 import useUserProfiles from "@/hooks/useUserProfiles";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import MeetingControls from "@/lib/aws-chime-sdk-meeting/containers/MeetingControls";
 import { NavigationProvider } from "@/lib/aws-chime-sdk-meeting/providers/NavigationProvider";
 import { VideoTileGridProvider } from "@/lib/aws-chime-sdk-meeting/providers/VideoTileGridProvider";
@@ -20,7 +21,7 @@ import { StyleSheetManager, ThemeProvider } from "styled-components";
 import { useParams } from "next/navigation";
 import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+
 const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => {
   return (
     <ThemeProvider theme={lightTheme}>
@@ -48,7 +49,17 @@ function HelpMeeting() {
   const meetingManager = useMeetingManager();
   const { users } = useUserProfiles();
   const { help_request_id, course_id } = useParams();
-  const supabase = createClient();
+
+  // Use realtime hook to monitor help request status
+  const { data: realtimeData } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    helpRequestId: Number(help_request_id),
+    enableActiveRequests: false,
+    enableGlobalQueues: false,
+    enableStaffData: false
+  });
+
+  const { helpRequest } = realtimeData;
 
   useEffect(() => {
     meetingManager.getAttendee = async (chimeAttendeeId: string, externalUserId?: string) => {
@@ -62,35 +73,16 @@ function HelpMeeting() {
 
   const initialized = useRef(false);
 
-  // Set up real-time subscription to detect when meeting ends externally
+  // Monitor help request status for meeting end detection
   useEffect(() => {
-    if (!help_request_id) return;
+    if (!helpRequest) return;
 
-    const channel = supabase
-      .channel("meeting-end-detection")
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "help_requests",
-          filter: `id=eq.${help_request_id}`
-        },
-        (payload) => {
-          const updatedRequest = payload.new as HelpRequest;
-
-          // If the meeting is no longer live, close this window
-          if (!updatedRequest.is_video_live) {
-            window.close();
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [help_request_id, supabase]);
+    // If the meeting is no longer live, close this window
+    if (!helpRequest.is_video_live) {
+      console.log("Meeting ended, closing window");
+      window.close();
+    }
+  }, [helpRequest?.is_video_live, helpRequest]);
 
   useEffect(() => {
     const joinMeeting = async () => {

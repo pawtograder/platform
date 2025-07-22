@@ -1,10 +1,24 @@
-import type { ChatMessage, BroadcastMessage } from "@/hooks/use-realtime-chat";
+import type { ChatMessage } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpRequestMessageReadReceipt, UserRole } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Text, Icon, Stack, HStack, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Reply, Check, CheckCheck } from "lucide-react";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Tooltip } from "@/components/ui/tooltip";
+
+// Broadcast message type for real-time communication
+export interface BroadcastMessage {
+  id: string;
+  content: string;
+  user: {
+    id: string;
+    name: string;
+  };
+  createdAt: string;
+  replyToMessageId?: number | null;
+  helpRequestId: number;
+  classId: number;
+}
 
 // Unified message type that can handle both database and broadcast messages
 export type UnifiedMessage =

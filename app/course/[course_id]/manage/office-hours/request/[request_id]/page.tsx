@@ -7,6 +7,8 @@ import { BsClipboardCheck, BsClipboardCheckFill, BsCheckCircle, BsXCircle } from
 import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/react";
 import { Alert } from "@/components/ui/alert";
 import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useEffect } from "react";
 
 /**
  * Component for displaying status-specific visual indicators and information
@@ -73,15 +75,49 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
 /**
  * Main page component for displaying and managing a help request
  * Shows different visual states based on request status
+ * Uses real-time updates for help request data, messages, and staff actions
  * @returns JSX element for the help request page
  */
 export default function HelpRequestPage() {
-  const { request_id } = useParams();
+  const { request_id, course_id } = useParams();
+
+  // Set up real-time subscriptions for this help request
   const {
-    query: { data: activeRequest, isLoading }
+    data: realtimeData,
+    isConnected,
+    connectionStatus,
+    isLoading: realtimeLoading
+  } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    helpRequestId: Number(request_id),
+    enableStaffData: true,
+    enableGlobalQueues: false // Not needed for individual request view
+  });
+
+  const {
+    query: { data: activeRequest, isLoading: requestLoading, refetch: refetchRequest }
   } = useShow<HelpRequest>({ resource: "help_requests", id: Number.parseInt(request_id as string) });
 
-  if (isLoading || !activeRequest) {
+  // Set up realtime message handling
+  useEffect(() => {
+    if (!isConnected) return;
+
+    console.log("Help request page realtime connection established for request", request_id);
+  }, [isConnected, request_id]);
+
+  // Refresh request data when realtime help request data changes
+  useEffect(() => {
+    if (realtimeData.helpRequest && realtimeData.helpRequest.id === Number(request_id)) {
+      // Debounce refetch to avoid excessive API calls
+      const timeoutId = setTimeout(() => {
+        refetchRequest();
+      }, 500);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [realtimeData.helpRequest, request_id, refetchRequest]);
+
+  if (requestLoading || realtimeLoading || !activeRequest) {
     return <Skeleton />;
   }
 
@@ -89,12 +125,28 @@ export default function HelpRequestPage() {
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
 
   return (
-    <Box opacity={isRequestInactive ? 0.7 : 1} transition="opacity 0.2s ease-in-out">
-      <VStack gap={4} align="stretch" mb={4}>
-        <HelpRequestStatusIndicator status={request.status} />
-      </VStack>
+    <Box>
+      {/* Connection Status Indicator */}
+      {!isConnected && (
+        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
+          Help request updates may not appear immediately. Connection status: {connectionStatus?.overall}
+        </Alert>
+      )}
 
-      <HelpRequestChat request={request} />
+      <Box opacity={isRequestInactive ? 0.7 : 1} transition="opacity 0.2s ease-in-out">
+        <VStack gap={4} align="stretch" mb={4}>
+          <HStack justify="space-between" align="center">
+            <HelpRequestStatusIndicator status={request.status} />
+            {isConnected && (
+              <Badge colorPalette="green" size="sm" variant="subtle">
+                <Text fontSize="xs">● Live updates</Text>
+              </Badge>
+            )}
+          </HStack>
+        </VStack>
+
+        <HelpRequestChat request={request} />
+      </Box>
     </Box>
   );
 }

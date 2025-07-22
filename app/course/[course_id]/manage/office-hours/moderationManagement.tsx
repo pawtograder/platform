@@ -9,8 +9,9 @@ import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
 import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useEffect, useState } from "react";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { useState } from "react";
 import { toaster } from "@/components/ui/toaster";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
 
@@ -29,6 +30,7 @@ type ModerationActionWithDetails = ModerationAction & {
 /**
  * Component for managing moderation actions and student bans.
  * Allows instructors and TAs to view moderation history and create new moderation actions.
+ * Uses real-time updates to show moderation changes immediately across all staff.
  */
 export default function ModerationManagement() {
   const { course_id } = useParams();
@@ -37,6 +39,18 @@ export default function ModerationManagement() {
 
   // Modal management
   const createModal = useModalManager();
+
+  // Set up real-time subscriptions for staff data including moderation
+  const {
+    data: realtimeData,
+    isConnected,
+    connectionStatus,
+    isLoading: realtimeLoading
+  } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    enableGlobalQueues: false, // Not needed for moderation
+    enableStaffData: true // Enable staff data subscriptions
+  });
 
   // Fetch all moderation actions for the course with related data
   const {
@@ -61,6 +75,31 @@ export default function ModerationManagement() {
 
   // Delete functionality
   const { mutate: deleteModerationAction, isPending: isDeleting } = useDelete();
+
+  // Use realtime data when available, fallback to API data
+  // Note: The realtime moderation data comes from helpRequestModeration array
+  const moderationActions = moderationResponse?.data ?? [];
+
+  // Set up realtime message handling
+  useEffect(() => {
+    if (!isConnected) return;
+
+    // Realtime updates are handled automatically by the hook
+    // The controller will update the realtimeData when moderation changes are broadcast
+    console.log("Moderation management realtime connection established");
+  }, [isConnected]);
+
+  // Refresh moderation data when realtime moderation changes to get updated join data
+  useEffect(() => {
+    if (realtimeData.helpRequestModeration.length > 0) {
+      // Debounce refetch to avoid excessive API calls
+      const timeoutId = setTimeout(() => {
+        refetchModeration();
+      }, 500);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [realtimeData.helpRequestModeration, refetchModeration]);
 
   const handleCreateSuccess = () => {
     createModal.closeModal();
@@ -89,10 +128,8 @@ export default function ModerationManagement() {
     }
   };
 
-  if (moderationLoading) return <Text>Loading moderation actions...</Text>;
+  if (moderationLoading || realtimeLoading) return <Text>Loading moderation actions...</Text>;
   if (moderationError) return <Alert status="error" title={`Error: ${moderationError.message}`} />;
-
-  const moderationActions = moderationResponse?.data ?? [];
 
   // ---------------------------------------------------------------------------
   // Helper Functions
@@ -183,6 +220,11 @@ export default function ModerationManagement() {
             <Badge colorPalette={getActionTypeColor(action.action_type)} size="sm">
               {action.is_permanent ? "Permanent" : isActionActive(action) ? "Active" : "Expired"}
             </Badge>
+            {isConnected && (
+              <Text fontSize="xs" color="green.500">
+                ● Live
+              </Text>
+            )}
           </Flex>
 
           <VStack align="start" gap={2} mb={3}>
@@ -246,6 +288,13 @@ export default function ModerationManagement() {
         </Button>
       </Flex>
 
+      {/* Connection Status Indicator */}
+      {!isConnected && (
+        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
+          Moderation changes may not appear immediately. Connection status: {connectionStatus?.overall}
+        </Alert>
+      )}
+
       {/* Filter Controls */}
       <HStack mb={6} gap={3}>
         <Text fontSize="sm" fontWeight="medium">
@@ -268,6 +317,11 @@ export default function ModerationManagement() {
         >
           Expired ({moderationActions.filter((a) => !a.is_permanent && !isActionActive(a)).length})
         </Button>
+        {isConnected && (
+          <Text fontSize="xs" color="green.500">
+            ● Live updates
+          </Text>
+        )}
       </HStack>
 
       {/* Moderation Actions List */}

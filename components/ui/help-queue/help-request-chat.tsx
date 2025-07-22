@@ -1,12 +1,6 @@
 "use client";
-import { useCallback, useState } from "react";
-import type {
-  HelpRequest,
-  HelpRequestMessage,
-  Submission,
-  SubmissionFile,
-  HelpRequestFileReference
-} from "@/utils/supabase/DatabaseTypes";
+import { useCallback, useState, useMemo } from "react";
+import type { HelpRequest, Submission, SubmissionFile, HelpRequestFileReference } from "@/utils/supabase/DatabaseTypes";
 import { Flex, HStack, Stack, Text, AvatarGroup, Box, Icon, IconButton, Card, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -24,7 +18,7 @@ import {
   BsArrowLeft
 } from "react-icons/bs";
 import { useRouter, useParams, usePathname } from "next/navigation";
-import { useUserProfile } from "@/hooks/useUserProfiles";
+
 import { useUpdate, useList, useCreate, useDelete } from "@refinedev/core";
 import { PopConfirm } from "../popconfirm";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -35,10 +29,11 @@ import VideoCallControls from "./video-call-controls";
 import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
 import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
-import useAuthState from "@/hooks/useAuthState";
+
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import Link from "next/link";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 
 // Type for help request students relationship
 type HelpRequestStudent = {
@@ -399,6 +394,35 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   const params = useParams();
   const pathname = usePathname();
 
+  // Use the consolidated office hours realtime hook
+  const {
+    data: officeHoursData,
+    isLoading,
+    connectionError
+  } = useOfficeHoursRealtime({
+    classId: request.class_id,
+    helpRequestId: request.id,
+    enableStaffData: true, // Enable staff data so we can see moderation/karma
+    enableGlobalQueues: false, // We don't need global queues in this view
+    enableActiveRequests: false // We don't need active requests list in this view
+  });
+
+  // Extract data from the consolidated hook with proper fallback handling
+  const helpRequestMessages = useMemo(() => {
+    return officeHoursData?.helpRequestMessages || [];
+  }, [officeHoursData?.helpRequestMessages]);
+
+  const helpRequestStudentData = useMemo(() => {
+    return officeHoursData?.helpRequestStudents || [];
+  }, [officeHoursData?.helpRequestStudents]);
+
+  // Get student profiles for display - memoized to prevent unnecessary recalculations
+  const { studentIds, students } = useMemo(() => {
+    const studentIds = helpRequestStudentData.map((student) => student.profile_id);
+    const students = profiles.filter((user: UserProfile) => studentIds.includes(user.id));
+    return { studentIds, students };
+  }, [helpRequestStudentData, profiles]);
+
   // Check if current user is instructor or grader (not a student)
   const isInstructorOrGrader = role.role === "instructor" || role.role === "grader";
 
@@ -419,66 +443,65 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     }
   }, [router, params, pathname]);
 
-  // Fetch students for this help request
-  const { data: helpRequestStudents } = useList<HelpRequestStudent>({
-    resource: "help_request_students",
-    filters: [{ field: "help_request_id", operator: "eq", value: request.id }]
-  });
-
-  // Get student profiles for display
-  const studentIds = helpRequestStudents?.data?.map((student) => student.profile_id) || [];
-
   // Check if current user can access video controls (join/start video calls)
-  // - Instructors/graders can always access video controls
-  // - For public requests: any student in the class can access video controls
-  // - For private requests: only students specifically associated with the request can access video controls
-  const canAccessVideoControls =
-    isInstructorOrGrader ||
-    (!request.is_private && role.role === "student") ||
-    (request.is_private && studentIds.includes(private_profile_id!));
+  const canAccessVideoControls = useMemo(() => {
+    return (
+      isInstructorOrGrader ||
+      (!request.is_private && role.role === "student") ||
+      (request.is_private && studentIds.includes(private_profile_id!))
+    );
+  }, [isInstructorOrGrader, request.is_private, role.role, studentIds, private_profile_id]);
 
   // Check if current user can access request management controls (resolve/close)
-  // - Instructors/graders can always access request controls
-  // - Students can only access request controls if they are specifically associated with the request
-  const canAccessRequestControls = isInstructorOrGrader || studentIds.includes(private_profile_id!);
-  const students = profiles.filter((user: UserProfile) => studentIds.includes(user.id));
-
-  // Get the actual user ID from auth system (not profile ID)
-  const { user } = useAuthState();
-  // Get the user profile using the auth user ID to get the display name
-  const currentUserProfile = useUserProfile(user?.id || "");
+  const canAccessRequestControls = useMemo(() => {
+    return isInstructorOrGrader || studentIds.includes(private_profile_id!);
+  }, [isInstructorOrGrader, studentIds, private_profile_id]);
 
   // Modal management for moderation and karma actions
   const moderationModal = useModalManager();
   const karmaModal = useModalManager();
 
-  // Get help request messages from database with real-time updates
-  const { data: helpRequestMessages } = useList<HelpRequestMessage>({
-    resource: "help_request_messages",
-    filters: [{ field: "help_request_id", operator: "eq", value: request.id }],
-    pagination: { pageSize: 1000 },
-    sorters: [{ field: "created_at", order: "asc" }],
-    liveMode: "auto"
-  });
-
   const { mutate } = useUpdate({ resource: "help_requests", id: request.id });
 
+  // Generate title based on number of students - memoized to prevent recalculation
+  const requestTitle = useMemo(() => {
+    if (students.length === 0) {
+      return "Help Request"; // Fallback if no students found
+    } else if (students.length === 1) {
+      return `${students[0].name}'s Help Request`;
+    } else if (students.length === 2) {
+      return `${students[0].name} & ${students[1].name}'s Help Request`;
+    } else {
+      return `${students[0].name} + ${students.length - 1} others' Help Request`;
+    }
+  }, [students]);
+
+  // Generate unique participant IDs for avatars
+  const participantIds = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...studentIds, // Include all students in the request
+        ...helpRequestMessages.map((msg) => msg.author)
+      ])
+    ).slice(0, 5);
+  }, [studentIds, helpRequestMessages]);
+
   // Modal success handlers
-  const handleModerationSuccess = () => {
+  const handleModerationSuccess = useCallback(() => {
     moderationModal.closeModal();
     toaster.success({
       title: "Moderation action created",
       description: "The moderation action has been successfully created."
     });
-  };
+  }, [moderationModal]);
 
-  const handleKarmaSuccess = () => {
+  const handleKarmaSuccess = useCallback(() => {
     karmaModal.closeModal();
     toaster.success({
       title: "Karma entry created",
       description: "The karma entry has been successfully created."
     });
-  };
+  }, [karmaModal]);
 
   const resolveRequest = useCallback(() => {
     mutate({
@@ -500,18 +523,32 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     });
   }, [mutate, request.id]);
 
-  // Generate title based on number of students
-  const getRequestTitle = () => {
-    if (students.length === 0) {
-      return "Help Request"; // Fallback if no students found
-    } else if (students.length === 1) {
-      return `${students[0].name}'s Help Request`;
-    } else if (students.length === 2) {
-      return `${students[0].name} & ${students[1].name}'s Help Request`;
-    } else {
-      return `${students[0].name} + ${students.length - 1} others' Help Request`;
-    }
-  };
+  // Show loading state while data is being fetched
+  if (isLoading) {
+    return (
+      <Flex direction="column" width="100%" height="calc(100vh - var(--nav-height))" justify="center" align="center">
+        <Text>Loading help request data...</Text>
+      </Flex>
+    );
+  }
+
+  // Show error state if there's a connection error
+  if (connectionError) {
+    return (
+      <Flex direction="column" width="100%" height="calc(100vh - var(--nav-height))" justify="center" align="center">
+        <Card.Root variant="outline" borderColor="red.200">
+          <Card.Body>
+            <Text color="red.500" textAlign="center">
+              Failed to connect to realtime chat: {connectionError}
+            </Text>
+            <Button mt={4} onClick={() => window.location.reload()}>
+              Refresh Page
+            </Button>
+          </Card.Body>
+        </Card.Root>
+      </Flex>
+    );
+  }
 
   return (
     <Flex
@@ -531,7 +568,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           )}
 
           <Stack spaceY="2">
-            <Text fontWeight="medium">{getRequestTitle()}</Text>
+            <Text fontWeight="medium">{requestTitle}</Text>
             {/* Students Management */}
             <HelpRequestStudents request={request} students={students} currentUserCanEdit={canAccessRequestControls} />
           </Stack>
@@ -617,15 +654,9 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
         <AvatarGroup size="sm">
           {/* Show avatars of all participants who have sent messages and all students in the request */}
-          {helpRequestMessages?.data &&
-            Array.from(
-              new Set([
-                ...studentIds, // Include all students in the request
-                ...helpRequestMessages.data.map((msg) => msg.author)
-              ])
-            )
-              .slice(0, 5)
-              .map((participantId) => <PersonAvatar key={participantId} uid={participantId} size="sm" />)}
+          {participantIds.map((participantId) => (
+            <PersonAvatar key={`participant-${participantId}`} uid={participantId} size="sm" />
+          ))}
         </AvatarGroup>
       </Flex>
 
@@ -636,8 +667,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
       <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
         <RealtimeChat
-          username={currentUserProfile?.name || user?.email || "Unknown User"} // Pass display name, fallback to email, then unknown
-          messages={helpRequestMessages?.data}
+          messages={helpRequestMessages}
           helpRequest={request}
           helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling
         />

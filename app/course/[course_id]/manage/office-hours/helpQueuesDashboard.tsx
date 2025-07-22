@@ -9,6 +9,8 @@ import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useMemo } from "react";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { Alert } from "@/components/ui/alert";
 
 type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"]["Row"];
 
@@ -18,11 +20,25 @@ type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"
  * who is currently working the queue, and allows the current user to start or
  * stop working that queue. Starting work creates a new `help_queue_assignments`
  * row; stopping work marks the active assignment as ended.
+ *
+ * Uses real-time updates to show live queue status and assignment changes.
  */
 export default function HelpQueuesDashboard() {
   const { course_id } = useParams();
 
   const { private_profile_id: taProfileId } = useClassProfiles();
+
+  // Set up real-time subscriptions for global help queues and assignments
+  const {
+    data: realtimeData,
+    isConnected,
+    connectionStatus,
+    isLoading: realtimeLoading
+  } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    enableGlobalQueues: true,
+    enableStaffData: false // Not needed for dashboard
+  });
 
   // Fetch all help queues for the course.
   const {
@@ -35,7 +51,11 @@ export default function HelpQueuesDashboard() {
   });
 
   // Fetch all active assignments for this TA across queues in this course.
-  const { data: assignmentsResponse } = useList<{ id: number; help_queue_id: number; is_active: boolean }>({
+  const { data: assignmentsResponse } = useList<{
+    id: number;
+    help_queue_id: number;
+    is_active: boolean;
+  }>({
     resource: "help_queue_assignments",
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
@@ -67,14 +87,22 @@ export default function HelpQueuesDashboard() {
     pagination: { current: 1, pageSize: 1000 }
   });
 
+  // Use realtime data when available, fallback to API data
+  const queues = realtimeData.helpQueues.length > 0 ? realtimeData.helpQueues : (queuesResponse?.data ?? []);
+  const queueAssignments = useMemo(() => {
+    return realtimeData.helpQueueAssignments.length > 0
+      ? realtimeData.helpQueueAssignments
+      : (allActiveAssignments?.data ?? []);
+  }, [realtimeData.helpQueueAssignments, allActiveAssignments?.data]);
+
   const activeAssignments = assignmentsResponse?.data ?? [];
   const unresolvedRequests = (requestsResponse?.data ?? []).filter((r) => r.resolved_by === null);
 
   // Group all active assignments by queue
   const activeAssignmentsByQueue = useMemo(() => {
-    if (!allActiveAssignments?.data) return {};
+    const assignments = queueAssignments.filter((assignment) => assignment.is_active);
 
-    return allActiveAssignments.data.reduce(
+    return assignments.reduce(
       (acc, assignment) => {
         const queueId = assignment.help_queue_id;
         if (!acc[queueId]) {
@@ -85,7 +113,7 @@ export default function HelpQueuesDashboard() {
       },
       {} as Record<number, HelpQueueAssignment[]>
     );
-  }, [allActiveAssignments?.data]);
+  }, [queueAssignments]);
 
   const { mutate: createAssignment } = useCreate();
   const { mutate: updateAssignment } = useUpdate();
@@ -99,6 +127,10 @@ export default function HelpQueuesDashboard() {
         ta_profile_id: taProfileId,
         is_active: true,
         started_at: new Date().toISOString()
+      },
+      successNotification: {
+        message: "Started working on queue",
+        type: "success"
       }
     });
   };
@@ -110,18 +142,30 @@ export default function HelpQueuesDashboard() {
       values: {
         is_active: false,
         ended_at: new Date().toISOString()
+      },
+      successNotification: {
+        message: "Stopped working on queue",
+        type: "success"
       }
     });
   };
 
-  if (queuesLoading || activeAssignmentsLoading) return <Text>Loading office-hour queues…</Text>;
+  if (queuesLoading || activeAssignmentsLoading || realtimeLoading) {
+    return <Text>Loading office-hour queues…</Text>;
+  }
+
   if (queuesError) return <Text>Error: {queuesError.message}</Text>;
   if (activeAssignmentsError) return <Text>Error loading assignments: {activeAssignmentsError.message}</Text>;
 
-  const queues = queuesResponse?.data ?? [];
-
   return (
     <Stack spaceY="4">
+      {/* Connection Status Indicator */}
+      {!isConnected && (
+        <Alert status="warning" title="Real-time updates disconnected">
+          Queue status may not be up to date. Connection status: {connectionStatus?.overall}
+        </Alert>
+      )}
+
       {queues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
         const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
@@ -144,6 +188,11 @@ export default function HelpQueuesDashboard() {
                 <Text fontSize="sm">
                   · Open Requests: {unresolvedRequests.filter((r) => r.help_queue === queue.id).length}
                 </Text>
+                {!queue.is_active && (
+                  <Text fontSize="sm" color="red.500">
+                    · Inactive
+                  </Text>
+                )}
               </HStack>
 
               {/* Active staff section */}
@@ -153,6 +202,11 @@ export default function HelpQueuesDashboard() {
                   <Text fontSize="sm" fontWeight="medium">
                     Staff on duty ({activeStaff.length})
                   </Text>
+                  {isConnected && (
+                    <Text fontSize="xs" color="green.500">
+                      ● Live
+                    </Text>
+                  )}
                 </HStack>
 
                 {activeStaff.length > 0 ? (

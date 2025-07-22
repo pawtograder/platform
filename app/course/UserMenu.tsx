@@ -27,7 +27,7 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState, { useCourse } from "@/hooks/useAuthState";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { useRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
+import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Avatar } from "@chakra-ui/react";
@@ -616,8 +616,12 @@ function ObfuscatedGradesModePicker() {
   );
 }
 
+/**
+ * Shows realtime connection status for both class and office hours functionality.
+ * Automatically detects office hours context and includes relevant channels.
+ */
 function ConnectionStatusIndicator() {
-  const status = useRealtimeConnectionStatus();
+  const status = useAutomaticRealtimeConnectionStatus();
 
   if (!status) {
     return null;
@@ -663,9 +667,35 @@ function ConnectionStatusIndicator() {
         return "Staff submission data for this submission";
       case "submission_user":
         return "Your submission data for this submission";
+      case "help_queues":
+        return "Office hours queues";
+      case "help_request":
+        return "Help request data";
+      case "help_request_staff":
+        return "Help request staff data";
+      case "help_queue":
+        return "Help queue data";
       default:
         return type;
     }
+  };
+
+  const getChannelDetails = (channel: (typeof status.channels)[0]) => {
+    const details = [];
+
+    if (channel.submissionId) {
+      details.push(`submission ${channel.submissionId}`);
+    }
+
+    if (channel.help_request_id) {
+      details.push(`request ${channel.help_request_id}`);
+    }
+
+    if (channel.help_queue_id) {
+      details.push(`queue ${channel.help_queue_id}`);
+    }
+
+    return details.length > 0 ? ` (${details.join(", ")})` : "";
   };
 
   const tooltipContent = (
@@ -679,7 +709,7 @@ function ConnectionStatusIndicator() {
           <Box width={2} height={2} borderRadius="full" bg={channel.state === "joined" ? "green.400" : "red.400"} />
           <Text>
             {getChannelTypeName(channel.type)}
-            {channel.submissionId ? ` (${channel.submissionId})` : ""}
+            {getChannelDetails(channel)}
           </Text>
           <Text color="gray.400">({channel.state})</Text>
         </HStack>

@@ -7,6 +7,8 @@ import { useParams } from "next/navigation";
 import { BsPerson, BsCalendar, BsStopwatch, BsX } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useEffect } from "react";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"]["Row"];
@@ -21,15 +23,29 @@ type AssignmentWithDetails = HelpQueueAssignment & {
 /**
  * Component for managing help queue assignments.
  * Allows instructors to view and manage TA assignments across all queues.
+ * Uses real-time updates to show assignment changes immediately.
  */
 export default function HelpQueueAssignmentManagement() {
   const { course_id } = useParams();
+
+  // Set up real-time subscriptions for global help queues and assignments
+  const {
+    data: realtimeData,
+    isConnected,
+    connectionStatus,
+    isLoading: realtimeLoading
+  } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    enableGlobalQueues: true,
+    enableStaffData: false
+  });
 
   // Fetch all assignments for the course with related data
   const {
     data: assignmentsResponse,
     isLoading: assignmentsLoading,
-    error: assignmentsError
+    error: assignmentsError,
+    refetch: refetchAssignments
   } = useList<AssignmentWithDetails>({
     resource: "help_queue_assignments",
     filters: [{ field: "class_id", operator: "eq", value: course_id }],
@@ -48,6 +64,31 @@ export default function HelpQueueAssignmentManagement() {
 
   const { mutate: updateAssignment } = useUpdate();
   const { mutate: deleteAssignment } = useDelete();
+
+  // Use realtime data when available, fallback to API data
+  // Note: The realtime data focuses on queue assignments, but we need the detailed join data from the API
+  const assignments = assignmentsResponse?.data ?? [];
+
+  // Set up realtime message handling
+  useEffect(() => {
+    if (!isConnected) return;
+
+    // Realtime updates are handled automatically by the hook
+    // The controller will update the realtimeData when assignment changes are broadcast
+    console.log("Help queue assignment management realtime connection established");
+  }, [isConnected]);
+
+  // Refresh assignments when realtime assignments change to get updated join data
+  useEffect(() => {
+    if (realtimeData.helpQueueAssignments.length > 0) {
+      // Debounce refetch to avoid excessive API calls
+      const timeoutId = setTimeout(() => {
+        refetchAssignments();
+      }, 500);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [realtimeData.helpQueueAssignments, refetchAssignments]);
 
   const handleEndAssignment = (assignmentId: number) => {
     updateAssignment({
@@ -85,10 +126,9 @@ export default function HelpQueueAssignmentManagement() {
     }
   };
 
-  if (assignmentsLoading) return <Text>Loading assignments...</Text>;
+  if (assignmentsLoading || realtimeLoading) return <Text>Loading assignments...</Text>;
   if (assignmentsError) return <Alert status="error" title={`Error: ${assignmentsError.message}`} />;
 
-  const assignments = assignmentsResponse?.data ?? [];
   const activeAssignments = assignments.filter((a) => a.is_active);
   const inactiveAssignments = assignments.filter((a) => !a.is_active);
 
@@ -137,6 +177,11 @@ export default function HelpQueueAssignmentManagement() {
               <Badge colorPalette="green" size="sm">
                 Active
               </Badge>
+            )}
+            {isConnected && (
+              <Text fontSize="xs" color="green.500">
+                ● Live
+              </Text>
             )}
           </Flex>
 
@@ -211,10 +256,22 @@ export default function HelpQueueAssignmentManagement() {
         <Heading size="lg">Help Queue Assignment Management</Heading>
       </Flex>
 
+      {/* Connection Status Indicator */}
+      {!isConnected && (
+        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
+          Assignment changes may not appear immediately. Connection status: {connectionStatus?.overall}
+        </Alert>
+      )}
+
       {/* Active Assignments */}
       <Box mb={8}>
         <Heading size="md" mb={4}>
           Active Assignments ({activeAssignments.length})
+          {isConnected && (
+            <Text as="span" fontSize="xs" color="green.500" ml={2}>
+              ● Live updates
+            </Text>
+          )}
         </Heading>
         {activeAssignments.length === 0 ? (
           <Box textAlign="center" py={6} borderWidth="1px" borderRadius="md">

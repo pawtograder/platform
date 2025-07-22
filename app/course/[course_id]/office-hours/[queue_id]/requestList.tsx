@@ -1,15 +1,10 @@
 import HelpRequestChat from "@/components/ui/help-queue/help-request-chat";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { HelpRequest, HelpRequestHistoryProps } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Stack, Text, Card, Badge, Button, Icon } from "@chakra-ui/react";
 import { useState } from "react";
 import { BsChevronDown, BsChevronUp, BsPersonCheck, BsPersonDash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-
-interface HelpRequestHistoryProps {
-  requests: HelpRequest[];
-  showPrivacyIndicator?: boolean;
-}
 
 /**
  * Component to display assignment status for a help request

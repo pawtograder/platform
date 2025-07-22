@@ -10,8 +10,9 @@ import { Alert } from "@/components/ui/alert";
 import useModalManager from "@/hooks/useModalManager";
 import CreateKarmaEntryModal from "./modals/createKarmaEntryModal";
 import EditKarmaEntryModal from "./modals/editKarmaEntryModal";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useEffect, useState } from "react";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { useState } from "react";
 
 type StudentKarmaNotes = Database["public"]["Tables"]["student_karma_notes"]["Row"];
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
@@ -24,6 +25,7 @@ type KarmaEntryWithDetails = StudentKarmaNotes & {
 /**
  * Component for managing student karma scores and internal notes.
  * Allows instructors and TAs to track student behavior and participation.
+ * Uses real-time updates to show karma changes immediately across all staff.
  */
 export default function StudentKarmaManagement() {
   const { course_id } = useParams();
@@ -32,6 +34,18 @@ export default function StudentKarmaManagement() {
   // Modal management
   const createModal = useModalManager();
   const editModal = useModalManager<KarmaEntryWithDetails>();
+
+  // Set up real-time subscriptions for staff data including karma
+  const {
+    data: realtimeData,
+    isConnected,
+    connectionStatus,
+    isLoading: realtimeLoading
+  } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    enableGlobalQueues: false, // Not needed for karma
+    enableStaffData: true // Enable staff data subscriptions
+  });
 
   // Fetch all karma entries for the course with related data
   const {
@@ -54,6 +68,31 @@ export default function StudentKarmaManagement() {
     }
   });
 
+  // Use realtime data when available, fallback to API data
+  // Note: The realtime karma data comes from studentKarmaNotes array
+  const karmaEntries = karmaResponse?.data ?? [];
+
+  // Set up realtime message handling
+  useEffect(() => {
+    if (!isConnected) return;
+
+    // Realtime updates are handled automatically by the hook
+    // The controller will update the realtimeData when karma changes are broadcast
+    console.log("Student karma management realtime connection established");
+  }, [isConnected]);
+
+  // Refresh karma data when realtime karma changes to get updated join data
+  useEffect(() => {
+    if (realtimeData.studentKarmaNotes.length > 0) {
+      // Debounce refetch to avoid excessive API calls
+      const timeoutId = setTimeout(() => {
+        refetchKarma();
+      }, 500);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [realtimeData.studentKarmaNotes, refetchKarma]);
+
   const handleCreateSuccess = () => {
     createModal.closeModal();
     refetchKarma();
@@ -64,10 +103,8 @@ export default function StudentKarmaManagement() {
     refetchKarma();
   };
 
-  if (karmaLoading) return <Text>Loading student karma data...</Text>;
+  if (karmaLoading || realtimeLoading) return <Text>Loading student karma data...</Text>;
   if (karmaError) return <Alert status="error" title={`Error: ${karmaError.message}`} />;
-
-  const karmaEntries = karmaResponse?.data ?? [];
 
   // Filter karma entries based on search term
   const filteredEntries = karmaEntries.filter((entry) => {
@@ -116,6 +153,11 @@ export default function StudentKarmaManagement() {
             <Badge colorPalette={getKarmaColor(entry.karma_score)} size="sm">
               {entry.karma_score} - {getKarmaLabel(entry.karma_score)}
             </Badge>
+            {isConnected && (
+              <Text fontSize="xs" color="green.500">
+                ● Live
+              </Text>
+            )}
           </Flex>
 
           <HStack mb={3}>
@@ -168,6 +210,13 @@ export default function StudentKarmaManagement() {
         </Button>
       </Flex>
 
+      {/* Connection Status Indicator */}
+      {!isConnected && (
+        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
+          Karma changes may not appear immediately. Connection status: {connectionStatus?.overall}
+        </Alert>
+      )}
+
       {/* Statistics */}
       <HStack mb={6} gap={6}>
         <VStack align="start">
@@ -178,9 +227,16 @@ export default function StudentKarmaManagement() {
         </VStack>
         <VStack align="start">
           <Text fontSize="sm">Average Karma</Text>
-          <Text fontSize="2xl" fontWeight="bold" color={getKarmaColor(averageKarma)}>
-            {averageKarma.toFixed(1)}
-          </Text>
+          <Flex align="center" gap={2}>
+            <Text fontSize="2xl" fontWeight="bold" color={getKarmaColor(averageKarma)}>
+              {averageKarma.toFixed(1)}
+            </Text>
+            {isConnected && (
+              <Text fontSize="xs" color="green.500">
+                ● Live
+              </Text>
+            )}
+          </Flex>
         </VStack>
         <VStack align="start">
           <Text fontSize="sm">Positive Karma</Text>
@@ -206,6 +262,11 @@ export default function StudentKarmaManagement() {
             onChange={(e) => setSearchTerm(e.target.value)}
             flex="1"
           />
+          {isConnected && searchTerm.trim() && (
+            <Text fontSize="xs" color="green.500">
+              ● Live search
+            </Text>
+          )}
         </HStack>
       </Box>
 
@@ -230,6 +291,11 @@ export default function StudentKarmaManagement() {
           {filteredEntries.map((entry) => (
             <KarmaEntryCard key={entry.id} entry={entry} />
           ))}
+          {isConnected && filteredEntries.length > 0 && (
+            <Text fontSize="xs" color="green.500" textAlign="center">
+              ● {filteredEntries.length} entries with live updates
+            </Text>
+          )}
         </Stack>
       )}
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useChatScroll } from "@/hooks/use-chat-scroll";
-import { useRealtimeChat, type ChatMessage } from "@/hooks/use-realtime-chat";
+import { useOfficeHoursRealtime, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
@@ -9,11 +9,9 @@ import { Box, Flex, Stack, Input, Icon, Text, Button, HStack } from "@chakra-ui/
 import { Send, X } from "lucide-react";
 import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationStatus";
 import useAuthState from "@/hooks/useAuthState";
-import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 interface RealtimeChatProps {
-  username: string;
   onMessage?: (messages: UnifiedMessage[]) => void;
   messages?: ChatMessage[];
   helpRequest: HelpRequest;
@@ -111,16 +109,9 @@ const ReplyPreview = ({
 };
 
 /**
- * Realtime chat component
- * @param roomName - The name of the room to join. Each room is a unique chat.
- * @param username - The username of the user
- * @param onMessage - The callback function to handle the messages. Useful if you want to store the messages in a database.
- * @param messages - The messages to display in the chat. Useful if you want to display messages from a database.
- * @param helpRequestStudentIds - Array of student profile IDs associated with the help request (for OP labeling)
- * @returns The chat component
+ * Realtime chat component enhanced with office hours functionality
  */
 export const RealtimeChat = ({
-  username: propUsername, // Keep prop for fallback
   onMessage,
   messages: databaseMessages = [],
   helpRequest,
@@ -129,13 +120,9 @@ export const RealtimeChat = ({
   const { containerRef, scrollToBottom } = useChatScroll();
   const moderationStatus = useModerationStatus(helpRequest.class_id);
 
-  // Get authenticated user and their profile for display name
+  // Get authenticated user and their profile
   const { user } = useAuthState();
-  const userProfile = useUserProfile(user?.id || "");
   const { private_profile_id, allVisibleRoles } = useClassProfiles();
-
-  // Use profile name, fallback to prop username, then fallback to user email
-  const displayName = userProfile?.name || propUsername || user?.email || "Unknown User";
 
   // Reply state
   const [replyToMessage, setReplyToMessage] = useState<UnifiedMessage | null>(null);
@@ -147,72 +134,48 @@ export const RealtimeChat = ({
   // Track which messages have already been marked as read to prevent duplicates
   const [markedAsRead, setMarkedAsRead] = useState<Set<number>>(new Set());
 
-  const { broadcastMessages, sendMessage, markMessageAsRead, isConnected, readReceipts } = useRealtimeChat({
-    username: displayName, // Pass display name to hook
-    messages: databaseMessages, // Pass messages from props to hook
-    helpRequest
+  // Use the enhanced office hours realtime hook with chat functionality enabled
+  const {
+    data,
+    sendMessage,
+    markMessageAsRead,
+    isConnected,
+    isValidating,
+    isAuthorized,
+    connectionError,
+    readReceipts
+  } = useOfficeHoursRealtime({
+    classId: helpRequest.class_id,
+    helpRequestId: helpRequest.id,
+    enableChat: true
   });
 
-  // Merge broadcast messages with database messages
+  // Helper function to get timestamp from either message type
+  const getMessageTimestamp = (msg: UnifiedMessage): string => {
+    if ("created_at" in msg && msg.created_at) {
+      return msg.created_at;
+    }
+    if ("createdAt" in msg) {
+      return (msg as { createdAt: string }).createdAt;
+    }
+    return new Date().toISOString();
+  };
+
+  // Prioritize realtime data over prop data, ensure proper reactivity to changes
   const allMessages = useMemo(() => {
-    const mergedMessages: UnifiedMessage[] = [...databaseMessages];
+    const hookMessages = data?.helpRequestMessages || [];
+    // Always prefer realtime hook data if available, fallback to prop data only when hook data is empty
+    const messages = hookMessages.length > 0 ? hookMessages : databaseMessages;
 
-    // Add broadcast messages that aren't already in database
-    broadcastMessages.forEach((broadcastMsg) => {
-      // Don't add if we already have this message in database
-      const isDuplicate = databaseMessages.some((dbMsg) => {
-        // Check content match
-        const contentMatches = dbMsg.message === broadcastMsg.content;
-
-        // Check timestamp match (5 second tolerance)
-        const timeMatches =
-          Math.abs(new Date(dbMsg.created_at).getTime() - new Date(broadcastMsg.createdAt).getTime()) < 5000;
-
-        // For the current user, also check author match to ensure we're comparing the right messages
-        // For database messages, author is profile ID. For broadcast messages, user.id is auth user ID
-        const isFromCurrentUser = broadcastMsg.user.id === (user?.id || "");
-        const databaseMessageFromCurrentUser = dbMsg.author === private_profile_id;
-        const authorMatches = !isFromCurrentUser || (isFromCurrentUser && databaseMessageFromCurrentUser);
-
-        // For messages from other users, we rely on content + timestamp matching
-        // For messages from current user, we also verify author matching
-        return contentMatches && timeMatches && authorMatches;
-      });
-
-      if (!isDuplicate) {
-        // Convert broadcast message to unified format
-        // For consistency, use profile ID when this is the current user's message
-        let authorId = broadcastMsg.user.id; // Default to auth user ID
-
-        // If this is the current user's message, use their profile ID for consistency with database messages
-        if (broadcastMsg.user.id === (user?.id || "") && private_profile_id) {
-          authorId = private_profile_id;
-        }
-
-        const unifiedMsg: UnifiedMessage = {
-          ...broadcastMsg,
-          author: authorId, // Use profile ID for current user, auth user ID for others
-          author_name: broadcastMsg.user.name, // Preserve username for display
-          message: broadcastMsg.content,
-          created_at: broadcastMsg.createdAt,
-          reply_to_message_id: broadcastMsg.replyToMessageId,
-          help_request_id: broadcastMsg.helpRequestId,
-          class_id: broadcastMsg.classId,
-          instructors_only: false,
-          requestor: null
-        };
-        mergedMessages.push(unifiedMsg);
-      }
+    // Sort messages by creation time to ensure proper order
+    return messages.sort((a, b) => {
+      const aTime = getMessageTimestamp(a);
+      const bTime = getMessageTimestamp(b);
+      return new Date(aTime).getTime() - new Date(bTime).getTime();
     });
+  }, [data?.helpRequestMessages, databaseMessages]);
 
-    // Sort by creation date
-    return mergedMessages.sort((a, b) => {
-      const timeA = "created_at" in a ? a.created_at : a.createdAt;
-      const timeB = "created_at" in b ? b.created_at : b.createdAt;
-      return timeA.localeCompare(timeB);
-    });
-  }, [databaseMessages, broadcastMessages, user?.id, private_profile_id]);
-
+  // Notify parent component when messages change
   useEffect(() => {
     if (onMessage) {
       onMessage(allMessages);
@@ -238,14 +201,18 @@ export const RealtimeChat = ({
     });
   }, [allMessages]);
 
+  // Scroll to bottom when messages change (with debouncing to prevent excessive scrolling)
   useEffect(() => {
-    // Scroll to bottom whenever messages change
-    scrollToBottom();
-  }, [allMessages, scrollToBottom]);
+    const timeoutId = setTimeout(() => {
+      scrollToBottom();
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
+  }, [allMessages.length, scrollToBottom]); // Only track message count to avoid excessive scrolling
 
   // Mark messages as read when they come into view
   useEffect(() => {
-    if (!allMessages.length) return;
+    if (!allMessages.length || !markMessageAsRead) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -278,21 +245,25 @@ export const RealtimeChat = ({
     return () => {
       observer.disconnect();
     };
-  }, [allMessages, markMessageAsRead, markedAsRead, setMarkedAsRead]);
+  }, [allMessages, markMessageAsRead, markedAsRead]);
 
   const handleSendMessage = useCallback(
-    (e: React.FormEvent) => {
+    async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!newMessage.trim() || !isConnected || moderationStatus.isBanned) return;
+      if (!newMessage.trim() || !sendMessage || !isConnected || moderationStatus.isBanned) return;
 
       const replyToId =
         replyToMessage && "id" in replyToMessage && typeof replyToMessage.id === "number" ? replyToMessage.id : null;
 
-      sendMessage(newMessage, replyToId);
-      setNewMessage("");
-      setReplyToMessage(null);
+      try {
+        await sendMessage(newMessage, replyToId);
+        setNewMessage("");
+        setReplyToMessage(null);
+      } catch (error) {
+        console.error("Failed to send message:", error);
+      }
     },
-    [newMessage, isConnected, sendMessage, moderationStatus.isBanned, replyToMessage]
+    [newMessage, sendMessage, isConnected, moderationStatus.isBanned, replyToMessage]
   );
 
   const handleReply = useCallback(
@@ -314,7 +285,7 @@ export const RealtimeChat = ({
     setReplyToMessage(null);
   }, []);
 
-  // Helper function to find reply-to message
+  // Helper function to find reply-to message - memoized to prevent unnecessary recalculation
   const getReplyToMessage = useCallback(
     (replyToId: number | null) => {
       if (!replyToId) return null;
@@ -330,8 +301,71 @@ export const RealtimeChat = ({
     [allMessages]
   );
 
+  // Show loading state during validation
+  if (isValidating) {
+    return (
+      <Flex
+        direction="column"
+        height="100%"
+        width="100%"
+        bg="white"
+        _dark={{ bg: "gray.800" }}
+        justify="center"
+        align="center"
+      >
+        <Text fontSize="sm" color="gray.500" _dark={{ color: "gray.400" }}>
+          Connecting to chat...
+        </Text>
+      </Flex>
+    );
+  }
+
+  // Show error state if not authorized or connection failed
+  if (!isAuthorized || connectionError) {
+    return (
+      <Flex
+        direction="column"
+        height="100%"
+        width="100%"
+        bg="white"
+        _dark={{ bg: "gray.800" }}
+        justify="center"
+        align="center"
+        p={4}
+      >
+        <Box
+          p={4}
+          bg="red.50"
+          _dark={{ bg: "red.900", borderColor: "red.700" }}
+          borderRadius="md"
+          border="1px"
+          borderColor="red.200"
+        >
+          <Text fontSize="sm" color="red.700" _dark={{ color: "red.300" }}>
+            {connectionError || "Unable to connect to chat"}
+          </Text>
+        </Box>
+      </Flex>
+    );
+  }
+
   return (
     <Flex direction="column" height="100%" width="100%" bg="white" _dark={{ bg: "gray.800" }}>
+      {/* Connection status indicator */}
+      {!isConnected && (
+        <Box
+          p={2}
+          bg="yellow.50"
+          _dark={{ bg: "yellow.900", borderColor: "yellow.700" }}
+          borderBottom="1px"
+          borderColor="yellow.200"
+        >
+          <Text fontSize="xs" color="yellow.700" _dark={{ color: "yellow.300" }} textAlign="center">
+            Reconnecting to chat...
+          </Text>
+        </Box>
+      )}
+
       {/* Messages */}
       <Box
         ref={containerRef}
@@ -407,9 +441,9 @@ export const RealtimeChat = ({
                     readReceipts={readReceipts}
                     onReply={handleReply}
                     allMessages={allMessages}
-                    currentUserId={private_profile_id} // Pass profile ID for read receipt matching (database uses profile IDs)
-                    helpRequestStudentIds={helpRequestStudentIds} // Pass student IDs for OP labeling
-                    userRoles={allVisibleRoles} // Pass all user roles for role labeling
+                    currentUserId={private_profile_id}
+                    helpRequestStudentIds={helpRequestStudentIds}
+                    userRoles={allVisibleRoles}
                   />
                 </Box>
               );
@@ -452,17 +486,17 @@ export const RealtimeChat = ({
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 placeholder={replyToMessage ? "Reply to message..." : "Type a message..."}
-                disabled={!isConnected}
+                disabled={!isConnected || !sendMessage}
                 transition="all 0.3s"
                 flex="1"
               />
-              {isConnected && newMessage.trim() && (
+              {isConnected && newMessage.trim() && sendMessage && (
                 <Button
                   type="submit"
                   size="sm"
                   borderRadius="full"
                   aspectRatio="1"
-                  disabled={!isConnected}
+                  disabled={!isConnected || !sendMessage}
                   style={{
                     animation: "slideInFromRight 0.3s ease-out"
                   }}

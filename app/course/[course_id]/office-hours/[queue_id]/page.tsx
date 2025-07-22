@@ -1,16 +1,10 @@
 "use client";
 
-import { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { HelpRequest, HelpRequestStudent } from "@/utils/supabase/DatabaseTypes";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 
-type HelpRequestStudent = {
-  id: number;
-  help_request_id: number;
-  profile_id: string;
-  class_id: number;
-  created_at: string;
-};
 import { Box, Heading, Tabs } from "@chakra-ui/react";
-import { useList, useShow } from "@refinedev/core";
+import { useList } from "@refinedev/core";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import CurrentRequest from "./currentRequest";
 import HelpRequestForm from "./newRequestForm";
@@ -37,12 +31,25 @@ export default function HelpQueuePage() {
 
   const [currentRequest, setCurrentRequest] = useState<HelpRequest | null>(null);
 
-  const { query: queue } = useShow<HelpQueue>({
-    resource: "help_queues",
-    id: Number.parseInt(queue_id as string)
+  // Use the enhanced office hours realtime hook for this specific queue
+  const { data, isLoading, connectionStatus } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    helpQueueId: Number(queue_id),
+    enableActiveRequests: true,
+    enableGlobalQueues: false, // We only need this specific queue
+    enableStaffData: false
   });
 
-  // Fetch user's help request associations with real-time updates
+  const { helpQueue, activeHelpRequests } = data;
+
+  // Get active requests in this specific queue (filter from activeHelpRequests)
+  const queueRequests = useMemo(() => {
+    return (activeHelpRequests || [])
+      .filter((request) => request.help_queue === Number(queue_id))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); // Sort by creation time (oldest first)
+  }, [activeHelpRequests, queue_id]);
+
+  // Fetch user's help request associations with real-time updates (still needed for user-specific data)
   const { data: userRequestStudents } = useList<HelpRequestStudent>({
     resource: "help_request_students",
     filters: [
@@ -59,7 +66,7 @@ export default function HelpQueuePage() {
   // Get the help request IDs for this user
   const userRequestIds = userRequestStudents?.data?.map((student) => student.help_request_id) || [];
 
-  // Fetch the actual help requests with real-time updates
+  // Fetch the actual help requests for this user with real-time updates
   const { data: userRequestsData } = useList<HelpRequest>({
     resource: "help_requests",
     filters: [
@@ -109,22 +116,16 @@ export default function HelpQueuePage() {
     }
   });
 
-  // Fetch all currently active requests in this queue (for queue status) - ordered by creation time (oldest first)
-  const { data: queueRequests } = useList<HelpRequest>({
-    resource: "help_requests",
-    pagination: { pageSize: 100 },
-    filters: [
-      { field: "help_queue", operator: "eq", value: Number.parseInt(queue_id as string) },
-      { field: "status", operator: "in", value: ["open", "in_progress"] }
-    ],
-    sorters: [{ field: "created_at", order: "asc" }]
-  });
-
-  if (queue.isLoading || !queueRequests || queueRequests?.isLoading) {
+  if (isLoading) {
     return <div>Loading...</div>;
   }
-  if (queue.error) {
-    return <div>Error: {queue.error.message}</div>;
+
+  if (connectionStatus?.overall === "disconnected") {
+    return <div>Connection error. Please try refreshing the page.</div>;
+  }
+
+  if (!helpQueue) {
+    return <div>Help queue not found.</div>;
   }
 
   // Filter resolved/closed requests for history (both student-resolved and staff-resolved)
@@ -132,7 +133,10 @@ export default function HelpQueuePage() {
     (request) => request.status === "resolved" || request.status === "closed"
   );
 
-  const pendingRequests = queueRequests?.data || [];
+  const pendingRequests = queueRequests || [];
+
+  // Calculate position of current request in queue
+  const currentRequestPosition = currentRequest ? pendingRequests.findIndex((r) => r.id === currentRequest.id) + 1 : 0;
 
   // Use only resolved public requests for "similar questions" to avoid duplication with queue status
   const recentPublicRequests = publicRequests?.data || [];
@@ -148,7 +152,7 @@ export default function HelpQueuePage() {
   return (
     <ModerationBanNotice classId={Number(course_id)}>
       <Box m={4}>
-        <Heading>Help Queue: {queue.data?.data.name}</Heading>
+        <Heading>Help Queue: {helpQueue.name}</Heading>
         <Tabs.Root
           size="md"
           orientation="vertical"
@@ -169,7 +173,7 @@ export default function HelpQueuePage() {
           </Tabs.Content>
           {currentRequest && (
             <Tabs.Content width="100%" value="current">
-              <CurrentRequest queue={queue.data?.data} request={currentRequest} />
+              <CurrentRequest request={currentRequest} position={currentRequestPosition} />
             </Tabs.Content>
           )}
           <Tabs.Content width="100%" value="new-request">

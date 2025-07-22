@@ -10,9 +10,7 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useMemo } from "react";
 import { BsClipboardCheckFill, BsCheckCircle, BsXCircle, BsChatText } from "react-icons/bs";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-
-type HelpRequestStudent = Database["public"]["Tables"]["help_request_students"]["Row"];
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 
 /**
  * Enhanced help request with queue information and multiple students
@@ -28,6 +26,18 @@ export default function HelpRequestList() {
   const activeRequestID = request_id ? Number.parseInt(request_id as string) : null;
   const [searchTerm, setSearchTerm] = useState("");
 
+  // Use the consolidated office hours realtime hook for most data
+  const { data: officeHoursData, isLoading: officeHoursLoading } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    enableGlobalQueues: true, // Need queues data
+    enableActiveRequests: true, // Need all help requests
+    enableStaffData: false // Don't need moderation/karma data for this view
+  });
+
+  // Extract data from the consolidated hook
+  const { helpQueues, helpRequestStudents: realtimeHelpRequestStudents } = officeHoursData;
+
+  // Still need to fetch all help requests (not just active) with search capability
   // Build filters array dynamically
   const filters: CrudFilters = [{ field: "class_id", operator: "eq", value: course_id }];
 
@@ -40,33 +50,27 @@ export default function HelpRequestList() {
     });
   }
 
-  const { data } = useList<HelpRequest>({
+  const { data: searchableRequestsData, isLoading: searchLoading } = useList<HelpRequest>({
     resource: "help_requests",
     filters,
     pagination: { pageSize: 1000 }, // Fetch all requests like the student view
     sorters: [{ field: "created_at", order: "desc" }] // Sort by newest first for instructor view
   });
 
-  // Fetch help request students to get the students associated with each request
-  const { data: helpRequestStudentsData } = useList<HelpRequestStudent>({
-    resource: "help_request_students",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: { pageSize: 1000 }
-  });
-
-  // Fetch all help queues for the class
-  const { data: helpQueuesData } = useList<HelpQueue>({
-    resource: "help_queues",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: { pageSize: 1000 }
-  });
-
-  const requests = data?.data;
+  // Use searchable requests if there's a search term, otherwise use realtime data
+  const allHelpRequests = useMemo(() => {
+    if (searchTerm.trim()) {
+      return searchableRequestsData?.data || [];
+    }
+    // For non-search case, we need to fetch all requests, not just active ones
+    // So we'll fall back to the searchable data without search filter
+    return searchableRequestsData?.data || [];
+  }, [searchTerm, searchableRequestsData?.data]);
 
   // Create a mapping of help request ID to student profile IDs
   const requestStudentsMap = useMemo(() => {
-    const helpRequestStudents = helpRequestStudentsData?.data ?? [];
-    return helpRequestStudents.reduce(
+    // Use realtime data when available, fall back to empty array
+    return realtimeHelpRequestStudents.reduce(
       (acc, student) => {
         if (!acc[student.help_request_id]) {
           acc[student.help_request_id] = [];
@@ -76,11 +80,10 @@ export default function HelpRequestList() {
       },
       {} as Record<number, string[]>
     );
-  }, [helpRequestStudentsData?.data]);
+  }, [realtimeHelpRequestStudents]);
 
   // Create a mapping of queue ID to queue data
   const queueMap = useMemo(() => {
-    const helpQueues = helpQueuesData?.data || [];
     return helpQueues.reduce(
       (acc, queue) => {
         acc[queue.id] = queue;
@@ -88,13 +91,11 @@ export default function HelpRequestList() {
       },
       {} as Record<number, HelpQueue>
     );
-  }, [helpQueuesData?.data]);
+  }, [helpQueues]);
 
   // Enhanced requests with queue information and students
   const enhancedRequests = useMemo(() => {
-    if (!requests) return [];
-
-    return requests.map(
+    return allHelpRequests.map(
       (request): EnhancedHelpRequest => ({
         ...request,
         queue:
@@ -108,14 +109,23 @@ export default function HelpRequestList() {
         students: requestStudentsMap[request.id] || []
       })
     );
-  }, [requests, queueMap, requestStudentsMap]);
+  }, [allHelpRequests, queueMap, requestStudentsMap]);
+
+  // Show loading state while data is being fetched
+  if (officeHoursLoading || searchLoading) {
+    return (
+      <Flex height="100vh" overflow="hidden" justify="center" align="center">
+        <Text>Loading help requests...</Text>
+      </Flex>
+    );
+  }
 
   return (
     <Flex height="100vh" overflow="hidden">
       <Stack spaceY="4" width="320px" borderEndWidth="1px" pt="6">
         <Box px="5">
           <Text fontSize="lg" fontWeight="medium">
-            Requests ({requests?.length})
+            Requests ({allHelpRequests?.length || 0})
           </Text>
         </Box>
 

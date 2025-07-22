@@ -10,10 +10,13 @@ import useModalManager from "@/hooks/useModalManager";
 import CreateHelpQueueModal from "./modals/createHelpQueueModal";
 import EditHelpQueueModal from "./modals/editHelpQueueModal";
 import { Alert } from "@/components/ui/alert";
+import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useEffect } from "react";
 
 /**
  * Component for managing help queues in a course.
  * Allows instructors to create, edit, and delete help queues.
+ * Uses real-time updates to show changes made by other instructors.
  */
 export default function HelpQueueManagement() {
   const { course_id } = useParams();
@@ -21,6 +24,18 @@ export default function HelpQueueManagement() {
   // Modal management
   const createModal = useModalManager();
   const editModal = useModalManager<HelpQueue>();
+
+  // Set up real-time subscriptions for global help queues
+  const {
+    data: realtimeData,
+    isConnected,
+    connectionStatus,
+    isLoading: realtimeLoading
+  } = useOfficeHoursRealtime({
+    classId: Number(course_id),
+    enableGlobalQueues: true,
+    enableStaffData: false
+  });
 
   // Fetch all help queues for the course
   const {
@@ -35,6 +50,18 @@ export default function HelpQueueManagement() {
   });
 
   const { mutate: deleteQueue } = useDelete();
+
+  // Use realtime data when available, fallback to API data
+  const queues = realtimeData.helpQueues.length > 0 ? realtimeData.helpQueues : (queuesResponse?.data ?? []);
+
+  // Set up realtime message handling for optimistic updates
+  useEffect(() => {
+    if (!isConnected) return;
+
+    // Realtime updates are handled automatically by the hook
+    // The controller will update the realtimeData when queue changes are broadcast
+    console.log("Help queue management realtime connection established");
+  }, [isConnected]);
 
   const handleDeleteQueue = (queueId: number, queueName: string) => {
     if (window.confirm(`Are you sure you want to delete the queue "${queueName}"? This action cannot be undone.`)) {
@@ -55,18 +82,18 @@ export default function HelpQueueManagement() {
 
   const handleCreateSuccess = () => {
     createModal.closeModal();
+    // Refetch as fallback in case realtime doesn't update immediately
     refetchQueues();
   };
 
   const handleEditSuccess = () => {
     editModal.closeModal();
+    // Refetch as fallback in case realtime doesn't update immediately
     refetchQueues();
   };
 
-  if (queuesLoading) return <Text>Loading help queues...</Text>;
+  if (queuesLoading || realtimeLoading) return <Text>Loading help queues...</Text>;
   if (queuesError) return <Alert status="error" title={`Error: ${queuesError.message}`} />;
-
-  const queues = queuesResponse?.data ?? [];
 
   const getQueueTypeColor = (type: string) => {
     switch (type) {
@@ -103,6 +130,13 @@ export default function HelpQueueManagement() {
           Create New Queue
         </Button>
       </Flex>
+
+      {/* Connection Status Indicator */}
+      {!isConnected && (
+        <Alert status="warning" title="Real-time updates disconnected" mb={4}>
+          Queue changes by other instructors may not appear immediately. Connection status: {connectionStatus?.overall}
+        </Alert>
+      )}
 
       {queues.length === 0 ? (
         <Box textAlign="center" py={8}>
@@ -145,6 +179,11 @@ export default function HelpQueueManagement() {
                       >
                         Inactive
                       </Box>
+                    )}
+                    {isConnected && (
+                      <Text fontSize="xs" color="green.500">
+                        ● Live
+                      </Text>
                     )}
                   </Flex>
 
