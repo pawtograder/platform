@@ -45,9 +45,7 @@ test.beforeAll(async () => {
   });
 });
 const expectedLabAssignmentDueDate =
-  labAssignmentDueDate.getDay() === 1
-    ? labAssignmentDueDate
-    : previousMonday(labAssignmentDueDate);
+  labAssignmentDueDate.getDay() === 1 ? labAssignmentDueDate : previousMonday(labAssignmentDueDate);
 expectedLabAssignmentDueDate.setHours(5, 42, 0, 0);
 
 function getDueDateString(date: Date) {

@@ -389,14 +389,9 @@ function LabSectionsTable() {
                       <PopConfirm
                         triggerLabel="Delete lab section"
                         trigger={
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              colorPalette="red"
-                              loading={isDeleting}
-                            >
-                              <FaTrash />
-                            </Button>
+                          <Button size="sm" variant="ghost" colorPalette="red" loading={isDeleting}>
+                            <FaTrash />
+                          </Button>
                         }
                         confirmHeader="Delete Lab Section"
                         confirmText={`Are you sure you want to delete "${labSection.name}"? This action cannot be undone.`}
