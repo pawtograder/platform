@@ -705,6 +705,41 @@ export type Course = GetResult<
   "*"
 >;
 
+// Lab Sections Types
+export type LabSection = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
+  "*"
+>;
+
+export type LabSectionMeeting = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_section_meetings"]["Row"],
+  "lab_section_meetings",
+  Database["public"]["Tables"]["lab_section_meetings"]["Relationships"],
+  "*"
+>;
+
+export type LabSectionWithLeader = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
+  "*, profiles!lab_sections_lab_leader_id_fkey(*)"
+>;
+
+export type LabSectionWithMeetings = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["lab_sections"]["Row"],
+  "lab_sections",
+  Database["public"]["Tables"]["lab_sections"]["Relationships"],
+  "*, lab_section_meetings(*)"
+>;
+
+export type DayOfWeek = "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+
 export type RegradeStatus = Database["public"]["Enums"]["regrade_status"];
 export type RegradeRequest = Database["public"]["Tables"]["submission_regrade_requests"]["Row"];
 export type RegradeRequestComment = Database["public"]["Tables"]["submission_regrade_request_comments"]["Row"];
