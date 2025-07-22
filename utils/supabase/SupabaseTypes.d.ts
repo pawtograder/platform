@@ -2640,6 +2640,20 @@ export type Database = {
             foreignKeyName: "help_request_file_references_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment";
             referencedColumns: ["assignment_id"];
           },
@@ -2670,6 +2684,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submission_files";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_id"];
           },
           {
             foreignKeyName: "help_request_file_references_submission_id_fkey";
@@ -3119,6 +3140,13 @@ export type Database = {
             foreignKeyName: "help_requests_referenced_submission_id_fkey";
             columns: ["referenced_submission_id"];
             isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_id"];
+          },
+          {
+            foreignKeyName: "help_requests_referenced_submission_id_fkey";
+            columns: ["referenced_submission_id"];
+            isOneToOne: false;
             referencedRelation: "submissions";
             referencedColumns: ["id"];
           },
@@ -3156,6 +3184,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment";
             referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "help_requests_template_id_fkey";
+            columns: ["template_id"];
+            isOneToOne: false;
+            referencedRelation: "help_request_templates";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -6841,6 +6876,40 @@ export type Database = {
         Args: { topic_text: string };
         Returns: boolean;
       };
+      create_help_request_message_notification: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_message_id: number;
+          p_author_profile_id: string;
+          p_author_name: string;
+          p_message_preview: string;
+          p_help_request_creator_profile_id: string;
+          p_help_request_creator_name: string;
+          p_is_private?: boolean;
+        };
+        Returns: undefined;
+      };
+      create_help_request_notification: {
+        Args: {
+          p_class_id: number;
+          p_notification_type: string;
+          p_help_request_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_creator_profile_id: string;
+          p_creator_name: string;
+          p_assignee_profile_id?: string;
+          p_assignee_name?: string;
+          p_status?: Database["public"]["Enums"]["help_request_status"];
+          p_request_preview?: string;
+          p_is_private?: boolean;
+          p_action?: string;
+        };
+        Returns: undefined;
+      };
       custom_access_token_hook: {
         Args: { event: Json };
         Returns: Json;
@@ -6930,6 +6999,7 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+      email_digest_frequency: "daily" | "weekly" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -7067,6 +7137,7 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+      email_digest_frequency: ["daily", "weekly", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",
