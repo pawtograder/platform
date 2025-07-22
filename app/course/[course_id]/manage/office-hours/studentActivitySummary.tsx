@@ -4,11 +4,7 @@ import { Box, HStack, VStack, Text, Icon, Badge, Separator } from "@chakra-ui/re
 import { useList } from "@refinedev/core";
 import { BsStar, BsStarFill, BsPerson, BsClock, BsShield, BsExclamationTriangle } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-
-type StudentKarmaNotes = Database["public"]["Tables"]["student_karma_notes"]["Row"];
-type StudentHelpActivity = Database["public"]["Tables"]["student_help_activity"]["Row"];
-type ModerationAction = Database["public"]["Tables"]["help_request_moderation"]["Row"];
+import type { StudentKarmaNotes, StudentHelpActivity, HelpRequestModeration } from "@/utils/supabase/DatabaseTypes";
 
 type StudentActivitySummaryProps = {
   studentProfileId: string;
@@ -47,7 +43,7 @@ export default function StudentActivitySummary({
   });
 
   // Fetch recent moderation actions
-  const { data: moderationResponse } = useList<ModerationAction>({
+  const { data: moderationResponse } = useList<HelpRequestModeration>({
     resource: "help_request_moderation",
     filters: [
       { field: "student_profile_id", operator: "eq", value: studentProfileId },

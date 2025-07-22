@@ -9,15 +9,11 @@ import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { useEffect } from "react";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-
-type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"]["Row"];
-type HelpQueue = Database["public"]["Tables"]["help_queues"]["Row"];
-type Profile = Database["public"]["Tables"]["profiles"]["Row"];
+import type { HelpQueueAssignment, HelpQueue, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type AssignmentWithDetails = HelpQueueAssignment & {
   help_queue?: HelpQueue;
-  profile?: Profile;
+  profile?: UserProfile;
 };
 
 /**

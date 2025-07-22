@@ -6,10 +6,8 @@ import { useCreate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-
-type HelpQueueInsert = Database["public"]["Tables"]["help_queues"]["Insert"];
+import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 
 type HelpQueueFormData = {
   name: string;
@@ -53,7 +51,7 @@ export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: Cre
     }
   });
 
-  const { mutateAsync: createQueue } = useCreate<HelpQueueInsert>();
+  const { mutateAsync: createQueue } = useCreate<HelpQueue>();
 
   const handleClose = () => {
     reset();

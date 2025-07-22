@@ -6,14 +6,11 @@ import { useUpdate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useEffect } from "react";
 import { BsX } from "react-icons/bs";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
+import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 
-type StudentKarmaNotes = Database["public"]["Tables"]["student_karma_notes"]["Row"];
-type Profile = Database["public"]["Tables"]["profiles"]["Row"];
-
 type KarmaEntryWithDetails = StudentKarmaNotes & {
-  student_profile?: Profile;
+  student_profile?: UserProfile;
   created_by?: { name: string };
 };
 

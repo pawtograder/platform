@@ -2,17 +2,14 @@
 import { Box, Flex, HStack, Stack, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { useList, useCreate, useUpdate } from "@refinedev/core";
-import type { HelpQueue, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue, HelpRequest, HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useMemo } from "react";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { Alert } from "@/components/ui/alert";
-
-type HelpQueueAssignment = Database["public"]["Tables"]["help_queue_assignments"]["Row"];
 
 /**
  * Dashboard component for instructors/TAs to manage their office-hour queues.
@@ -169,7 +166,7 @@ export default function HelpQueuesDashboard() {
       {queues.map((queue) => {
         const myAssignment = activeAssignments.find((a) => a.help_queue_id === queue.id);
         const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
-        const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
+        const activeStaff = queueAssignments.map((assignment: HelpQueueAssignment) => assignment.ta_profile_id);
 
         return (
           <Flex
@@ -211,7 +208,7 @@ export default function HelpQueuesDashboard() {
 
                 {activeStaff.length > 0 ? (
                   <HStack wrap="wrap" gap={2}>
-                    {activeStaff.slice(0, 4).map((staffId, index) => (
+                    {activeStaff.slice(0, 4).map((staffId: string, index: number) => (
                       <PersonAvatar key={`staff-${staffId}-${index}`} uid={staffId} size="sm" />
                     ))}
                     {activeStaff.length > 4 && <Text fontSize="xs">+{activeStaff.length - 4} more</Text>}

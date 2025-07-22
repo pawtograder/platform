@@ -11,11 +11,7 @@ import {
   SubmissionFile,
   HelpRequestLocationType,
   HelpRequestFormFileReference,
-  HelpRequestWithStudentCount,
-  HelpRequestFormTemplateOption,
-  HelpRequestFormSubmissionOption,
-  HelpRequestFormFileOption,
-  HelpRequestFormQueueOption
+  HelpRequestWithStudentCount
 } from "@/utils/supabase/DatabaseTypes";
 import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
@@ -29,6 +25,11 @@ import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { X } from "lucide-react";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
+
+type SelectOption = {
+  label: string;
+  value: string;
+};
 
 export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
@@ -476,7 +477,7 @@ export default function HelpRequestForm() {
                         ({
                           label: `${queue.name} - ${queue.description}`,
                           value: queue.id.toString()
-                        }) as HelpRequestFormQueueOption
+                        }) as SelectOption
                     ) ?? []
                   }
                   value={
@@ -484,10 +485,10 @@ export default function HelpRequestForm() {
                       ? ({
                           label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
                           value: field.value.toString()
-                        } as HelpRequestFormQueueOption)
+                        } as SelectOption)
                       : null
                   }
-                  onChange={(option: HelpRequestFormQueueOption | null) => {
+                  onChange={(option: SelectOption | null) => {
                     const val = option?.value ?? "";
                     field.onChange(val === "" ? undefined : Number.parseInt(val));
                   }}
@@ -550,7 +551,7 @@ export default function HelpRequestForm() {
                         ({
                           label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
                           value: submission.id.toString()
-                        }) as HelpRequestFormSubmissionOption
+                        }) as SelectOption
                     ) ?? []
                   }
                   value={
@@ -558,10 +559,10 @@ export default function HelpRequestForm() {
                       ? ({
                           label: submissions?.data?.find((s) => s.id === field.value)?.repository || "Unknown",
                           value: field.value.toString()
-                        } as HelpRequestFormSubmissionOption)
+                        } as SelectOption)
                       : null
                   }
-                  onChange={(option: HelpRequestFormSubmissionOption | null) => {
+                  onChange={(option: SelectOption | null) => {
                     const val = option?.value ?? "";
                     field.onChange(val === "" ? undefined : Number.parseInt(val));
                   }}
@@ -600,7 +601,7 @@ export default function HelpRequestForm() {
                             label: file.name,
                             value: file.id.toString()
                           }))}
-                        onChange={(option: HelpRequestFormFileOption | null) => {
+                        onChange={(option: SelectOption | null) => {
                           if (option) {
                             const newRef: HelpRequestFormFileReference = {
                               submission_file_id: Number.parseInt(option.value),
@@ -752,17 +753,17 @@ export default function HelpRequestForm() {
                     isMulti={false}
                     placeholder="Choose a template"
                     options={templates.data.map(
-                      (tmpl) => ({ label: tmpl.name, value: tmpl.id.toString() }) as HelpRequestFormTemplateOption
+                      (tmpl) => ({ label: tmpl.name, value: tmpl.id.toString() }) as SelectOption
                     )}
                     value={
                       field.value
                         ? ({
                             label: templates.data.find((t) => t.id === field.value)!.name,
                             value: field.value.toString()
-                          } as HelpRequestFormTemplateOption)
+                          } as SelectOption)
                         : null
                     }
-                    onChange={(option: HelpRequestFormTemplateOption | null) => {
+                    onChange={(option: SelectOption | null) => {
                       // option can be null if cleared
                       const val = option?.value ?? "";
                       field.onChange(val === "" ? undefined : Number.parseInt(val));
@@ -794,7 +795,7 @@ export default function HelpRequestForm() {
                         ({
                           label: `${req.request.substring(0, 60)}${req.request.length > 60 ? "..." : ""} (${new Date(req.resolved_at!).toLocaleDateString()})`,
                           value: req.id.toString()
-                        }) as HelpRequestFormTemplateOption
+                        }) as SelectOption
                     )}
                     value={
                       field.value
@@ -803,10 +804,10 @@ export default function HelpRequestForm() {
                               userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
                                 "..." || "",
                             value: field.value.toString()
-                          } as HelpRequestFormTemplateOption)
+                          } as SelectOption)
                         : null
                     }
-                    onChange={(option: HelpRequestFormTemplateOption | null) => {
+                    onChange={(option: SelectOption | null) => {
                       const val = option?.value ?? "";
                       field.onChange(val === "" ? undefined : Number.parseInt(val));
                     }}

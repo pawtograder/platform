@@ -9,11 +9,8 @@ import { BsX } from "react-icons/bs";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { useEffect } from "react";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-
-type ModerationActionInsert = Database["public"]["Tables"]["help_request_moderation"]["Insert"];
-type HelpRequest = Database["public"]["Tables"]["help_requests"]["Row"];
+import type { HelpRequestModeration, HelpRequest } from "@/utils/supabase/DatabaseTypes";
 
 type ModerationActionFormData = {
   student_profile_id: string;
@@ -89,7 +86,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
     sorters: [{ field: "created_at", order: "desc" }]
   });
 
-  const { mutateAsync: createModerationAction } = useCreate<ModerationActionInsert>();
+  const { mutateAsync: createModerationAction } = useCreate<HelpRequestModeration>();
 
   // Set up realtime message handling to refresh data when needed
   useEffect(() => {

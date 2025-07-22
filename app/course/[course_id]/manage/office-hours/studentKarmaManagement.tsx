@@ -12,13 +12,10 @@ import CreateKarmaEntryModal from "./modals/createKarmaEntryModal";
 import EditKarmaEntryModal from "./modals/editKarmaEntryModal";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { useEffect, useState } from "react";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-
-type StudentKarmaNotes = Database["public"]["Tables"]["student_karma_notes"]["Row"];
-type Profile = Database["public"]["Tables"]["profiles"]["Row"];
+import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type KarmaEntryWithDetails = StudentKarmaNotes & {
-  student_profile?: Profile;
+  student_profile?: UserProfile;
   created_by?: { name: string };
 };
 

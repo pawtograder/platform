@@ -11,18 +11,18 @@ import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { useEffect, useState } from "react";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
 import { useIsInstructor } from "@/hooks/useClassProfiles";
+import type {
+  HelpRequestModeration,
+  UserProfile,
+  HelpRequest,
+  HelpRequestMessage
+} from "@/utils/supabase/DatabaseTypes";
 
-type ModerationAction = Database["public"]["Tables"]["help_request_moderation"]["Row"];
-type Profile = Database["public"]["Tables"]["profiles"]["Row"];
-type HelpRequest = Database["public"]["Tables"]["help_requests"]["Row"];
-type HelpRequestMessage = Database["public"]["Tables"]["help_request_messages"]["Row"];
-
-type ModerationActionWithDetails = ModerationAction & {
-  student_profile?: Profile;
-  moderator_profile?: Profile;
+type ModerationActionWithDetails = HelpRequestModeration & {
+  student_profile?: UserProfile;
+  moderator_profile?: UserProfile;
   help_request?: HelpRequest;
   help_request_message?: HelpRequestMessage;
 };

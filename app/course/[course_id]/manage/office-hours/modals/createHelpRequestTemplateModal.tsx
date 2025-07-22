@@ -7,10 +7,8 @@ import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-
-type HelpRequestTemplateInsert = Database["public"]["Tables"]["help_request_templates"]["Insert"];
+import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
 
 type HelpRequestTemplateFormData = {
   name: string;
@@ -54,7 +52,7 @@ export default function CreateHelpRequestTemplateModal({
     }
   });
 
-  const { mutateAsync: createTemplate } = useCreate<HelpRequestTemplateInsert>();
+  const { mutateAsync: createTemplate } = useCreate<HelpRequestTemplate>();
 
   const handleClose = () => {
     reset();

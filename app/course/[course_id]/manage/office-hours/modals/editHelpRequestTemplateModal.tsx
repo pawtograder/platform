@@ -6,10 +6,8 @@ import { useUpdate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useEffect } from "react";
 import { BsX } from "react-icons/bs";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
+import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-
-type HelpRequestTemplate = Database["public"]["Tables"]["help_request_templates"]["Row"];
 
 type HelpRequestTemplateFormData = {
   name: string;

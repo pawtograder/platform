@@ -10,9 +10,7 @@ import { Alert } from "@/components/ui/alert";
 import useModalManager from "@/hooks/useModalManager";
 import CreateHelpRequestTemplateModal from "./modals/createHelpRequestTemplateModal";
 import EditHelpRequestTemplateModal from "./modals/editHelpRequestTemplateModal";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-
-type HelpRequestTemplate = Database["public"]["Tables"]["help_request_templates"]["Row"];
+import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
 
 /**
  * Component for managing help request templates.

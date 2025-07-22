@@ -9,10 +9,8 @@ import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { useEffect } from "react";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-
-type StudentKarmaNotesInsert = Database["public"]["Tables"]["student_karma_notes"]["Insert"];
+import type { StudentKarmaNotes } from "@/utils/supabase/DatabaseTypes";
 
 type KarmaEntryFormData = {
   student_profile_id: string;
@@ -68,7 +66,7 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
     }
   });
 
-  const { mutateAsync: createKarmaEntry } = useCreate<StudentKarmaNotesInsert>();
+  const { mutateAsync: createKarmaEntry } = useCreate<StudentKarmaNotes>();
 
   // Set up realtime message handling to refresh student data when needed
   useEffect(() => {

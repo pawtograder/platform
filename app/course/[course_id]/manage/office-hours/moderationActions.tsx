@@ -5,10 +5,8 @@ import { Button } from "@/components/ui/button";
 import { useCreate } from "@refinedev/core";
 import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye } from "react-icons/bs";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { toaster } from "@/components/ui/toaster";
-
-type ModerationActionInsert = Database["public"]["Tables"]["help_request_moderation"]["Insert"];
+import type { HelpRequestModeration } from "@/utils/supabase/DatabaseTypes";
 
 type ModerationActionsProps = {
   helpRequestId: number;
@@ -30,7 +28,7 @@ export default function ModerationActions({
   onModerationComplete
 }: ModerationActionsProps) {
   const { private_profile_id } = useClassProfiles();
-  const { mutateAsync: createModerationAction } = useCreate<ModerationActionInsert>();
+  const { mutateAsync: createModerationAction } = useCreate<HelpRequestModeration>();
 
   const handleModerationAction = async (
     actionType: "warning" | "temporary_ban" | "permanent_ban" | "message_deleted" | "message_edited",
