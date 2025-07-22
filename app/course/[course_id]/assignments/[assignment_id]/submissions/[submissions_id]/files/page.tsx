@@ -417,6 +417,11 @@ function ArtifactComments({
   );
 }
 
+/**
+ * Renders a form for posting new comments on a submission artifact.
+ *
+ * Allows users to enter and submit a comment, with graders and instructors able to control whether the comment becomes visible to students upon submission release. Throws an error if the submission lacks a grading review ID.
+ */
 function ArtifactCommentsForm({
   submission,
   artifact,
@@ -480,6 +485,11 @@ function ArtifactCommentsForm({
   );
 }
 
+/**
+ * Displays a popover UI for annotating an artifact with a rubric check and optional comment.
+ *
+ * Allows graders or instructors to select a rubric check, optionally choose a sub-option, set visibility to students, and add a comment annotation to the artifact. Only rubric checks configured for artifact annotation are available. Throws an error if the grading review ID is missing.
+ */
 function ArtifactCheckPopover({
   artifact,
   reviewAssignmentId

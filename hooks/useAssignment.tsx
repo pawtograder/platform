@@ -125,9 +125,10 @@ export function useMyReviewAssignments(submission_id?: number) {
 }
 
 /**
- * Returns all referencing rubric checks for which the given check is the referenced check.
- * @param rubric_check_id Check that is referenced
- * @returns the referencing rubric checks
+ * Returns all rubric checks that reference the specified rubric check ID.
+ *
+ * @param rubric_check_id - The ID of the rubric check being referenced
+ * @returns An array of referencing rubric checks, or undefined if no ID is provided
  */
 export function useReferencingRubricChecks(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
@@ -137,6 +138,13 @@ export function useReferencingRubricChecks(rubric_check_id: number | null | unde
   return controller.referencingChecksById.get(rubric_check_id);
 }
 
+/**
+ * Subscribes to and returns all regrade requests for the current assignment.
+ *
+ * The returned array updates in real time as regrade requests are added, modified, or removed.
+ *
+ * @returns An array of regrade requests associated with the current assignment.
+ */
 export function useRegradeRequests() {
   const controller = useAssignmentController();
   const [regradeRequests, setRegradeRequests] = useState<RegradeRequest[]>(controller.regradeRequests.rows);
@@ -150,6 +158,12 @@ export function useRegradeRequests() {
   return regradeRequests;
 }
 
+/**
+ * Subscribes to and returns a single regrade request by its ID, updating the value in real time as the data changes.
+ *
+ * @param regrade_request_id - The ID of the regrade request to retrieve, or `null`/`undefined` to disable the subscription.
+ * @returns The regrade request with the specified ID, or `undefined` if not found or if the ID is not provided.
+ */
 export function useRegradeRequest(regrade_request_id: number | null | undefined) {
   const controller = useAssignmentController();
   const [regradeRequest, setRegradeRequest] = useState<RegradeRequest | undefined>(
@@ -170,6 +184,12 @@ export function useRegradeRequest(regrade_request_id: number | null | undefined)
   return regradeRequest;
 }
 
+/**
+ * Returns all regrade requests associated with a specific submission.
+ *
+ * @param submission_id - The ID of the submission to filter regrade requests by
+ * @returns An array of regrade requests for the given submission ID
+ */
 export function useRegradeRequestsBySubmission(submission_id: number | null | undefined) {
   const regradeRequests = useRegradeRequests();
   return useMemo(
@@ -353,6 +373,15 @@ export function AssignmentProvider({
   );
 }
 
+/**
+ * Loads assignment data, rubrics, and submissions into the provided AssignmentController and manages readiness state.
+ *
+ * Waits for assignment, rubrics, submissions, and required table controllers to be loaded before signaling readiness. Does not render any UI.
+ *
+ * @param assignment_id - The ID of the assignment to load
+ * @param setReady - Callback to set readiness state when all data and controllers are loaded
+ * @param controller - The AssignmentController instance to populate with loaded data
+ */
 function AssignmentControllerCreator({
   assignment_id,
   setReady,

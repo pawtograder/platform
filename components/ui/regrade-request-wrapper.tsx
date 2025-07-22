@@ -78,6 +78,11 @@ const statusConfig: Record<
   }
 };
 
+/**
+ * Displays a single comment within a regrade request, including author information, role tags, and comment content.
+ *
+ * Supports inline editing of the comment by its author. Shows a loading skeleton if the author's profile is not yet loaded.
+ */
 function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType }) {
   const authorProfile = useUserProfile(comment.author);
   const authorRole = useRoleByPrivateProfileId(comment.author);
@@ -169,6 +174,13 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
   );
 }
 
+/**
+ * Displays a list of comments for a specific regrade request.
+ *
+ * Fetches and renders all comments associated with the given regrade request ID.
+ *
+ * @param regradeRequestId - The unique identifier of the regrade request whose comments are displayed.
+ */
 export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId: number }) {
   const comments = useSubmissionRegradeRequestComments({ submission_regrade_request_id: regradeRequestId });
   return (
@@ -176,6 +188,14 @@ export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId:
   );
 }
 
+/**
+ * Displays and manages a regrade request, including its status, metadata, available actions, and associated comments.
+ *
+ * Renders the regrade request's current status, assignment and user details, and provides context-sensitive actions such as resolving, escalating, or closing the request based on user role and request state. Includes a comment section for discussion and supports adding new comments unless the request is closed. Children content is rendered within the request panel.
+ *
+ * @param regradeRequestId - The ID of the regrade request to display and manage
+ * @param children - Content to render within the regrade request panel
+ */
 export default function RegradeRequestWrapper({
   regradeRequestId,
   children

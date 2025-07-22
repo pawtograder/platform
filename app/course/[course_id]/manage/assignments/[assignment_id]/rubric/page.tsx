@@ -276,6 +276,15 @@ function YamlRubricToHydratedRubric(
   };
 }
 
+/**
+ * Returns the property names of an object that have changed compared to another object, excluding arrays and certain metadata fields.
+ *
+ * Compares two objects of the same type and identifies which non-array, non-metadata properties have different values. For the `data` property, a deep comparison is performed using JSON stringification.
+ *
+ * @param newItem - The updated object to compare.
+ * @param existingItem - The original object to compare against.
+ * @returns An array of property names that have changed.
+ */
 function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T): (keyof T)[] {
   return Object.keys(newItem)
     .filter(
@@ -290,10 +299,20 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
         newItem[key as keyof T] != existingItem[key as keyof T]
     ) as (keyof T)[];
 }
+/**
+ * Renders the main rubric editing page for managing and editing handgrading rubrics.
+ *
+ * Displays the rubric editor interface with YAML editing, validation, and preview features.
+ */
 export default function RubricPage() {
   return <InnerRubricPage />;
 }
 const MemoizedRubricSidebar = memo(RubricSidebar);
+/**
+ * Renders the main interface for editing, validating, and saving handgrading rubrics in YAML format for a specific assignment and review round.
+ *
+ * Provides a YAML editor with schema validation, a live rubric preview, and controls for switching between review rounds, loading demo templates, resetting, and saving. Manages rubric state, detects unsaved changes, and synchronizes rubric data with the backend, supporting creation, update, and deletion of rubric parts, criteria, and checks.
+ */
 function InnerRubricPage() {
   const assignmentController = useAssignmentController();
   const assignment_id = String(assignmentController.assignment?.id || "");

@@ -67,6 +67,11 @@ type RegradeRequestRow = GetResult<
   "*, submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id), submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id), submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id), submissions!inner(id, profiles(name), assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name))))"
 >;
 
+/**
+ * Renders a status tag with an icon and label corresponding to the given regrade request status.
+ *
+ * @param status - The status of the regrade request to display.
+ */
 function StatusCell({ status }: { status: RegradeStatus }) {
   const config = statusConfig[status];
   const StatusIcon = config.icon;
@@ -81,6 +86,13 @@ function StatusCell({ status }: { status: RegradeStatus }) {
   );
 }
 
+/**
+ * Renders the student or group name associated with a submission, along with a button to open the submission details page in a new tab.
+ *
+ * If the submission is part of a group, displays the group members' names; otherwise, displays the individual student's name or "Unknown" if unavailable.
+ *
+ * @param submissionId - The unique identifier of the submission to link to.
+ */
 function StudentCell({
   submission,
   submissionId
@@ -113,6 +125,11 @@ function StudentCell({
   );
 }
 
+/**
+ * Displays whether an appeal was granted for a closed regrade request.
+ *
+ * Shows "Yes" with a green check icon if the closed points differ from the resolved points, "No" with a red cross if they are equal, and "N/A" if the request is not closed.
+ */
 function AppealGrantedCell({ row }: { row: RegradeRequestRow }) {
   const isAppealGranted =
     row.status === "closed" &&
@@ -132,6 +149,11 @@ function AppealGrantedCell({ row }: { row: RegradeRequestRow }) {
   );
 }
 
+/**
+ * Displays the name of the rubric check associated with a regrade request row.
+ *
+ * Determines the rubric check ID from the first available comment in the row and fetches its details to display the rubric check name.
+ */
 function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
   const rubricCheckId =
     row.submission_file_comments?.[0]?.rubric_check_id ||
@@ -141,6 +163,13 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
   return <Text>{rubricCheck?.name}</Text>;
 }
 
+/**
+ * Displays a filterable, sortable, and paginated table of regrade requests for a specific assignment.
+ *
+ * Provides interactive controls to filter by status, student/group, appeal granted, and rubric check. Integrates with Supabase to fetch regrade request data and related entities, and renders detailed information for each request including status, student/group, rubric check, points, and appeal outcome.
+ *
+ * The table supports sorting, multi-column filtering, and navigation through large result sets with pagination controls.
+ */
 export default function RegradeRequestsTable() {
   const { assignment_id } = useParams();
   const [pageCount, setPageCount] = useState(0);
