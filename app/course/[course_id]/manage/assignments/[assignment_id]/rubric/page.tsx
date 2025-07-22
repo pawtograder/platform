@@ -3,7 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import { useColorMode } from "@/components/ui/color-mode";
 import { RubricSidebar } from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { AssignmentProvider, useAssignmentController, useRubric } from "@/hooks/useAssignment";
+import { useAssignmentController, useRubric } from "@/hooks/useAssignment";
 import {
   HydratedRubric,
   HydratedRubricCheck,
@@ -20,7 +20,6 @@ import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, 
 import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
-import { useParams } from "next/navigation";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import * as YAML from "yaml";
 
@@ -292,9 +291,7 @@ function findUpdatedPropertyNames<T extends object>(newItem: T, existingItem: T)
     ) as (keyof T)[];
 }
 export default function RubricPage() {
-  return (
-    <InnerRubricPage />
-  );
+  return <InnerRubricPage />;
 }
 const MemoizedRubricSidebar = memo(RubricSidebar);
 function InnerRubricPage() {

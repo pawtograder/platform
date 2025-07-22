@@ -344,7 +344,7 @@ export function useSubmissionArtifactComments({
 export function useSubmissionRegradeRequestComments({
   submission_regrade_request_id,
   onEnter,
-  onLeave,
+  onLeave
 }: {
   submission_regrade_request_id?: number;
   onEnter?: (comment: RegradeRequestComment[]) => void;
@@ -361,29 +361,47 @@ export function useSubmissionRegradeRequestComments({
     }
     const { unsubscribe, data } = submissionController.submission_regrade_request_comments.list(
       (data, { entered, left }) => {
-        const filteredData = data.filter((comment) => 
-          submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
+        const filteredData = data.filter(
+          (comment) =>
+            submission_regrade_request_id === undefined ||
+            comment.submission_regrade_request_id === submission_regrade_request_id
         );
         setComments(filteredData);
         if (onEnter) {
-          onEnter(entered.filter((comment) => 
-            submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
-          ));
+          onEnter(
+            entered.filter(
+              (comment) =>
+                submission_regrade_request_id === undefined ||
+                comment.submission_regrade_request_id === submission_regrade_request_id
+            )
+          );
         }
         if (onLeave) {
-          onLeave(left.filter((comment) => 
-            submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
-          ));
+          onLeave(
+            left.filter(
+              (comment) =>
+                submission_regrade_request_id === undefined ||
+                comment.submission_regrade_request_id === submission_regrade_request_id
+            )
+          );
         }
       }
     );
-    setComments(data.filter((comment) => 
-      submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
-    ));
+    setComments(
+      data.filter(
+        (comment) =>
+          submission_regrade_request_id === undefined ||
+          comment.submission_regrade_request_id === submission_regrade_request_id
+      )
+    );
     if (onEnter) {
-      onEnter(data.filter((comment) => 
-        submission_regrade_request_id === undefined || comment.submission_regrade_request_id === submission_regrade_request_id
-      ));
+      onEnter(
+        data.filter(
+          (comment) =>
+            submission_regrade_request_id === undefined ||
+            comment.submission_regrade_request_id === submission_regrade_request_id
+        )
+      );
     }
     return () => unsubscribe();
   }, [submissionController, submission_regrade_request_id, onEnter, onLeave]);

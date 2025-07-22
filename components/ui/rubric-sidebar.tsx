@@ -1140,6 +1140,7 @@ function SubmissionCommentForm({
             released: submissionReview?.released ?? true,
             submission_review_id: submissionReview?.id ?? null,
             eventually_visible: true,
+            regrade_request_id: null,
             ...artifactInfo
           };
           onSuccess();

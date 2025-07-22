@@ -450,7 +450,8 @@ function ArtifactCommentsForm({
         released: reviewContext ? reviewContext.released : true,
         eventually_visible: eventuallyVisible,
         rubric_check_id: null,
-        points: null
+        points: null,
+        regrade_request_id: null
       });
     },
     [submissionController, submission, artifact, reviewContext, eventuallyVisible, reviewAssignmentId]
@@ -673,7 +674,8 @@ function ArtifactCheckPopover({
                       released: reviewContext ? reviewContext.released : true,
                       points: points ?? null,
                       submission_review_id: finalReviewAssignmentId ?? null,
-                      eventually_visible: eventuallyVisible
+                      eventually_visible: eventuallyVisible,
+                      regrade_request_id: null
                     };
                     await submissionController.submission_artifact_comments.create(values);
                     setIsOpen(false);

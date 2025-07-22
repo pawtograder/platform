@@ -140,37 +140,42 @@ export function useReferencingRubricChecks(rubric_check_id: number | null | unde
 export function useRegradeRequests() {
   const controller = useAssignmentController();
   const [regradeRequests, setRegradeRequests] = useState<RegradeRequest[]>(controller.regradeRequests.rows);
-  
+
   useEffect(() => {
     const { unsubscribe } = controller.regradeRequests.list(setRegradeRequests);
     setRegradeRequests(controller.regradeRequests.rows);
     return () => unsubscribe();
   }, [controller]);
-  
+
   return regradeRequests;
 }
 
 export function useRegradeRequest(regrade_request_id: number | null | undefined) {
   const controller = useAssignmentController();
-  const [regradeRequest, setRegradeRequest] = useState<RegradeRequest | undefined>(regrade_request_id ? controller.regradeRequests.rows.find((rr) => rr.id === regrade_request_id) : undefined);
-  
+  const [regradeRequest, setRegradeRequest] = useState<RegradeRequest | undefined>(
+    regrade_request_id ? controller.regradeRequests.rows.find((rr) => rr.id === regrade_request_id) : undefined
+  );
+
   useEffect(() => {
     if (!regrade_request_id) {
       setRegradeRequest(undefined);
       return;
     }
-    
+
     const { unsubscribe, data } = controller.regradeRequests.getById(regrade_request_id, setRegradeRequest);
     setRegradeRequest(data);
     return () => unsubscribe();
   }, [controller, regrade_request_id]);
-  
+
   return regradeRequest;
 }
 
 export function useRegradeRequestsBySubmission(submission_id: number | null | undefined) {
   const regradeRequests = useRegradeRequests();
-  return useMemo(() => regradeRequests.filter((rr) => rr.submission_id === submission_id), [regradeRequests, submission_id]);
+  return useMemo(
+    () => regradeRequests.filter((rr) => rr.submission_id === submission_id),
+    [regradeRequests, submission_id]
+  );
 }
 
 type OurRubricCheck =
@@ -378,10 +383,7 @@ function AssignmentControllerCreator({
   });
 
   useEffect(() => {
-    const promises = [
-      controller.reviewAssignments.readyPromise,
-      controller.regradeRequests.readyPromise
-    ];
+    const promises = [controller.reviewAssignments.readyPromise, controller.regradeRequests.readyPromise];
     Promise.all(promises).then(() => {
       setTableControllersReady(true);
     });

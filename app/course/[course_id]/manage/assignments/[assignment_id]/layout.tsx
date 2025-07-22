@@ -25,7 +25,11 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaCalendar
   },
   { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
-  { label: "Manage Regrade Requests", href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`, icon: FaPooStorm },
+  {
+    label: "Manage Regrade Requests",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
+    icon: FaPooStorm
+  },
   { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
   {
     label: "Rerun Autograder",

@@ -24,14 +24,11 @@ export default function FinalizeSubmissionEarly({
   // back 3 hours to 6:15pm so they can access the self review immediately.
   const finalizeSubmission = async () => {
     try {
-      console.log("Finalizing submission early", assignment.id, private_profile_id);
       setLoading(true);
-      // @ts-expect-error - Function not yet in types
       const { data, error } = await supabase.rpc("finalize_submission_early", {
         this_assignment_id: assignment.id,
         this_profile_id: private_profile_id
       });
-      console.log("Finalized submission early", data, error);
 
       if (error) {
         console.error("Error finalizing submission:", error);
