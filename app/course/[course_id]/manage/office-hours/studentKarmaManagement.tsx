@@ -81,12 +81,7 @@ export default function StudentKarmaManagement() {
   // Refresh karma data when realtime karma changes to get updated join data
   useEffect(() => {
     if (realtimeData.studentKarmaNotes.length > 0) {
-      // Debounce refetch to avoid excessive API calls
-      const timeoutId = setTimeout(() => {
-        refetchKarma();
-      }, 500);
-
-      return () => clearTimeout(timeoutId);
+      refetchKarma();
     }
   }, [realtimeData.studentKarmaNotes, refetchKarma]);
 

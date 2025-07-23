@@ -77,12 +77,7 @@ export default function HelpQueueAssignmentManagement() {
   // Refresh assignments when realtime assignments change to get updated join data
   useEffect(() => {
     if (realtimeData.helpQueueAssignments.length > 0) {
-      // Debounce refetch to avoid excessive API calls
-      const timeoutId = setTimeout(() => {
-        refetchAssignments();
-      }, 500);
-
-      return () => clearTimeout(timeoutId);
+      refetchAssignments();
     }
   }, [realtimeData.helpQueueAssignments, refetchAssignments]);
 

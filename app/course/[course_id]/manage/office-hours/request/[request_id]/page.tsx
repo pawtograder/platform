@@ -108,12 +108,7 @@ export default function HelpRequestPage() {
   // Refresh request data when realtime help request data changes
   useEffect(() => {
     if (realtimeData.helpRequest && realtimeData.helpRequest.id === Number(request_id)) {
-      // Debounce refetch to avoid excessive API calls
-      const timeoutId = setTimeout(() => {
-        refetchRequest();
-      }, 500);
-
-      return () => clearTimeout(timeoutId);
+      refetchRequest();
     }
   }, [realtimeData.helpRequest, request_id, refetchRequest]);
 

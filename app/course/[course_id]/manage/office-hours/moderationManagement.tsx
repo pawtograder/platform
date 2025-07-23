@@ -92,12 +92,7 @@ export default function ModerationManagement() {
   // Refresh moderation data when realtime moderation changes to get updated join data
   useEffect(() => {
     if (realtimeData.helpRequestModeration.length > 0) {
-      // Debounce refetch to avoid excessive API calls
-      const timeoutId = setTimeout(() => {
-        refetchModeration();
-      }, 500);
-
-      return () => clearTimeout(timeoutId);
+      refetchModeration();
     }
   }, [realtimeData.helpRequestModeration, refetchModeration]);
 

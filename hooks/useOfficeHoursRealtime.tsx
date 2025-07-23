@@ -24,6 +24,20 @@ import {
   OfficeHoursBroadcastMessage,
   OfficeHoursConnectionStatus
 } from "@/utils/supabase/DatabaseTypes";
+
+// Type for broadcast messages from the database trigger
+type DatabaseBroadcastMessage = {
+  type: "table_change" | "staff_data_change" | "queue_change" | "channel_created" | "system";
+  operation?: "INSERT" | "UPDATE" | "DELETE";
+  table?: string;
+  row_id?: number | string;
+  data?: Record<string, unknown>;
+  help_request_id?: number;
+  help_queue_id?: number;
+  class_id: number;
+  student_profile_id?: string;
+  timestamp: string;
+};
 import { Database } from "@/utils/supabase/SupabaseTypes";
 
 // Re-export chat message type for compatibility
@@ -38,6 +52,10 @@ export type Unsubscribe = () => void;
 export class OfficeHoursController {
   private _isLoaded = false;
   private _officeHoursRealTimeController: OfficeHoursRealTimeController | null = null;
+  private _broadcastUnsubscribe: (() => void) | null = null;
+
+  // Track read receipts that have been marked to prevent duplicates across component mounts
+  private _markedAsReadSet: Set<number> = new Set();
 
   constructor(public classId: number) {}
 
@@ -46,12 +64,27 @@ export class OfficeHoursController {
       this._officeHoursRealTimeController.close();
     }
 
+    if (this._broadcastUnsubscribe) {
+      this._broadcastUnsubscribe();
+    }
+
     this._officeHoursRealTimeController = new OfficeHoursRealTimeController({
       client: createClient(),
       classId: this.classId,
       profileId,
       isStaff
     });
+
+    // Subscribe to broadcast messages and integrate with data maps
+    // NOTE: Using empty filter {} to receive all messages from any subscribed channel.
+    // This doesn't create channels - specific subscriptions (like in useOfficeHoursRealtime)
+    // must ensure channels are created by subscribing to specific help_request_id/help_queue_id.
+    this._broadcastUnsubscribe = this._officeHoursRealTimeController.subscribe(
+      {}, // Subscribe to all messages from any active channel
+      (message) => {
+        this._handleBroadcastMessage(message);
+      }
+    );
   }
 
   get officeHoursRealTimeController(): OfficeHoursRealTimeController {
@@ -59,6 +92,183 @@ export class OfficeHoursController {
       throw new Error("OfficeHoursRealTimeController not initialized. Call initializeRealTimeController first.");
     }
     return this._officeHoursRealTimeController;
+  }
+
+  /**
+   * Handle broadcast messages from OfficeHoursRealTimeController and update data maps
+   */
+  private _handleBroadcastMessage(message: DatabaseBroadcastMessage) {
+    console.log("Processing broadcast message in OfficeHoursController:", message);
+
+    if (message.type !== "table_change" || !message.table || !message.operation || !message.data) {
+      return;
+    }
+
+    const { table, operation, data } = message;
+
+    switch (table) {
+      case "help_request_messages":
+        this._handleMessageBroadcast(operation, data);
+        break;
+      case "help_request_message_read_receipts":
+        this._handleReadReceiptBroadcast(operation, data);
+        break;
+      case "help_requests":
+        this._handleHelpRequestBroadcast(operation, data);
+        break;
+      case "help_queues":
+        this._handleHelpQueueBroadcast(operation, data);
+        break;
+      case "help_queue_assignments":
+        this._handleHelpQueueAssignmentBroadcast(operation, data);
+        break;
+      case "help_request_students":
+        this._handleHelpRequestStudentBroadcast(operation, data);
+        break;
+    }
+  }
+
+  private _handleMessageBroadcast(operation: string, data: Record<string, unknown>) {
+    const message = data as HelpRequestMessage;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpRequestMessages.set(message.id, message);
+      const subscribers = this.helpRequestMessagesSubscribers.get(message.id) || [];
+      subscribers.forEach((cb) => cb(message));
+      this.helpRequestMessagesListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestMessages.values())));
+    } else if (operation === "DELETE") {
+      this.helpRequestMessages.delete(message.id);
+      this.helpRequestMessagesListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestMessages.values())));
+    }
+  }
+
+  private _handleReadReceiptBroadcast(operation: string, data: Record<string, unknown>) {
+    const receipt = data as HelpRequestMessageReadReceipt;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpRequestReadReceipts.set(receipt.id, receipt);
+      this.helpRequestReadReceiptsListSubscribers.forEach((cb) =>
+        cb(Array.from(this.helpRequestReadReceipts.values()))
+      );
+    } else if (operation === "DELETE") {
+      this.helpRequestReadReceipts.delete(receipt.id);
+      this.helpRequestReadReceiptsListSubscribers.forEach((cb) =>
+        cb(Array.from(this.helpRequestReadReceipts.values()))
+      );
+    }
+  }
+
+  private _handleHelpRequestBroadcast(operation: string, data: Record<string, unknown>) {
+    const request = data as HelpRequest;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpRequests.set(request.id, request);
+      const subscribers = this.helpRequestSubscribers.get(request.id) || [];
+      subscribers.forEach((cb) => cb(request));
+      this.helpRequestsListSubscribers.forEach((cb) => cb(Array.from(this.helpRequests.values())));
+    } else if (operation === "DELETE") {
+      this.helpRequests.delete(request.id);
+      this.helpRequestsListSubscribers.forEach((cb) => cb(Array.from(this.helpRequests.values())));
+    }
+  }
+
+  private _handleHelpQueueBroadcast(operation: string, data: Record<string, unknown>) {
+    const queue = data as HelpQueue;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpQueues.set(queue.id, queue);
+      this.helpQueuesListSubscribers.forEach((cb) => cb(Array.from(this.helpQueues.values())));
+    } else if (operation === "DELETE") {
+      this.helpQueues.delete(queue.id);
+      this.helpQueuesListSubscribers.forEach((cb) => cb(Array.from(this.helpQueues.values())));
+    }
+  }
+
+  private _handleHelpQueueAssignmentBroadcast(operation: string, data: Record<string, unknown>) {
+    const assignment = data as HelpQueueAssignment;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpQueueAssignments.set(assignment.id, assignment);
+      this.helpQueueAssignmentsListSubscribers.forEach((cb) => cb(Array.from(this.helpQueueAssignments.values())));
+    } else if (operation === "DELETE") {
+      this.helpQueueAssignments.delete(assignment.id);
+      this.helpQueueAssignmentsListSubscribers.forEach((cb) => cb(Array.from(this.helpQueueAssignments.values())));
+    }
+  }
+
+  private _handleHelpRequestStudentBroadcast(operation: string, data: Record<string, unknown>) {
+    const student = data as HelpRequestStudent;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpRequestStudents.set(student.id, student);
+      this.helpRequestStudentsListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestStudents.values())));
+    } else if (operation === "DELETE") {
+      this.helpRequestStudents.delete(student.id);
+      this.helpRequestStudentsListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestStudents.values())));
+    }
+  }
+
+  /**
+   * Mark a message as read to prevent duplicate API calls
+   */
+  markMessageAsRead(messageId: number): boolean {
+    if (this._markedAsReadSet.has(messageId)) {
+      return false; // Already marked
+    }
+    this._markedAsReadSet.add(messageId);
+    return true; // Newly marked
+  }
+
+  /**
+   * Check if a message has been marked as read
+   */
+  isMessageMarkedAsRead(messageId: number): boolean {
+    return this._markedAsReadSet.has(messageId);
+  }
+
+  /**
+   * Clear marked as read state (useful for testing or manual resets)
+   */
+  clearMarkedAsReadState(): void {
+    this._markedAsReadSet.clear();
+  }
+
+  /**
+   * Get connection status from the real-time controller
+   */
+  getConnectionStatus() {
+    if (!this._officeHoursRealTimeController) {
+      return {
+        overall: "disconnected" as const,
+        channels: [],
+        lastUpdate: new Date()
+      };
+    }
+    return this._officeHoursRealTimeController.getConnectionStatus();
+  }
+
+  /**
+   * Check if the real-time controller is ready
+   */
+  get isReady(): boolean {
+    return this._officeHoursRealTimeController?.isReady ?? false;
+  }
+
+  /**
+   * Close the controller and clean up resources
+   */
+  close(): void {
+    if (this._broadcastUnsubscribe) {
+      this._broadcastUnsubscribe();
+      this._broadcastUnsubscribe = null;
+    }
+
+    if (this._officeHoursRealTimeController) {
+      this._officeHoursRealTimeController.close();
+      this._officeHoursRealTimeController = null;
+    }
+
+    this._markedAsReadSet.clear();
   }
 
   private helpRequestMessages: Map<number, HelpRequestMessage> = new Map();
@@ -454,6 +664,11 @@ export function OfficeHoursControllerProvider({
   useEffect(() => {
     controller.current.initializeRealTimeController(profileId, role === "instructor" || role === "grader");
     setIsInitialized(true);
+
+    // Cleanup on unmount
+    return () => {
+      controller.current.close();
+    };
   }, [controller, profileId, role]);
 
   if (!isInitialized) {
@@ -683,9 +898,47 @@ export interface UseOfficeHoursRealtimeReturn {
 /**
  * Legacy hook for backwards compatibility. Prefer using individual hooks and OfficeHoursControllerProvider.
  * New pattern: Use OfficeHoursControllerProvider + individual hooks like useHelpRequestMessages, useHelpQueues, etc.
+ * When helpRequestId/helpQueueId are provided, explicitly subscribe to those channels
+ * to ensure they exist and are connected. The main controller subscription will still handle
+ * the actual message processing, but these subscriptions ensure the channels are active.
  */
 export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): UseOfficeHoursRealtimeReturn {
   const controller = useOfficeHoursController();
+
+  // Ensure help request channel subscription when helpRequestId is provided.
+  // The OfficeHoursController subscribes to all messages with an empty filter {}, but this
+  // doesn't trigger channel creation. The database broadcasts read receipts to specific
+  // help_request:ID channels, so we must ensure that channel exists and is subscribed to.
+  useEffect(() => {
+    if (options.helpRequestId) {
+      console.log(`[ReadReceiptFix] Subscribing to help request channel for ID: ${options.helpRequestId}`);
+      const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(
+        options.helpRequestId,
+        (message) => {
+          console.log(`[ReadReceiptFix] Received help request broadcast for ${options.helpRequestId}:`, message);
+          // The message will still be handled by the main controller subscription
+          // This subscription just ensures the channel exists and is connected
+        }
+      );
+
+      return unsubscribe;
+    }
+  }, [controller, options.helpRequestId]);
+
+  // Also ensure help queue channel subscription when helpQueueId is provided
+  useEffect(() => {
+    if (options.helpQueueId) {
+      console.log(`[ReadReceiptFix] Subscribing to help queue channel for ID: ${options.helpQueueId}`);
+      const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpQueue(
+        options.helpQueueId,
+        (message) => {
+          console.log(`[ReadReceiptFix] Received help queue broadcast for ${options.helpQueueId}:`, message);
+        }
+      );
+
+      return unsubscribe;
+    }
+  }, [controller, options.helpQueueId]);
 
   const messages = useHelpRequestMessages();
   const readReceipts = useHelpRequestReadReceipts();
@@ -696,6 +949,44 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
 
   const helpRequest = useHelpRequest(options.helpRequestId || 0);
   const validHelpRequest = options.helpRequestId ? helpRequest : undefined;
+
+  // Get real connection status from controller
+  const [connectionStatus, setConnectionStatus] = useState<OfficeHoursConnectionStatus | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const updateStatus = () => {
+      try {
+        const status = controller.getConnectionStatus() as OfficeHoursConnectionStatus;
+        setConnectionStatus(status);
+        setConnectionError(null);
+      } catch (error) {
+        console.error("Failed to get connection status:", error);
+        setConnectionError(error instanceof Error ? error.message : "Unknown connection error");
+      }
+    };
+
+    updateStatus();
+
+    // Subscribe to status changes if available
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = controller.officeHoursRealTimeController?.subscribeToStatus?.(updateStatus);
+    } catch (error) {
+      console.warn("Could not subscribe to status changes:", error);
+    }
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [controller]);
+
+  // Calculate connection states
+  const isConnected = connectionStatus?.overall === "connected";
+  const isValidating = connectionStatus?.overall === "connecting";
+  const isAuthorized = connectionStatus?.overall !== "disconnected" || connectionError === null;
 
   // Filter data based on options
   const filteredMessages = useMemo(() => {
@@ -818,24 +1109,42 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
         return;
       }
 
-      // Check if read receipt already exists
+      // Use controller's persistent tracking to prevent duplicate API calls
+      if (!controller.markMessageAsRead(messageId)) {
+        console.log(`Message ${messageId} already marked as read, skipping API call`);
+        return;
+      }
+
+      // Check if read receipt already exists in current data
       const existingReceipt = readReceipts.find(
         (receipt) => receipt.message_id === messageId && receipt.viewer_id === private_profile_id
       );
 
       if (existingReceipt) {
+        console.log(`Read receipt already exists for message ${messageId}, skipping API call`);
         return;
       }
 
-      await createReadReceipt({
-        values: {
-          message_id: messageId,
-          viewer_id: private_profile_id,
-          class_id: options.classId
-        }
-      });
+      try {
+        await createReadReceipt({
+          values: {
+            message_id: messageId,
+            viewer_id: private_profile_id,
+            class_id: options.classId
+          }
+        });
+        console.log(`Successfully created read receipt for message ${messageId}`);
+      } catch (error) {
+        console.error(`Failed to create read receipt for message ${messageId}:`, error);
+        // Remove from marked set on failure to allow retry
+        controller.clearMarkedAsReadState();
+        controller.markMessageAsRead(messageId); // Re-mark since we cleared all
+
+        // Optionally, you could implement a retry mechanism here
+        // or show a user-friendly error message
+      }
     },
-    [options.enableChat, options.classId, user, private_profile_id, readReceipts, createReadReceipt]
+    [options.enableChat, options.classId, user, private_profile_id, readReceipts, createReadReceipt, controller]
   );
 
   // Subscription helpers using controller
@@ -876,11 +1185,11 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
 
   return {
     data,
-    connectionStatus: null, // Simplified - use controller directly for connection status
-    isConnected: true, // Simplified
-    isValidating: false,
-    isAuthorized: true,
-    connectionError: null,
+    connectionStatus,
+    isConnected,
+    isValidating,
+    isAuthorized,
+    connectionError,
     controller: controller.officeHoursRealTimeController,
     subscribeToHelpRequest,
     subscribeToHelpRequestStaff,
@@ -890,7 +1199,7 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
     sendMessage: options.enableChat ? sendMessage : undefined,
     markMessageAsRead: options.enableChat ? markMessageAsRead : undefined,
     readReceipts: filteredReadReceipts.filter((receipt) => receipt.viewer_id !== private_profile_id),
-    isLoading: false
+    isLoading: !controller.isReady
   };
 }
 

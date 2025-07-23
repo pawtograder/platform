@@ -1,7 +1,7 @@
 "use client";
 
 import { useChatScroll } from "@/hooks/use-chat-scroll";
-import { useOfficeHoursRealtime, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
+import { useOfficeHoursRealtime, useOfficeHoursController, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
@@ -131,9 +131,6 @@ export const RealtimeChat = ({
   // Refs for intersection observer
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
-  // Track which messages have already been marked as read to prevent duplicates
-  const [markedAsRead, setMarkedAsRead] = useState<Set<number>>(new Set());
-
   // Use the enhanced office hours realtime hook with chat functionality enabled
   const {
     data,
@@ -150,6 +147,8 @@ export const RealtimeChat = ({
     enableChat: true
   });
 
+  console.log("readReceipts", readReceipts);
+
   // Helper function to get timestamp from either message type
   const getMessageTimestamp = (msg: UnifiedMessage): string => {
     if ("created_at" in msg && msg.created_at) {
@@ -161,14 +160,67 @@ export const RealtimeChat = ({
     return new Date().toISOString();
   };
 
-  // Prioritize realtime data over prop data, ensure proper reactivity to changes
+  // Smart message prioritization based on data freshness and completeness
   const allMessages = useMemo(() => {
     const hookMessages = data?.helpRequestMessages || [];
-    // Always prefer realtime hook data if available, fallback to prop data only when hook data is empty
-    const messages = hookMessages.length > 0 ? hookMessages : databaseMessages;
+    const propMessages = databaseMessages || [];
+
+    // If we have no data from either source, return empty array
+    if (hookMessages.length === 0 && propMessages.length === 0) {
+      return [];
+    }
+
+    // If we only have data from one source, use that
+    if (hookMessages.length === 0) {
+      return propMessages.sort((a, b) => {
+        const aTime = getMessageTimestamp(a);
+        const bTime = getMessageTimestamp(b);
+        return new Date(aTime).getTime() - new Date(bTime).getTime();
+      });
+    }
+
+    if (propMessages.length === 0) {
+      return hookMessages.sort((a, b) => {
+        const aTime = getMessageTimestamp(a);
+        const bTime = getMessageTimestamp(b);
+        return new Date(aTime).getTime() - new Date(bTime).getTime();
+      });
+    }
+
+    // If we have data from both sources, determine which is fresher
+    // Compare the latest message timestamp from each source
+    const latestHookMessage = hookMessages.reduce((latest, msg) => {
+      const msgTime = new Date(getMessageTimestamp(msg)).getTime();
+      const latestTime = new Date(getMessageTimestamp(latest)).getTime();
+      return msgTime > latestTime ? msg : latest;
+    });
+
+    const latestPropMessage = propMessages.reduce((latest, msg) => {
+      const msgTime = new Date(getMessageTimestamp(msg)).getTime();
+      const latestTime = new Date(getMessageTimestamp(latest)).getTime();
+      return msgTime > latestTime ? msg : latest;
+    });
+
+    const hookLatestTime = new Date(getMessageTimestamp(latestHookMessage)).getTime();
+    const propLatestTime = new Date(getMessageTimestamp(latestPropMessage)).getTime();
+
+    // Use the source with the more recent latest message
+    // Also consider the total count - if one source has significantly more messages
+    // and the timestamps are close (within 5 seconds), prefer the larger dataset
+    const timeDifference = Math.abs(hookLatestTime - propLatestTime);
+    const shouldUseHookData =
+      hookLatestTime > propLatestTime || (timeDifference < 5000 && hookMessages.length >= propMessages.length);
+
+    const selectedMessages = shouldUseHookData ? hookMessages : propMessages;
+
+    console.log(
+      `Message source selection: using ${shouldUseHookData ? "hook" : "prop"} data. ` +
+        `Hook: ${hookMessages.length} messages (latest: ${new Date(hookLatestTime).toISOString()}), ` +
+        `Prop: ${propMessages.length} messages (latest: ${new Date(propLatestTime).toISOString()})`
+    );
 
     // Sort messages by creation time to ensure proper order
-    return messages.sort((a, b) => {
+    return selectedMessages.sort((a, b) => {
       const aTime = getMessageTimestamp(a);
       const bTime = getMessageTimestamp(b);
       return new Date(aTime).getTime() - new Date(bTime).getTime();
@@ -182,37 +234,17 @@ export const RealtimeChat = ({
     }
   }, [allMessages, onMessage]);
 
-  // Clean up markedAsRead state when messages change to prevent stale data
+  // Get the controller instance to access persistent read receipt tracking
+  const officeHoursController = useOfficeHoursController();
+
+  // Scroll to bottom when messages change
   useEffect(() => {
-    const currentMessageIds = new Set(
-      allMessages
-        .map((msg) => {
-          if ("id" in msg && typeof msg.id === "number") {
-            return msg.id;
-          }
-          return null;
-        })
-        .filter((id): id is number => id !== null)
-    );
-
-    setMarkedAsRead((prev) => {
-      const filtered = new Set([...prev].filter((id) => currentMessageIds.has(id)));
-      return filtered;
-    });
-  }, [allMessages]);
-
-  // Scroll to bottom when messages change (with debouncing to prevent excessive scrolling)
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      scrollToBottom();
-    }, 100);
-
-    return () => clearTimeout(timeoutId);
+    scrollToBottom();
   }, [allMessages.length, scrollToBottom]); // Only track message count to avoid excessive scrolling
 
-  // Mark messages as read when they come into view
+  // Mark messages as read when they come into view using controller's persistent tracking
   useEffect(() => {
-    if (!allMessages.length || !markMessageAsRead) return;
+    if (!allMessages.length || !markMessageAsRead || !officeHoursController) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -220,13 +252,11 @@ export const RealtimeChat = ({
           if (entry.isIntersecting) {
             const messageId = parseInt(entry.target.getAttribute("data-message-id") || "0", 10);
             const messageAuthorId = entry.target.getAttribute("data-message-author-id") || undefined;
-            if (messageId && !markedAsRead.has(messageId)) {
-              // Mark this message as processed to prevent duplicate calls
-              setMarkedAsRead((prev) => new Set(prev).add(messageId));
-              // Mark message as read after a short delay to ensure it's actually viewed
-              setTimeout(() => {
-                markMessageAsRead(messageId, messageAuthorId);
-              }, 1000);
+
+            if (messageId && !officeHoursController.isMessageMarkedAsRead(messageId)) {
+              // Mark message as read - the controller will handle duplicate prevention
+              markMessageAsRead(messageId, messageAuthorId);
+              console.log("marked message as read", messageId, messageAuthorId);
             }
           }
         });
@@ -245,7 +275,7 @@ export const RealtimeChat = ({
     return () => {
       observer.disconnect();
     };
-  }, [allMessages, markMessageAsRead, markedAsRead]);
+  }, [allMessages, markMessageAsRead, officeHoursController]);
 
   const handleSendMessage = useCallback(
     async (e: React.FormEvent) => {
