@@ -51,15 +51,26 @@ export async function createUserInClass(
 
   if (!userId) {
     console.log("Creating user", user.primary_email);
-    const newUser = await supabase.auth.admin.createUser({
-      email: user.primary_email
-    });
-    if (newUser.error) {
-      console.error(newUser.error);
-      throw new Error("Error creating user");
+    if (user.primary_email.endsWith("@northeastern.edu")) {
+      const newUser = await supabase.auth.admin.createUser({
+        email: user.primary_email,
+        email_confirm: true
+      });
+      if (newUser.error) {
+        console.error(newUser.error);
+        throw new Error("Error creating user");
+      }
+      console.log("Created user", newUser);
+      userId = newUser.data.user!.id;
+    } else {
+      const newUser = await supabase.auth.admin.inviteUserByEmail(user.primary_email);
+      if (newUser.error) {
+        console.error(newUser.error);
+        throw new Error("Error creating user");
+      }
+      console.log("Invited user", newUser);
+      userId = newUser.data.user!.id;
     }
-    console.log("Created user", newUser);
-    userId = newUser.data.user!.id;
   }
 
   // --- Determine avatar_url for private profile based on input ---
