@@ -42,8 +42,8 @@ const statusConfig: Record<
   }
 > = {
   draft: {
-    bgColor: "bg.muted",
-    borderColor: "border.muted",
+    bgColor: "bg.warning",
+    borderColor: "border.warning",
     icon: Clock,
     label: "Draft",
     description: "Regrade request being prepared"
@@ -404,7 +404,12 @@ export default function RegradeRequestWrapper({
                     {regradeRequest.initial_points || 0}
                   </Text>
                 )}
-                {regradeRequest.assignee && (
+                {regradeRequest.status === "draft" && (
+                  <Text fontSize="xs" fontWeight="bold">
+                    Draft regrade request, awaiting student comment
+                  </Text>
+                )}
+                {regradeRequest.assignee && regradeRequest.status !== "draft" && (
                   <Text fontSize="xs" color="fg.muted">
                     Assigned to {assignee?.name}
                   </Text>
@@ -612,9 +617,14 @@ export default function RegradeRequestWrapper({
                 <Box w="100%">
                   <MessageInput
                     textAreaRef={commentInputRef}
-                    placeholder="Add a comment to continue the discussion about this regrade request..."
+                    placeholder={
+                      regradeRequest.status === "draft"
+                        ? "Add a comment to open this regrade request"
+                        : "Add a comment to continue the discussion about this regrade request"
+                    }
                     allowEmptyMessage={false}
                     defaultSingleLine={true}
+                    sendButtonText={regradeRequest.status === "draft" ? "Open Request" : "Add Comment"}
                     sendMessage={async (message) => {
                       await handleSubmitComment(message);
                     }}

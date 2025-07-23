@@ -69,14 +69,11 @@ export default class TableController<
   }
 
   async _fetchRow(id: IDType): Promise<ResultOne | undefined> {
-    const { data, error } = await this._client.from(this._table).select("*").eq("id", id);
+    const { data, error } = await this._client.from(this._table).select("*").eq("id", id).single();
     if (error) {
       throw error;
     }
-    if (!data || data.length === 0) {
-      return undefined;
-    }
-    return data[0];
+    return data;
   }
   constructor({
     query,
@@ -112,13 +109,10 @@ export default class TableController<
         // Set up realtime subscription if controller is provided
         if (this._classRealTimeController) {
           const messageHandler = (message: BroadcastMessage) => {
-            console.log("Received broadcast message", JSON.stringify(message, null, 2));
-
             // Filter by table name
             if (message.table !== table) {
               return;
             }
-
             // Handle different message types
             switch (message.operation) {
               case "INSERT":
@@ -251,20 +245,38 @@ export default class TableController<
     }
   }
 
+  private _nonExistantKeys: Set<IDType> = new Set();
+  private _maybeRefetchKey(id: IDType) {
+    if (this._nonExistantKeys.has(id)) {
+      return;
+    }
+    this._nonExistantKeys.add(id);
+    this._fetchRow(id).then((row) => {
+      if (row) {
+        this._addRow({
+          ...row,
+          __db_pending: false
+        });
+        this._nonExistantKeys.delete(id);
+      }
+    });
+  }
   getById(id: IDType, listener?: (data: PossiblyTentativeResult<ResultOne> | undefined) => void) {
+    const data = this._rows.find(
+      (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
+    ) as PossiblyTentativeResult<ResultOne>;
+    if (!data) {
+      this._maybeRefetchKey(id);
+    }
     if (!listener) {
       return {
-        data: this._rows.find(
-          (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
-        ) as PossiblyTentativeResult<ResultOne>,
-        unsubscribe: () => {}
+        data,
+        unsubscribe: () => { }
       };
     }
     this._itemDataListeners.set(id, [...(this._itemDataListeners.get(id) || []), listener]);
     return {
-      data: this._rows.find(
-        (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
-      ) as PossiblyTentativeResult<ResultOne>,
+      data,
       unsubscribe: () => {
         const listeners = this._itemDataListeners.get(id);
         if (listeners) {
@@ -281,7 +293,7 @@ export default class TableController<
     if (!listener) {
       return {
         data: this._rows,
-        unsubscribe: () => {}
+        unsubscribe: () => { }
       };
     }
     this._listDataListeners.push(listener);
@@ -291,6 +303,25 @@ export default class TableController<
         this._listDataListeners = this._listDataListeners.filter((l) => l !== listener);
       }
     };
+  }
+
+  async invalidate(id: IDType) {
+    const { data, error } = await this._client.from(this._table).select("*").eq("id", id).single();
+    if (error) {
+      throw error;
+    }
+    if (!data) {
+      return;
+    }
+    const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+    if (existingRow) {
+      this._updateRow(id as IDType, data as ResultOne & { id: IDType }, false);
+    } else {
+      this._addRow({
+        ...data,
+        __db_pending: false
+      });
+    }
   }
 
   private _addRow(row: PossiblyTentativeResult<ResultOne>) {

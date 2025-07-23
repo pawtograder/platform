@@ -1,6 +1,6 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import { useRubricById, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useSubmission,
   useSubmissionController,
@@ -20,17 +20,7 @@ import {
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { Badge, Box, Button, Flex, HStack, Icon, Separator, Tag, Text, VStack } from "@chakra-ui/react";
-import { useCreate, useUpdate } from "@refinedev/core";
-import {
-  DialogActionTrigger,
-  DialogBody,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogRoot,
-  DialogTitle,
-  DialogTrigger
-} from "@/components/ui/dialog";
+import { useUpdate } from "@refinedev/core";
 import { common, createStarryNight } from "@wooorm/starry-night";
 import "@wooorm/starry-night/style/both";
 import { chakraComponents, Select, SelectComponentsConfig, SelectInstance } from "chakra-react-select";
@@ -55,11 +45,12 @@ import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
+import RegradeRequestWrapper from "./regrade-request-wrapper";
+import RequestRegradeDialog from "./request-regrade-dialog";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
 import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
-import RegradeRequestWrapper from "./regrade-request-wrapper";
 
 export type RubricCheckSubOption = {
   label: string;
@@ -127,7 +118,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     left: 0,
     visible: false,
     mode: "select",
-    close: () => {}
+    close: () => { }
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -179,26 +170,26 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   });
   const commentsCSS = showCommentsFeature
     ? {
-        "& .source-code-line": {
-          cursor: "pointer",
-          display: "flex",
-          flexDirection: "row",
-          "&:hover": {
-            bg: "yellow.subtle",
-            width: "100%",
-            cursor: "cell"
-          }
-        },
-        "& .selected": {
-          bg: "yellow.subtle"
+      "& .source-code-line": {
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "row",
+        "&:hover": {
+          bg: "yellow.subtle",
+          width: "100%",
+          cursor: "cell"
         }
+      },
+      "& .selected": {
+        bg: "yellow.subtle"
       }
+    }
     : {
-        "& .source-code-line": {
-          display: "flex",
-          flexDirection: "row"
-        }
-      };
+      "& .source-code-line": {
+        display: "flex",
+        flexDirection: "row"
+      }
+    };
   return (
     <Box
       border="1px solid"
@@ -394,16 +385,11 @@ export function starryNightGutter(
 
 function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
-  const submission = useSubmission();
-  const { private_profile_id } = useClassProfiles();
   const commentAuthor = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
-  const [isRegradeDialogOpen, setIsRegradeDialogOpen] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submissionController = useSubmissionController();
-  const { mutateAsync: createRegradeRequest } = useCreate({
-    resource: "rpc/create_regrade_request"
-  });
+
   const isGraderOrInstructor = useIsGraderOrInstructor();
 
   const rubricCheck = useRubricCheck(comment?.rubric_check_id);
@@ -436,37 +422,9 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const { isVisible: willBeVisibleToStudents } = getStudentVisibilityInfo();
 
   // Check if student can create a regrade request
-  // Using type assertion since regrade_request_id was added in migration but types may not be updated
-  const commentWithRegrade = comment as SubmissionFileComment & { regrade_request_id?: number };
-  const canCreateRegradeRequest =
-    !isGraderOrInstructor && hasPoints && !commentWithRegrade.regrade_request_id && comment.released;
+  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
 
   // Check if this is a group submission
-  const isGroupSubmission = submission.assignment_group_id !== null;
-
-  const handleConfirmCreateRegradeRequest = async () => {
-    try {
-      await createRegradeRequest({
-        values: {
-          private_profile_id: private_profile_id,
-          submission_file_comment_id: comment.id
-        }
-      });
-
-      // Close dialog and show inline form
-      setIsRegradeDialogOpen(false);
-
-      toaster.success({
-        title: "Regrade Request Created",
-        description: "Now explain your reasoning in the comment below."
-      });
-    } catch (error) {
-      toaster.error({
-        title: "Error Creating Regrade Request",
-        description: error instanceof Error ? error.message : "Unknown error occurred"
-      });
-    }
-  };
 
   return (
     <RegradeRequestWrapper regradeRequestId={comment.regrade_request_id}>
@@ -534,72 +492,8 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
               )}
             </Box>
             {/* Regrade Request Button */}
-            {canCreateRegradeRequest && (
-              <Box pl={2} pb={2} w="100%">
-                <DialogRoot open={isRegradeDialogOpen} onOpenChange={(e) => setIsRegradeDialogOpen(e.open)}>
-                  <DialogTrigger asChild>
-                    <Button size="sm" colorPalette="orange" variant="outline" w="100%">
-                      Request Regrade for This Comment
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Request a Regrade</DialogTitle>
-                    </DialogHeader>
-                    <DialogBody>
-                      <VStack gap={4} align="start">
-                        <Text>
-                          You are about to request a regrade for this comment that affected your score by{" "}
-                          <strong>{pointsText} points</strong>.
-                        </Text>
-
-                        {isGroupSubmission && (
-                          <Box bg="bg.info" p={3} borderRadius="md" w="100%">
-                            <Text fontWeight="semibold" mb={2}>
-                              📝 Group Submission
-                            </Text>
-                            <VStack gap={1} align="start">
-                              <Text fontSize="sm">
-                                • This regrade request will apply to <strong>all group members</strong>
-                              </Text>
-                              <Text fontSize="sm">
-                                • All group members will be able to see this request and any responses
-                              </Text>
-                              <Text fontSize="sm">
-                                • If the grade is changed, it will affect the entire group&apos;s score
-                              </Text>
-                            </VStack>
-                          </Box>
-                        )}
-
-                        <Text>
-                          <strong>What happens next:</strong>
-                        </Text>
-                        <VStack gap={2} align="start" pl={4}>
-                          <Text>• You&apos;ll explain your reasoning in a comment below</Text>
-                          <Text>• Your request will be reviewed by the original grader</Text>
-                          <Text>• You&apos;ll receive a notification when the grader responds</Text>
-                          <Text>• If you disagree with the response, you can escalate to an instructor</Text>
-                          <Text>• The instructor&apos;s decision will be final</Text>
-                        </VStack>
-                        <Text color="fg.muted" fontSize="sm">
-                          <strong>Note:</strong> Regrade requests should only be submitted if you believe there was an
-                          error in grading. Please make sure you understand the rubric criteria before submitting.
-                        </Text>
-                      </VStack>
-                    </DialogBody>
-                    <DialogFooter>
-                      <DialogActionTrigger asChild>
-                        <Button variant="outline">Cancel</Button>
-                      </DialogActionTrigger>
-                      <Button colorPalette="orange" onClick={handleConfirmCreateRegradeRequest}>
-                        Create Regrade Request
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </DialogRoot>
-              </Box>
-            )}
+            {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />
+            }
           </VStack>
         </HStack>
       </Box>

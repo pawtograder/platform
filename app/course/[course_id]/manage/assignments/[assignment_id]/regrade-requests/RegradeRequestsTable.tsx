@@ -183,6 +183,8 @@ export default function RegradeRequestsTable() {
     [allRubricChecks]
   );
 
+
+
   const columns = useMemo<ColumnDef<RegradeRequestRow>[]>(
     () => [
       {
@@ -248,7 +250,14 @@ export default function RegradeRequestsTable() {
         id: "assignee",
         accessorKey: "assignee",
         header: "Assignee",
-        cell: ({ getValue }) => <PersonName showAvatar={false} uid={getValue() as string} />
+        cell: ({ getValue }) => <PersonName showAvatar={false} uid={getValue() as string} />,
+        enableColumnFilter: true,
+        filterFn: (row, id, filterValue) => {
+          if (!filterValue) return true;
+          const filterString = String(filterValue).toLowerCase();
+          const assignee = row.original.assignee?.toLowerCase();
+          return assignee ? assignee.includes(filterString) : false;
+        }
       },
       {
         id: "initial_points",
@@ -257,14 +266,16 @@ export default function RegradeRequestsTable() {
         cell: ({ getValue }) => getValue() ?? "N/A"
       },
       {
-        id: "current_points",
-        header: "Current Points",
-        accessorFn: (row) => {
-          if (row.closed_points !== null) return row.closed_points;
-          if (row.resolved_points !== null) return row.resolved_points;
-          return row.initial_points;
-        },
-        cell: ({ getValue }) => getValue() ?? "N/A"
+        id: "resolved_points",
+        header: "Resolved Points",
+        accessorKey: "resolved_points",
+        cell: ({ getValue }) => getValue() ?? ""
+      },
+      {
+        id: "closed_points",
+        header: "Points on Appeal",
+        accessorKey: "closed_points",
+        cell: ({ getValue }) => getValue() ?? ""
       },
       {
         id: "appeal_granted",
@@ -309,8 +320,11 @@ export default function RegradeRequestsTable() {
       },
       {
         id: "last_updated_at",
+        accessorKey: "last_updated_at",
         header: "Last Updated",
-        cell: ({ getValue }) => formatRelative(new Date(getValue() as string), new Date())
+        cell: ({ getValue }) => { 
+          return formatRelative(new Date(getValue() as string), new Date());
+        }
       }
     ],
     []
@@ -371,6 +385,25 @@ export default function RegradeRequestsTable() {
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel()
   });
+
+  // Create options for assignee filter
+  const assigneeOptions = useMemo(() => {
+    if (!tableQueryResult?.data?.data) return [];
+    
+    const assignees = new Set<string>();
+    tableQueryResult.data.data.forEach((row) => {
+      if (row.assignee) {
+        assignees.add(row.assignee);
+      }
+    });
+    
+    return Array.from(assignees)
+      .sort()
+      .map((assignee) => ({
+        label: assignee,
+        value: assignee
+      }));
+  }, [tableQueryResult?.data?.data]);
 
   // Update page count when data changes
   const totalCount = tableQueryResult?.data?.total || 0;
@@ -467,6 +500,32 @@ export default function RegradeRequestsTable() {
                 getColumn("rubric_check")?.setFilterValue(values.length > 0 ? values[0] : undefined);
               }}
               options={rubricCheckOptions}
+              isClearable
+              isMulti
+            />
+          </Box>
+        </Box>
+
+        <Box>
+          <Text fontSize="sm" fontWeight="medium" mb={1}>
+            Filter by Assignee:
+          </Text>
+          <Box width="200px">
+            <Select
+              size="sm"
+              placeholder="All assignees"
+              value={
+                (getColumn("assignee")?.getFilterValue() as string)
+                  ? assigneeOptions.filter(
+                      (opt) => (getColumn("assignee")?.getFilterValue() as string) === opt.value
+                    )
+                  : []
+              }
+              onChange={(options) => {
+                const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
+                getColumn("assignee")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+              }}
+              options={assigneeOptions}
               isClearable
               isMulti
             />

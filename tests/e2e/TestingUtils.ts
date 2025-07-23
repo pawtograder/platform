@@ -581,7 +581,10 @@ export async function insertSubmissionViaAPI({
 }> {
   const test_run_batch = "abcd" + Math.random().toString(36).substring(2, 15);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const repository = `pawtograder-playground/test-e2e-student-repo-java--${test_run_batch}-${workerIndex}`;
+  const timestamp = Date.now();
+  const studentId = student_profile_id?.slice(0, 8) || "no-student";
+  const assignmentStr = assignment_id || 1;
+  const repository = `pawtograder-playground/test-e2e-student-repo-java--${test_run_batch}-${workerIndex}-${assignmentStr}-${studentId}-${timestamp}`;
   const { data: repositoryData, error: repositoryError } = await supabase
     .from("repositories")
     .insert({
