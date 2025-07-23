@@ -5,12 +5,11 @@ import { SearchInput } from "@/components/ui/help-queue/search-input";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { HelpRequest, HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Stack, Text } from "@chakra-ui/react";
-import { useList, CrudFilters } from "@refinedev/core";
 import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useMemo } from "react";
 import { BsClipboardCheckFill, BsCheckCircle, BsXCircle, BsChatText } from "react-icons/bs";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useOfficeHoursRealtime, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
 
 /**
  * Enhanced help request with queue information and multiple students
@@ -26,50 +25,33 @@ export default function HelpRequestList() {
   const activeRequestID = request_id ? Number.parseInt(request_id as string) : null;
   const [searchTerm, setSearchTerm] = useState("");
 
-  // Use the consolidated office hours realtime hook for most data
+  // Get ALL help requests directly from the controller
+  const allHelpRequestsFromController = useHelpRequests();
+
+  // Use the consolidated office hours realtime hook for additional data
   const { data: officeHoursData, isLoading: officeHoursLoading } = useOfficeHoursRealtime({
     classId: Number(course_id),
     enableGlobalQueues: true, // Need queues data
-    enableActiveRequests: true, // Need all help requests
-    enableStaffData: false // Don't need moderation/karma data for this view
+    enableActiveRequests: false // We don't need the filtered activeHelpRequests
   });
 
   // Extract data from the consolidated hook
   const { helpQueues, helpRequestStudents: realtimeHelpRequestStudents } = officeHoursData;
 
-  // Still need to fetch all help requests (not just active) with search capability
-  // Build filters array dynamically
-  const filters: CrudFilters = [{ field: "class_id", operator: "eq", value: course_id }];
-
-  // Add search filter if search term exists
-  if (searchTerm.trim()) {
-    filters.push({
-      field: "request",
-      operator: "contains",
-      value: searchTerm
-    });
-  }
-
-  const { data: searchableRequestsData, isLoading: searchLoading } = useList<HelpRequest>({
-    resource: "help_requests",
-    filters,
-    pagination: { pageSize: 1000 }, // Fetch all requests like the student view
-    sorters: [{ field: "created_at", order: "desc" }] // Sort by newest first for instructor view
-  });
-
-  // Use searchable requests if there's a search term, otherwise use realtime data
+  // Apply client-side search filtering and get ALL help requests
   const allHelpRequests = useMemo(() => {
+    // Apply client-side search filtering if search term exists
     if (searchTerm.trim()) {
-      return searchableRequestsData?.data || [];
+      return allHelpRequestsFromController.filter((request) =>
+        request.request.toLowerCase().includes(searchTerm.toLowerCase())
+      );
     }
-    // For non-search case, we need to fetch all requests, not just active ones
-    // So we'll fall back to the searchable data without search filter
-    return searchableRequestsData?.data || [];
-  }, [searchTerm, searchableRequestsData?.data]);
+
+    return allHelpRequestsFromController;
+  }, [allHelpRequestsFromController, searchTerm]);
 
   // Create a mapping of help request ID to student profile IDs
   const requestStudentsMap = useMemo(() => {
-    // Use realtime data when available, fall back to empty array
     return realtimeHelpRequestStudents.reduce(
       (acc, student) => {
         if (!acc[student.help_request_id]) {
@@ -93,26 +75,28 @@ export default function HelpRequestList() {
     );
   }, [helpQueues]);
 
-  // Enhanced requests with queue information and students
+  // Enhanced requests with queue information and students, sorted in descending order (newest first)
   const enhancedRequests = useMemo(() => {
-    return allHelpRequests.map(
-      (request): EnhancedHelpRequest => ({
-        ...request,
-        queue:
-          queueMap[request.help_queue] ||
-          ({
-            id: request.help_queue,
-            name: `Queue #${request.help_queue}`,
-            queue_type: "text",
-            color: null
-          } as HelpQueue),
-        students: requestStudentsMap[request.id] || []
-      })
-    );
+    return allHelpRequests
+      .map(
+        (request): EnhancedHelpRequest => ({
+          ...request,
+          queue:
+            queueMap[request.help_queue] ||
+            ({
+              id: request.help_queue,
+              name: `Queue #${request.help_queue}`,
+              queue_type: "text",
+              color: null
+            } as HelpQueue),
+          students: requestStudentsMap[request.id] || []
+        })
+      )
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()); // Descending order (newest first)
   }, [allHelpRequests, queueMap, requestStudentsMap]);
 
   // Show loading state while data is being fetched
-  if (officeHoursLoading || searchLoading) {
+  if (officeHoursLoading) {
     return (
       <Flex height="100vh" overflow="hidden" justify="center" align="center">
         <Text>Loading help requests...</Text>
@@ -125,7 +109,7 @@ export default function HelpRequestList() {
       <Stack spaceY="4" width="320px" borderEndWidth="1px" pt="6">
         <Box px="5">
           <Text fontSize="lg" fontWeight="medium">
-            Requests ({allHelpRequests?.length || 0})
+            Requests ({enhancedRequests?.length || 0})
           </Text>
         </Box>
 

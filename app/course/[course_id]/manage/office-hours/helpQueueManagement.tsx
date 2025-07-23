@@ -2,7 +2,7 @@
 
 import { Box, Flex, HStack, Stack, Text, Heading, Icon } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useList, useDelete } from "@refinedev/core";
+import { useDelete } from "@refinedev/core";
 import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { BsPlus, BsPencil, BsTrash } from "react-icons/bs";
@@ -37,22 +37,10 @@ export default function HelpQueueManagement() {
     enableStaffData: false
   });
 
-  // Fetch all help queues for the course
-  const {
-    data: queuesResponse,
-    isLoading: queuesLoading,
-    error: queuesError,
-    refetch: refetchQueues
-  } = useList<HelpQueue>({
-    resource: "help_queues",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    sorters: [{ field: "created_at", order: "asc" }]
-  });
-
   const { mutate: deleteQueue } = useDelete();
 
-  // Use realtime data when available, fallback to API data
-  const queues = realtimeData.helpQueues.length > 0 ? realtimeData.helpQueues : (queuesResponse?.data ?? []);
+  // Use only realtime data
+  const queues = realtimeData.helpQueues;
 
   // Set up realtime message handling for optimistic updates
   useEffect(() => {
@@ -82,18 +70,15 @@ export default function HelpQueueManagement() {
 
   const handleCreateSuccess = () => {
     createModal.closeModal();
-    // Refetch as fallback in case realtime doesn't update immediately
-    refetchQueues();
+    // No need to refetch - realtime updates will handle data synchronization
   };
 
   const handleEditSuccess = () => {
     editModal.closeModal();
-    // Refetch as fallback in case realtime doesn't update immediately
-    refetchQueues();
+    // No need to refetch - realtime updates will handle data synchronization
   };
 
-  if (queuesLoading || realtimeLoading) return <Text>Loading help queues...</Text>;
-  if (queuesError) return <Alert status="error" title={`Error: ${queuesError.message}`} />;
+  if (realtimeLoading) return <Text>Loading help queues...</Text>;
 
   const getQueueTypeColor = (type: string) => {
     switch (type) {

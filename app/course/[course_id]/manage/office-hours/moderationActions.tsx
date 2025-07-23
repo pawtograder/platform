@@ -19,6 +19,7 @@ type ModerationActionsProps = {
 /**
  * Component that provides quick moderation actions for help request messages.
  * Allows TAs and instructors to quickly moderate content and issue warnings/bans.
+ * Uses RefineDiv only for creating moderation actions (mutations).
  */
 export default function ModerationActions({
   helpRequestId,

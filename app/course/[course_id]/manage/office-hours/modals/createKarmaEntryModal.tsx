@@ -2,15 +2,16 @@
 
 import { Box, Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useCreate, useList } from "@refinedev/core";
+import { useCreate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useStudentRoster } from "@/hooks/useClassProfiles";
 import { useEffect } from "react";
 import { toaster } from "@/components/ui/toaster";
-import type { StudentKarmaNotes } from "@/utils/supabase/DatabaseTypes";
+import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type KarmaEntryFormData = {
   student_profile_id: string;
@@ -53,31 +54,15 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
     }
   });
 
-  // Fetch students in the class (excluding instructors and graders)
-  const { data: studentsResponse, refetch: refetchStudents } = useList({
-    resource: "user_roles",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "role", operator: "eq", value: "student" }
-    ],
-    pagination: { current: 1, pageSize: 1000 },
-    meta: {
-      select: "private_profile_id,profiles!user_roles_private_profile_id_fkey!inner(id,name,avatar_url)"
-    }
-  });
+  // Get students from the cached roster
+  const students = useStudentRoster();
 
   const { mutateAsync: createKarmaEntry } = useCreate<StudentKarmaNotes>();
 
-  // Set up realtime message handling to refresh student data when needed
   useEffect(() => {
     if (!isConnected) return;
-
     console.log("Karma entry modal realtime connection established");
-
-    // Refresh student data when realtime connection is established
-    // This ensures we have the most up-to-date student list
-    refetchStudents();
-  }, [isConnected, refetchStudents]);
+  }, [isConnected]);
 
   const handleClose = () => {
     reset();
@@ -126,8 +111,6 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
     }
   };
 
-  const students = studentsResponse?.data ?? [];
-
   return (
     <Dialog.Root open={isOpen} onOpenChange={({ open }) => !open && handleClose()} size="lg">
       <Dialog.Backdrop />
@@ -170,9 +153,9 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
                       placeholder="Select a student"
                     >
                       <option value="">Select a student</option>
-                      {students.map((userRole) => (
-                        <option key={userRole.private_profile_id} value={userRole.private_profile_id}>
-                          {userRole.profiles?.name || "Unknown Student"}
+                      {students.map((profile: UserProfile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name || "Unknown Student"}
                         </option>
                       ))}
                     </NativeSelect.Field>

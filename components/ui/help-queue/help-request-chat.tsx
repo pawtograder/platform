@@ -33,7 +33,7 @@ import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import Link from "next/link";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequestMessages, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 
 // Type for help request students relationship
 type HelpRequestStudent = {
@@ -242,20 +242,17 @@ const HelpRequestFileReferences = ({ request }: { request: HelpRequest }) => {
 const HelpRequestStudents = ({
   request,
   students,
-  currentUserCanEdit
+  currentUserCanEdit,
+  currentAssociations
 }: {
   request: HelpRequest;
   students: UserProfile[];
   currentUserCanEdit: boolean;
+  currentAssociations: HelpRequestStudent[];
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
-
-  // Fetch current student associations
-  const { data: currentAssociations, refetch: refetchAssociations } = useList<HelpRequestStudent>({
-    resource: "help_request_students",
-    filters: [{ field: "help_request_id", operator: "eq", value: request.id }]
-  });
+  console.log("students", students);
 
   // Refinedev hooks for student association management
   const { mutateAsync: createStudentAssociation } = useCreate();
@@ -278,9 +275,9 @@ const HelpRequestStudents = ({
       const studentsToRemove = originalStudentIds.filter((id) => !selectedStudents.includes(id));
 
       // Remove students that are no longer selected
-      if (studentsToRemove.length > 0 && currentAssociations?.data) {
+      if (studentsToRemove.length > 0 && currentAssociations.length > 0) {
         // Find the association records to delete
-        const associationsToDelete = currentAssociations.data.filter((association) =>
+        const associationsToDelete = currentAssociations.filter((association) =>
           studentsToRemove.includes(association.profile_id)
         );
 
@@ -306,9 +303,6 @@ const HelpRequestStudents = ({
           });
         }
       }
-
-      // Refetch associations to update the UI
-      await refetchAssociations();
 
       setIsEditing(false);
       toaster.success({
@@ -394,27 +388,20 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   const params = useParams();
   const pathname = usePathname();
 
-  // Use the consolidated office hours realtime hook
-  const {
-    data: officeHoursData,
-    isLoading,
-    connectionError
-  } = useOfficeHoursRealtime({
-    classId: request.class_id,
-    helpRequestId: request.id,
-    enableStaffData: true, // Enable staff data so we can see moderation/karma
-    enableGlobalQueues: false, // We don't need global queues in this view
-    enableActiveRequests: false // We don't need active requests list in this view
-  });
+  // Use individual realtime hooks following the pattern from newRequestForm.tsx
+  const allHelpRequestMessages = useHelpRequestMessages();
+  const allHelpRequestStudents = useHelpRequestStudents();
 
-  // Extract data from the consolidated hook with proper fallback handling
+  // Filter realtime data for this specific help request
   const helpRequestMessages = useMemo(() => {
-    return officeHoursData?.helpRequestMessages || [];
-  }, [officeHoursData?.helpRequestMessages]);
+    return allHelpRequestMessages.filter((msg) => msg.help_request_id === request.id);
+  }, [allHelpRequestMessages, request.id]);
 
   const helpRequestStudentData = useMemo(() => {
-    return officeHoursData?.helpRequestStudents || [];
-  }, [officeHoursData?.helpRequestStudents]);
+    return allHelpRequestStudents.filter(
+      (student) => student.help_request_id === request.id && student.class_id === request.class_id
+    );
+  }, [allHelpRequestStudents, request.id, request.class_id]);
 
   // Get student profiles for display - memoized to prevent unnecessary recalculations
   const { studentIds, students } = useMemo(() => {
@@ -523,33 +510,6 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     });
   }, [mutate, request.id]);
 
-  // Show loading state while data is being fetched
-  if (isLoading) {
-    return (
-      <Flex direction="column" width="100%" height="calc(100vh - var(--nav-height))" justify="center" align="center">
-        <Text>Loading help request data...</Text>
-      </Flex>
-    );
-  }
-
-  // Show error state if there's a connection error
-  if (connectionError) {
-    return (
-      <Flex direction="column" width="100%" height="calc(100vh - var(--nav-height))" justify="center" align="center">
-        <Card.Root variant="outline" borderColor="red.200">
-          <Card.Body>
-            <Text color="red.500" textAlign="center">
-              Failed to connect to realtime chat: {connectionError}
-            </Text>
-            <Button mt={4} onClick={() => window.location.reload()}>
-              Refresh Page
-            </Button>
-          </Card.Body>
-        </Card.Root>
-      </Flex>
-    );
-  }
-
   return (
     <Flex
       direction="column"
@@ -570,7 +530,12 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           <Stack spaceY="2">
             <Text fontWeight="medium">{requestTitle}</Text>
             {/* Students Management */}
-            <HelpRequestStudents request={request} students={students} currentUserCanEdit={canAccessRequestControls} />
+            <HelpRequestStudents
+              request={request}
+              students={students}
+              currentUserCanEdit={canAccessRequestControls}
+              currentAssociations={helpRequestStudentData}
+            />
           </Stack>
 
           {/* Control Buttons */}

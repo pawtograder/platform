@@ -345,7 +345,7 @@ export const ChatMessageItem = ({
             align="center"
             gap={2}
             fontSize="xs"
-            px={3}
+            px={2}
             justify={isOwnMessage ? "flex-end" : "flex-start"}
             direction={isOwnMessage ? "row-reverse" : "row"}
           >
@@ -374,7 +374,7 @@ export const ChatMessageItem = ({
           {/* Message Content */}
           <Box
             py={2}
-            px={3}
+            px={2}
             borderRadius="xl"
             fontSize="sm"
             w="fit-content"

@@ -2,15 +2,16 @@
 
 import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useList, useDelete, useUpdate } from "@refinedev/core";
+import { useDelete, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { BsPlus, BsPencil, BsTrash, BsEye, BsEyeSlash, BsFileText } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
-import { Alert } from "@/components/ui/alert";
 import useModalManager from "@/hooks/useModalManager";
 import CreateHelpRequestTemplateModal from "./modals/createHelpRequestTemplateModal";
 import EditHelpRequestTemplateModal from "./modals/editHelpRequestTemplateModal";
+import { useHelpRequestTemplates } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
+import { useMemo } from "react";
 
 /**
  * Component for managing help request templates.
@@ -24,21 +25,11 @@ export default function HelpRequestTemplateManagement() {
   const createModal = useModalManager();
   const editModal = useModalManager<HelpRequestTemplate>();
 
-  // Fetch all templates for the course
-  const {
-    data: templatesResponse,
-    isLoading: templatesLoading,
-    error: templatesError,
-    refetch: refetchTemplates
-  } = useList<HelpRequestTemplate>({
-    resource: "help_request_templates",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    sorters: [
-      { field: "is_active", order: "desc" },
-      { field: "category", order: "asc" },
-      { field: "name", order: "asc" }
-    ]
-  });
+  // Get all templates from realtime data and filter by class_id
+  const allTemplates = useHelpRequestTemplates();
+  const templates = useMemo(() => {
+    return allTemplates.filter((template) => template.class_id === parseInt(course_id as string));
+  }, [allTemplates, course_id]);
 
   const { mutate: updateTemplate } = useUpdate();
   const { mutate: deleteTemplate } = useDelete();
@@ -82,33 +73,46 @@ export default function HelpRequestTemplateManagement() {
 
   const handleCreateSuccess = () => {
     createModal.closeModal();
-    refetchTemplates();
+    // No need to refetch - realtime data will update automatically
   };
 
   const handleEditSuccess = () => {
     editModal.closeModal();
-    refetchTemplates();
+    // No need to refetch - realtime data will update automatically
   };
 
-  if (templatesLoading) return <Text>Loading help request templates...</Text>;
-  if (templatesError) return <Alert status="error" title={`Error: ${templatesError.message}`} />;
+  // Sort templates for display
+  const sortedTemplates = useMemo(() => {
+    return [...templates].sort((a, b) => {
+      // Sort by active status (active first), then category, then name
+      if (a.is_active !== b.is_active) {
+        return b.is_active ? 1 : -1;
+      }
+      const categoryCompare = (a.category || "").localeCompare(b.category || "");
+      if (categoryCompare !== 0) {
+        return categoryCompare;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  }, [templates]);
 
-  const templates = templatesResponse?.data ?? [];
-  const activeTemplates = templates.filter((t) => t.is_active);
-  const inactiveTemplates = templates.filter((t) => !t.is_active);
+  const activeTemplates = useMemo(() => sortedTemplates.filter((t) => t.is_active), [sortedTemplates]);
+  const inactiveTemplates = useMemo(() => sortedTemplates.filter((t) => !t.is_active), [sortedTemplates]);
 
   // Group templates by category
-  const templatesByCategory = templates.reduce(
-    (acc, template) => {
-      const category = template.category || "Uncategorized";
-      if (!acc[category]) {
-        acc[category] = [];
-      }
-      acc[category].push(template);
-      return acc;
-    },
-    {} as Record<string, HelpRequestTemplate[]>
-  );
+  const templatesByCategory = useMemo(() => {
+    return sortedTemplates.reduce(
+      (acc, template) => {
+        const category = template.category || "Uncategorized";
+        if (!acc[category]) {
+          acc[category] = [];
+        }
+        acc[category].push(template);
+        return acc;
+      },
+      {} as Record<string, HelpRequestTemplate[]>
+    );
+  }, [sortedTemplates]);
 
   const getCategoryColor = (category: string) => {
     const colors = ["blue", "green", "purple", "orange", "red", "teal"];

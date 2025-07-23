@@ -1,3 +1,5 @@
+"use client";
+
 import { DataList, Flex, HStack, Badge, Icon, Text } from "@chakra-ui/react";
 import { Box } from "@chakra-ui/react";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";

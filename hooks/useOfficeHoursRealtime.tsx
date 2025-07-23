@@ -16,6 +16,7 @@ import {
   HelpRequestStudent,
   HelpRequestFileReference,
   HelpRequestModeration,
+  HelpRequestTemplate,
   HelpQueue,
   HelpQueueAssignment,
   StudentKarmaNotes,
@@ -125,6 +126,15 @@ export class OfficeHoursController {
       case "help_request_students":
         this._handleHelpRequestStudentBroadcast(operation, data);
         break;
+      case "student_karma_notes":
+        this._handleStudentKarmaNoteBroadcast(operation, data);
+        break;
+      case "help_request_templates":
+        this._handleHelpRequestTemplateBroadcast(operation, data);
+        break;
+      case "student_help_activity":
+        this._handleStudentHelpActivityBroadcast(operation, data);
+        break;
     }
   }
 
@@ -208,6 +218,42 @@ export class OfficeHoursController {
     }
   }
 
+  private _handleStudentKarmaNoteBroadcast(operation: string, data: Record<string, unknown>) {
+    const karmaNote = data as StudentKarmaNotes;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.studentKarmaNotes.set(karmaNote.id, karmaNote);
+      this.studentKarmaNotesListSubscribers.forEach((cb) => cb(Array.from(this.studentKarmaNotes.values())));
+    } else if (operation === "DELETE") {
+      this.studentKarmaNotes.delete(karmaNote.id);
+      this.studentKarmaNotesListSubscribers.forEach((cb) => cb(Array.from(this.studentKarmaNotes.values())));
+    }
+  }
+
+  private _handleHelpRequestTemplateBroadcast(operation: string, data: Record<string, unknown>) {
+    const template = data as HelpRequestTemplate;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpRequestTemplates.set(template.id, template);
+      this.helpRequestTemplatesListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestTemplates.values())));
+    } else if (operation === "DELETE") {
+      this.helpRequestTemplates.delete(template.id);
+      this.helpRequestTemplatesListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestTemplates.values())));
+    }
+  }
+
+  private _handleStudentHelpActivityBroadcast(operation: string, data: Record<string, unknown>) {
+    const activity = data as StudentHelpActivity;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.studentHelpActivity.set(activity.id, activity);
+      this.studentHelpActivityListSubscribers.forEach((cb) => cb(Array.from(this.studentHelpActivity.values())));
+    } else if (operation === "DELETE") {
+      this.studentHelpActivity.delete(activity.id);
+      this.studentHelpActivityListSubscribers.forEach((cb) => cb(Array.from(this.studentHelpActivity.values())));
+    }
+  }
+
   /**
    * Mark a message as read to prevent duplicate API calls
    */
@@ -283,6 +329,9 @@ export class OfficeHoursController {
 
   private helpRequestFileReferences: Map<number, HelpRequestFileReference> = new Map();
   private helpRequestFileReferencesListSubscribers: UpdateCallback<HelpRequestFileReference[]>[] = [];
+
+  private helpRequestTemplates: Map<number, HelpRequestTemplate> = new Map();
+  private helpRequestTemplatesListSubscribers: UpdateCallback<HelpRequestTemplate[]>[] = [];
 
   private helpRequestModeration: Map<number, HelpRequestModeration> = new Map();
   private helpRequestModerationListSubscribers: UpdateCallback<HelpRequestModeration[]>[] = [];
@@ -440,6 +489,17 @@ export class OfficeHoursController {
     }
   }
 
+  handleHelpRequestStudentEvent(event: LiveEvent) {
+    const student = event.payload as HelpRequestStudent;
+    if (event.type === "created" || event.type === "updated") {
+      this.helpRequestStudents.set(student.id, student);
+      this.helpRequestStudentsListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestStudents.values())));
+    } else if (event.type === "deleted") {
+      this.helpRequestStudents.delete(student.id);
+      this.helpRequestStudentsListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestStudents.values())));
+    }
+  }
+
   // Help Queues
   setHelpQueues(data: HelpQueue[]) {
     for (const queue of data) {
@@ -518,6 +578,148 @@ export class OfficeHoursController {
       },
       data: Array.from(this.helpQueueAssignments.values())
     };
+  }
+
+  // Student Karma Notes
+  setStudentKarmaNotes(data: StudentKarmaNotes[]) {
+    for (const karmaNote of data) {
+      this.studentKarmaNotes.set(karmaNote.id, karmaNote);
+    }
+    this.studentKarmaNotesListSubscribers.forEach((cb) => cb(Array.from(this.studentKarmaNotes.values())));
+  }
+
+  listStudentKarmaNotes(callback?: UpdateCallback<StudentKarmaNotes[]>): {
+    unsubscribe: Unsubscribe;
+    data: StudentKarmaNotes[];
+  } {
+    if (callback) {
+      this.studentKarmaNotesListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this.studentKarmaNotesListSubscribers = this.studentKarmaNotesListSubscribers.filter((cb) => cb !== callback);
+      },
+      data: Array.from(this.studentKarmaNotes.values())
+    };
+  }
+
+  handleStudentKarmaNotesEvent(event: LiveEvent) {
+    const karmaNote = event.payload as StudentKarmaNotes;
+    if (event.type === "created" || event.type === "updated") {
+      this.studentKarmaNotes.set(karmaNote.id, karmaNote);
+      this.studentKarmaNotesListSubscribers.forEach((cb) => cb(Array.from(this.studentKarmaNotes.values())));
+    } else if (event.type === "deleted") {
+      this.studentKarmaNotes.delete(karmaNote.id);
+      this.studentKarmaNotesListSubscribers.forEach((cb) => cb(Array.from(this.studentKarmaNotes.values())));
+    }
+  }
+
+  // Help Request Templates
+  setHelpRequestTemplates(data: HelpRequestTemplate[]) {
+    for (const template of data) {
+      this.helpRequestTemplates.set(template.id, template);
+    }
+    this.helpRequestTemplatesListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestTemplates.values())));
+  }
+
+  listHelpRequestTemplates(callback?: UpdateCallback<HelpRequestTemplate[]>): {
+    unsubscribe: Unsubscribe;
+    data: HelpRequestTemplate[];
+  } {
+    if (callback) {
+      this.helpRequestTemplatesListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this.helpRequestTemplatesListSubscribers = this.helpRequestTemplatesListSubscribers.filter(
+          (cb) => cb !== callback
+        );
+      },
+      data: Array.from(this.helpRequestTemplates.values())
+    };
+  }
+
+  handleHelpRequestTemplatesEvent(event: LiveEvent) {
+    const template = event.payload as HelpRequestTemplate;
+    if (event.type === "created" || event.type === "updated") {
+      this.helpRequestTemplates.set(template.id, template);
+      this.helpRequestTemplatesListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestTemplates.values())));
+    } else if (event.type === "deleted") {
+      this.helpRequestTemplates.delete(template.id);
+      this.helpRequestTemplatesListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestTemplates.values())));
+    }
+  }
+
+  // Student Help Activity
+  setStudentHelpActivity(data: StudentHelpActivity[]) {
+    for (const activity of data) {
+      this.studentHelpActivity.set(activity.id, activity);
+    }
+    this.studentHelpActivityListSubscribers.forEach((cb) => cb(Array.from(this.studentHelpActivity.values())));
+  }
+
+  listStudentHelpActivity(callback?: UpdateCallback<StudentHelpActivity[]>): {
+    unsubscribe: Unsubscribe;
+    data: StudentHelpActivity[];
+  } {
+    if (callback) {
+      this.studentHelpActivityListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this.studentHelpActivityListSubscribers = this.studentHelpActivityListSubscribers.filter(
+          (cb) => cb !== callback
+        );
+      },
+      data: Array.from(this.studentHelpActivity.values())
+    };
+  }
+
+  handleStudentHelpActivityEvent(event: LiveEvent) {
+    const activity = event.payload as StudentHelpActivity;
+    if (event.type === "created" || event.type === "updated") {
+      this.studentHelpActivity.set(activity.id, activity);
+      this.studentHelpActivityListSubscribers.forEach((cb) => cb(Array.from(this.studentHelpActivity.values())));
+    } else if (event.type === "deleted") {
+      this.studentHelpActivity.delete(activity.id);
+      this.studentHelpActivityListSubscribers.forEach((cb) => cb(Array.from(this.studentHelpActivity.values())));
+    }
+  }
+
+  // Help Request Moderation
+  setHelpRequestModeration(data: HelpRequestModeration[]) {
+    for (const moderation of data) {
+      this.helpRequestModeration.set(moderation.id, moderation);
+    }
+    this.helpRequestModerationListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestModeration.values())));
+  }
+
+  listHelpRequestModeration(callback?: UpdateCallback<HelpRequestModeration[]>): {
+    unsubscribe: Unsubscribe;
+    data: HelpRequestModeration[];
+  } {
+    if (callback) {
+      this.helpRequestModerationListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this.helpRequestModerationListSubscribers = this.helpRequestModerationListSubscribers.filter(
+          (cb) => cb !== callback
+        );
+      },
+      data: Array.from(this.helpRequestModeration.values())
+    };
+  }
+
+  handleHelpRequestModerationEvent(event: LiveEvent) {
+    const moderation = event.payload as HelpRequestModeration;
+    if (event.type === "created" || event.type === "updated") {
+      this.helpRequestModeration.set(moderation.id, moderation);
+      this.helpRequestModerationListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestModeration.values())));
+    } else if (event.type === "deleted") {
+      this.helpRequestModeration.delete(moderation.id);
+      this.helpRequestModerationListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestModeration.values())));
+    }
   }
 }
 
@@ -617,7 +819,10 @@ function OfficeHoursControllerProviderImpl({
       staleTime: Infinity,
       cacheTime: Infinity
     },
-    liveMode: "auto"
+    liveMode: "auto",
+    onLiveEvent: (event) => {
+      controller.handleHelpRequestStudentEvent(event);
+    }
   });
   useEffect(() => {
     if (helpRequestStudents.data) {
@@ -641,6 +846,86 @@ function OfficeHoursControllerProviderImpl({
       controller.setHelpQueueAssignments(helpQueueAssignments.data.data);
     }
   }, [controller, helpQueueAssignments.data]);
+
+  // Student Karma Notes
+  const studentKarmaNotes = useList<StudentKarmaNotes>({
+    resource: "student_karma_notes",
+    filters: [{ field: "class_id", operator: "eq", value: classId }],
+    pagination: { pageSize: 1000 },
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    liveMode: "auto",
+    onLiveEvent: (event) => {
+      controller.handleStudentKarmaNotesEvent(event);
+    }
+  });
+  useEffect(() => {
+    if (studentKarmaNotes.data) {
+      controller.setStudentKarmaNotes(studentKarmaNotes.data.data);
+    }
+  }, [controller, studentKarmaNotes.data]);
+
+  // Help Request Templates
+  const helpRequestTemplates = useList<HelpRequestTemplate>({
+    resource: "help_request_templates",
+    filters: [{ field: "class_id", operator: "eq", value: classId }],
+    pagination: { pageSize: 1000 },
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    liveMode: "auto",
+    onLiveEvent: (event) => {
+      controller.handleHelpRequestTemplatesEvent(event);
+    }
+  });
+  useEffect(() => {
+    if (helpRequestTemplates.data) {
+      controller.setHelpRequestTemplates(helpRequestTemplates.data.data);
+    }
+  }, [controller, helpRequestTemplates.data]);
+
+  // Help Request Moderation
+  const helpRequestModeration = useList<HelpRequestModeration>({
+    resource: "help_request_moderation",
+    filters: [{ field: "class_id", operator: "eq", value: classId }],
+    pagination: { pageSize: 1000 },
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    liveMode: "auto",
+    onLiveEvent: (event) => {
+      controller.handleHelpRequestModerationEvent(event);
+    }
+  });
+  useEffect(() => {
+    if (helpRequestModeration.data) {
+      controller.setHelpRequestModeration(helpRequestModeration.data.data);
+    }
+  }, [controller, helpRequestModeration.data]);
+
+  // Student Help Activity
+  const studentHelpActivity = useList<StudentHelpActivity>({
+    resource: "student_help_activity",
+    filters: [{ field: "class_id", operator: "eq", value: classId }],
+    pagination: { pageSize: 1000 },
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    liveMode: "auto",
+    onLiveEvent: (event) => {
+      controller.handleStudentHelpActivityEvent(event);
+    }
+  });
+  useEffect(() => {
+    if (studentHelpActivity.data) {
+      controller.setStudentHelpActivity(studentHelpActivity.data.data);
+    }
+  }, [controller, studentHelpActivity.data]);
 
   return <></>;
 }
@@ -787,6 +1072,58 @@ export function useHelpQueueAssignments() {
   return assignments;
 }
 
+export function useStudentKarmaNotes() {
+  const controller = useOfficeHoursController();
+  const [karmaNotes, setKarmaNotes] = useState<StudentKarmaNotes[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listStudentKarmaNotes((data) => {
+      setKarmaNotes(data);
+    });
+    setKarmaNotes(data);
+    return unsubscribe;
+  }, [controller]);
+  return karmaNotes;
+}
+
+export function useHelpRequestTemplates() {
+  const controller = useOfficeHoursController();
+  const [templates, setTemplates] = useState<HelpRequestTemplate[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listHelpRequestTemplates((data) => {
+      setTemplates(data);
+    });
+    setTemplates(data);
+    return unsubscribe;
+  }, [controller]);
+  return templates;
+}
+
+export function useHelpRequestModeration() {
+  const controller = useOfficeHoursController();
+  const [moderation, setModeration] = useState<HelpRequestModeration[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listHelpRequestModeration((data) => {
+      setModeration(data);
+    });
+    setModeration(data);
+    return unsubscribe;
+  }, [controller]);
+  return moderation;
+}
+
+export function useStudentHelpActivity() {
+  const controller = useOfficeHoursController();
+  const [activity, setActivity] = useState<StudentHelpActivity[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listStudentHelpActivity((data) => {
+      setActivity(data);
+    });
+    setActivity(data);
+    return unsubscribe;
+  }, [controller]);
+  return activity;
+}
+
 /**
  * Props for configuring the office hours realtime hook
  */
@@ -838,6 +1175,7 @@ export interface OfficeHoursData {
   helpRequestReadReceipts: HelpRequestMessageReadReceipt[];
   helpRequestStudents: HelpRequestStudent[];
   helpRequestFileReferences: HelpRequestFileReference[];
+  helpRequestTemplates: HelpRequestTemplate[];
 
   // Staff Data (only accessible by staff or current user's own data)
   helpRequestModeration: HelpRequestModeration[];
@@ -946,6 +1284,10 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
   const requests = useHelpRequests();
   const queues = useHelpQueues();
   const assignments = useHelpQueueAssignments();
+  const karmaNotes = useStudentKarmaNotes();
+  const templates = useHelpRequestTemplates();
+  const activity = useStudentHelpActivity();
+  const moderation = useHelpRequestModeration();
 
   const helpRequest = useHelpRequest(options.helpRequestId || 0);
   const validHelpRequest = options.helpRequestId ? helpRequest : undefined;
@@ -1037,10 +1379,11 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
       helpRequestReadReceipts: filteredReadReceipts,
       helpRequestStudents: filteredStudents,
       helpRequestFileReferences: [],
-      helpRequestModeration: [],
-      studentKarmaNotes: [],
+      helpRequestTemplates: templates,
+      helpRequestModeration: moderation,
+      studentKarmaNotes: karmaNotes,
       videoMeetingSessions: [],
-      studentHelpActivity: [],
+      studentHelpActivity: activity,
       helpQueue: options.helpQueueId ? filteredQueues[0] : undefined,
       helpQueues: filteredQueues,
       helpQueueAssignments: filteredAssignments,
@@ -1051,10 +1394,14 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
       filteredMessages,
       filteredReadReceipts,
       filteredStudents,
+      templates,
+      karmaNotes,
+      activity,
       filteredQueues,
       filteredAssignments,
       activeHelpRequests,
-      options.helpQueueId
+      options.helpQueueId,
+      moderation
     ]
   );
 

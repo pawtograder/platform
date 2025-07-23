@@ -1,9 +1,5 @@
-"use client";
-
 import { AppStateProvider, useAppState } from "@/lib/aws-chime-sdk-meeting/providers/AppStateProvider";
-
 import { GlobalStyles, LoggerProvider } from "amazon-chime-sdk-component-library-react";
-
 import { NotificationProvider } from "amazon-chime-sdk-component-library-react";
 import Notifications from "@/lib/aws-chime-sdk-meeting/containers/Notifications";
 import ErrorProvider from "@/lib/aws-chime-sdk-meeting/providers/ErrorProvider";

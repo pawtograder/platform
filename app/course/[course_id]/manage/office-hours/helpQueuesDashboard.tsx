@@ -1,8 +1,9 @@
 "use client";
+
 import { Box, Flex, HStack, Stack, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useList, useCreate, useUpdate } from "@refinedev/core";
-import type { HelpQueue, HelpRequest, HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
+import { useCreate, useUpdate } from "@refinedev/core";
+import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -25,79 +26,32 @@ export default function HelpQueuesDashboard() {
 
   const { private_profile_id: taProfileId } = useClassProfiles();
 
-  // Set up real-time subscriptions for global help queues and assignments
-  const {
-    data: realtimeData,
-    isConnected,
-    connectionStatus,
-    isLoading: realtimeLoading
-  } = useOfficeHoursRealtime({
+  // Set up real-time subscriptions for all office hours data
+  const { data, isConnected, connectionStatus, isLoading } = useOfficeHoursRealtime({
     classId: Number(course_id),
     enableGlobalQueues: true,
+    enableActiveRequests: true,
     enableStaffData: false // Not needed for dashboard
   });
 
-  // Fetch all help queues for the course.
-  const {
-    data: queuesResponse,
-    isLoading: queuesLoading,
-    error: queuesError
-  } = useList<HelpQueue>({
-    resource: "help_queues",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }]
-  });
+  // Extract data from realtime hook
+  const queues = data.helpQueues;
+  const allQueueAssignments = data.helpQueueAssignments;
+  const allHelpRequests = data.activeHelpRequests;
 
-  // Fetch all active assignments for this TA across queues in this course.
-  const { data: assignmentsResponse } = useList<{
-    id: number;
-    help_queue_id: number;
-    is_active: boolean;
-  }>({
-    resource: "help_queue_assignments",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "ta_profile_id", operator: "eq", value: taProfileId },
-      { field: "is_active", operator: "eq", value: true }
-    ],
-    pagination: { current: 1, pageSize: 100 }
-  });
+  // Filter assignments for current TA
+  const activeAssignments = useMemo(() => {
+    return allQueueAssignments.filter((assignment) => assignment.ta_profile_id === taProfileId && assignment.is_active);
+  }, [allQueueAssignments, taProfileId]);
 
-  // Fetch ALL active assignments for all staff members in this course
-  const {
-    data: allActiveAssignments,
-    isLoading: activeAssignmentsLoading,
-    error: activeAssignmentsError
-  } = useList<HelpQueueAssignment>({
-    resource: "help_queue_assignments",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "is_active", operator: "eq", value: true }
-    ],
-    sorters: [{ field: "started_at", order: "asc" }],
-    pagination: { pageSize: 1000 }
-  });
-
-  // Fetch all unresolved help requests for this course to display queue workload counts.
-  const { data: requestsResponse } = useList<HelpRequest>({
-    resource: "help_requests",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: { current: 1, pageSize: 1000 }
-  });
-
-  // Use realtime data when available, fallback to API data
-  const queues = realtimeData.helpQueues.length > 0 ? realtimeData.helpQueues : (queuesResponse?.data ?? []);
-  const queueAssignments = useMemo(() => {
-    return realtimeData.helpQueueAssignments.length > 0
-      ? realtimeData.helpQueueAssignments
-      : (allActiveAssignments?.data ?? []);
-  }, [realtimeData.helpQueueAssignments, allActiveAssignments?.data]);
-
-  const activeAssignments = assignmentsResponse?.data ?? [];
-  const unresolvedRequests = (requestsResponse?.data ?? []).filter((r) => r.resolved_by === null);
+  // Filter unresolved requests (activeHelpRequests gives us open/in_progress, but we also need to check for resolved_by)
+  const unresolvedRequests = useMemo(() => {
+    return allHelpRequests.filter((request) => request.resolved_by === null);
+  }, [allHelpRequests]);
 
   // Group all active assignments by queue
   const activeAssignmentsByQueue = useMemo(() => {
-    const assignments = queueAssignments.filter((assignment) => assignment.is_active);
+    const assignments = allQueueAssignments.filter((assignment) => assignment.is_active);
 
     return assignments.reduce(
       (acc, assignment) => {
@@ -110,7 +64,7 @@ export default function HelpQueuesDashboard() {
       },
       {} as Record<number, HelpQueueAssignment[]>
     );
-  }, [queueAssignments]);
+  }, [allQueueAssignments]);
 
   const { mutate: createAssignment } = useCreate();
   const { mutate: updateAssignment } = useUpdate();
@@ -147,12 +101,9 @@ export default function HelpQueuesDashboard() {
     });
   };
 
-  if (queuesLoading || activeAssignmentsLoading || realtimeLoading) {
+  if (isLoading) {
     return <Text>Loading office-hour queues…</Text>;
   }
-
-  if (queuesError) return <Text>Error: {queuesError.message}</Text>;
-  if (activeAssignmentsError) return <Text>Error loading assignments: {activeAssignmentsError.message}</Text>;
 
   return (
     <Stack spaceY="4">

@@ -2,7 +2,6 @@
 
 import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge, VStack, Input } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { BsStar, BsStarFill, BsPerson, BsPlus, BsPencil, BsSearch } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
@@ -10,8 +9,9 @@ import { Alert } from "@/components/ui/alert";
 import useModalManager from "@/hooks/useModalManager";
 import CreateKarmaEntryModal from "./modals/createKarmaEntryModal";
 import EditKarmaEntryModal from "./modals/editKarmaEntryModal";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
-import { useEffect, useState } from "react";
+import { useOfficeHoursRealtime, useStudentKarmaNotes } from "@/hooks/useOfficeHoursRealtime";
+import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { useState, useMemo } from "react";
 import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type KarmaEntryWithDetails = StudentKarmaNotes & {
@@ -32,9 +32,11 @@ export default function StudentKarmaManagement() {
   const createModal = useModalManager();
   const editModal = useModalManager<KarmaEntryWithDetails>();
 
-  // Set up real-time subscriptions for staff data including karma
+  // Get real-time karma notes data
+  const karmaNotesData = useStudentKarmaNotes();
+
+  // Set up real-time connection status monitoring
   const {
-    data: realtimeData,
     isConnected,
     connectionStatus,
     isLoading: realtimeLoading
@@ -44,68 +46,58 @@ export default function StudentKarmaManagement() {
     enableStaffData: true // Enable staff data subscriptions
   });
 
-  // Fetch all karma entries for the course with related data
-  const {
-    data: karmaResponse,
-    isLoading: karmaLoading,
-    error: karmaError,
-    refetch: refetchKarma
-  } = useList<KarmaEntryWithDetails>({
-    resource: "student_karma_notes",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    sorters: [
-      { field: "karma_score", order: "desc" },
-      { field: "updated_at", order: "desc" }
-    ],
-    meta: {
-      select: `
-        *,
-        student_profile:student_profile_id(*)
-      `
-    }
-  });
+  // Get all student profiles from the class
+  const studentProfiles = useStudentRoster();
 
-  // Use realtime data when available, fallback to API data
-  // Note: The realtime karma data comes from studentKarmaNotes array
-  const karmaEntries = karmaResponse?.data ?? [];
+  // Create a map of profile ID to profile for easy lookup
+  const profilesMap = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    studentProfiles.forEach((profile) => {
+      map.set(profile.id, profile);
+    });
+    return map;
+  }, [studentProfiles]);
 
-  // Set up realtime message handling
-  useEffect(() => {
-    if (!isConnected) return;
+  // Combine karma notes with profile data
+  const karmaEntries: KarmaEntryWithDetails[] = useMemo(() => {
+    return karmaNotesData.map((note) => ({
+      ...note,
+      student_profile: note.student_profile_id ? profilesMap.get(note.student_profile_id) : undefined
+    }));
+  }, [karmaNotesData, profilesMap]);
 
-    // Realtime updates are handled automatically by the hook
-    // The controller will update the realtimeData when karma changes are broadcast
-    console.log("Student karma management realtime connection established");
-  }, [isConnected]);
+  // Filter and sort karma entries based on search term
+  const filteredEntries = useMemo(() => {
+    const filtered = karmaEntries.filter((entry) => {
+      if (!searchTerm.trim()) return true;
+      const studentName = entry.student_profile?.name?.toLowerCase() || "";
+      const notes = entry.internal_notes?.toLowerCase() || "";
+      const search = searchTerm.toLowerCase();
+      return studentName.includes(search) || notes.includes(search);
+    });
 
-  // Refresh karma data when realtime karma changes to get updated join data
-  useEffect(() => {
-    if (realtimeData.studentKarmaNotes.length > 0) {
-      refetchKarma();
-    }
-  }, [realtimeData.studentKarmaNotes, refetchKarma]);
+    // Sort by karma score (descending) then by updated_at (descending)
+    return filtered.sort((a, b) => {
+      if (a.karma_score !== b.karma_score) {
+        return b.karma_score - a.karma_score;
+      }
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
+  }, [karmaEntries, searchTerm]);
 
   const handleCreateSuccess = () => {
     createModal.closeModal();
-    refetchKarma();
+    // Real-time updates will automatically refresh the data
   };
 
   const handleEditSuccess = () => {
     editModal.closeModal();
-    refetchKarma();
+    // Real-time updates will automatically refresh the data
   };
 
-  if (karmaLoading || realtimeLoading) return <Text>Loading student karma data...</Text>;
-  if (karmaError) return <Alert status="error" title={`Error: ${karmaError.message}`} />;
+  const isLoading = realtimeLoading;
 
-  // Filter karma entries based on search term
-  const filteredEntries = karmaEntries.filter((entry) => {
-    if (!searchTerm.trim()) return true;
-    const studentName = entry.student_profile?.name?.toLowerCase() || "";
-    const notes = entry.internal_notes?.toLowerCase() || "";
-    const search = searchTerm.toLowerCase();
-    return studentName.includes(search) || notes.includes(search);
-  });
+  if (isLoading) return <Text>Loading student karma data...</Text>;
 
   const getKarmaColor = (score: number) => {
     if (score >= 10) return "green";

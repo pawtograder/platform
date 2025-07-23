@@ -1,3 +1,5 @@
+"use client";
+
 import Roster from "@/components/videocall/roster";
 import VideoGrid from "@/components/videocall/videogrid";
 import useUserProfiles from "@/hooks/useUserProfiles";

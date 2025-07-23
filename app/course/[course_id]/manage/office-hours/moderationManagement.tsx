@@ -2,17 +2,17 @@
 
 import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge, VStack, IconButton } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useList, useDelete } from "@refinedev/core";
+import { useDelete } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye, BsPlus, BsTrash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
 import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
-import { useEffect, useState } from "react";
+import { useHelpRequestModeration, useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
+import { useState, useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useIsInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
 import type {
   HelpRequestModeration,
   UserProfile,
@@ -36,69 +36,49 @@ export default function ModerationManagement() {
   const { course_id } = useParams();
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "expired">("all");
   const isInstructor = useIsInstructor();
+  const { profiles } = useClassProfiles();
 
   // Modal management
   const createModal = useModalManager();
 
-  // Set up real-time subscriptions for staff data including moderation
-  const {
-    data: realtimeData,
-    isConnected,
-    connectionStatus,
-    isLoading: realtimeLoading
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: false, // Not needed for moderation
-    enableStaffData: true // Enable staff data subscriptions
-  });
+  // Get realtime data using individual hooks
+  const moderationData = useHelpRequestModeration();
+  const helpRequestsData = useHelpRequests();
+  const controller = useOfficeHoursController();
 
-  // Fetch all moderation actions for the course with related data
-  const {
-    data: moderationResponse,
-    isLoading: moderationLoading,
-    error: moderationError,
-    refetch: refetchModeration
-  } = useList<ModerationActionWithDetails>({
-    resource: "help_request_moderation",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    sorters: [{ field: "created_at", order: "desc" }],
-    meta: {
-      select: `
-        *,
-        student_profile:student_profile_id(*),
-        moderator_profile:moderator_profile_id(*),
-        help_request:help_request_id(*),
-        help_request_message:message_id(*)
-      `
-    }
-  });
-
-  // Delete functionality
   const { mutate: deleteModerationAction, isPending: isDeleting } = useDelete();
 
-  // Use realtime data when available, fallback to API data
-  // Note: The realtime moderation data comes from helpRequestModeration array
-  const moderationActions = moderationResponse?.data ?? [];
+  // Create a map of profiles for efficient lookup
+  const profilesMap = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    profiles.forEach((profile) => {
+      map.set(profile.id, profile);
+    });
+    return map;
+  }, [profiles]);
 
-  // Set up realtime message handling
-  useEffect(() => {
-    if (!isConnected) return;
+  // Filter help requests for this class
+  const classHelpRequests = useMemo(() => {
+    return helpRequestsData.filter((request) => request.class_id === Number(course_id));
+  }, [helpRequestsData, course_id]);
 
-    // Realtime updates are handled automatically by the hook
-    // The controller will update the realtimeData when moderation changes are broadcast
-    console.log("Moderation management realtime connection established");
-  }, [isConnected]);
-
-  // Refresh moderation data when realtime moderation changes to get updated join data
-  useEffect(() => {
-    if (realtimeData.helpRequestModeration.length > 0) {
-      refetchModeration();
-    }
-  }, [realtimeData.helpRequestModeration, refetchModeration]);
+  // Join moderation data with profile data in memory
+  const moderationActions = useMemo((): ModerationActionWithDetails[] => {
+    return moderationData
+      .filter((action) => action.class_id === Number(course_id))
+      .map((action) => ({
+        ...action,
+        student_profile: action.student_profile_id ? profilesMap.get(action.student_profile_id) : undefined,
+        moderator_profile: action.moderator_profile_id ? profilesMap.get(action.moderator_profile_id) : undefined,
+        help_request: action.help_request_id
+          ? classHelpRequests.find((req) => req.id === action.help_request_id)
+          : undefined
+      }));
+  }, [moderationData, classHelpRequests, profilesMap, course_id]);
 
   const handleCreateSuccess = () => {
     createModal.closeModal();
-    refetchModeration();
+    // No need to refetch - realtime updates will handle this automatically
   };
 
   const handleDeleteModerationAction = (actionId: number) => {
@@ -110,7 +90,10 @@ export default function ModerationManagement() {
         },
         {
           onSuccess: () => {
-            refetchModeration();
+            // Realtime updates will handle the UI update automatically
+            toaster.success({
+              title: "Moderation action deleted successfully"
+            });
           },
           onError: (error) => {
             toaster.error({
@@ -123,8 +106,9 @@ export default function ModerationManagement() {
     }
   };
 
-  if (moderationLoading || realtimeLoading) return <Text>Loading moderation actions...</Text>;
-  if (moderationError) return <Alert status="error" title={`Error: ${moderationError.message}`} />;
+  // Get connection status from controller
+  const connectionStatus = controller.getConnectionStatus();
+  const isConnected = connectionStatus.overall === "connected";
 
   // ---------------------------------------------------------------------------
   // Helper Functions
@@ -286,7 +270,7 @@ export default function ModerationManagement() {
       {/* Connection Status Indicator */}
       {!isConnected && (
         <Alert status="warning" title="Real-time updates disconnected" mb={4}>
-          Moderation changes may not appear immediately. Connection status: {connectionStatus?.overall}
+          Moderation changes may not appear immediately. Connection status: {connectionStatus.overall}
         </Alert>
       )}
 

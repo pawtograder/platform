@@ -85,7 +85,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     pagination: {
       pageSize: 1000
     },
-    filters
+    filters,
+    liveMode: "auto"
   });
   const { data: roles } = useList<UserRole>({
     resource: "user_roles",
@@ -99,7 +100,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       cacheTime: Infinity,
       staleTime: Infinity
     },
-    filters
+    filters,
+    liveMode: "auto"
   });
 
   if (!profiles?.data || !roles?.data) {

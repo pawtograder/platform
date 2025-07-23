@@ -1,8 +1,9 @@
-import { createClient } from "@/utils/supabase/client";
+"use client";
+
 import { useCallback, useEffect, useState, useRef } from "react";
-import { useList } from "@refinedev/core";
 import { useParams, useRouter } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
+import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
 import { Fieldset, Button, Heading, Text, Box, Stack, Input, IconButton } from "@chakra-ui/react";
 import {
   HelpRequest,
@@ -17,7 +18,12 @@ import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
 import MdEditor from "@/components/ui/md-editor";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useOfficeHoursRealtime,
+  useHelpRequests,
+  useHelpRequestStudents,
+  useHelpRequestTemplates
+} from "@/hooks/useOfficeHoursRealtime";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "chakra-react-select";
 import { toaster } from "@/components/ui/toaster";
@@ -33,7 +39,6 @@ type SelectOption = {
 
 export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
-  const supabase = createClient();
   const router = useRouter();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
@@ -98,20 +103,24 @@ export default function HelpRequestForm() {
 
           // Add all selected students to help_request_students
           if (currentSelectedStudents.length > 0) {
-            const studentEntries = currentSelectedStudents.map((studentId) => ({
-              help_request_id: data.data.id,
-              profile_id: studentId,
-              class_id: Number.parseInt(course_id as string)
-            }));
-
-            const { error: studentInsertError } = await supabase.from("help_request_students").insert(studentEntries);
-
-            if (studentInsertError) {
-              toaster.error({
-                title: "Error",
-                description: `Failed to create student associations: ${studentInsertError.message}`
-              });
-              throw new Error(`Failed to create student associations: ${studentInsertError.message}`);
+            for (const studentId of currentSelectedStudents) {
+              try {
+                await createStudentAssociation({
+                  values: {
+                    help_request_id: data.data.id,
+                    profile_id: studentId,
+                    class_id: Number.parseInt(course_id as string)
+                  }
+                });
+              } catch (error) {
+                toaster.error({
+                  title: "Error",
+                  description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
+                });
+                throw new Error(
+                  `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
+                );
+              }
             }
           } else {
             toaster.error({
@@ -124,17 +133,29 @@ export default function HelpRequestForm() {
           // Check if we need to update the help request to private
           const intendedPrivacy = getValues("_intended_privacy");
           if (intendedPrivacy) {
-            const { error: updateError } = await supabase
-              .from("help_requests")
-              .update({ is_private: true })
-              .eq("id", data.data.id);
-
-            if (updateError) {
-              toaster.error({
-                title: "Warning",
-                description: "Help request created but could not be set to private. It will remain public."
+            try {
+              await updateHelpRequest({
+                id: data.data.id,
+                values: { is_private: true }
               });
-              // Don't throw here - the request was created successfully
+              toaster.success({
+                title: "Success",
+                description: "Private help request successfully created."
+              });
+            } catch {
+              try {
+                await deleteHelpRequest({
+                  id: data.data.id,
+                  resource: "help_requests"
+                });
+              } catch {
+                throw new Error("Failed to update help request to private");
+              }
+              toaster.error({
+                title: "Error",
+                description:
+                  "Failed to update help request to private, please manually delete the request to avoid leaking private information."
+              });
             }
           }
 
@@ -148,24 +169,33 @@ export default function HelpRequestForm() {
             }
 
             for (const ref of fileReferences) {
-              const { error: fileRefError } = await supabase.from("help_request_file_references").insert({
-                help_request_id: data.data.id,
-                class_id: Number.parseInt(course_id as string),
-                assignment_id: selectedSubmission.assignment_id,
-                submission_file_id: ref.submission_file_id,
-                submission_id: getValues("referenced_submission_id"),
-                line_number: ref.line_number
-              });
-
-              if (fileRefError) {
+              try {
+                await createFileReference({
+                  values: {
+                    help_request_id: data.data.id,
+                    class_id: Number.parseInt(course_id as string),
+                    assignment_id: selectedSubmission.assignment_id,
+                    submission_file_id: ref.submission_file_id,
+                    submission_id: getValues("referenced_submission_id"),
+                    line_number: ref.line_number
+                  }
+                });
+              } catch (error) {
                 toaster.error({
                   title: "Error",
-                  description: `Failed to create file reference: ${fileRefError.message}`
+                  description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
                 });
-                throw new Error(`Failed to create file reference: ${fileRefError.message}`);
+                throw new Error(
+                  `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                );
               }
             }
           }
+
+          toaster.success({
+            title: "Success",
+            description: "Help request successfully created. Redirecting to queue view..."
+          });
 
           // Navigate to queue view
           router.push(`/course/${course_id}/office-hours/${queue_id}?tab=queue`);
@@ -180,6 +210,21 @@ export default function HelpRequestForm() {
   });
 
   const { private_profile_id } = useClassProfiles();
+
+  // Refine mutation hooks for creating related data
+  const { mutateAsync: createStudentAssociation } = useCreate({
+    resource: "help_request_students"
+  });
+
+  const { mutateAsync: updateHelpRequest } = useUpdate({
+    resource: "help_requests"
+  });
+
+  const { mutateAsync: deleteHelpRequest } = useDelete();
+
+  const { mutateAsync: createFileReference } = useCreate({
+    resource: "help_request_file_references"
+  });
 
   // Use realtime hook to get available help queues with proper error handling
   const {
@@ -196,115 +241,46 @@ export default function HelpRequestForm() {
 
   const { helpQueues } = realtimeData;
 
-  // Initialize selected students with current user when profile is available
-  useEffect(() => {
-    if (private_profile_id && selectedStudents.length === 0) {
-      setSelectedStudents([private_profile_id]);
-    }
-  }, [private_profile_id, selectedStudents.length]);
+  // Get all help requests and students data from realtime
+  const allHelpRequests = useHelpRequests();
+  const allHelpRequestStudents = useHelpRequestStudents();
 
-  // Fetch user's help requests using direct Supabase client
-  useEffect(() => {
-    if (!private_profile_id) return;
+  // Get templates from realtime data and filter for current class and active templates
+  const allTemplates = useHelpRequestTemplates();
+  const templates = allTemplates.filter(
+    (template) => template.class_id === Number.parseInt(course_id as string) && template.is_active
+  );
 
-    const fetchUserRequests = async () => {
-      try {
-        // First, fetch the help request IDs for this user
-        const { data: userRequestIds, error: fetchError } = await supabase
-          .from("help_request_students")
-          .select("help_request_id")
-          .eq("profile_id", private_profile_id);
+  // Hierarchical selection states
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | null>(null);
+  const [selectedSubmissionId, setSelectedSubmissionId] = useState<number | null>(null);
 
-        if (fetchError) {
-          console.error("Error fetching user request IDs:", fetchError);
-          return;
-        }
-
-        if (!userRequestIds || userRequestIds.length === 0) {
-          setUserPreviousRequests([]);
-          setUserActiveRequests([]);
-          return;
-        }
-
-        const requestIds = userRequestIds.map((item) => item.help_request_id);
-
-        // Fetch previous requests (resolved/closed)
-        const { data: previousRequestsData, error: previousError } = await supabase
-          .from("help_requests")
-          .select("*")
-          .eq("class_id", Number.parseInt(course_id as string))
-          .in("status", ["resolved", "closed"])
-          .in("id", requestIds)
-          .order("resolved_at", { ascending: false })
-          .limit(20);
-
-        if (previousError) {
-          console.error("Error fetching previous requests:", previousError);
-        } else if (previousRequestsData) {
-          setUserPreviousRequests(previousRequestsData);
-        }
-
-        // Fetch active requests with student counts
-        const { data: activeRequestsData, error: activeError } = await supabase
-          .from("help_requests")
-          .select("*")
-          .eq("class_id", Number.parseInt(course_id as string))
-          .in("status", ["open", "in_progress"])
-          .in("id", requestIds);
-
-        if (activeError) {
-          console.error("Error fetching active requests:", activeError);
-        } else if (activeRequestsData) {
-          // Get student counts for each active request
-          const activeRequestsWithCount: HelpRequestWithStudentCount[] = [];
-
-          for (const request of activeRequestsData) {
-            const { count, error: countError } = await supabase
-              .from("help_request_students")
-              .select("*", { count: "exact", head: true })
-              .eq("help_request_id", request.id);
-
-            if (countError) {
-              console.error("Error counting students for request:", countError);
-            }
-
-            activeRequestsWithCount.push({
-              ...request,
-              student_count: count || 0
-            });
-          }
-
-          setUserActiveRequests(activeRequestsWithCount);
-        }
-      } catch (error) {
-        console.error("Error in fetchUserRequests:", error);
-      }
-    };
-
-    fetchUserRequests();
-  }, [private_profile_id, course_id, supabase]);
-
-  const { data: templates, error: templatesError } = useList<HelpRequestTemplate>({
-    resource: "help_request_templates",
+  // Fetch assignments for the class
+  const { data: assignments } = useList({
+    resource: "assignments",
     filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "is_active", operator: "eq", value: true }
-    ]
+      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
+      { field: "published", operator: "eq", value: true }
+    ],
+    sorters: [{ field: "due_date", order: "desc" }],
+    pagination: { pageSize: 100 }
   });
 
-  // Fetch student's submissions for file/submission references
+  // Fetch submissions for the selected assignment
   const { data: submissions } = useList<Submission>({
     resource: "submissions",
     filters: [
-      { field: "class_id", operator: "eq", value: course_id },
+      { field: "assignment_id", operator: "eq", value: selectedAssignmentId },
       { field: "profile_id", operator: "eq", value: private_profile_id }
     ],
     sorters: [{ field: "created_at", order: "desc" }],
-    pagination: { pageSize: 50 }
+    pagination: { pageSize: 50 },
+    queryOptions: {
+      enabled: !!selectedAssignmentId && !!private_profile_id
+    }
   });
 
-  // Watch the selected submission to fetch its files
-  const selectedSubmissionId = watch("referenced_submission_id");
+  // Fetch files for the selected submission
   const { data: submissionFiles } = useList<SubmissionFile>({
     resource: "submission_files",
     filters: [{ field: "submission_id", operator: "eq", value: selectedSubmissionId }],
@@ -312,6 +288,89 @@ export default function HelpRequestForm() {
       enabled: !!selectedSubmissionId
     }
   });
+
+  // Initialize selected students with current user when profile is available
+  useEffect(() => {
+    if (private_profile_id && selectedStudents.length === 0) {
+      setSelectedStudents([private_profile_id]);
+    }
+  }, [private_profile_id, selectedStudents.length]);
+
+  // Sync form state with local state variables
+  const formSubmissionId = watch("referenced_submission_id");
+  useEffect(() => {
+    if (formSubmissionId && submissions?.data) {
+      const submission = submissions.data.find((s) => s.id === formSubmissionId);
+      if (submission?.assignment_id && submission.assignment_id !== selectedAssignmentId) {
+        setSelectedAssignmentId(submission.assignment_id);
+      }
+      if (formSubmissionId !== selectedSubmissionId) {
+        setSelectedSubmissionId(formSubmissionId);
+      }
+    } else if (!formSubmissionId && selectedSubmissionId) {
+      setSelectedSubmissionId(null);
+    }
+  }, [formSubmissionId, submissions?.data, selectedAssignmentId, selectedSubmissionId]);
+
+  // Fetch user's help requests using realtime data
+  useEffect(() => {
+    if (!private_profile_id) return;
+
+    try {
+      // Get user's help request associations from realtime data
+      const userRequestStudents = allHelpRequestStudents.filter(
+        (student) =>
+          student.profile_id === private_profile_id && student.class_id === Number.parseInt(course_id as string)
+      );
+
+      if (userRequestStudents.length === 0) {
+        setUserPreviousRequests([]);
+        setUserActiveRequests([]);
+        return;
+      }
+
+      const requestIds = userRequestStudents.map((item) => item.help_request_id);
+
+      // Get previous requests (resolved/closed) from realtime data
+      const previousRequestsData = allHelpRequests
+        .filter(
+          (request) =>
+            request.class_id === Number.parseInt(course_id as string) &&
+            (request.status === "resolved" || request.status === "closed") &&
+            requestIds.includes(request.id)
+        )
+        .sort((a, b) => {
+          const aTime = a.resolved_at ? new Date(a.resolved_at).getTime() : 0;
+          const bTime = b.resolved_at ? new Date(b.resolved_at).getTime() : 0;
+          return bTime - aTime; // Sort by resolved time (newest first)
+        })
+        .slice(0, 20); // Limit to 20 recent requests
+
+      setUserPreviousRequests(previousRequestsData);
+
+      // Get active requests from realtime data
+      const activeRequestsData = allHelpRequests.filter(
+        (request) =>
+          request.class_id === Number.parseInt(course_id as string) &&
+          (request.status === "open" || request.status === "in_progress") &&
+          requestIds.includes(request.id)
+      );
+
+      // Get student counts for each active request
+      const activeRequestsWithCount: HelpRequestWithStudentCount[] = activeRequestsData.map((request) => {
+        const studentCount = allHelpRequestStudents.filter((student) => student.help_request_id === request.id).length;
+
+        return {
+          ...request,
+          student_count: studentCount
+        };
+      });
+
+      setUserActiveRequests(activeRequestsWithCount);
+    } catch (error) {
+      console.error("Error in processing user requests from realtime data:", error);
+    }
+  }, [private_profile_id, course_id, allHelpRequests, allHelpRequestStudents]);
 
   // Auto-set privacy when submission is referenced
   useEffect(() => {
@@ -410,9 +469,6 @@ export default function HelpRequestForm() {
   // Show loading state if queries are still loading
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;
-  }
-  if (templatesError) {
-    return <div>Error: {templatesError.message}</div>;
   }
   if (!query || formLoading || isLoadingQueues) {
     return (
@@ -533,44 +589,88 @@ export default function HelpRequestForm() {
         {/* Code/Submission Reference Section */}
         <Fieldset.Content>
           <Field
-            label="Reference Submission "
+            label="Reference Assignment "
             optionalText="(Optional)"
-            helperText="Reference a specific submission for context"
+            helperText="First select an assignment to reference"
           >
-            <Controller
-              name="referenced_submission_id"
-              control={control}
-              render={({ field }) => (
-                <Select
-                  isMulti={false}
-                  isClearable={true}
-                  placeholder="Select a submission to reference"
-                  options={
-                    submissions?.data?.map(
-                      (submission) =>
-                        ({
-                          label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
-                          value: submission.id.toString()
-                        }) as SelectOption
-                    ) ?? []
-                  }
-                  value={
-                    field.value
-                      ? ({
-                          label: submissions?.data?.find((s) => s.id === field.value)?.repository || "Unknown",
-                          value: field.value.toString()
-                        } as SelectOption)
-                      : null
-                  }
-                  onChange={(option: SelectOption | null) => {
-                    const val = option?.value ?? "";
-                    field.onChange(val === "" ? undefined : Number.parseInt(val));
-                  }}
-                />
-              )}
+            <Select
+              isMulti={false}
+              isClearable={true}
+              placeholder="Select an assignment"
+              options={
+                assignments?.data
+                  ?.filter((assignment) => assignment.id)
+                  .map(
+                    (assignment) =>
+                      ({
+                        label: `${assignment.name} (Due: ${assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"})`,
+                        value: assignment.id!.toString()
+                      }) as SelectOption
+                  ) ?? []
+              }
+              value={
+                selectedAssignmentId
+                  ? ({
+                      label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.name || "Unknown",
+                      value: selectedAssignmentId.toString()
+                    } as SelectOption)
+                  : null
+              }
+              onChange={(option: SelectOption | null) => {
+                const val = option?.value ?? "";
+                setSelectedAssignmentId(val === "" ? null : Number.parseInt(val));
+                setSelectedSubmissionId(null); // Reset submission when assignment changes
+              }}
             />
           </Field>
         </Fieldset.Content>
+
+        {/* Show submission selection only when assignment is selected */}
+        {selectedAssignmentId && (
+          <Fieldset.Content>
+            <Field
+              label="Reference Submission "
+              optionalText="(Optional)"
+              helperText="Select a specific submission from the chosen assignment"
+            >
+              <Controller
+                name="referenced_submission_id"
+                control={control}
+                render={({ field }) => (
+                  <Select
+                    isMulti={false}
+                    isClearable={true}
+                    placeholder="Select a submission to reference"
+                    options={
+                      submissions?.data?.map(
+                        (submission: Submission) =>
+                          ({
+                            label: `${submission.repository} (${new Date(submission.created_at).toLocaleDateString()}) - Run #${submission.run_number}`,
+                            value: submission.id.toString()
+                          }) as SelectOption
+                      ) ?? []
+                    }
+                    value={
+                      field.value
+                        ? ({
+                            label:
+                              submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
+                            value: field.value.toString()
+                          } as SelectOption)
+                        : null
+                    }
+                    onChange={(option: SelectOption | null) => {
+                      const val = option?.value ?? "";
+                      const submissionId = val === "" ? null : Number.parseInt(val);
+                      field.onChange(submissionId);
+                      setSelectedSubmissionId(submissionId);
+                    }}
+                  />
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+        )}
 
         {/* File References Section - Show only when a submission is selected */}
         {selectedSubmissionId && submissionFiles?.data && submissionFiles.data.length > 0 && (
@@ -592,12 +692,12 @@ export default function HelpRequestForm() {
                         placeholder="Select a file to add"
                         options={submissionFiles.data
                           .filter(
-                            (file) =>
+                            (file: SubmissionFile) =>
                               !field.value?.some(
                                 (ref: HelpRequestFormFileReference) => ref.submission_file_id === file.id
                               )
                           )
-                          .map((file) => ({
+                          .map((file: SubmissionFile) => ({
                             label: file.name,
                             value: file.id.toString()
                           }))}
@@ -620,7 +720,8 @@ export default function HelpRequestForm() {
                       <Stack gap={2}>
                         {field.value.map((ref: HelpRequestFormFileReference, index: number) => {
                           const fileName =
-                            submissionFiles.data.find((f) => f.id === ref.submission_file_id)?.name || "Unknown";
+                            submissionFiles.data.find((f: SubmissionFile) => f.id === ref.submission_file_id)?.name ||
+                            "Unknown";
                           return (
                             <Box
                               key={`file-ref-${index}-${ref.submission_file_id}`}
@@ -681,7 +782,7 @@ export default function HelpRequestForm() {
             helperText={
               selectedSubmissionId
                 ? "Private requests are only visible to course staff and associated students. This is automatically enabled when referencing a submission."
-                : "Private requests are only visible to course staff and associated students. Note: Due to current system limitations, private requests may not work properly without a submission reference."
+                : "Private requests are only visible to course staff and associated students."
             }
             optionalText={selectedSubmissionId ? "(Required)" : "(Optional)"}
           >
@@ -742,7 +843,7 @@ export default function HelpRequestForm() {
           </Field>
         </Fieldset.Content>
 
-        {templates?.data && templates.data.length > 0 && (
+        {templates && templates.length > 0 && (
           <Fieldset.Content>
             <Field label="Template " optionalText="(Optional)">
               <Controller
@@ -752,13 +853,13 @@ export default function HelpRequestForm() {
                   <Select
                     isMulti={false}
                     placeholder="Choose a template"
-                    options={templates.data.map(
-                      (tmpl) => ({ label: tmpl.name, value: tmpl.id.toString() }) as SelectOption
+                    options={templates.map(
+                      (tmpl: HelpRequestTemplate) => ({ label: tmpl.name, value: tmpl.id.toString() }) as SelectOption
                     )}
                     value={
                       field.value
                         ? ({
-                            label: templates.data.find((t) => t.id === field.value)!.name,
+                            label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
                             value: field.value.toString()
                           } as SelectOption)
                         : null
@@ -767,7 +868,7 @@ export default function HelpRequestForm() {
                       // option can be null if cleared
                       const val = option?.value ?? "";
                       field.onChange(val === "" ? undefined : Number.parseInt(val));
-                      const tmpl = templates.data.find((t) => t.id.toString() === val);
+                      const tmpl = templates.find((t: HelpRequestTemplate) => t.id.toString() === val);
                       if (tmpl && !getValues("request")) {
                         setValue("request", tmpl.template_content);
                       }
@@ -779,7 +880,7 @@ export default function HelpRequestForm() {
           </Fieldset.Content>
         )}
 
-        {userPreviousRequests && userPreviousRequests.length > 0 && (
+        {userPreviousRequests.length > 0 && (
           <Fieldset.Content>
             <Field label="Follow-up to previous request " optionalText="(Optional)">
               <Controller

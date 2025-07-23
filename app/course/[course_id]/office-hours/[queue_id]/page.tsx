@@ -1,10 +1,8 @@
 "use client";
 
-import { HelpRequest, HelpRequestStudent } from "@/utils/supabase/DatabaseTypes";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
-
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { useOfficeHoursRealtime, useHelpRequests, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 import { Box, Heading, Tabs } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import CurrentRequest from "./currentRequest";
 import HelpRequestForm from "./newRequestForm";
@@ -42,6 +40,10 @@ export default function HelpQueuePage() {
 
   const { helpQueue, activeHelpRequests } = data;
 
+  // Get all help requests and students data from realtime
+  const allHelpRequests = useHelpRequests();
+  const allHelpRequestStudents = useHelpRequestStudents();
+
   // Get active requests in this specific queue (filter from activeHelpRequests)
   const queueRequests = useMemo(() => {
     return (activeHelpRequests || [])
@@ -49,39 +51,24 @@ export default function HelpQueuePage() {
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); // Sort by creation time (oldest first)
   }, [activeHelpRequests, queue_id]);
 
-  // Fetch user's help request associations with real-time updates (still needed for user-specific data)
-  const { data: userRequestStudents } = useList<HelpRequestStudent>({
-    resource: "help_request_students",
-    filters: [
-      { field: "profile_id", operator: "eq", value: private_profile_id },
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }
-    ],
-    pagination: { pageSize: 1000 },
-    liveMode: "auto",
-    queryOptions: {
-      enabled: !!private_profile_id
-    }
-  });
+  // Get user's help request associations from realtime data
+  const userRequestStudents = useMemo(() => {
+    if (!private_profile_id) return [];
+    return allHelpRequestStudents.filter(
+      (student) => student.profile_id === private_profile_id && student.class_id === Number(course_id)
+    );
+  }, [allHelpRequestStudents, private_profile_id, course_id]);
 
   // Get the help request IDs for this user
-  const userRequestIds = userRequestStudents?.data?.map((student) => student.help_request_id) || [];
+  const userRequestIds = userRequestStudents.map((student) => student.help_request_id);
 
-  // Fetch the actual help requests for this user with real-time updates
-  const { data: userRequestsData } = useList<HelpRequest>({
-    resource: "help_requests",
-    filters: [
-      { field: "id", operator: "in", value: userRequestIds },
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }
-    ],
-    sorters: [{ field: "created_at", order: "desc" }],
-    pagination: { pageSize: 1000 },
-    liveMode: "auto",
-    queryOptions: {
-      enabled: userRequestIds.length > 0
-    }
-  });
-
-  const userRequests = useMemo(() => userRequestsData?.data || [], [userRequestsData?.data]);
+  // Get the actual help requests for this user from realtime data
+  const userRequests = useMemo(() => {
+    if (userRequestIds.length === 0) return [];
+    return allHelpRequests
+      .filter((request) => userRequestIds.includes(request.id) && request.class_id === Number(course_id))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()); // Sort by creation time (newest first)
+  }, [allHelpRequests, userRequestIds, course_id]);
 
   // Update current request when user requests change
   useEffect(() => {
@@ -93,28 +80,34 @@ export default function HelpQueuePage() {
     setCurrentRequest(activeRequestInQueue || null);
   }, [userRequests, queue_id]);
 
-  // Fetch recent resolved/closed public requests in this queue for students to see similar questions
-  const { data: publicRequests } = useList<HelpRequest>({
-    resource: "help_requests",
-    pagination: { pageSize: 50 },
-    filters: [
-      { field: "help_queue", operator: "eq", value: Number.parseInt(queue_id as string) },
-      { field: "is_private", operator: "eq", value: false },
-      { field: "status", operator: "in", value: ["resolved", "closed"] }
-    ],
-    sorters: [{ field: "resolved_at", order: "desc" }]
-  });
+  // Get recent resolved/closed public requests in this queue for students to see similar questions
+  const publicRequests = useMemo(() => {
+    return allHelpRequests
+      .filter(
+        (request) =>
+          request.help_queue === Number(queue_id) &&
+          request.is_private === false &&
+          (request.status === "resolved" || request.status === "closed")
+      )
+      .sort((a, b) => {
+        const aTime = a.resolved_at ? new Date(a.resolved_at).getTime() : 0;
+        const bTime = b.resolved_at ? new Date(b.resolved_at).getTime() : 0;
+        return bTime - aTime; // Sort by resolved time (newest first)
+      })
+      .slice(0, 50); // Limit to 50 recent requests
+  }, [allHelpRequests, queue_id]);
 
-  // Fetch help request students for public requests to filter out user's own requests
-  const publicRequestIds = publicRequests?.data?.map((request) => request.id) || [];
-  const { data: publicRequestStudents } = useList<HelpRequestStudent>({
-    resource: "help_request_students",
-    filters: [{ field: "help_request_id", operator: "in", value: publicRequestIds }],
-    pagination: { pageSize: 1000 },
-    queryOptions: {
-      enabled: publicRequestIds.length > 0
-    }
-  });
+  // Filter public requests to exclude user's own requests
+  const similarQuestions = useMemo(() => {
+    const publicRequestIds = publicRequests.map((request) => request.id);
+    const userAssociatedRequestIds = allHelpRequestStudents
+      .filter(
+        (student) => student.profile_id === private_profile_id && publicRequestIds.includes(student.help_request_id)
+      )
+      .map((student) => student.help_request_id);
+
+    return publicRequests.filter((request) => !userAssociatedRequestIds.includes(request.id));
+  }, [publicRequests, allHelpRequestStudents, private_profile_id]);
 
   if (isLoading) {
     return <div>Loading...</div>;
@@ -137,17 +130,6 @@ export default function HelpQueuePage() {
 
   // Calculate position of current request in queue
   const currentRequestPosition = currentRequest ? pendingRequests.findIndex((r) => r.id === currentRequest.id) + 1 : 0;
-
-  // Use only resolved public requests for "similar questions" to avoid duplication with queue status
-  const recentPublicRequests = publicRequests?.data || [];
-  const similarQuestions = recentPublicRequests.filter((request) => {
-    // Don't show requests where the current user is associated
-    const isUserAssociated = publicRequestStudents?.data?.some(
-      (student: HelpRequestStudent) =>
-        student.help_request_id === request.id && student.profile_id === private_profile_id
-    );
-    return !isUserAssociated;
-  });
 
   return (
     <ModerationBanNotice classId={Number(course_id)}>

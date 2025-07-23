@@ -2,15 +2,15 @@
 
 import { Box, Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useCreate, useList } from "@refinedev/core";
+import { useCreate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
-import { useEffect } from "react";
+import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
-import type { HelpRequestModeration, HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequestModeration, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type ModerationActionFormData = {
   student_profile_id: string;
@@ -31,18 +31,14 @@ type CreateModerationActionModalProps = {
 /**
  * Modal component for creating new moderation actions.
  * Allows instructors and TAs to issue warnings, bans, and other moderation actions.
- * Uses real-time updates to ensure student and help request lists are current.
+ * Uses real-time data for help requests to ensure current information.
  */
 export default function CreateModerationActionModal({ isOpen, onClose, onSuccess }: CreateModerationActionModalProps) {
   const { course_id } = useParams();
   const { private_profile_id } = useClassProfiles();
 
-  // Set up real-time subscriptions to get updated help request data
-  const { isConnected, connectionStatus } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true, // Get updates for help request changes
-    enableStaffData: true // Get staff data updates
-  });
+  // Get realtime help requests data
+  const allHelpRequests = useHelpRequests();
 
   const {
     register,
@@ -65,45 +61,18 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
 
   const actionType = watch("action_type");
 
-  // Fetch students in the class (excluding instructors and graders)
-  const { data: studentsResponse, refetch: refetchStudents } = useList({
-    resource: "user_roles",
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "role", operator: "eq", value: "student" }
-    ],
-    pagination: { current: 1, pageSize: 1000 },
-    meta: {
-      select: "private_profile_id,profiles!user_roles_private_profile_id_fkey!inner(id,name,avatar_url)"
-    }
-  });
+  // Get students from the cached roster
+  const students = useStudentRoster();
 
-  // Fetch help requests for reference
-  const { data: helpRequestsResponse, refetch: refetchHelpRequests } = useList<HelpRequest>({
-    resource: "help_requests",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: { current: 1, pageSize: 100 },
-    sorters: [{ field: "created_at", order: "desc" }]
-  });
+  // Filter help requests for this class and sort by most recent
+  const helpRequests = useMemo(() => {
+    return allHelpRequests
+      .filter((request) => request.class_id === Number(course_id))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 100); // Limit to 100 most recent
+  }, [allHelpRequests, course_id]);
 
   const { mutateAsync: createModerationAction } = useCreate<HelpRequestModeration>();
-
-  // Set up realtime message handling to refresh data when needed
-  useEffect(() => {
-    if (!isConnected) return;
-
-    console.log("Moderation action modal realtime connection established");
-
-    // Refresh help requests when realtime connection is established
-    // This ensures we have the most up-to-date help request list
-    const refreshData = () => {
-      refetchHelpRequests();
-      refetchStudents();
-    };
-
-    // Refresh data immediately when connected
-    refreshData();
-  }, [isConnected, refetchHelpRequests, refetchStudents]);
 
   const handleClose = () => {
     reset();
@@ -179,9 +148,6 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
     }
   };
 
-  const students = studentsResponse?.data ?? [];
-  const helpRequests = helpRequestsResponse?.data ?? [];
-
   return (
     <Dialog.Root open={isOpen} onOpenChange={({ open }) => !open && handleClose()} size="lg">
       <Dialog.Backdrop />
@@ -190,11 +156,9 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
           <Dialog.Header>
             <Dialog.Title>
               Create Moderation Action
-              {isConnected && (
-                <Text as="span" fontSize="xs" color="green.500" ml={2}>
-                  ● Live data
-                </Text>
-              )}
+              <Text as="span" fontSize="xs" color="green.500" ml={2}>
+                ● Live help requests
+              </Text>
             </Dialog.Title>
             <Dialog.CloseTrigger asChild>
               <Button variant="ghost" size="sm">
@@ -204,16 +168,6 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
           </Dialog.Header>
 
           <Dialog.Body>
-            {/* Connection Status Warning */}
-            {!isConnected && (
-              <Box mb={4} p={3} borderRadius="md" bg="yellow.50" borderWidth="1px" borderColor="yellow.200">
-                <Text fontSize="sm" color="yellow.700">
-                  <strong>Warning:</strong> Real-time updates disconnected. Student and help request lists may not be
-                  current. Status: {connectionStatus?.overall}
-                </Text>
-              </Box>
-            )}
-
             <form onSubmit={handleSubmit(onSubmit)}>
               <Stack spaceY={4}>
                 <Field.Root invalid={!!errors.student_profile_id}>
@@ -224,18 +178,15 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                       placeholder="Select a student"
                     >
                       <option value="">Select a student</option>
-                      {students.map((userRole) => (
-                        <option key={userRole.private_profile_id} value={userRole.private_profile_id}>
-                          {userRole.profiles?.name || "Unknown Student"}
+                      {students.map((profile: UserProfile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name || "Unknown Student"}
                         </option>
                       ))}
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.student_profile_id?.message}</Field.ErrorText>
-                  <Field.HelperText>
-                    {students.length} students available
-                    {isConnected && <Text as="span"> (live updated)</Text>}
-                  </Field.HelperText>
+                  <Field.HelperText>{students.length} students available</Field.HelperText>
                 </Field.Root>
 
                 <Field.Root invalid={!!errors.action_type}>
@@ -308,10 +259,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.help_request_id?.message}</Field.ErrorText>
-                  <Field.HelperText>
-                    {helpRequests.length} help requests available
-                    {isConnected && <Text as="span"> (live updated)</Text>}
-                  </Field.HelperText>
+                  <Field.HelperText>{helpRequests.length} help requests available (live updated)</Field.HelperText>
                 </Field.Root>
 
                 {actionType === "permanent_ban" && (

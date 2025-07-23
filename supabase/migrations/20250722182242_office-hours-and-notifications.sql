@@ -591,6 +591,18 @@ BEGIN
             student_profile_id := OLD.student_profile_id;
             row_id := OLD.id;
         END IF;
+    ELSIF TG_TABLE_NAME = 'help_request_templates' THEN
+        -- For template data, broadcast to class-level channels since templates are class-wide resources
+        IF TG_OP = 'INSERT' THEN
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'UPDATE' THEN
+            class_id := NEW.class_id;
+            row_id := NEW.id;
+        ELSIF TG_OP = 'DELETE' THEN
+            class_id := OLD.class_id;
+            row_id := OLD.id;
+        END IF;
     END IF;
 
     -- Only broadcast if we have valid class_id
@@ -621,12 +633,26 @@ BEGIN
             );
         END IF;
 
-        -- For karma data, also broadcast to class-level staff channel if it exists
+        -- For karma data and templates, also broadcast to class-level channels
         IF TG_TABLE_NAME = 'student_karma_notes' THEN
             PERFORM realtime.send(
                 staff_payload,
                 'broadcast',
                 'class:' || class_id || ':staff',
+                true
+            );
+        ELSIF TG_TABLE_NAME = 'help_request_templates' THEN
+            -- Broadcast template changes to both staff and general class channels
+            PERFORM realtime.send(
+                staff_payload,
+                'broadcast',
+                'class:' || class_id || ':staff',
+                true
+            );
+            PERFORM realtime.send(
+                staff_payload,
+                'broadcast',
+                'class:' || class_id,
                 true
             );
         END IF;
@@ -2403,5 +2429,9 @@ CREATE TRIGGER create_help_request_channels_trigger AFTER INSERT ON public.help_
 CREATE TRIGGER help_request_updated_trigger AFTER UPDATE ON public.help_requests FOR EACH ROW EXECUTE FUNCTION trigger_help_request_updated();
 
 CREATE TRIGGER broadcast_student_karma_notes_change AFTER INSERT OR DELETE OR UPDATE ON public.student_karma_notes FOR EACH ROW EXECUTE FUNCTION broadcast_help_request_staff_data_change();
+
+CREATE TRIGGER broadcast_help_request_templates_change AFTER INSERT OR DELETE OR UPDATE ON public.help_request_templates FOR EACH ROW EXECUTE FUNCTION broadcast_help_request_staff_data_change();
+
+CREATE TRIGGER broadcast_student_help_activity_change AFTER INSERT OR DELETE OR UPDATE ON public.student_help_activity FOR EACH ROW EXECUTE FUNCTION broadcast_help_request_data_change();
 
 

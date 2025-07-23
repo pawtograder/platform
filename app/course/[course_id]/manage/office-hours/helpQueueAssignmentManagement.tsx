@@ -2,13 +2,14 @@
 
 import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useList, useUpdate, useDelete } from "@refinedev/core";
+import { useUpdate, useDelete } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { BsPerson, BsCalendar, BsStopwatch, BsX } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
-import { useEffect } from "react";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useMemo } from "react";
 import type { HelpQueueAssignment, HelpQueue, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type AssignmentWithDetails = HelpQueueAssignment & {
@@ -36,50 +37,38 @@ export default function HelpQueueAssignmentManagement() {
     enableStaffData: false
   });
 
-  // Fetch all assignments for the course with related data
-  const {
-    data: assignmentsResponse,
-    isLoading: assignmentsLoading,
-    error: assignmentsError,
-    refetch: refetchAssignments
-  } = useList<AssignmentWithDetails>({
-    resource: "help_queue_assignments",
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    sorters: [
-      { field: "is_active", order: "desc" },
-      { field: "started_at", order: "desc" }
-    ],
-    meta: {
-      select: `
-        *,
-        help_queue:help_queue_id(*),
-        profile:ta_profile_id(*)
-      `
-    }
-  });
+  // Get class profiles
+  const { profiles } = useClassProfiles();
 
+  // Mutations for assignment management - only use Refine for database operations
   const { mutate: updateAssignment } = useUpdate();
   const { mutate: deleteAssignment } = useDelete();
 
-  // Use realtime data when available, fallback to API data
-  // Note: The realtime data focuses on queue assignments, but we need the detailed join data from the API
-  const assignments = assignmentsResponse?.data ?? [];
+  // Combine realtime assignment and queue data with profile data
+  const assignments = useMemo((): AssignmentWithDetails[] => {
+    const queues = realtimeData.helpQueues;
 
-  // Set up realtime message handling
-  useEffect(() => {
-    if (!isConnected) return;
+    return realtimeData.helpQueueAssignments.map((assignment) => ({
+      ...assignment,
+      help_queue: queues.find((queue) => queue.id === assignment.help_queue_id),
+      profile: profiles.find((profile) => profile.id === assignment.ta_profile_id)
+    }));
+  }, [realtimeData.helpQueueAssignments, realtimeData.helpQueues, profiles]);
 
-    // Realtime updates are handled automatically by the hook
-    // The controller will update the realtimeData when assignment changes are broadcast
-    console.log("Help queue assignment management realtime connection established");
-  }, [isConnected]);
+  // Sort assignments by active status and start time
+  const sortedAssignments = useMemo(() => {
+    return [...assignments].sort((a, b) => {
+      // Active assignments first
+      if (a.is_active && !b.is_active) return -1;
+      if (!a.is_active && b.is_active) return 1;
 
-  // Refresh assignments when realtime assignments change to get updated join data
-  useEffect(() => {
-    if (realtimeData.helpQueueAssignments.length > 0) {
-      refetchAssignments();
-    }
-  }, [realtimeData.helpQueueAssignments, refetchAssignments]);
+      // Then by start time (most recent first)
+      return new Date(b.started_at).getTime() - new Date(a.started_at).getTime();
+    });
+  }, [assignments]);
+
+  // Loading state - wait for realtime data
+  const isLoading = realtimeLoading;
 
   const handleEndAssignment = (assignmentId: number) => {
     updateAssignment({
@@ -117,11 +106,10 @@ export default function HelpQueueAssignmentManagement() {
     }
   };
 
-  if (assignmentsLoading || realtimeLoading) return <Text>Loading assignments...</Text>;
-  if (assignmentsError) return <Alert status="error" title={`Error: ${assignmentsError.message}`} />;
+  if (isLoading) return <Text>Loading assignments...</Text>;
 
-  const activeAssignments = assignments.filter((a) => a.is_active);
-  const inactiveAssignments = assignments.filter((a) => !a.is_active);
+  const activeAssignments = sortedAssignments.filter((a) => a.is_active);
+  const inactiveAssignments = sortedAssignments.filter((a) => !a.is_active);
 
   const getQueueTypeColor = (type?: string) => {
     switch (type) {

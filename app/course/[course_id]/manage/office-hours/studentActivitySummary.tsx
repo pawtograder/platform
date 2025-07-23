@@ -1,10 +1,10 @@
 "use client";
 
 import { Box, HStack, VStack, Text, Icon, Badge, Separator } from "@chakra-ui/react";
-import { useList } from "@refinedev/core";
+import { useMemo } from "react";
 import { BsStar, BsStarFill, BsPerson, BsClock, BsShield, BsExclamationTriangle } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
-import type { StudentKarmaNotes, StudentHelpActivity, HelpRequestModeration } from "@/utils/supabase/DatabaseTypes";
+import { useStudentKarmaNotes, useStudentHelpActivity, useHelpRequestModeration } from "@/hooks/useOfficeHoursRealtime";
 
 type StudentActivitySummaryProps = {
   studentProfileId: string;
@@ -15,47 +15,36 @@ type StudentActivitySummaryProps = {
 /**
  * Component that displays a summary of a student's recent activity and karma.
  * Helps TAs understand a student's background when providing assistance.
+ * Uses realtime data from the office hours system.
  */
 export default function StudentActivitySummary({
   studentProfileId,
   classId,
   compact = false
 }: StudentActivitySummaryProps) {
-  // Fetch student's karma data
-  const { data: karmaResponse } = useList<StudentKarmaNotes>({
-    resource: "student_karma_notes",
-    filters: [
-      { field: "student_profile_id", operator: "eq", value: studentProfileId },
-      { field: "class_id", operator: "eq", value: classId }
-    ],
-    pagination: { current: 1, pageSize: 1 }
-  });
+  // Get all realtime data for the class
+  const allKarmaNotes = useStudentKarmaNotes();
+  const allHelpActivity = useStudentHelpActivity();
+  const allModerationActions = useHelpRequestModeration();
 
-  // Fetch recent help activity
-  const { data: activityResponse } = useList<StudentHelpActivity>({
-    resource: "student_help_activity",
-    filters: [
-      { field: "student_profile_id", operator: "eq", value: studentProfileId },
-      { field: "class_id", operator: "eq", value: classId }
-    ],
-    sorters: [{ field: "created_at", order: "desc" }],
-    pagination: { current: 1, pageSize: 5 }
-  });
+  // Filter data for the specific student
+  const karmaEntry = useMemo(() => {
+    return allKarmaNotes.find((karma) => karma.student_profile_id === studentProfileId && karma.class_id === classId);
+  }, [allKarmaNotes, studentProfileId, classId]);
 
-  // Fetch recent moderation actions
-  const { data: moderationResponse } = useList<HelpRequestModeration>({
-    resource: "help_request_moderation",
-    filters: [
-      { field: "student_profile_id", operator: "eq", value: studentProfileId },
-      { field: "class_id", operator: "eq", value: classId }
-    ],
-    sorters: [{ field: "created_at", order: "desc" }],
-    pagination: { current: 1, pageSize: 3 }
-  });
+  const recentActivity = useMemo(() => {
+    return allHelpActivity
+      .filter((activity) => activity.student_profile_id === studentProfileId && activity.class_id === classId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 5);
+  }, [allHelpActivity, studentProfileId, classId]);
 
-  const karmaEntry = karmaResponse?.data?.[0];
-  const recentActivity = activityResponse?.data ?? [];
-  const recentModeration = moderationResponse?.data ?? [];
+  const recentModeration = useMemo(() => {
+    return allModerationActions
+      .filter((action) => action.student_profile_id === studentProfileId && action.class_id === classId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 3);
+  }, [allModerationActions, studentProfileId, classId]);
 
   const getKarmaColor = (score: number) => {
     if (score >= 10) return "green";

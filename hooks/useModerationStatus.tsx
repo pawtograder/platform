@@ -1,5 +1,6 @@
-import { useList } from "@refinedev/core";
-import type { HttpError } from "@refinedev/core";
+"use client";
+
+import { useHelpRequestModeration } from "./useOfficeHoursRealtime";
 import { useClassProfiles } from "./useClassProfiles";
 import { useMemo } from "react";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
@@ -14,76 +15,24 @@ type ModerationStatus = {
   activeBan: ModerationAction | null;
   recentWarnings: ModerationAction[];
   isLoading: boolean;
-  error: HttpError | null;
+  error: string | null;
 };
 
 /**
  * Hook to check if the current user is banned or has recent moderation actions.
+ * Uses realtime data from the office hours system for immediate updates.
  * @param classId - The ID of the class to check moderation status for.
  * @returns Comprehensive moderation status including ban expiration and warnings.
  */
 export function useModerationStatus(classId: number): ModerationStatus {
   const { private_profile_id } = useClassProfiles();
 
-  // Fetch all moderation actions for the current user in this class
-  const {
-    data: moderationResponse,
-    isLoading,
-    error
-  } = useList<ModerationAction>({
-    resource: "help_request_moderation",
-    filters: [
-      { field: "class_id", operator: "eq", value: classId },
-      { field: "student_profile_id", operator: "eq", value: private_profile_id }
-    ],
-    sorters: [{ field: "created_at", order: "desc" }],
-    pagination: { pageSize: 100 },
-    queryOptions: {
-      enabled: !!private_profile_id && !!classId,
-      retry: false // Don't retry on permission errors
-    },
-    meta: {
-      // Add meta information for debugging
-      select: "*"
-    }
-  });
+  // Get all moderation actions from realtime data
+  const allModerationActions = useHelpRequestModeration();
 
   const moderationStatus = useMemo((): ModerationStatus => {
-    // Handle loading state
-    if (isLoading) {
-      return {
-        isBanned: false,
-        isPermanentBan: false,
-        banExpiresAt: null,
-        timeRemainingMs: null,
-        activeBan: null,
-        recentWarnings: [],
-        isLoading: true,
-        error: null
-      };
-    }
-
-    // Handle error state
-    if (error) {
-      console.error("Moderation status query error:", error);
-      return {
-        isBanned: false,
-        isPermanentBan: false,
-        banExpiresAt: null,
-        timeRemainingMs: null,
-        activeBan: null,
-        recentWarnings: [],
-        isLoading: false,
-        error
-      };
-    }
-
     // Handle case where query is disabled (missing required params)
     if (!private_profile_id || !classId) {
-      console.warn("Moderation status query disabled - missing required parameters:", {
-        private_profile_id,
-        classId
-      });
       return {
         isBanned: false,
         isPermanentBan: false,
@@ -96,8 +45,13 @@ export function useModerationStatus(classId: number): ModerationStatus {
       };
     }
 
-    // Handle case where there's no data (could be RLS issue or no records)
-    if (!moderationResponse?.data || moderationResponse.data.length === 0) {
+    // Filter moderation actions for the current user in this class
+    const userModerationActions = allModerationActions
+      .filter((action) => action.student_profile_id === private_profile_id && action.class_id === classId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    // Handle case where there's no data
+    if (userModerationActions.length === 0) {
       return {
         isBanned: false,
         isPermanentBan: false,
@@ -110,11 +64,10 @@ export function useModerationStatus(classId: number): ModerationStatus {
       };
     }
 
-    const actions = moderationResponse.data;
     const now = new Date();
 
     // Find active bans
-    const activeBans = actions.filter((action) => {
+    const activeBans = userModerationActions.filter((action) => {
       // Only consider ban-type actions
       if (action.action_type !== "temporary_ban" && action.action_type !== "permanent_ban") {
         return false;
@@ -167,11 +120,11 @@ export function useModerationStatus(classId: number): ModerationStatus {
 
     // Get recent warnings (last 7 days)
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const recentWarnings = actions.filter(
+    const recentWarnings = userModerationActions.filter(
       (action) => action.action_type === "warning" && new Date(action.created_at) > sevenDaysAgo
     );
 
-    const result = {
+    return {
       isBanned,
       isPermanentBan,
       banExpiresAt,
@@ -181,9 +134,7 @@ export function useModerationStatus(classId: number): ModerationStatus {
       isLoading: false,
       error: null
     };
-
-    return result;
-  }, [moderationResponse, isLoading, error, private_profile_id, classId]);
+  }, [allModerationActions, private_profile_id, classId]);
 
   return moderationStatus;
 }
