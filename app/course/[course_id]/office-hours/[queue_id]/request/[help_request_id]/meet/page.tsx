@@ -1,3 +1,5 @@
+"use client";
+
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
