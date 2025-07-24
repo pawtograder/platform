@@ -195,14 +195,9 @@ export default function ModerationManagement() {
           <Flex align="center" gap={3} mb={2}>
             <Icon as={getActionIcon(action.action_type)} />
             <Text fontWeight="semibold">{getActionTypeLabel(action.action_type)}</Text>
-            <Badge colorPalette={getActionTypeColor(action.action_type)} size="sm">
+            <Badge colorPalette={getActionTypeColor(action.action_type)} variant="solid" size="sm">
               {action.is_permanent ? "Permanent" : isActionActive(action) ? "Active" : "Expired"}
             </Badge>
-            {isConnected && (
-              <Text fontSize="xs" color="green.500">
-                ● Live
-              </Text>
-            )}
           </Flex>
 
           <VStack align="start" gap={2} mb={3}>
@@ -244,13 +239,7 @@ export default function ModerationManagement() {
           <PopConfirm
             triggerLabel="Delete moderation action"
             trigger={
-              <IconButton
-                aria-label="Delete moderation action"
-                colorPalette="red"
-                variant="ghost"
-                size="sm"
-                loading={isDeleting}
-              >
+              <IconButton aria-label="Delete moderation action" colorPalette="red" size="sm" loading={isDeleting}>
                 <Icon as={BsTrash} />
               </IconButton>
             }
@@ -303,11 +292,6 @@ export default function ModerationManagement() {
         >
           Expired ({moderationActions.filter((a) => !a.is_permanent && !isActionActive(a)).length})
         </Button>
-        {isConnected && (
-          <Text fontSize="xs" color="green.500">
-            ● Live updates
-          </Text>
-        )}
       </HStack>
 
       {/* Moderation Actions List */}

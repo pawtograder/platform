@@ -122,7 +122,7 @@ export default function CreateHelpRequestTemplateModal({
           <Dialog.Header>
             <Dialog.Title>Create New Help Request Template</Dialog.Title>
             <Dialog.CloseTrigger asChild>
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" colorPalette="red" size="sm">
                 <Icon as={BsX} />
               </Button>
             </Dialog.CloseTrigger>
@@ -212,7 +212,7 @@ export default function CreateHelpRequestTemplateModal({
 
           <Dialog.Footer>
             <HStack justify="end" gap={3}>
-              <Button variant="outline" onClick={handleClose}>
+              <Button colorPalette="red" onClick={handleClose}>
                 Cancel
               </Button>
               <Button colorPalette="green" onClick={handleSubmit(onSubmit)} loading={isSubmitting}>

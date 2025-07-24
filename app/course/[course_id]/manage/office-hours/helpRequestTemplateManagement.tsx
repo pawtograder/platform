@@ -164,9 +164,12 @@ export default function HelpRequestTemplateManagement() {
         </Box>
 
         <HStack spaceX={2}>
+          <Button size="sm" onClick={() => editModal.openModal(template)}>
+            <Icon as={BsPencil} />
+            Edit
+          </Button>
           <Button
             size="sm"
-            variant="outline"
             colorPalette={template.is_active ? "orange" : "green"}
             onClick={() => handleToggleActive(template.id, template.is_active)}
             title={template.is_active ? "Deactivate template" : "Activate template"}
@@ -174,14 +177,10 @@ export default function HelpRequestTemplateManagement() {
             <Icon as={template.is_active ? BsEyeSlash : BsEye} />
             {template.is_active ? "Deactivate" : "Activate"}
           </Button>
-          <Button size="sm" variant="outline" onClick={() => editModal.openModal(template)}>
-            <Icon as={BsPencil} />
-            Edit
-          </Button>
           <PopConfirm
             triggerLabel="Delete template"
             trigger={
-              <Button size="sm" variant="outline" colorPalette="red">
+              <Button size="sm" colorPalette="red">
                 <Icon as={BsTrash} />
                 Delete
               </Button>

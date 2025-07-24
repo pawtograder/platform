@@ -101,7 +101,7 @@ export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: Cre
           <Dialog.Header>
             <Dialog.Title>Create New Help Queue</Dialog.Title>
             <Dialog.CloseTrigger asChild>
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" colorPalette="red" size="sm">
                 <Icon as={BsX} />
               </Button>
             </Dialog.CloseTrigger>
@@ -194,7 +194,7 @@ export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: Cre
 
           <Dialog.Footer>
             <HStack justify="end" gap={3}>
-              <Button variant="outline" onClick={handleClose}>
+              <Button colorPalette="red" onClick={handleClose}>
                 Cancel
               </Button>
               <Button colorPalette="green" onClick={handleSubmit(onSubmit)} loading={isSubmitting}>

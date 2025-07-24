@@ -81,15 +81,12 @@ export function useRealtimeConnectionStatus(
   const { officeHoursController } = options;
 
   useEffect(() => {
-    console.log("Setting up realtime connection status monitoring");
-
     // Get initial status
     const updateCombinedStatus = () => {
       const classStatus = classRealTimeController.getConnectionStatus();
       const officeHoursStatus = officeHoursController?.getConnectionStatus();
 
       const combinedStatus = combineConnectionStatuses(classStatus, officeHoursStatus);
-      console.log("Combined connection status updated:", combinedStatus);
       setStatus(combinedStatus);
     };
 
@@ -98,7 +95,6 @@ export function useRealtimeConnectionStatus(
 
     // Subscribe to class status changes
     const unsubscribeClass = classRealTimeController.subscribeToStatus((newClassStatus) => {
-      console.log("Class realtime status changed:", newClassStatus);
       const officeHoursStatus = officeHoursController?.getConnectionStatus();
       const combinedStatus = combineConnectionStatuses(newClassStatus, officeHoursStatus);
       setStatus(combinedStatus);
@@ -108,7 +104,6 @@ export function useRealtimeConnectionStatus(
     let unsubscribeOfficeHours: (() => void) | undefined;
     if (officeHoursController) {
       unsubscribeOfficeHours = officeHoursController.subscribeToStatus((newOfficeHoursStatus) => {
-        console.log("Office hours realtime status changed:", newOfficeHoursStatus);
         const classStatus = classRealTimeController.getConnectionStatus();
         const combinedStatus = combineConnectionStatuses(classStatus, newOfficeHoursStatus);
         setStatus(combinedStatus);
@@ -116,7 +111,6 @@ export function useRealtimeConnectionStatus(
     }
 
     return () => {
-      console.log("Unsubscribing from realtime status changes");
       unsubscribeClass();
       if (unsubscribeOfficeHours) {
         unsubscribeOfficeHours();

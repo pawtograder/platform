@@ -1,8 +1,8 @@
 "use client";
-import { ChatGroupHeader } from "@/components/ui/help-queue/chat-group-header";
-import { HelpRequestTeaser } from "@/components/ui/help-queue/help-request-teaser";
-import { SearchInput } from "@/components/ui/help-queue/search-input";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { ChatGroupHeader } from "@/components/help-queue/chat-group-header";
+import { HelpRequestTeaser } from "@/components/help-queue/help-request-teaser";
+import { SearchInput } from "@/components/help-queue/search-input";
+import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
 import { HelpRequest, HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Stack, Text } from "@chakra-ui/react";
 import NextLink from "next/link";
@@ -22,6 +22,7 @@ type EnhancedHelpRequest = HelpRequest & {
 export default function HelpRequestList() {
   const { course_id, request_id } = useParams();
   const { private_profile_id } = useClassProfiles();
+  const studentRoster = useStudentRoster();
   const activeRequestID = request_id ? Number.parseInt(request_id as string) : null;
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -37,18 +38,6 @@ export default function HelpRequestList() {
 
   // Extract data from the consolidated hook
   const { helpQueues, helpRequestStudents: realtimeHelpRequestStudents } = officeHoursData;
-
-  // Apply client-side search filtering and get ALL help requests
-  const allHelpRequests = useMemo(() => {
-    // Apply client-side search filtering if search term exists
-    if (searchTerm.trim()) {
-      return allHelpRequestsFromController.filter((request) =>
-        request.request.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-
-    return allHelpRequestsFromController;
-  }, [allHelpRequestsFromController, searchTerm]);
 
   // Create a mapping of help request ID to student profile IDs
   const requestStudentsMap = useMemo(() => {
@@ -74,6 +63,36 @@ export default function HelpRequestList() {
       {} as Record<number, HelpQueue>
     );
   }, [helpQueues]);
+
+  // Create a mapping of profile ID to student name for search functionality
+  const studentNameMap = useMemo(() => {
+    return studentRoster.reduce(
+      (acc, student) => {
+        acc[student.id] = student.name || student.short_name || student.sortable_name || "Unknown Student";
+        return acc;
+      },
+      {} as Record<string, string>
+    );
+  }, [studentRoster]);
+
+  // Apply client-side search filtering and get ALL help requests
+  const allHelpRequests = useMemo(() => {
+    // Apply client-side search filtering if search term exists
+    if (searchTerm.trim()) {
+      const searchLower = searchTerm.toLowerCase();
+      return allHelpRequestsFromController.filter((request) => {
+        const requestStudents = requestStudentsMap[request.id] || [];
+        const requestTextMatch = request.request.toLowerCase().includes(searchLower);
+        const studentNameMatch = requestStudents.some((profileId) => {
+          const studentName = studentNameMap[profileId];
+          return studentName && studentName.toLowerCase().includes(searchLower);
+        });
+        return requestTextMatch || studentNameMatch;
+      });
+    }
+
+    return allHelpRequestsFromController;
+  }, [allHelpRequestsFromController, searchTerm, requestStudentsMap, studentNameMap]);
 
   // Enhanced requests with queue information and students, sorted in descending order (newest first)
   const enhancedRequests = useMemo(() => {

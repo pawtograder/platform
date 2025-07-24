@@ -21,7 +21,7 @@ import { signOutAction } from "../actions";
 import { useInvalidate, useList, useOne } from "@refinedev/core";
 import { ColorModeButton } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
-import NotificationsBox from "@/components/ui/notifications/notifications-box";
+import NotificationsBox from "@/components/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -36,7 +36,7 @@ import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } fr
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import { HiOutlineSupport } from "react-icons/hi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
-import NotificationPreferences from "@/components/ui/notifications/notification-preferences";
+import NotificationPreferences from "@/components/notifications/notification-preferences";
 import { IoNotificationsCircle } from "react-icons/io5";
 
 function SupportMenu() {

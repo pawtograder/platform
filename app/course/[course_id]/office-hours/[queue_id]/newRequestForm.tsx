@@ -12,7 +12,8 @@ import {
   SubmissionFile,
   HelpRequestLocationType,
   HelpRequestFormFileReference,
-  HelpRequestWithStudentCount
+  HelpRequestWithStudentCount,
+  Assignment
 } from "@/utils/supabase/DatabaseTypes";
 import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
@@ -136,7 +137,7 @@ export default function HelpRequestForm() {
                   }
                 });
               } catch (error) {
-                console.error(`Failed to log activity for student ${studentId}:`, error);
+                console.error(`Failed to log activity for student:`, error);
                 // Don't throw here - activity logging shouldn't block request creation
               }
             }
@@ -279,14 +280,14 @@ export default function HelpRequestForm() {
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<number | null>(null);
 
   // Fetch assignments for the class
-  const { data: assignments } = useList({
+  const { data: assignments } = useList<Assignment>({
     resource: "assignments",
     filters: [
       { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "published", operator: "eq", value: true }
+      { field: "release_date", operator: "lte", value: new Date().toISOString() }
     ],
     sorters: [{ field: "due_date", order: "desc" }],
-    pagination: { pageSize: 100 }
+    pagination: { pageSize: 1000 }
   });
 
   // Fetch submissions for the selected assignment
@@ -297,7 +298,7 @@ export default function HelpRequestForm() {
       { field: "profile_id", operator: "eq", value: private_profile_id }
     ],
     sorters: [{ field: "created_at", order: "desc" }],
-    pagination: { pageSize: 50 },
+    pagination: { pageSize: 1000 },
     queryOptions: {
       enabled: !!selectedAssignmentId && !!private_profile_id
     }
@@ -307,6 +308,7 @@ export default function HelpRequestForm() {
   const { data: submissionFiles } = useList<SubmissionFile>({
     resource: "submission_files",
     filters: [{ field: "submission_id", operator: "eq", value: selectedSubmissionId }],
+    pagination: { pageSize: 1000 },
     queryOptions: {
       enabled: !!selectedSubmissionId
     }
@@ -391,7 +393,10 @@ export default function HelpRequestForm() {
 
       setUserActiveRequests(activeRequestsWithCount);
     } catch (error) {
-      console.error("Error in processing user requests from realtime data:", error);
+      toaster.error({
+        title: "Error",
+        description: "Error in processing user requests from realtime data: " + (error as Error).message
+      });
     }
   }, [private_profile_id, course_id, allHelpRequests, allHelpRequestStudents]);
 
@@ -463,7 +468,6 @@ export default function HelpRequestForm() {
           class_id: Number.parseInt(course_id as string),
           // Ensure these fields have proper defaults
           status: "open" as const,
-          priority_level: 1,
           is_video_live: false,
           // WORKAROUND: Always create as public first to avoid RLS issues
           is_private: false
@@ -626,7 +630,7 @@ export default function HelpRequestForm() {
                   .map(
                     (assignment) =>
                       ({
-                        label: `${assignment.name} (Due: ${assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"})`,
+                        label: `${assignment.title} (Due: ${assignment.due_date ? new Date(assignment.due_date).toLocaleDateString() : "No due date"})`,
                         value: assignment.id!.toString()
                       }) as SelectOption
                   ) ?? []
@@ -634,7 +638,7 @@ export default function HelpRequestForm() {
               value={
                 selectedAssignmentId
                   ? ({
-                      label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.name || "Unknown",
+                      label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
                       value: selectedAssignmentId.toString()
                     } as SelectOption)
                   : null

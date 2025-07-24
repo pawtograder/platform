@@ -167,11 +167,6 @@ export default function StudentKarmaManagement() {
             <Badge colorPalette={getKarmaColor(entry.karma_score)} size="sm">
               {entry.karma_score} - {getKarmaLabel(entry.karma_score)}
             </Badge>
-            {isConnected && (
-              <Text fontSize="xs" color="green.500">
-                ● Live
-              </Text>
-            )}
           </Flex>
 
           <HStack mb={3}>
@@ -198,14 +193,14 @@ export default function StudentKarmaManagement() {
         </Box>
 
         <HStack spaceX={2}>
-          <Button size="sm" variant="outline" onClick={() => editModal.openModal(entry)}>
+          <Button size="sm" onClick={() => editModal.openModal(entry)}>
             <Icon as={BsPencil} />
             Edit
           </Button>
           <PopConfirm
             triggerLabel="Delete karma entry"
             trigger={
-              <Button size="sm" variant="outline" colorPalette="red">
+              <Button size="sm" colorPalette="red">
                 <Icon as={BsTrash} />
                 Delete
               </Button>
@@ -258,11 +253,6 @@ export default function StudentKarmaManagement() {
             <Text fontSize="2xl" fontWeight="bold" color={getKarmaColor(averageKarma)}>
               {averageKarma.toFixed(1)}
             </Text>
-            {isConnected && (
-              <Text fontSize="xs" color="green.500">
-                ● Live
-              </Text>
-            )}
           </Flex>
         </VStack>
         <VStack align="start">
@@ -289,11 +279,6 @@ export default function StudentKarmaManagement() {
             onChange={(e) => setSearchTerm(e.target.value)}
             flex="1"
           />
-          {isConnected && searchTerm.trim() && (
-            <Text fontSize="xs" color="green.500">
-              ● Live search
-            </Text>
-          )}
         </HStack>
       </Box>
 
@@ -315,14 +300,11 @@ export default function StudentKarmaManagement() {
         </Box>
       ) : (
         <Stack spaceY={3}>
+          {filteredEntries.length === 1 && <Text textAlign="center">{filteredEntries.length} entry found</Text>}
+          {filteredEntries.length > 1 && <Text textAlign="center">{filteredEntries.length} entries found</Text>}
           {filteredEntries.map((entry) => (
             <KarmaEntryCard key={entry.id} entry={entry} />
           ))}
-          {isConnected && filteredEntries.length > 0 && (
-            <Text fontSize="xs" color="green.500" textAlign="center">
-              ● {filteredEntries.length} entries with live updates
-            </Text>
-          )}
         </Stack>
       )}
 

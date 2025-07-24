@@ -95,12 +95,10 @@ export class OfficeHoursRealTimeController {
    * Initialize global channels (help_queues and class staff channel)
    */
   private async _initializeGlobalChannels() {
-    console.log("Initializing office hours channels", this._objDebugId);
     const accessToken = await this._client.auth.getSession();
     await this._client.realtime.setAuth(accessToken.data.session?.access_token);
 
     if (this._closed) {
-      console.log("Channels already closed", this._objDebugId);
       return;
     }
 
@@ -299,7 +297,6 @@ export class OfficeHoursRealTimeController {
    */
   subscribeToHelpRequestStaffData(helpRequestId: number, callback: MessageCallback): () => void {
     if (!this._isStaff) {
-      console.warn("Non-staff user attempting to subscribe to staff data");
       return () => {};
     }
 
@@ -413,11 +410,9 @@ export class OfficeHoursRealTimeController {
    * Subscribe to status changes
    */
   subscribeToStatus(callback: (status: ConnectionStatus) => void): () => void {
-    console.log("Subscribing to status changes", this._objDebugId, this._statusChangeListeners);
     this._statusChangeListeners.push(callback);
     return () => {
       this._statusChangeListeners = this._statusChangeListeners.filter((l) => l !== callback);
-      console.log("After unsubscribing from status changes", this._objDebugId, this._statusChangeListeners);
     };
   }
 
@@ -426,8 +421,6 @@ export class OfficeHoursRealTimeController {
    */
   private _notifyStatusChange() {
     const status = this.getConnectionStatus();
-    console.log("Notifying status change listeners", this._objDebugId, status);
-    console.log("Status change listeners", this._objDebugId, this._statusChangeListeners);
     this._statusChangeListeners.forEach((listener) => listener(status));
   }
 
@@ -479,7 +472,6 @@ export class OfficeHoursRealTimeController {
    * Clean up channels and subscriptions
    */
   close() {
-    console.log("Closing OfficeHoursRealTimeController channels", this._objDebugId);
     this._closed = true;
     this._subscriptions.clear();
     this._statusChangeListeners = [];

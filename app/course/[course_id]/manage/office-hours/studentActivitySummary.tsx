@@ -32,7 +32,6 @@ export default function StudentActivitySummary({
   // Get all realtime data for the class
   const allKarmaNotes = useStudentKarmaNotes();
   const allHelpActivity = useStudentHelpActivity();
-  console.log("allHelpActivity", allHelpActivity);
   const allModerationActions = useHelpRequestModeration();
   const studentRoster = useStudentRoster();
 

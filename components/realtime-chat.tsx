@@ -11,6 +11,7 @@ import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationS
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCreate } from "@refinedev/core";
+import { toaster } from "@/components/ui/toaster";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
@@ -123,7 +124,7 @@ export const RealtimeChat = ({
 
   // Get authenticated user and their profile
   const { user } = useAuthState();
-  const { private_profile_id, allVisibleRoles } = useClassProfiles();
+  const { private_profile_id } = useClassProfiles();
 
   // Reply state
   const [replyToMessage, setReplyToMessage] = useState<UnifiedMessage | null>(null);
@@ -152,8 +153,6 @@ export const RealtimeChat = ({
     helpRequestId: helpRequest.id,
     enableChat: true
   });
-
-  console.log("readReceipts", readReceipts);
 
   // Helper function to get timestamp from either message type
   const getMessageTimestamp = (msg: UnifiedMessage): string => {
@@ -219,12 +218,6 @@ export const RealtimeChat = ({
 
     const selectedMessages = shouldUseHookData ? hookMessages : propMessages;
 
-    console.log(
-      `Message source selection: using ${shouldUseHookData ? "hook" : "prop"} data. ` +
-        `Hook: ${hookMessages.length} messages (latest: ${new Date(hookLatestTime).toISOString()}), ` +
-        `Prop: ${propMessages.length} messages (latest: ${new Date(propLatestTime).toISOString()})`
-    );
-
     // Sort messages by creation time to ensure proper order
     return selectedMessages.sort((a, b) => {
       const aTime = getMessageTimestamp(a);
@@ -262,7 +255,6 @@ export const RealtimeChat = ({
             if (messageId && !officeHoursController.isMessageMarkedAsRead(messageId)) {
               // Mark message as read - the controller will handle duplicate prevention
               markMessageAsRead(messageId, messageAuthorId);
-              console.log("marked message as read", messageId, messageAuthorId);
             }
           }
         });
@@ -315,7 +307,10 @@ export const RealtimeChat = ({
         setNewMessage("");
         setReplyToMessage(null);
       } catch (error) {
-        console.error("Failed to send message:", error);
+        toaster.error({
+          title: "Failed to send message",
+          description: "Failed to send message: " + (error as Error).message
+        });
       }
     },
     [
@@ -507,7 +502,6 @@ export const RealtimeChat = ({
                     allMessages={allMessages}
                     currentUserId={private_profile_id}
                     helpRequestStudentIds={helpRequestStudentIds}
-                    userRoles={allVisibleRoles}
                   />
                 </Box>
               );

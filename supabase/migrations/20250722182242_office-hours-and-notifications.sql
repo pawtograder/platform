@@ -6,7 +6,7 @@ create type "public"."help_request_status" as enum ('open', 'in_progress', 'reso
 
 create type "public"."location_type" as enum ('remote', 'in_person', 'hybrid');
 
-create type "public"."moderation_action_type" as enum ('warning', 'temporary_ban', 'permanent_ban', 'message_deleted', 'message_edited');
+create type "public"."moderation_action_type" as enum ('warning', 'temporary_ban', 'permanent_ban');
 
 create type "public"."notification_type" as enum ('immediate', 'digest', 'disabled');
 

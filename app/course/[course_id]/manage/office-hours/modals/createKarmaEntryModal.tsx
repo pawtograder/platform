@@ -9,7 +9,6 @@ import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
-import { useEffect } from "react";
 import { toaster } from "@/components/ui/toaster";
 import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
@@ -58,11 +57,6 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
   const students = useStudentRoster();
 
   const { mutateAsync: createKarmaEntry } = useCreate<StudentKarmaNotes>();
-
-  useEffect(() => {
-    if (!isConnected) return;
-    console.log("Karma entry modal realtime connection established");
-  }, [isConnected]);
 
   const handleClose = () => {
     reset();
@@ -117,16 +111,9 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
       <Dialog.Positioner>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>
-              Create Student Karma Entry
-              {isConnected && (
-                <Text as="span" fontSize="xs" color="green.500" ml={2}>
-                  ● Live data
-                </Text>
-              )}
-            </Dialog.Title>
+            <Dialog.Title>Create Student Karma Entry</Dialog.Title>
             <Dialog.CloseTrigger asChild>
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" colorPalette="red" size="sm">
                 <Icon as={BsX} />
               </Button>
             </Dialog.CloseTrigger>
@@ -161,10 +148,7 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.student_profile_id?.message}</Field.ErrorText>
-                  <Field.HelperText>
-                    {students.length} students available
-                    {isConnected && <Text as="span"> (live updated)</Text>}
-                  </Field.HelperText>
+                  <Field.HelperText>{students.length} students available</Field.HelperText>
                 </Field.Root>
 
                 <Field.Root invalid={!!errors.karma_score}>
@@ -222,7 +206,7 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
 
           <Dialog.Footer>
             <HStack justify="end" gap={3}>
-              <Button variant="outline" onClick={handleClose}>
+              <Button colorPalette="red" onClick={handleClose}>
                 Cancel
               </Button>
               <Button colorPalette="green" onClick={handleSubmit(onSubmit)} loading={isSubmitting}>

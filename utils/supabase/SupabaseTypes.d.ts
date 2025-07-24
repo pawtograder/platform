@@ -2785,7 +2785,6 @@ export type Database = {
           instructors_only: boolean;
           message: string;
           reply_to_message_id: number | null;
-          requestor: string | null;
         };
         Insert: {
           author: string;
@@ -2796,7 +2795,6 @@ export type Database = {
           instructors_only?: boolean;
           message: string;
           reply_to_message_id?: number | null;
-          requestor?: string | null;
         };
         Update: {
           author?: string;
@@ -2807,7 +2805,6 @@ export type Database = {
           instructors_only?: boolean;
           message?: string;
           reply_to_message_id?: number | null;
-          requestor?: string | null;
         };
         Relationships: [
           {
@@ -3054,14 +3051,12 @@ export type Database = {
           assignee: string | null;
           class_id: number;
           created_at: string;
-          estimated_duration_minutes: number | null;
           followup_to: number | null;
           help_queue: number;
           id: number;
           is_private: boolean;
           is_video_live: boolean;
           location_type: Database["public"]["Enums"]["location_type"];
-          priority_level: number;
           referenced_submission_id: number | null;
           request: string;
           resolved_at: string | null;
@@ -3073,14 +3068,12 @@ export type Database = {
           assignee?: string | null;
           class_id: number;
           created_at?: string;
-          estimated_duration_minutes?: number | null;
           followup_to?: number | null;
           help_queue: number;
           id?: number;
           is_private?: boolean;
           is_video_live?: boolean;
           location_type?: Database["public"]["Enums"]["location_type"];
-          priority_level?: number;
           referenced_submission_id?: number | null;
           request: string;
           resolved_at?: string | null;
@@ -3092,14 +3085,12 @@ export type Database = {
           assignee?: string | null;
           class_id?: number;
           created_at?: string;
-          estimated_duration_minutes?: number | null;
           followup_to?: number | null;
           help_queue?: number;
           id?: number;
           is_private?: boolean;
           is_video_live?: boolean;
           location_type?: Database["public"]["Enums"]["location_type"];
-          priority_level?: number;
           referenced_submission_id?: number | null;
           request?: string;
           resolved_at?: string | null;
@@ -7013,7 +7004,7 @@ export type Database = {
       help_queue_type: "text" | "video" | "in_person";
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
-      moderation_action_type: "warning" | "temporary_ban" | "permanent_ban" | "message_deleted" | "message_edited";
+      moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
       notification_type: "immediate" | "digest" | "disabled";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
@@ -7152,7 +7143,7 @@ export const Constants = {
       help_queue_type: ["text", "video", "in_person"],
       help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
-      moderation_action_type: ["warning", "temporary_ban", "permanent_ban", "message_deleted", "message_edited"],
+      moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
       notification_type: ["immediate", "digest", "disabled"],
       review_round: ["self-review", "grading-review", "meta-grading-review"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],

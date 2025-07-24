@@ -3,6 +3,7 @@ import { Avatar, Box, HStack, Stack, Text, Badge, Icon, AvatarGroup } from "@cha
 import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "react-markdown";
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import { getQueueTypeColor } from "@/lib/utils";
 
 interface MessageData {
   user: string;
@@ -128,23 +129,15 @@ export const HelpRequestTeaser = (props: Props) => {
               </Badge>
             )}
             {queue && (
-              <Badge
-                colorPalette={queue.color ? undefined : "blue"}
-                bg={queue.color || undefined}
-                color={queue.color ? "white" : undefined}
-                variant="solid"
-                size="xs"
-              >
+              <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="solid" size="xs">
                 <Icon as={getQueueIcon(queue.queue_type)} fontSize="xs" />
                 {queue.name}
               </Badge>
             )}
-            <Text color="fg.subtle" fontSize="xs">
-              {updatedAt}
-            </Text>
+            <Text fontSize="xs">{updatedAt}</Text>
           </HStack>
         </HStack>
-        <Box color="fg.subtle" truncate>
+        <Box truncate>
           <Markdown>{message}</Markdown>
         </Box>
       </Stack>

@@ -7,7 +7,7 @@ import {
   DiscussionThreadNotification,
   HelpRequestNotification,
   HelpRequestMessageNotification
-} from "@/components/ui/notifications/notification-teaser";
+} from "@/components/notifications/notification-teaser";
 
 export function useNotification(notification_id: number) {
   const controller = useCourseController();

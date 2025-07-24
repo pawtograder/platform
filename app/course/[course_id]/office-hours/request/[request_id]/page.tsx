@@ -71,12 +71,13 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
 };
 
 /**
- * Main page component for displaying and managing a help request
+ * Student context page component for displaying and managing a help request
  * Shows different visual states based on request status
  * Uses real-time updates for help request data, messages, and staff actions
+ * Supports both regular viewing and popout mode
  * @returns JSX element for the help request page
  */
-export default function HelpRequestPage() {
+export default function StudentHelpRequestPage() {
   const { request_id, course_id } = useParams();
 
   // Set up real-time subscriptions for this help request
@@ -88,7 +89,7 @@ export default function HelpRequestPage() {
   } = useOfficeHoursRealtime({
     classId: Number(course_id),
     helpRequestId: Number(request_id),
-    enableStaffData: true,
+    enableStaffData: false, // Students don't need staff-specific data
     enableGlobalQueues: false // Not needed for individual request view
   });
 
@@ -108,7 +109,7 @@ export default function HelpRequestPage() {
         </Alert>
       )}
 
-      <Box opacity={isRequestInactive ? 0.7 : 1} transition="opacity 0.2s ease-in-out">
+      <Box opacity={isRequestInactive ? 0.7 : 1} transition="opacity 0.2s ease-in-out" m={4}>
         <VStack gap={4} align="stretch" mb={4}>
           <HStack justify="space-between" align="center">
             <HelpRequestStatusIndicator status={request.status} />

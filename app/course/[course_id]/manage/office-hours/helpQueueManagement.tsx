@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, Heading, Icon } from "@chakra-ui/react";
+import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { useDelete } from "@refinedev/core";
 import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
@@ -12,7 +12,7 @@ import CreateHelpQueueModal from "./modals/createHelpQueueModal";
 import EditHelpQueueModal from "./modals/editHelpQueueModal";
 import { Alert } from "@/components/ui/alert";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
-import { useEffect } from "react";
+import { getQueueTypeColor } from "@/lib/utils";
 
 /**
  * Component for managing help queues in a course.
@@ -43,15 +43,6 @@ export default function HelpQueueManagement() {
   // Use only realtime data
   const queues = realtimeData.helpQueues;
 
-  // Set up realtime message handling for optimistic updates
-  useEffect(() => {
-    if (!isConnected) return;
-
-    // Realtime updates are handled automatically by the hook
-    // The controller will update the realtimeData when queue changes are broadcast
-    console.log("Help queue management realtime connection established");
-  }, [isConnected]);
-
   const handleDeleteQueue = (queueId: number) => {
     deleteQueue({
       resource: "help_queues",
@@ -78,19 +69,6 @@ export default function HelpQueueManagement() {
   };
 
   if (realtimeLoading) return <Text>Loading help queues...</Text>;
-
-  const getQueueTypeColor = (type: string) => {
-    switch (type) {
-      case "text":
-        return "blue";
-      case "video":
-        return "green";
-      case "in_person":
-        return "orange";
-      default:
-        return "gray";
-    }
-  };
 
   const getQueueTypeLabel = (type: string) => {
     switch (type) {
@@ -140,17 +118,9 @@ export default function HelpQueueManagement() {
                     <Text fontWeight="semibold" fontSize="lg">
                       {queue.name}
                     </Text>
-                    <Box
-                      px={2}
-                      py={1}
-                      borderRadius="md"
-                      bg={`${getQueueTypeColor(queue.queue_type)}.100`}
-                      color={`${getQueueTypeColor(queue.queue_type)}.700`}
-                      fontSize="sm"
-                      fontWeight="medium"
-                    >
+                    <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="solid">
                       {getQueueTypeLabel(queue.queue_type)}
-                    </Box>
+                    </Badge>
                     {!queue.is_active && (
                       <Box
                         px={2}
@@ -163,11 +133,6 @@ export default function HelpQueueManagement() {
                       >
                         Inactive
                       </Box>
-                    )}
-                    {isConnected && (
-                      <Text fontSize="xs" color="green.500">
-                        ● Live
-                      </Text>
                     )}
                   </Flex>
 

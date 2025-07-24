@@ -129,7 +129,7 @@ export default function ModerationActions({
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
-        <Button size="sm" variant="outline" colorPalette="red">
+        <Button size="sm" colorPalette="red">
           <Icon as={BsShield} />
           Moderate
         </Button>

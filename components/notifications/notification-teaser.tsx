@@ -7,7 +7,7 @@ import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
 import { useParams } from "next/navigation";
 import { LucideMail, X } from "lucide-react";
 import { useState } from "react";
-import { toaster } from "../toaster";
+import { toaster } from "../ui/toaster";
 // type NotificationTextProps = {
 //   notification: Notification;
 // } & TextProps;

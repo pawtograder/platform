@@ -154,14 +154,9 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
       <Dialog.Positioner>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>
-              Create Moderation Action
-              <Text as="span" fontSize="xs" color="green.500" ml={2}>
-                ● Live help requests
-              </Text>
-            </Dialog.Title>
+            <Dialog.Title>Create Moderation Action</Dialog.Title>
             <Dialog.CloseTrigger asChild>
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" colorPalette="red" size="sm">
                 <Icon as={BsX} />
               </Button>
             </Dialog.CloseTrigger>
@@ -199,8 +194,6 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                       <option value="warning">Warning</option>
                       <option value="temporary_ban">Temporary Ban</option>
                       <option value="permanent_ban">Permanent Ban</option>
-                      <option value="message_deleted">Message Deleted</option>
-                      <option value="message_edited">Message Edited</option>
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.action_type?.message}</Field.ErrorText>
@@ -259,7 +252,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.help_request_id?.message}</Field.ErrorText>
-                  <Field.HelperText>{helpRequests.length} help requests available (live updated)</Field.HelperText>
+                  <Field.HelperText>{helpRequests.length} help requests available</Field.HelperText>
                 </Field.Root>
 
                 {actionType === "permanent_ban" && (
@@ -276,7 +269,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
 
           <Dialog.Footer>
             <HStack justify="end" gap={3}>
-              <Button variant="outline" onClick={handleClose}>
+              <Button colorPalette="red" onClick={handleClose}>
                 Cancel
               </Button>
               <Button

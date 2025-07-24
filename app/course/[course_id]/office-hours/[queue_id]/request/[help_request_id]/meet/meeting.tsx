@@ -15,6 +15,7 @@ import {
   UserActivityProvider,
   VoiceFocusProvider,
   lightTheme,
+  darkTheme,
   useMeetingManager
 } from "amazon-chime-sdk-component-library-react";
 import { MeetingSessionConfiguration } from "amazon-chime-sdk-js";
@@ -23,10 +24,12 @@ import { StyleSheetManager, ThemeProvider } from "styled-components";
 import { useParams } from "next/navigation";
 import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
+import { useTheme } from "next-themes";
 
 const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => {
+  const { theme } = useTheme();
   return (
-    <ThemeProvider theme={lightTheme}>
+    <ThemeProvider theme={theme === "light" ? lightTheme : darkTheme}>
       <GlobalStyles />
       <MeetingProvider>
         <StyleSheetManager>
@@ -81,7 +84,6 @@ function HelpMeeting() {
 
     // If the meeting is no longer live, close this window
     if (!helpRequest.is_video_live) {
-      console.log("Meeting ended, closing window");
       window.close();
     }
   }, [helpRequest?.is_video_live, helpRequest]);
@@ -118,7 +120,6 @@ function HelpMeeting() {
       <Roster />
       <VideoGrid />
       <MeetingControls />
-      {/* <Controls /> */}
     </>
   );
 }

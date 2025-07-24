@@ -56,7 +56,7 @@ const LinkItems = (courseID: number) => [
     // feature_flag: "office-hours"
   },
   {
-    name: "Manage Office Hours",
+    name: "Office Hours",
     instructor_only: true,
     icon: FiClipboard,
     target: `/course/${courseID}/manage/office-hours`

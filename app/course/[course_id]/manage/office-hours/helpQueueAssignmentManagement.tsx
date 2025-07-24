@@ -4,7 +4,7 @@ import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui
 import { Button } from "@/components/ui/button";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { BsPerson, BsCalendar, BsStopwatch, BsX } from "react-icons/bs";
+import { BsPerson, BsCalendar, BsStopwatch, BsTrash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
 import { PopConfirm } from "@/components/ui/popconfirm";
@@ -156,11 +156,6 @@ export default function HelpQueueAssignmentManagement() {
                 Active
               </Badge>
             )}
-            {isConnected && (
-              <Text fontSize="xs" color="green.500">
-                ● Live
-              </Text>
-            )}
           </Flex>
 
           <HStack spaceX={4} fontSize="sm" mb={2}>
@@ -204,20 +199,15 @@ export default function HelpQueueAssignmentManagement() {
         {showActions && (
           <HStack spaceX={2}>
             {assignment.is_active && (
-              <Button
-                size="sm"
-                variant="outline"
-                colorPalette="orange"
-                onClick={() => handleEndAssignment(assignment.id)}
-              >
+              <Button size="sm" colorPalette="yellow" onClick={() => handleEndAssignment(assignment.id)}>
                 End Assignment
               </Button>
             )}
             <PopConfirm
               triggerLabel="Delete assignment"
               trigger={
-                <Button size="sm" variant="outline" colorPalette="red">
-                  <Icon as={BsX} />
+                <Button size="sm" colorPalette="red">
+                  <Icon as={BsTrash} />
                   Delete
                 </Button>
               }
@@ -249,11 +239,6 @@ export default function HelpQueueAssignmentManagement() {
       <Box mb={8}>
         <Heading size="md" mb={4}>
           Active Assignments ({activeAssignments.length})
-          {isConnected && (
-            <Text as="span" fontSize="xs" color="green.500" ml={2}>
-              ● Live updates
-            </Text>
-          )}
         </Heading>
         {activeAssignments.length === 0 ? (
           <Box textAlign="center" py={6} borderWidth="1px" borderRadius="md">

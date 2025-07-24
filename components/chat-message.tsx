@@ -1,9 +1,10 @@
 import type { ChatMessage } from "@/hooks/useOfficeHoursRealtime";
-import type { HelpRequestMessageReadReceipt, UserRole } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Text, Icon, Stack, HStack, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Reply, Check, CheckCheck } from "lucide-react";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useTagsForProfile } from "@/hooks/useTags";
 import { Tooltip } from "@/components/ui/tooltip";
 
 // Broadcast message type for real-time communication
@@ -40,7 +41,6 @@ interface ChatMessageItemProps {
   allMessages: UnifiedMessage[];
   currentUserId?: string;
   helpRequestStudentIds?: string[];
-  userRoles?: UserRole[];
 }
 
 /**
@@ -108,21 +108,16 @@ const getMessageId = (message: UnifiedMessage): number | null => {
 /**
  * Component to display role-based badges for message authors
  */
-const UserRoleBadge = ({
-  authorId,
-  helpRequestStudentIds,
-  userRoles
-}: {
-  authorId: string;
-  helpRequestStudentIds?: string[];
-  userRoles?: UserRole[];
-}) => {
+const UserRoleBadge = ({ authorId, helpRequestStudentIds }: { authorId: string; helpRequestStudentIds?: string[] }) => {
   // Check if author is a student associated with this help request (OP)
   const isOP = helpRequestStudentIds?.includes(authorId);
 
-  // Find the user's role
-  const userRole = userRoles?.find((role) => role.private_profile_id === authorId);
-  const roleType = userRole?.role;
+  // Get tags for the user to determine their role
+  const { tags } = useTagsForProfile(authorId);
+
+  // Check for instructor or grader tags
+  const hasInstructorTag = tags.some((tag) => tag.name === "instructor");
+  const hasGraderTag = tags.some((tag) => tag.name === "grader");
 
   if (isOP) {
     return (
@@ -132,7 +127,7 @@ const UserRoleBadge = ({
     );
   }
 
-  if (roleType === "instructor") {
+  if (hasInstructorTag) {
     return (
       <Badge colorPalette="purple" variant="outline" size="sm">
         Instructor
@@ -140,7 +135,7 @@ const UserRoleBadge = ({
     );
   }
 
-  if (roleType === "grader") {
+  if (hasGraderTag) {
     return (
       <Badge colorPalette="green" variant="outline" size="sm">
         Grader
@@ -310,8 +305,7 @@ export const ChatMessageItem = ({
   onReply,
   allMessages,
   currentUserId,
-  helpRequestStudentIds,
-  userRoles
+  helpRequestStudentIds
 }: ChatMessageItemProps) => {
   const messageAuthor = useUserProfile(getMessageAuthor(message));
   const messageId = getMessageId(message);
@@ -351,7 +345,7 @@ export const ChatMessageItem = ({
           >
             <HStack gap={2}>
               <Text fontWeight="medium">{getDisplayName()}</Text>
-              <UserRoleBadge authorId={authorId} helpRequestStudentIds={helpRequestStudentIds} userRoles={userRoles} />
+              <UserRoleBadge authorId={authorId} helpRequestStudentIds={helpRequestStudentIds} />
             </HStack>
             <Text color="gray.500" _dark={{ color: "gray.400" }} fontSize="xs">
               {new Date(getMessageTimestamp(message)).toLocaleTimeString("en-US", {

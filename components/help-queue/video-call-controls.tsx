@@ -76,7 +76,10 @@ export default function VideoCallControls({
             }
           });
         } catch (error) {
-          console.error(`Failed to log ${activityType} activity:`, error);
+          toaster.error({
+            title: "Failed to log activity",
+            description: `Failed to log ${activityType} activity: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
         }
       }
     },
@@ -100,7 +103,10 @@ export default function VideoCallControls({
             }
           });
         } catch (error) {
-          console.error(`Failed to log ${activityType} activity for student ${student.profile_id}:`, error);
+          toaster.error({
+            title: "Failed to log activity",
+            description: `Failed to log ${activityType} activity for student: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
         }
       }
     },

@@ -150,11 +150,6 @@ export default function HelpQueuesDashboard() {
                   <Text fontSize="sm" fontWeight="medium">
                     Staff on duty ({activeStaff.length})
                   </Text>
-                  {isConnected && (
-                    <Text fontSize="xs" color="green.500">
-                      ● Live
-                    </Text>
-                  )}
                 </HStack>
 
                 {activeStaff.length > 0 ? (
@@ -170,7 +165,7 @@ export default function HelpQueuesDashboard() {
               </VStack>
             </Box>
             {myAssignment ? (
-              <Button variant="outline" colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
+              <Button colorPalette="red" onClick={() => handleStopWorking(myAssignment.id)}>
                 Stop Working
               </Button>
             ) : (

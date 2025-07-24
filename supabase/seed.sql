@@ -1143,7 +1143,6 @@ BEGIN
             help_queue,
             is_private,
             location_type,
-            priority_level,
             template_id,
             status
         ) VALUES (
@@ -1156,7 +1155,6 @@ BEGIN
                 WHEN i % 3 = 2 THEN 'remote'::public.location_type
                 ELSE 'in_person'::public.location_type
             END,
-            ((random() * 3) + 1)::int,
             CASE WHEN i % 2 = 0 THEN debugging_template_id ELSE concept_template_id END,
             'open'
         ) RETURNING id INTO help_req_id;
@@ -1250,7 +1248,6 @@ BEGIN
         help_queue,
         is_private,
         location_type,
-        priority_level,
         status
     ) VALUES (
         demo_class_id,
@@ -1258,7 +1255,6 @@ BEGIN
         video_queue_id,
         FALSE,
         'remote',
-        2,
         'open'
     ) RETURNING id INTO help_req_id;
 
