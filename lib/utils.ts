@@ -1,3 +1,4 @@
+import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { clsx, type ClassValue } from "clsx";
 import { differenceInHours, formatDistance } from "date-fns";
@@ -45,3 +46,24 @@ export function appendTimezoneOffset(date: string | null, timezone: string) {
   }
   return date + offset;
 }
+
+/**
+ * Get the color of a help queue type
+ * @param queueType - The type of a help queue
+ * @returns The color of the help queue type
+ */
+export const getQueueTypeColor = (queueType: HelpQueue["queue_type"] | null) => {
+  if (!queueType) {
+    return "gray";
+  }
+  switch (queueType) {
+    case "text":
+      return "blue";
+    case "video":
+      return "green";
+    case "in_person":
+      return "orange";
+    default:
+      return "gray";
+  }
+};

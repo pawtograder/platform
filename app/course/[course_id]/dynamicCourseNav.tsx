@@ -49,18 +49,18 @@ const LinkItems = (courseID: number) => [
   { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion` },
   { name: "Flashcards", icon: TbCards, student_only: true, target: `/course/${courseID}/flashcards` },
   {
-    name: "Get Help Now",
+    name: "Office Hours",
     student_only: true,
     icon: FiMessageSquare,
-    target: `/course/${courseID}/help`,
-    feature_flag: "office-hours"
+    target: `/course/${courseID}/office-hours`
+    // feature_flag: "office-hours"
   },
   {
-    name: "Give Help Now",
+    name: "Office Hours",
     instructor_only: true,
     icon: FiClipboard,
-    target: `/course/${courseID}/manage/help`,
-    feature_flag: "office-hours"
+    target: `/course/${courseID}/manage/office-hours`
+    // feature_flag: "office-hours"
   },
   { name: "Gradebook", icon: FiBookOpen, student_only: true, target: `/course/${courseID}/gradebook` },
   { name: "Gradebook", icon: FiBookOpen, instructor_only: true, target: `/course/${courseID}/manage/gradebook` },
@@ -172,7 +172,7 @@ export default function DynamicCourseNav() {
   const course = enrollment.classes as CourseWithFeatures;
   const filteredLinks = LinkItems(enrollment.class_id)
     .filter((link) => (!link.instructor_only || isInstructor) && (!link.student_only || !isInstructor))
-    .filter((link) => !link.feature_flag || course.features?.find((f) => f.name === link.feature_flag)?.enabled);
+    .filter((link) => !("feature_flag" in link) || course.features?.find((f) => f.name === link.feature_flag)?.enabled);
 
   return (
     <Box
@@ -316,15 +316,7 @@ export default function DynamicCourseNav() {
                     >
                       <Menu.Root>
                         <Menu.Trigger asChild>
-                          <Button
-                            colorPalette="gray"
-                            _hover={{ bg: "#EBEDEF" }}
-                            size="xs"
-                            fontSize="sm"
-                            pt="0"
-                            variant="ghost"
-                            asChild
-                          >
+                          <Button colorPalette="gray" size="xs" fontSize="sm" pt="0" variant="ghost" asChild>
                             <Flex align="center" role="group">
                               <HStack>
                                 {React.createElement(link.icon)}
