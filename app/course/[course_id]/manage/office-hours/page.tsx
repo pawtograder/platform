@@ -22,6 +22,7 @@ export default function OfficeHoursAdminPage() {
           <Tabs.Trigger value="templates">Templates</Tabs.Trigger>
           <Tabs.Trigger value="moderation">Moderation</Tabs.Trigger>
           <Tabs.Trigger value="karma">Student Karma</Tabs.Trigger>
+          <Tabs.Trigger value="activity">Student Activity</Tabs.Trigger>
         </Tabs.List>
 
         <Box mt={6}>

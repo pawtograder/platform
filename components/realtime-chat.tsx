@@ -10,6 +10,7 @@ import { Send, X } from "lucide-react";
 import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationStatus";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCreate } from "@refinedev/core";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
@@ -130,6 +131,11 @@ export const RealtimeChat = ({
 
   // Refs for intersection observer
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  // Hook for logging student activity
+  const { mutateAsync: createStudentActivity } = useCreate({
+    resource: "student_help_activity"
+  });
 
   // Use the enhanced office hours realtime hook with chat functionality enabled
   const {
@@ -287,13 +293,41 @@ export const RealtimeChat = ({
 
       try {
         await sendMessage(newMessage, replyToId);
+
+        // Log activity for the current user who sent the message
+        if (private_profile_id) {
+          try {
+            await createStudentActivity({
+              values: {
+                student_profile_id: private_profile_id,
+                class_id: helpRequest.class_id,
+                help_request_id: helpRequest.id,
+                activity_type: "message_sent",
+                activity_description: `Student sent a message in help request chat${replyToId ? " (reply)" : ""}`
+              }
+            });
+          } catch (error) {
+            console.error(`Failed to log message_sent activity:`, error);
+            // Don't throw - activity logging shouldn't block message sending
+          }
+        }
+
         setNewMessage("");
         setReplyToMessage(null);
       } catch (error) {
         console.error("Failed to send message:", error);
       }
     },
-    [newMessage, sendMessage, isConnected, moderationStatus.isBanned, replyToMessage]
+    [
+      newMessage,
+      sendMessage,
+      isConnected,
+      moderationStatus.isBanned,
+      replyToMessage,
+      private_profile_id,
+      helpRequest,
+      createStudentActivity
+    ]
   );
 
   const handleReply = useCallback(

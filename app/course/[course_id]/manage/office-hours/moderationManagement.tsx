@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye, BsPlus, BsTrash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "./modals/createModerationActionModal";
 import { useHelpRequestModeration, useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
@@ -82,28 +83,26 @@ export default function ModerationManagement() {
   };
 
   const handleDeleteModerationAction = (actionId: number) => {
-    if (window.confirm("Are you sure you want to delete this moderation action? This action cannot be undone.")) {
-      deleteModerationAction(
-        {
-          resource: "help_request_moderation",
-          id: actionId
+    deleteModerationAction(
+      {
+        resource: "help_request_moderation",
+        id: actionId
+      },
+      {
+        onSuccess: () => {
+          // Realtime updates will handle the UI update automatically
+          toaster.success({
+            title: "Moderation action deleted successfully"
+          });
         },
-        {
-          onSuccess: () => {
-            // Realtime updates will handle the UI update automatically
-            toaster.success({
-              title: "Moderation action deleted successfully"
-            });
-          },
-          onError: (error) => {
-            toaster.error({
-              title: "Failed to delete moderation action",
-              description: error instanceof Error ? error.message : "An unexpected error occurred"
-            });
-          }
+        onError: (error) => {
+          toaster.error({
+            title: "Failed to delete moderation action",
+            description: error instanceof Error ? error.message : "An unexpected error occurred"
+          });
         }
-      );
-    }
+      }
+    );
   };
 
   // Get connection status from controller
@@ -242,16 +241,24 @@ export default function ModerationManagement() {
 
         {/* Delete Button */}
         {isInstructor && (
-          <IconButton
-            aria-label="Delete moderation action"
-            colorPalette="red"
-            variant="ghost"
-            size="sm"
-            loading={isDeleting}
-            onClick={() => handleDeleteModerationAction(action.id)}
-          >
-            <Icon as={BsTrash} />
-          </IconButton>
+          <PopConfirm
+            triggerLabel="Delete moderation action"
+            trigger={
+              <IconButton
+                aria-label="Delete moderation action"
+                colorPalette="red"
+                variant="ghost"
+                size="sm"
+                loading={isDeleting}
+              >
+                <Icon as={BsTrash} />
+              </IconButton>
+            }
+            confirmHeader="Delete Moderation Action"
+            confirmText="Are you sure you want to delete this moderation action? This action cannot be undone."
+            onConfirm={() => handleDeleteModerationAction(action.id)}
+            onCancel={() => {}}
+          />
         )}
       </Flex>
     </Box>

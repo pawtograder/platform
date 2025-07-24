@@ -361,6 +361,8 @@ export class OfficeHoursController {
 
   // Help Request Messages
   setHelpRequestMessages(data: HelpRequestMessage[]) {
+    // Clear the existing map and replace with new data
+    this.helpRequestMessages.clear();
     for (const message of data) {
       this.helpRequestMessages.set(message.id, message);
     }
@@ -399,6 +401,8 @@ export class OfficeHoursController {
 
   // Help Request Read Receipts
   setHelpRequestReadReceipts(data: HelpRequestMessageReadReceipt[]) {
+    // Clear the existing map and replace with new data
+    this.helpRequestReadReceipts.clear();
     for (const receipt of data) {
       this.helpRequestReadReceipts.set(receipt.id, receipt);
     }
@@ -439,6 +443,8 @@ export class OfficeHoursController {
 
   // Help Requests
   setHelpRequests(data: HelpRequest[]) {
+    // Clear the existing map and replace with new data
+    this.helpRequests.clear();
     for (const request of data) {
       this.helpRequests.set(request.id, request);
     }
@@ -502,6 +508,8 @@ export class OfficeHoursController {
 
   // Help Queues
   setHelpQueues(data: HelpQueue[]) {
+    // Clear the existing map and replace with new data
+    this.helpQueues.clear();
     for (const queue of data) {
       this.helpQueues.set(queue.id, queue);
     }
@@ -531,8 +539,21 @@ export class OfficeHoursController {
     }
   }
 
+  handleHelpQueueAssignmentEvent(event: LiveEvent) {
+    const assignment = event.payload as HelpQueueAssignment;
+    if (event.type === "created" || event.type === "updated") {
+      this.helpQueueAssignments.set(assignment.id, assignment);
+      this.helpQueueAssignmentsListSubscribers.forEach((cb) => cb(Array.from(this.helpQueueAssignments.values())));
+    } else if (event.type === "deleted") {
+      this.helpQueueAssignments.delete(assignment.id);
+      this.helpQueueAssignmentsListSubscribers.forEach((cb) => cb(Array.from(this.helpQueueAssignments.values())));
+    }
+  }
+
   // Helper methods for other data types following similar patterns
   setHelpRequestStudents(data: HelpRequestStudent[]) {
+    // Clear the existing map and replace with new data
+    this.helpRequestStudents.clear();
     for (const student of data) {
       this.helpRequestStudents.set(student.id, student);
     }
@@ -557,6 +578,8 @@ export class OfficeHoursController {
   }
 
   setHelpQueueAssignments(data: HelpQueueAssignment[]) {
+    // Clear the existing map and replace with new data
+    this.helpQueueAssignments.clear();
     for (const assignment of data) {
       this.helpQueueAssignments.set(assignment.id, assignment);
     }
@@ -582,6 +605,8 @@ export class OfficeHoursController {
 
   // Student Karma Notes
   setStudentKarmaNotes(data: StudentKarmaNotes[]) {
+    // Clear the existing map and replace with new data
+    this.studentKarmaNotes.clear();
     for (const karmaNote of data) {
       this.studentKarmaNotes.set(karmaNote.id, karmaNote);
     }
@@ -616,6 +641,8 @@ export class OfficeHoursController {
 
   // Help Request Templates
   setHelpRequestTemplates(data: HelpRequestTemplate[]) {
+    // Clear the existing map and replace with new data
+    this.helpRequestTemplates.clear();
     for (const template of data) {
       this.helpRequestTemplates.set(template.id, template);
     }
@@ -652,6 +679,8 @@ export class OfficeHoursController {
 
   // Student Help Activity
   setStudentHelpActivity(data: StudentHelpActivity[]) {
+    // Clear the existing map and replace with new data
+    this.studentHelpActivity.clear();
     for (const activity of data) {
       this.studentHelpActivity.set(activity.id, activity);
     }
@@ -688,6 +717,8 @@ export class OfficeHoursController {
 
   // Help Request Moderation
   setHelpRequestModeration(data: HelpRequestModeration[]) {
+    // Clear the existing map and replace with new data
+    this.helpRequestModeration.clear();
     for (const moderation of data) {
       this.helpRequestModeration.set(moderation.id, moderation);
     }
@@ -839,7 +870,10 @@ function OfficeHoursControllerProviderImpl({
       staleTime: Infinity,
       cacheTime: Infinity
     },
-    liveMode: "auto"
+    liveMode: "auto",
+    onLiveEvent: (event) => {
+      controller.handleHelpQueueAssignmentEvent(event);
+    }
   });
   useEffect(() => {
     if (helpQueueAssignments.data) {

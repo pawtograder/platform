@@ -2,6 +2,7 @@
 
 import { HStack, Icon, Text, Menu } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCreate } from "@refinedev/core";
 import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye } from "react-icons/bs";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
@@ -198,23 +199,25 @@ export default function ModerationActions({
           )}
 
           <Menu.Separator />
-          <Menu.Item
-            value="permanent-ban"
-            onClick={() => {
-              if (
-                window.confirm("Are you sure you want to permanently ban this student? This action cannot be undone.")
-              ) {
+          <Menu.Item value="permanent-ban">
+            <PopConfirm
+              triggerLabel="Permanently ban student"
+              trigger={
+                <HStack width="100%" cursor="pointer">
+                  <Icon as={getActionIcon("permanent_ban")} color="red.500" />
+                  <Text color="red.500">Permanent Ban</Text>
+                </HStack>
+              }
+              confirmHeader="Permanent Ban"
+              confirmText="Are you sure you want to permanently ban this student? This action cannot be undone."
+              onConfirm={() => {
                 handleModerationAction(
                   "permanent_ban",
                   "Permanent ban due to repeated violations or serious misconduct"
                 );
-              }
-            }}
-          >
-            <HStack>
-              <Icon as={getActionIcon("permanent_ban")} color="red.500" />
-              <Text color="red.500">Permanent Ban</Text>
-            </HStack>
+              }}
+              onCancel={() => {}}
+            />
           </Menu.Item>
         </Menu.Content>
       </Menu.Positioner>

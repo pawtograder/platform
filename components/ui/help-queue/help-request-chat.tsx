@@ -51,6 +51,7 @@ type HelpRequestStudent = {
  */
 const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
   const { private_profile_id } = useClassProfiles();
+  const allHelpRequestStudents = useHelpRequestStudents();
   const { mutateAsync: updateRequest } = useUpdate<HelpRequest>({
     resource: "help_requests",
     id: request.id,
@@ -63,6 +64,36 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
       }
     }
   });
+
+  // Hook for logging student activity
+  const { mutateAsync: createStudentActivity } = useCreate({
+    resource: "student_help_activity"
+  });
+
+  // Helper function to log activity for all students in the request
+  const logActivityForAllStudents = useCallback(
+    async (activityType: "request_updated" | "request_resolved", description: string) => {
+      // Get all student associations for this help request
+      const requestStudents = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
+
+      for (const student of requestStudents) {
+        try {
+          await createStudentActivity({
+            values: {
+              student_profile_id: student.profile_id,
+              class_id: request.class_id,
+              help_request_id: request.id,
+              activity_type: activityType,
+              activity_description: description
+            }
+          });
+        } catch (error) {
+          console.error(`Failed to log ${activityType} activity for student ${student.profile_id}:`, error);
+        }
+      }
+    },
+    [request.id, request.class_id, createStudentActivity, allHelpRequestStudents]
+  );
 
   // Disable assignment actions for resolved/closed requests
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
@@ -83,7 +114,10 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
               colorPalette="red"
               opacity={isRequestInactive ? 0.5 : 1}
               disabled={isRequestInactive}
-              onClick={() => updateRequest({ id: request.id, values: { assignee: null, status: "open" } })}
+              onClick={async () => {
+                await updateRequest({ id: request.id, values: { assignee: null, status: "open" } });
+                await logActivityForAllStudents("request_updated", "Request assignment dropped and returned to queue");
+              }}
             >
               <Icon as={BsClipboardCheckFill} />
             </IconButton>
@@ -112,9 +146,13 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
               colorPalette="green"
               opacity={isRequestInactive ? 0.5 : 1}
               disabled={isRequestInactive}
-              onClick={() =>
-                updateRequest({ id: request.id, values: { assignee: private_profile_id, status: "in_progress" } })
-              }
+              onClick={async () => {
+                await updateRequest({
+                  id: request.id,
+                  values: { assignee: private_profile_id, status: "in_progress" }
+                });
+                await logActivityForAllStudents("request_updated", "Request assigned and marked as in progress");
+              }}
             >
               <Icon as={BsClipboardCheck} />
             </IconButton>
@@ -252,11 +290,42 @@ const HelpRequestStudents = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  const allHelpRequestStudents = useHelpRequestStudents();
   console.log("students", students);
 
   // Refinedev hooks for student association management
   const { mutateAsync: createStudentAssociation } = useCreate();
   const { mutateAsync: deleteStudentAssociation } = useDelete();
+
+  // Hook for logging student activity
+  const { mutateAsync: createStudentActivity } = useCreate({
+    resource: "student_help_activity"
+  });
+
+  // Helper function to log activity for all students in the request
+  const logActivityForAllStudents = useCallback(
+    async (activityType: "request_updated" | "request_resolved", description: string) => {
+      // Get all student associations for this help request
+      const requestStudents = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
+
+      for (const student of requestStudents) {
+        try {
+          await createStudentActivity({
+            values: {
+              student_profile_id: student.profile_id,
+              class_id: request.class_id,
+              help_request_id: request.id,
+              activity_type: activityType,
+              activity_description: description
+            }
+          });
+        } catch (error) {
+          console.error(`Failed to log ${activityType} activity for student ${student.profile_id}:`, error);
+        }
+      }
+    },
+    [request.id, request.class_id, createStudentActivity, allHelpRequestStudents]
+  );
 
   // Initialize selected students when editing mode is entered
   const handleEditClick = () => {
@@ -309,6 +378,7 @@ const HelpRequestStudents = ({
         title: "Students updated",
         description: "The student list has been successfully updated."
       });
+      await logActivityForAllStudents("request_updated", "Student list updated");
     } catch (error) {
       toaster.error({
         title: "Failed to update students",
@@ -391,6 +461,36 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   // Use individual realtime hooks following the pattern from newRequestForm.tsx
   const allHelpRequestMessages = useHelpRequestMessages();
   const allHelpRequestStudents = useHelpRequestStudents();
+
+  // Hook for logging student activity
+  const { mutateAsync: createStudentActivity } = useCreate({
+    resource: "student_help_activity"
+  });
+
+  // Helper function to log activity for all students in the request
+  const logActivityForAllStudents = useCallback(
+    async (activityType: "request_updated" | "request_resolved", description: string) => {
+      // Get all student associations for this help request
+      const requestStudents = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
+
+      for (const student of requestStudents) {
+        try {
+          await createStudentActivity({
+            values: {
+              student_profile_id: student.profile_id,
+              class_id: request.class_id,
+              help_request_id: request.id,
+              activity_type: activityType,
+              activity_description: description
+            }
+          });
+        } catch (error) {
+          console.error(`Failed to log ${activityType} activity for student ${student.profile_id}:`, error);
+        }
+      }
+    },
+    [request.id, request.class_id, createStudentActivity, allHelpRequestStudents]
+  );
 
   // Filter realtime data for this specific help request
   const helpRequestMessages = useMemo(() => {
@@ -490,8 +590,8 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     });
   }, [karmaModal]);
 
-  const resolveRequest = useCallback(() => {
-    mutate({
+  const resolveRequest = useCallback(async () => {
+    await mutate({
       id: request.id,
       values: {
         resolved_by: private_profile_id,
@@ -499,16 +599,18 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         status: "resolved"
       }
     });
-  }, [mutate, request.id, private_profile_id]);
+    await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
+  }, [mutate, request.id, private_profile_id, logActivityForAllStudents]);
 
-  const closeRequest = useCallback(() => {
-    mutate({
+  const closeRequest = useCallback(async () => {
+    await mutate({
       id: request.id,
       values: {
         status: "closed"
       }
     });
-  }, [mutate, request.id]);
+    await logActivityForAllStudents("request_updated", "Request closed by instructor");
+  }, [mutate, request.id, logActivityForAllStudents]);
 
   return (
     <Flex

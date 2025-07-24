@@ -122,6 +122,24 @@ export default function HelpRequestForm() {
                 );
               }
             }
+
+            // Log activity for all students in the help request
+            for (const studentId of currentSelectedStudents) {
+              try {
+                await createStudentActivity({
+                  values: {
+                    student_profile_id: studentId,
+                    class_id: Number.parseInt(course_id as string),
+                    help_request_id: data.data.id,
+                    activity_type: "request_created",
+                    activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === data.data.help_queue)?.name || "Unknown"}`
+                  }
+                });
+              } catch (error) {
+                console.error(`Failed to log activity for student ${studentId}:`, error);
+                // Don't throw here - activity logging shouldn't block request creation
+              }
+            }
           } else {
             toaster.error({
               title: "Error",
@@ -224,6 +242,11 @@ export default function HelpRequestForm() {
 
   const { mutateAsync: createFileReference } = useCreate({
     resource: "help_request_file_references"
+  });
+
+  // Hook for logging student activity
+  const { mutateAsync: createStudentActivity } = useCreate({
+    resource: "student_help_activity"
   });
 
   // Use realtime hook to get available help queues with proper error handling

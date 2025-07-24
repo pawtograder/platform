@@ -4,9 +4,12 @@
  */
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
 import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { useCreate } from "@refinedev/core";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 
 type MeetingWindow = {
   window: Window;
@@ -17,58 +20,107 @@ type MeetingWindow = {
 export function useMeetingWindows() {
   const meetingWindows = useRef<Map<string, MeetingWindow>>(new Map());
   const supabase = createClient();
+  const { private_profile_id } = useClassProfiles();
+  const allHelpRequestStudents = useHelpRequestStudents();
+
+  // Hook for logging student activity
+  const { mutateAsync: createStudentActivity } = useCreate({
+    resource: "student_help_activity"
+  });
+
+  // Helper function to log video left activity for the current user
+  const logVideoLeftActivity = useCallback(
+    async (helpRequestId: number, courseId: number) => {
+      if (!private_profile_id) return;
+
+      // Check if current user is a student in this help request
+      const isStudentInRequest = allHelpRequestStudents.some(
+        (student) => student.help_request_id === helpRequestId && student.profile_id === private_profile_id
+      );
+
+      // Only log activity for students who are part of the request
+      if (isStudentInRequest) {
+        try {
+          await createStudentActivity({
+            values: {
+              student_profile_id: private_profile_id,
+              class_id: courseId,
+              help_request_id: helpRequestId,
+              activity_type: "video_left",
+              activity_description: "User left video call by closing meeting window"
+            }
+          });
+        } catch (error) {
+          console.error(`Failed to log video_left activity:`, error);
+        }
+      }
+    },
+    [private_profile_id, allHelpRequestStudents, createStudentActivity]
+  );
 
   /**
    * Opens a meeting window and tracks it for automatic cleanup
    */
-  const openMeetingWindow = useCallback((courseId: number, helpRequestId: number, queueId?: number) => {
-    const windowKey = `${courseId}-${helpRequestId}`;
+  const openMeetingWindow = useCallback(
+    (courseId: number, helpRequestId: number, queueId?: number) => {
+      const windowKey = `${courseId}-${helpRequestId}`;
 
-    // Close existing window for this help request if it exists
-    const existingWindow = meetingWindows.current.get(windowKey);
-    if (existingWindow && !existingWindow.window.closed) {
-      existingWindow.window.close();
-    }
+      // Close existing window for this help request if it exists
+      const existingWindow = meetingWindows.current.get(windowKey);
+      if (existingWindow && !existingWindow.window.closed) {
+        existingWindow.window.close();
+      }
 
-    // Open new meeting window
-    const meetingWindow = window.open(
-      `/course/${courseId}/office-hours/${queueId || "queue"}/request/${helpRequestId}/meet`,
-      "_blank",
-      "width=1200,height=800,resizable=yes,scrollbars=yes"
-    );
+      // Open new meeting window
+      const meetingWindow = window.open(
+        `/course/${courseId}/office-hours/${queueId || "queue"}/request/${helpRequestId}/meet`,
+        "_blank",
+        "width=1200,height=800,resizable=yes,scrollbars=yes"
+      );
 
-    if (meetingWindow) {
-      // Store window reference
-      meetingWindows.current.set(windowKey, {
-        window: meetingWindow,
-        helpRequestId,
-        courseId
-      });
+      if (meetingWindow) {
+        // Store window reference
+        meetingWindows.current.set(windowKey, {
+          window: meetingWindow,
+          helpRequestId,
+          courseId
+        });
 
-      // Clean up reference when window is manually closed
-      const checkClosed = setInterval(() => {
-        if (meetingWindow.closed) {
-          meetingWindows.current.delete(windowKey);
-          clearInterval(checkClosed);
-        }
-      }, 1000);
-    }
+        // Clean up reference when window is manually closed
+        const checkClosed = setInterval(() => {
+          if (meetingWindow.closed) {
+            // Log video left activity when user manually closes the meeting window
+            logVideoLeftActivity(helpRequestId, courseId);
 
-    return meetingWindow;
-  }, []);
+            meetingWindows.current.delete(windowKey);
+            clearInterval(checkClosed);
+          }
+        }, 1000);
+      }
+
+      return meetingWindow;
+    },
+    [logVideoLeftActivity]
+  );
 
   /**
    * Closes a specific meeting window
    */
-  const closeMeetingWindow = useCallback((courseId: number, helpRequestId: number) => {
-    const windowKey = `${courseId}-${helpRequestId}`;
-    const meetingWindow = meetingWindows.current.get(windowKey);
+  const closeMeetingWindow = useCallback(
+    (courseId: number, helpRequestId: number) => {
+      const windowKey = `${courseId}-${helpRequestId}`;
+      const meetingWindow = meetingWindows.current.get(windowKey);
 
-    if (meetingWindow && !meetingWindow.window.closed) {
-      meetingWindow.window.close();
-      meetingWindows.current.delete(windowKey);
-    }
-  }, []);
+      if (meetingWindow && !meetingWindow.window.closed) {
+        meetingWindow.window.close();
+        meetingWindows.current.delete(windowKey);
+
+        // Log video left activity when window is programmatically closed
+        logVideoLeftActivity(helpRequestId, courseId);
+      }
+    },
+    [logVideoLeftActivity]
+  );
 
   /**
    * Closes all meeting windows

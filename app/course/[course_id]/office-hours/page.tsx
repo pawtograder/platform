@@ -103,7 +103,6 @@ export default function OfficeHoursPage() {
     }
   }, []);
 
-  // Show loading state
   if (isLoading) {
     return (
       <Container>
@@ -114,7 +113,6 @@ export default function OfficeHoursPage() {
     );
   }
 
-  // Show error state if connection failed
   if (connectionError || connectionStatus?.overall === "disconnected") {
     return (
       <Container>
@@ -134,7 +132,6 @@ export default function OfficeHoursPage() {
 
   const availableQueues = helpQueues ?? [];
 
-  // Redirect to single queue if only one available
   if (availableQueues.length === 1) {
     redirect(`/course/${course_id}/office-hours/${availableQueues[0].id}`);
   }

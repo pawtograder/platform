@@ -1,14 +1,17 @@
 "use client";
 
 import { Box, HStack, VStack, Text, Icon, Badge, Separator } from "@chakra-ui/react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+import { Select } from "chakra-react-select";
 import { BsStar, BsStarFill, BsPerson, BsClock, BsShield, BsExclamationTriangle } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { useStudentKarmaNotes, useStudentHelpActivity, useHelpRequestModeration } from "@/hooks/useOfficeHoursRealtime";
+import { useStudentRoster } from "@/hooks/useClassProfiles";
 
 type StudentActivitySummaryProps = {
-  studentProfileId: string;
-  classId: number;
+  studentProfileId?: string;
+  classId?: number;
   compact?: boolean;
 };
 
@@ -22,29 +25,59 @@ export default function StudentActivitySummary({
   classId,
   compact = false
 }: StudentActivitySummaryProps) {
+  const params = useParams();
+  const courseId = classId || parseInt(params.course_id as string, 10);
+  const [selectedStudentId, setSelectedStudentId] = useState<string>("");
+
   // Get all realtime data for the class
   const allKarmaNotes = useStudentKarmaNotes();
   const allHelpActivity = useStudentHelpActivity();
+  console.log("allHelpActivity", allHelpActivity);
   const allModerationActions = useHelpRequestModeration();
+  const studentRoster = useStudentRoster();
 
-  // Filter data for the specific student
+  // Prepare options for react-select
+  const studentOptions = useMemo(
+    () =>
+      studentRoster.map((student) => ({
+        value: student.id,
+        label: student.name || student.sortable_name || "Unknown Student"
+      })),
+    [studentRoster]
+  );
+
+  // Filter data for the specific student or show aggregate data
+  const currentStudentId = studentProfileId || selectedStudentId;
   const karmaEntry = useMemo(() => {
-    return allKarmaNotes.find((karma) => karma.student_profile_id === studentProfileId && karma.class_id === classId);
-  }, [allKarmaNotes, studentProfileId, classId]);
+    if (!currentStudentId) return undefined;
+    return allKarmaNotes.find((karma) => karma.student_profile_id === currentStudentId && karma.class_id === courseId);
+  }, [allKarmaNotes, currentStudentId, courseId]);
 
   const recentActivity = useMemo(() => {
-    return allHelpActivity
-      .filter((activity) => activity.student_profile_id === studentProfileId && activity.class_id === classId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 5);
-  }, [allHelpActivity, studentProfileId, classId]);
+    const studentIds = studentRoster.map((student) => student.id);
+    const filtered = currentStudentId
+      ? allHelpActivity.filter(
+          (activity) => activity.student_profile_id === currentStudentId && activity.class_id === courseId
+        )
+      : allHelpActivity.filter(
+          (activity) => activity.class_id === courseId && studentIds.includes(activity.student_profile_id)
+        );
+
+    return filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 10);
+  }, [allHelpActivity, currentStudentId, courseId, studentRoster]);
 
   const recentModeration = useMemo(() => {
-    return allModerationActions
-      .filter((action) => action.student_profile_id === studentProfileId && action.class_id === classId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 3);
-  }, [allModerationActions, studentProfileId, classId]);
+    const studentIds = studentRoster.map((student) => student.id);
+    const filtered = currentStudentId
+      ? allModerationActions.filter(
+          (action) => action.student_profile_id === currentStudentId && action.class_id === courseId
+        )
+      : allModerationActions.filter(
+          (action) => action.class_id === courseId && studentIds.includes(action.student_profile_id)
+        );
+
+    return filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 5);
+  }, [allModerationActions, currentStudentId, courseId, studentRoster]);
 
   const getKarmaColor = (score: number) => {
     if (score >= 10) return "green";
@@ -163,7 +196,23 @@ export default function StudentActivitySummary({
   return (
     <Box p={4} borderRadius="md" borderWidth="1px">
       <VStack align="start" gap={4}>
-        <Text fontWeight="semibold">Student Activity Summary</Text>
+        <HStack justify="space-between" width="100%">
+          <Text fontWeight="semibold">
+            {currentStudentId ? "Student Activity Summary" : "Recent Office Hours Activity"}
+          </Text>
+          {!studentProfileId && (
+            <Box width="250px">
+              <Select
+                placeholder="Select a student"
+                options={studentOptions}
+                value={studentOptions.find((option) => option.value === selectedStudentId) || null}
+                onChange={(option) => setSelectedStudentId(option?.value || "")}
+                isClearable
+                size="sm"
+              />
+            </Box>
+          )}
+        </HStack>
 
         {/* Karma Section */}
         {karmaEntry && (
@@ -230,7 +279,11 @@ export default function StudentActivitySummary({
         )}
 
         {!karmaEntry && recentActivity.length === 0 && recentModeration.length === 0 && (
-          <Text fontSize="sm">No activity data available for this student.</Text>
+          <Text fontSize="sm">
+            {currentStudentId
+              ? "No activity data available for this student."
+              : "No recent office hours activity. Select a student to view individual activity."}
+          </Text>
         )}
       </VStack>
     </Box>

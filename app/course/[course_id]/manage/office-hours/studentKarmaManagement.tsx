@@ -3,9 +3,12 @@
 import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge, VStack, Input } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { useParams } from "next/navigation";
-import { BsStar, BsStarFill, BsPerson, BsPlus, BsPencil, BsSearch } from "react-icons/bs";
+import { BsStar, BsStarFill, BsPerson, BsPlus, BsPencil, BsSearch, BsTrash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
+import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
+import { useDelete } from "@refinedev/core";
 import useModalManager from "@/hooks/useModalManager";
 import CreateKarmaEntryModal from "./modals/createKarmaEntryModal";
 import EditKarmaEntryModal from "./modals/editKarmaEntryModal";
@@ -34,6 +37,9 @@ export default function StudentKarmaManagement() {
 
   // Get real-time karma notes data
   const karmaNotesData = useStudentKarmaNotes();
+
+  // Delete mutation
+  const { mutate: deleteKarmaEntry } = useDelete();
 
   // Set up real-time connection status monitoring
   const {
@@ -93,6 +99,30 @@ export default function StudentKarmaManagement() {
   const handleEditSuccess = () => {
     editModal.closeModal();
     // Real-time updates will automatically refresh the data
+  };
+
+  const handleDeleteKarmaEntry = (entryId: number, studentName: string) => {
+    deleteKarmaEntry(
+      {
+        resource: "student_karma_notes",
+        id: entryId
+      },
+      {
+        onSuccess: () => {
+          toaster.success({
+            title: "Karma entry deleted",
+            description: `Karma entry for ${studentName} has been deleted successfully.`
+          });
+          // Real-time updates will automatically refresh the data
+        },
+        onError: (error) => {
+          toaster.error({
+            title: "Failed to delete karma entry",
+            description: error.message || "An error occurred while deleting the karma entry."
+          });
+        }
+      }
+    );
   };
 
   const isLoading = realtimeLoading;
@@ -172,6 +202,19 @@ export default function StudentKarmaManagement() {
             <Icon as={BsPencil} />
             Edit
           </Button>
+          <PopConfirm
+            triggerLabel="Delete karma entry"
+            trigger={
+              <Button size="sm" variant="outline" colorPalette="red">
+                <Icon as={BsTrash} />
+                Delete
+              </Button>
+            }
+            confirmHeader="Delete Karma Entry"
+            confirmText={`Are you sure you want to delete the karma entry for ${entry.student_profile?.name || "this student"}? This action cannot be undone.`}
+            onConfirm={() => handleDeleteKarmaEntry(entry.id, entry.student_profile?.name || "Unknown Student")}
+            onCancel={() => {}}
+          />
         </HStack>
       </Flex>
     </Box>

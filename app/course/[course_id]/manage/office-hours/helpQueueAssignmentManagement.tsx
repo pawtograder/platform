@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import { BsPerson, BsCalendar, BsStopwatch, BsX } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useMemo } from "react";
@@ -90,20 +91,18 @@ export default function HelpQueueAssignmentManagement() {
   };
 
   const handleDeleteAssignment = (assignmentId: number) => {
-    if (window.confirm("Are you sure you want to delete this assignment? This action cannot be undone.")) {
-      deleteAssignment({
-        resource: "help_queue_assignments",
-        id: assignmentId,
-        successNotification: {
-          message: "Assignment deleted successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to delete assignment",
-          type: "error"
-        }
-      });
-    }
+    deleteAssignment({
+      resource: "help_queue_assignments",
+      id: assignmentId,
+      successNotification: {
+        message: "Assignment deleted successfully",
+        type: "success"
+      },
+      errorNotification: {
+        message: "Failed to delete assignment",
+        type: "error"
+      }
+    });
   };
 
   if (isLoading) return <Text>Loading assignments...</Text>;
@@ -214,15 +213,19 @@ export default function HelpQueueAssignmentManagement() {
                 End Assignment
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              colorPalette="red"
-              onClick={() => handleDeleteAssignment(assignment.id)}
-            >
-              <Icon as={BsX} />
-              Delete
-            </Button>
+            <PopConfirm
+              triggerLabel="Delete assignment"
+              trigger={
+                <Button size="sm" variant="outline" colorPalette="red">
+                  <Icon as={BsX} />
+                  Delete
+                </Button>
+              }
+              confirmHeader="Delete Assignment"
+              confirmText="Are you sure you want to delete this assignment? This action cannot be undone."
+              onConfirm={() => handleDeleteAssignment(assignment.id)}
+              onCancel={() => {}}
+            />
           </HStack>
         )}
       </Flex>

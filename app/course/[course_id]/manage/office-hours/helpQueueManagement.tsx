@@ -7,6 +7,7 @@ import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { BsPlus, BsPencil, BsTrash } from "react-icons/bs";
 import useModalManager from "@/hooks/useModalManager";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import CreateHelpQueueModal from "./modals/createHelpQueueModal";
 import EditHelpQueueModal from "./modals/editHelpQueueModal";
 import { Alert } from "@/components/ui/alert";
@@ -51,21 +52,19 @@ export default function HelpQueueManagement() {
     console.log("Help queue management realtime connection established");
   }, [isConnected]);
 
-  const handleDeleteQueue = (queueId: number, queueName: string) => {
-    if (window.confirm(`Are you sure you want to delete the queue "${queueName}"? This action cannot be undone.`)) {
-      deleteQueue({
-        resource: "help_queues",
-        id: queueId,
-        successNotification: {
-          message: "Help queue deleted successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to delete help queue",
-          type: "error"
-        }
-      });
-    }
+  const handleDeleteQueue = (queueId: number) => {
+    deleteQueue({
+      resource: "help_queues",
+      id: queueId,
+      successNotification: {
+        message: "Help queue deleted successfully",
+        type: "success"
+      },
+      errorNotification: {
+        message: "Failed to delete help queue",
+        type: "error"
+      }
+    });
   };
 
   const handleCreateSuccess = () => {
@@ -211,15 +210,19 @@ export default function HelpQueueManagement() {
                     <Icon as={BsPencil} />
                     Edit
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    colorPalette="red"
-                    onClick={() => handleDeleteQueue(queue.id, queue.name)}
-                  >
-                    <Icon as={BsTrash} />
-                    Delete
-                  </Button>
+                  <PopConfirm
+                    triggerLabel="Delete queue"
+                    trigger={
+                      <Button size="sm" variant="outline" colorPalette="red">
+                        <Icon as={BsTrash} />
+                        Delete
+                      </Button>
+                    }
+                    confirmHeader="Delete Queue"
+                    confirmText={`Are you sure you want to delete the queue "${queue.name}"? This action cannot be undone.`}
+                    onConfirm={() => handleDeleteQueue(queue.id)}
+                    onCancel={() => {}}
+                  />
                 </HStack>
               </Flex>
             </Box>

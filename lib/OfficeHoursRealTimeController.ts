@@ -33,7 +33,7 @@ interface MessageSubscription {
 export type ChannelStatus = {
   name: string;
   state: "closed" | "errored" | "joined" | "joining" | "leaving";
-  type: "help_request" | "help_request_staff" | "help_queue" | "help_queues";
+  type: "help_request" | "help_request_staff" | "help_queue" | "help_queues" | "class_staff";
   help_request_id?: number;
   help_queue_id?: number;
 };
@@ -63,6 +63,7 @@ export class OfficeHoursRealTimeController {
   private _helpRequestStaffChannels: Map<number, RealtimeChannel> = new Map();
   private _helpQueueChannels: Map<number, RealtimeChannel> = new Map();
   private _helpQueuesChannel: RealtimeChannel | null = null;
+  private _classStaffChannel: RealtimeChannel | null = null;
 
   // Subscription management
   private _subscriptions: Map<string, MessageSubscription> = new Map();
@@ -91,7 +92,7 @@ export class OfficeHoursRealTimeController {
   }
 
   /**
-   * Initialize global channels (help_queues)
+   * Initialize global channels (help_queues and class staff channel)
    */
   private async _initializeGlobalChannels() {
     console.log("Initializing office hours channels", this._objDebugId);
@@ -116,6 +117,23 @@ export class OfficeHoursRealTimeController {
       console.log(`Help queues channel status: help_queues`, status, err);
       this._notifyStatusChange();
     });
+
+    // Initialize class-level staff channel if user is staff
+    // This channel receives broadcasts for student_karma_notes and help_request_moderation
+    if (this._isStaff) {
+      this._classStaffChannel = this._client.channel(`class:${this._classId}:staff`, {
+        config: { private: true }
+      });
+
+      this._classStaffChannel.on("broadcast", { event: "broadcast" }, (message) => {
+        this._handleBroadcastMessage(message.payload as BroadcastMessage);
+      });
+
+      this._classStaffChannel.subscribe((status, err) => {
+        console.log(`Class staff channel status: class:${this._classId}:staff`, status, err);
+        this._notifyStatusChange();
+      });
+    }
   }
 
   /**
@@ -330,6 +348,15 @@ export class OfficeHoursRealTimeController {
       });
     }
 
+    // Add class staff channel
+    if (this._classStaffChannel) {
+      channels.push({
+        name: `class:${this._classId}:staff`,
+        state: this._classStaffChannel.state,
+        type: "class_staff"
+      });
+    }
+
     // Add help request channels
     for (const [helpRequestId, channel] of this._helpRequestChannels.entries()) {
       channels.push({
@@ -409,6 +436,7 @@ export class OfficeHoursRealTimeController {
    */
   get isReady(): boolean {
     const helpQueuesReady = !this._helpQueuesChannel || this._helpQueuesChannel.state === "joined";
+    const classStaffReady = !this._classStaffChannel || this._classStaffChannel.state === "joined";
 
     const helpRequestChannelsReady = Array.from(this._helpRequestChannels.values()).every(
       (channel) => channel.state === "joined"
@@ -422,7 +450,13 @@ export class OfficeHoursRealTimeController {
       (channel) => channel.state === "joined"
     );
 
-    return helpQueuesReady && helpRequestChannelsReady && helpRequestStaffChannelsReady && helpQueueChannelsReady;
+    return (
+      helpQueuesReady &&
+      classStaffReady &&
+      helpRequestChannelsReady &&
+      helpRequestStaffChannelsReady &&
+      helpQueueChannelsReady
+    );
   }
 
   /**
@@ -455,6 +489,11 @@ export class OfficeHoursRealTimeController {
       this._helpQueuesChannel = null;
     }
 
+    if (this._classStaffChannel) {
+      this._classStaffChannel.unsubscribe();
+      this._classStaffChannel = null;
+    }
+
     // Clean up help request channels
     for (const channel of this._helpRequestChannels.values()) {
       channel.unsubscribe();
@@ -483,6 +522,7 @@ export class OfficeHoursRealTimeController {
       profileId: this._profileId,
       isStaff: this._isStaff,
       helpQueuesChannelState: this._helpQueuesChannel?.state,
+      classStaffChannelState: this._classStaffChannel?.state,
       helpRequestChannelCount: this._helpRequestChannels.size,
       helpRequestStaffChannelCount: this._helpRequestStaffChannels.size,
       helpQueueChannelCount: this._helpQueueChannels.size,

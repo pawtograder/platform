@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import { BsPlus, BsPencil, BsTrash, BsEye, BsEyeSlash, BsFileText } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import useModalManager from "@/hooks/useModalManager";
+import { PopConfirm } from "@/components/ui/popconfirm";
 import CreateHelpRequestTemplateModal from "./modals/createHelpRequestTemplateModal";
 import EditHelpRequestTemplateModal from "./modals/editHelpRequestTemplateModal";
 import { useHelpRequestTemplates } from "@/hooks/useOfficeHoursRealtime";
@@ -52,23 +53,19 @@ export default function HelpRequestTemplateManagement() {
     });
   };
 
-  const handleDeleteTemplate = (templateId: number, templateName: string) => {
-    if (
-      window.confirm(`Are you sure you want to delete the template "${templateName}"? This action cannot be undone.`)
-    ) {
-      deleteTemplate({
-        resource: "help_request_templates",
-        id: templateId,
-        successNotification: {
-          message: "Template deleted successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to delete template",
-          type: "error"
-        }
-      });
-    }
+  const handleDeleteTemplate = (templateId: number) => {
+    deleteTemplate({
+      resource: "help_request_templates",
+      id: templateId,
+      successNotification: {
+        message: "Template deleted successfully",
+        type: "success"
+      },
+      errorNotification: {
+        message: "Failed to delete template",
+        type: "error"
+      }
+    });
   };
 
   const handleCreateSuccess = () => {
@@ -181,15 +178,19 @@ export default function HelpRequestTemplateManagement() {
             <Icon as={BsPencil} />
             Edit
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            colorPalette="red"
-            onClick={() => handleDeleteTemplate(template.id, template.name)}
-          >
-            <Icon as={BsTrash} />
-            Delete
-          </Button>
+          <PopConfirm
+            triggerLabel="Delete template"
+            trigger={
+              <Button size="sm" variant="outline" colorPalette="red">
+                <Icon as={BsTrash} />
+                Delete
+              </Button>
+            }
+            confirmHeader="Delete Template"
+            confirmText={`Are you sure you want to delete the template "${template.name}"? This action cannot be undone.`}
+            onConfirm={() => handleDeleteTemplate(template.id)}
+            onCancel={() => {}}
+          />
         </HStack>
       </Flex>
     </Box>
