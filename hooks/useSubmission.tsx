@@ -303,6 +303,15 @@ export function useSubmissionComments({
   return comments;
 }
 
+/**
+ * Provides a live-updating list of artifact comments for the current submission, excluding deleted comments.
+ *
+ * Invokes optional callbacks when comments are added or removed.
+ *
+ * @param onEnter - Called with newly entered artifact comments.
+ * @param onLeave - Called with artifact comments that have been removed.
+ * @returns An array of current, non-deleted artifact comments for the submission.
+ */
 export function useSubmissionArtifactComments({
   onEnter,
   onLeave
@@ -341,6 +350,16 @@ export function useSubmissionArtifactComments({
   }
   return comments;
 }
+/**
+ * Subscribes to and returns regrade request comments for the current submission, optionally filtered by a specific regrade request ID.
+ *
+ * Invokes optional callbacks when comments are added or removed from the filtered set.
+ *
+ * @param submission_regrade_request_id - If provided, filters comments to those matching this regrade request ID.
+ * @param onEnter - Optional callback invoked with comments that have entered the filtered set.
+ * @param onLeave - Optional callback invoked with comments that have left the filtered set.
+ * @returns An array of regrade request comments matching the filter.
+ */
 export function useSubmissionRegradeRequestComments({
   submission_regrade_request_id,
   onEnter,
@@ -412,6 +431,12 @@ export function useSubmissionRegradeRequestComments({
   return comments;
 }
 
+/**
+ * Returns a reactive submission file comment by its ID, updating as the comment changes in real time.
+ *
+ * @param comment_id - The ID of the submission file comment to subscribe to
+ * @returns The submission file comment object, or undefined if not found
+ */
 export function useSubmissionFileComment(comment_id: number) {
   const submissionController = useSubmissionController();
   const [comment, setComment] = useState<SubmissionFileComment | undefined>(

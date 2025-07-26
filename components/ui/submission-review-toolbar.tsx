@@ -73,6 +73,11 @@ function ActiveReviewPicker() {
   );
 }
 
+/**
+ * Renders a button and popover interface for marking the active submission review as complete.
+ *
+ * Displays missing required and optional rubric checks and criteria, and prevents completion until all required checks are addressed. On completion, updates the review status and shows a success or error notification.
+ */
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
