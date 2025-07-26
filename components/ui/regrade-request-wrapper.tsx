@@ -635,7 +635,7 @@ export default function RegradeRequestWrapper({
                   This comment will be visible to{" "}
                   {isGroupAssignment
                     ? "your groupmates and the entire course staff."
-                    : "the entire course staff and the author of the submssion."}
+                    : "the entire course staff and the author of the submission."}
                 </Text>
               </VStack>
             </Box>
