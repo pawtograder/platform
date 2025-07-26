@@ -1084,6 +1084,19 @@ export function RubricCheckGlobal({
   );
 }
 
+/**
+ * Renders a form for adding a comment to a rubric check within a submission review.
+ *
+ * Focuses the input on mount and constructs the comment text, optionally including the selected option label.
+ * Creates a new submission comment when submitted, linking to an artifact if applicable.
+ * Invokes the `onSuccess` callback after initiating comment creation.
+ *
+ * @param check - The rubric check to comment on.
+ * @param submissionReview - The current submission review context, if any.
+ * @param selectedOptionIndex - Index of the selected option for option-based checks.
+ * @param linkedArtifactId - ID of the artifact to link the comment to, if applicable.
+ * @param onSuccess - Callback invoked after the comment creation process is initiated.
+ */
 function SubmissionCommentForm({
   check,
   submissionReview,

@@ -42,6 +42,13 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaSearch
   }
 ];
+/**
+ * Provides a responsive layout for assignment management pages, including navigation and content display.
+ *
+ * Renders assignment-specific navigation links and content for both desktop and mobile views, fetching assignment data and supplying context via an AssignmentProvider. Displays the assignment title and renders nested page content.
+ *
+ * @param children - The content to display within the assignment layout
+ */
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
   const { course_id, assignment_id } = useParams();
   const { data: assignment } = useOne<Assignment>({

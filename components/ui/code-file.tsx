@@ -383,6 +383,11 @@ export function starryNightGutter(
   tree.children = replacement;
 }
 
+/**
+ * Displays a rubric-based annotation comment on a code line, including points, rubric details, author, and visibility status.
+ *
+ * Allows inline editing of the comment for graders and instructors. If the user is a student and the comment affects their score, provides a dialog to request a regrade, with special handling for group submissions. Shows relevant UI elements based on comment visibility, release status, and regrade request state.
+ */
 function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const commentAuthor = useUserProfile(comment?.author);
@@ -502,6 +507,14 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   );
 }
 
+/**
+ * Renders a single general comment on a code line, displaying the author's profile, flair, and comment content, with inline editing capabilities.
+ *
+ * If the comment or author profile is not yet loaded, displays a loading skeleton.
+ *
+ * @param comment_id - The ID of the comment to display.
+ * @param submissionReviewId - Optional ID of the submission review, used for context.
+ */
 function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: number; submissionReviewId?: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
@@ -615,6 +628,11 @@ export function formatPoints(option: {
   return ``;
 }
 
+/**
+ * Displays a popup for annotating a specific line in a code file with a rubric check or comment.
+ *
+ * Allows graders to select a rubric check (with optional sub-options), view criteria, and add an optional or required comment to the selected line. Enforces annotation limits per check and provides context-sensitive UI for marking or direct selection modes. Handles submission of new annotation comments, including points and visibility settings.
+ */
 function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
   const submissionController = useSubmissionController();
   const submission = useSubmission();
@@ -988,6 +1006,13 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   );
 }
 
+/**
+ * Renders all comments and rubric annotations for a specific line of code, along with the reply form if allowed.
+ *
+ * Displays line-specific comments and rubric-based annotations, filtering visibility based on user role and submission release status. Disables the reply form and "Add Comment" button if any comment on the line has an active regrade request.
+ *
+ * @param lineNumber - The line number for which to display comments and annotations.
+ */
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
   const {
     submission,

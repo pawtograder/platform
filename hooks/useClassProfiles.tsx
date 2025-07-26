@@ -61,16 +61,34 @@ export function useIsInstructor() {
   return role.role === "instructor";
 }
 
+/**
+ * Returns whether the current user's role is either "grader" or "instructor" in the class context.
+ *
+ * @returns `true` if the user is a grader or instructor; otherwise, `false`.
+ */
 export function useIsGraderOrInstructor() {
   const { role } = useClassProfiles();
   return role.role === "grader" || role.role === "instructor";
 }
 
+/**
+ * Returns the user role object matching the specified private profile ID from all visible roles.
+ *
+ * @param private_profile_id - The private profile ID to search for
+ * @returns The matching user role object, or undefined if not found
+ */
 export function useRoleByPrivateProfileId(private_profile_id: string) {
   const { allVisibleRoles } = useClassProfiles();
   return allVisibleRoles.find((r) => r.private_profile_id === private_profile_id);
 }
 
+/**
+ * Provides user role and profile context for the current course to its child components.
+ *
+ * Fetches user profiles and roles associated with the current course, determines the current user's role, and supplies this information via React context. Renders a loading skeleton while data is loading and a not-found component if the user's role is not found for the course.
+ *
+ * @param children - React child components that will have access to the class profile context
+ */
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
   const { user, roles: myRoles } = useAuthState();
