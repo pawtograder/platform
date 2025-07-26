@@ -1,4 +1,4 @@
-import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
@@ -7,9 +7,10 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-export function getTestRunPrefix() {
-  const test_run_batch = format(new Date(), "yyyy-MM-dd.HH.mm.ss") + "#" + Math.random().toString(36).substring(2, 6);
-  const workerIndex = process.env.TEST_WORKER_INDEX || "undefined";
+export function getTestRunPrefix(randomSuffix?: string) {
+  const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
+  const test_run_batch = format(new Date(), "dd/MM/yy HH:mm:ss") + "#" + suffix;
+  const workerIndex = process.env.TEST_WORKER_INDEX || "";
   return `e2e-${test_run_batch}-${workerIndex}`;
 }
 export type TestingUser = {
@@ -24,11 +25,12 @@ export type TestingUser = {
 };
 
 export async function createClass() {
-  const className = `E2E Test Class ${getTestRunPrefix()}`;
+  const className = `E2E Test Class`;
   const { data: classData, error: classError } = await supabase
     .from("classes")
     .insert({
       name: className,
+      slug: className.toLowerCase().replace(/ /g, "-"),
       start_date: addDays(new Date(), -30).toISOString(),
       end_date: addDays(new Date(), 180).toISOString(),
       late_tokens_per_student: 10,
@@ -44,16 +46,17 @@ export async function createClass() {
   }
   return classData;
 }
-
+let sectionIdx = 1;
 export async function createClassSection({ class_id }: { class_id: number }) {
   const { data: sectionData, error: sectionError } = await supabase
     .from("class_sections")
     .insert({
       class_id: class_id,
-      name: `E2E Test Section ${getTestRunPrefix()}`
+      name: `Section #${sectionIdx}Test`
     })
     .select("*")
     .single();
+  sectionIdx++;
   if (sectionError) {
     throw new Error(`Failed to create class section: ${sectionError.message}`);
   }
@@ -89,30 +92,33 @@ export async function loginAsUser(page: Page, testingUser: TestingUser, course?:
     await page.getByRole("link", { name: course.name! }).click();
   }
 }
-export async function createUserInDemoClass({ role }: { role: "student" | "instructor" | "grader" }) {
-  const class_id = 1;
-  return createUserInClass({ role, class_id });
-}
-let userIdx = 0;
+
+const userIdx = {
+  student: 1,
+  instructor: 1,
+  grader: 1
+};
 export async function createUserInClass({
   role,
   class_id,
   section_id,
-  lab_section_id
+  lab_section_id,
+  randomSuffix
 }: {
   role: "student" | "instructor" | "grader";
   class_id: number;
   section_id?: number;
   lab_section_id?: number;
+  randomSuffix?: string;
 }): Promise<TestingUser> {
   const password = process.env.TEST_PASSWORD || "change-it";
-  const extra_randomness = Math.random().toString(36).substring(2, 15);
+  const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 15);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx}@pawtograder.net`;
-  const name = `${getTestRunPrefix()}-${userIdx}.${extra_randomness}`;
-  const public_profile_name = `Public-${name}`;
-  const private_profile_name = `Private-${name}`;
-  userIdx++;
+  const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
+  const name = `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
+  const public_profile_name = `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+  const private_profile_name = `${name}`;
+  userIdx[role]++;
   const { data: userData, error: userError } = await supabase.auth.admin.createUser({
     email: email,
     password: password,
@@ -196,17 +202,19 @@ export async function insertPreBakedSubmission({
   student_profile_id,
   assignment_group_id,
   assignment_id,
-  class_id
+  class_id,
+  repositorySuffix
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
   assignment_id: number;
   class_id: number;
+  repositorySuffix?: string;
 }): Promise<{
   submission_id: number;
   repository_name: string;
 }> {
-  const test_run_prefix = getTestRunPrefix();
+  const test_run_prefix = repositorySuffix ?? getTestRunPrefix();
   const repository = `not-actually/repository-${test_run_prefix}`;
   const { data: repositoryData, error: repositoryError } = await supabase
     .from("repositories")
@@ -358,6 +366,7 @@ public class Entrypoint {
   };
 }
 
+let labSectionIdx = 1;
 export async function createLabSectionWithStudents({
   class_id,
   lab_leader,
@@ -373,7 +382,8 @@ export async function createLabSectionWithStudents({
   start_time?: string;
   end_time?: string;
 }) {
-  const lab_section_name = `E2E Test Lab Section ${getTestRunPrefix()} on ${day_of_week}`;
+  const lab_section_name = `Lab #${labSectionIdx} (${day_of_week})`;
+  labSectionIdx++;
   const { data: labSectionData, error: labSectionError } = await supabase
     .from("lab_sections")
     .insert({
@@ -401,7 +411,10 @@ export async function createLabSectionWithStudents({
   return labSectionData;
 }
 
-let assignmentIdx = 0;
+const assignmentIdx = {
+  lab: 1,
+  assignment: 1
+};
 export async function insertAssignment({
   due_date,
   lab_due_date_offset,
@@ -412,10 +425,9 @@ export async function insertAssignment({
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
   class_id: number;
-}): Promise<Assignment> {
-  const test_run_prefix = getTestRunPrefix() + "#" + assignmentIdx;
-  const title = `Test ${test_run_prefix}`;
-  assignmentIdx++;
+}): Promise<Assignment & { rubricChecks: RubricCheck[] }> {
+  const title = `Assignment #${assignmentIdx.assignment}Test`;
+  assignmentIdx.assignment++;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
     .insert({
@@ -429,7 +441,7 @@ export async function insertAssignment({
       max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: test_run_prefix,
+      slug: `assignment-${assignmentIdx.assignment}`,
       group_config: "individual",
       self_review_setting_id: 1,
       allow_not_graded_submissions: allow_not_graded_submissions || false
@@ -508,7 +520,7 @@ export async function insertAssignment({
   }
   const selfReviewCriteriaId = criteriaData.data?.[0]?.id;
   const gradingReviewCriteriaId = criteriaData.data?.[1]?.id;
-  await supabase
+  const { data: rubricChecksData, error: rubricChecksError } = await supabase
     .from("rubric_checks")
     .insert([
       {
@@ -556,9 +568,12 @@ export async function insertAssignment({
         is_required: true
       }
     ])
-    .select("id");
+    .select("*");
+  if (rubricChecksError) {
+    throw new Error(`Failed to create rubric checks: ${rubricChecksError.message}`);
+  }
 
-  return assignmentData;
+  return { ...assignmentData, rubricChecks: rubricChecksData };
 }
 
 export async function insertSubmissionViaAPI({
@@ -567,7 +582,9 @@ export async function insertSubmissionViaAPI({
   sha,
   commit_message,
   assignment_id = 1,
-  class_id
+  class_id,
+  repositorySuffix,
+  timestampOverride
 }: {
   student_profile_id?: string;
   assignment_group_id?: number;
@@ -575,13 +592,18 @@ export async function insertSubmissionViaAPI({
   commit_message?: string;
   assignment_id?: number;
   class_id: number;
+  repositorySuffix?: string;
+  timestampOverride?: number;
 }): Promise<{
   submission_id: number;
   repository_name: string;
 }> {
-  const test_run_batch = "abcd" + Math.random().toString(36).substring(2, 15);
+  const test_run_batch = repositorySuffix ?? "abcd" + Math.random().toString(36).substring(2, 15);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const repository = `pawtograder-playground/test-e2e-student-repo-java--${test_run_batch}-${workerIndex}`;
+  const timestamp = timestampOverride ?? Date.now();
+  const studentId = student_profile_id?.slice(0, 8) || "no-student";
+  const assignmentStr = assignment_id || 1;
+  const repository = `pawtograder-playground/test-e2e-student-repo-java--${test_run_batch}-${workerIndex}-${assignmentStr}-${studentId}-${timestamp}`;
   const { data: repositoryData, error: repositoryError } = await supabase
     .from("repositories")
     .insert({
@@ -651,4 +673,234 @@ export async function insertSubmissionViaAPI({
     repository_name: repository,
     submission_id: data.submission_id
   };
+}
+
+export async function createDueDateException(
+  assignment_id: number,
+  student_profile_id: string,
+  class_id: number,
+  hoursExtension: number
+) {
+  const { data: exceptionData, error: exceptionError } = await supabase
+    .from("assignment_due_date_exceptions")
+    .insert({
+      class_id: class_id,
+      assignment_id: assignment_id,
+      student_id: student_profile_id,
+      creator_id: student_profile_id,
+      hours: hoursExtension,
+      minutes: 0,
+      tokens_consumed: Math.ceil(hoursExtension / 24)
+    })
+    .select("*")
+    .single();
+
+  if (exceptionError) {
+    throw new Error(`Failed to create due date exception: ${exceptionError.message}`);
+  }
+  return exceptionData;
+}
+
+export async function createRegradeRequest(
+  submission_id: number,
+  assignment_id: number,
+  student_profile_id: string,
+  grader_profile_id: string,
+  rubric_check_id: number,
+  class_id: number,
+  status: "opened" | "resolved" | "closed",
+  options?: {
+    commentPoints?: number;
+    initialPoints?: number;
+    resolvedPoints?: number;
+    closedPoints?: number;
+  }
+) {
+  // First create a submission comment to reference
+  const { data: commentData, error: commentError } = await supabase
+    .from("submission_comments")
+    .insert({
+      submission_id: submission_id,
+      author: grader_profile_id,
+      comment: "Test comment for regrade request",
+      points: options?.commentPoints ?? Math.floor(Math.random() * 10),
+      class_id: class_id,
+      rubric_check_id,
+      released: true
+    })
+    .select("*")
+    .single();
+
+  if (commentError) {
+    throw new Error(`Failed to create submission comment: ${commentError.message}`);
+  }
+
+  const { data: regradeData, error: regradeError } = await supabase
+    .from("submission_regrade_requests")
+    .insert({
+      submission_id: submission_id,
+      class_id: class_id,
+      assignment_id: assignment_id,
+      opened_at: new Date().toISOString(),
+      created_by: student_profile_id,
+      assignee: grader_profile_id,
+      closed_by: status === "closed" ? grader_profile_id : null,
+      closed_at: status === "closed" ? new Date().toISOString() : null,
+      status: status,
+      resolved_by: status === "resolved" || status === "closed" ? grader_profile_id : null,
+      resolved_at: status === "resolved" || status === "closed" ? new Date().toISOString() : null,
+      submission_comment_id: commentData.id, // Reference the comment we just created
+      initial_points: options?.initialPoints ?? Math.floor(Math.random() * 100),
+      resolved_points:
+        status === "resolved" || status === "closed"
+          ? (options?.resolvedPoints ?? Math.floor(Math.random() * 100))
+          : null,
+      closed_points: status === "closed" ? (options?.closedPoints ?? Math.floor(Math.random() * 100)) : null,
+      last_updated_at: new Date().toISOString()
+    })
+    .select("*")
+    .single();
+
+  if (regradeError) {
+    throw new Error(`Failed to create regrade request: ${regradeError.message}`);
+  }
+  //Update the comment to reference the regrade request
+  const { error: commentUpdateError } = await supabase
+    .from("submission_comments")
+    .update({ regrade_request_id: regradeData.id })
+    .eq("id", commentData.id);
+  if (commentUpdateError) {
+    throw new Error(`Failed to update submission comment: ${commentUpdateError.message}`);
+  }
+
+  return regradeData;
+}
+
+export async function gradeSubmission(
+  grading_review_id: number,
+  grader_profile_id: string,
+  isCompleted: boolean,
+  options?: {
+    checkApplyChance?: number; // Probability (0-1) that non-required checks are applied
+    pointsRandomizer?: () => number; // Function to generate random points (0-1)
+    fileSelectionRandomizer?: () => number; // Function to select file index (0-1)
+    lineNumberRandomizer?: () => number; // Function to generate line numbers (returns 1-5)
+    totalScoreOverride?: number;
+    totalAutogradeScoreOverride?: number;
+  }
+) {
+  // Get the submission review details to find the rubric and submission
+  const { data: reviewInfo, error: reviewError } = await supabase
+    .from("submission_reviews")
+    .select("id, submission_id, rubric_id, class_id")
+    .eq("id", grading_review_id)
+    .single();
+
+  if (reviewError || !reviewInfo) {
+    throw new Error(`Failed to get submission review: ${reviewError?.message}`);
+  }
+
+  if (isCompleted) {
+    // Get all rubric checks for this rubric
+    const { data: rubricChecks, error: checksError } = await supabase
+      .from("rubric_checks")
+      .select(
+        `
+        id, name, is_annotation, points, is_required, file,
+        rubric_criteria!inner(id, rubric_id)
+      `
+      )
+      .eq("rubric_criteria.rubric_id", reviewInfo.rubric_id);
+
+    if (checksError) {
+      throw new Error(`Failed to get rubric checks: ${checksError.message}`);
+    }
+
+    // Get submission files for annotation comments
+    const { data: submissionFiles } = await supabase
+      .from("submission_files")
+      .select("id, name")
+      .eq("submission_id", reviewInfo.submission_id);
+
+    // Create comments for each rubric check
+    for (const check of rubricChecks || []) {
+      // Use provided chance or default 80% chance to apply non-required checks, 100% for required ones
+      const applyChance = options?.checkApplyChance ?? 0.8;
+      const shouldApply = check.is_required || Math.random() < applyChance;
+
+      if (shouldApply) {
+        const randomValue = options?.pointsRandomizer?.() ?? Math.random();
+        const pointsAwarded = Math.floor(randomValue * (check.points + 1)); // 0 to max points
+
+        if (check.is_annotation) {
+          // Create submission file comment (annotation)
+          let file_id = null;
+
+          if (check.file && submissionFiles) {
+            const matchingFile = submissionFiles.find((f) => f.name === check.file);
+            file_id = matchingFile?.id || submissionFiles[0]?.id; // Use specified file or first available
+          } else if (submissionFiles && submissionFiles.length > 0) {
+            const fileRandomValue = options?.fileSelectionRandomizer?.() ?? Math.random();
+            file_id = submissionFiles[Math.floor(fileRandomValue * submissionFiles.length)].id;
+          }
+
+          if (file_id) {
+            const lineRandomValue = options?.lineNumberRandomizer?.() ?? Math.random();
+            const lineNumber = Math.floor(lineRandomValue * 5) + 1; // Random line number 1-5
+
+            await supabase.from("submission_file_comments").insert({
+              submission_id: reviewInfo.submission_id,
+              submission_file_id: file_id,
+              author: grader_profile_id,
+              comment: `${check.name}: Grading comment for this check`,
+              points: pointsAwarded,
+              line: lineNumber,
+              class_id: reviewInfo.class_id,
+              released: true,
+              rubric_check_id: check.id,
+              submission_review_id: grading_review_id
+            });
+          }
+        } else {
+          // Create submission comment (general comment)
+          await supabase.from("submission_comments").insert({
+            submission_id: reviewInfo.submission_id,
+            author: grader_profile_id,
+            comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
+            points: pointsAwarded,
+            class_id: reviewInfo.class_id,
+            released: true,
+            rubric_check_id: check.id,
+            submission_review_id: grading_review_id
+          });
+        }
+      }
+    }
+  }
+
+  // Update the submission review
+  const totalScore = options?.totalScoreOverride ?? (isCompleted ? Math.floor(Math.random() * 100) : 0);
+  const totalAutogradeScore = options?.totalAutogradeScoreOverride ?? Math.floor(Math.random() * 100);
+
+  const updateData = {
+    grader: grader_profile_id,
+    total_score: totalScore,
+    released: isCompleted,
+    completed_by: isCompleted ? grader_profile_id : null,
+    completed_at: isCompleted ? new Date().toISOString() : null,
+    total_autograde_score: totalAutogradeScore
+  };
+
+  const { data: reviewResult, error: updateError } = await supabase
+    .from("submission_reviews")
+    .update(updateData)
+    .eq("id", grading_review_id)
+    .select("*")
+    .single();
+
+  if (updateError) {
+    throw new Error(`Failed to update submission review: ${updateError.message}`);
+  }
+
+  return reviewResult;
 }
