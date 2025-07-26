@@ -1,4 +1,4 @@
-import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
+import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
@@ -425,7 +425,7 @@ export async function insertAssignment({
   lab_due_date_offset?: number;
   allow_not_graded_submissions?: boolean;
   class_id: number;
-}): Promise<Assignment> {
+}): Promise<Assignment & { rubricChecks: RubricCheck[] }> {
   const title = `Assignment #${assignmentIdx.assignment}Test`;
   assignmentIdx.assignment++;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
@@ -520,7 +520,7 @@ export async function insertAssignment({
   }
   const selfReviewCriteriaId = criteriaData.data?.[0]?.id;
   const gradingReviewCriteriaId = criteriaData.data?.[1]?.id;
-  await supabase
+  const { data: rubricChecksData, error: rubricChecksError } = await supabase
     .from("rubric_checks")
     .insert([
       {
@@ -568,9 +568,12 @@ export async function insertAssignment({
         is_required: true
       }
     ])
-    .select("id");
+    .select("*");
+  if (rubricChecksError) {
+    throw new Error(`Failed to create rubric checks: ${rubricChecksError.message}`);
+  }
 
-  return assignmentData;
+  return { ...assignmentData, rubricChecks: rubricChecksData };
 }
 
 export async function insertSubmissionViaAPI({
@@ -703,6 +706,7 @@ export async function createRegradeRequest(
   assignment_id: number,
   student_profile_id: string,
   grader_profile_id: string,
+  rubric_check_id: number,
   class_id: number,
   status: "opened" | "resolved" | "closed",
   options?: {
@@ -721,6 +725,7 @@ export async function createRegradeRequest(
       comment: "Test comment for regrade request",
       points: options?.commentPoints ?? Math.floor(Math.random() * 10),
       class_id: class_id,
+      rubric_check_id,
       released: true
     })
     .select("*")
@@ -759,6 +764,15 @@ export async function createRegradeRequest(
   if (regradeError) {
     throw new Error(`Failed to create regrade request: ${regradeError.message}`);
   }
+  //Update the comment to reference the regrade request
+  const { error: commentUpdateError } = await supabase
+    .from("submission_comments")
+    .update({ regrade_request_id: regradeData.id })
+    .eq("id", commentData.id);
+  if (commentUpdateError) {
+    throw new Error(`Failed to update submission comment: ${commentUpdateError.message}`);
+  }
+
   return regradeData;
 }
 
@@ -770,7 +784,7 @@ export async function gradeSubmission(
     checkApplyChance?: number; // Probability (0-1) that non-required checks are applied
     pointsRandomizer?: () => number; // Function to generate random points (0-1)
     fileSelectionRandomizer?: () => number; // Function to select file index (0-1)
-    lineNumberRandomizer?: () => number; // Function to generate line numbers (returns 1-50)
+    lineNumberRandomizer?: () => number; // Function to generate line numbers (returns 1-5)
     totalScoreOverride?: number;
     totalAutogradeScoreOverride?: number;
   }

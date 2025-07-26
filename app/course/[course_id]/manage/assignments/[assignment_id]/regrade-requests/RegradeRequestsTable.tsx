@@ -15,6 +15,7 @@ import { FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaCheck, FaTimes } fro
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { useAssignmentController, useRubricCheck } from "@/hooks/useAssignment";
+import useUserProfiles, { getUserProfile } from "@/hooks/useUserProfiles";
 
 // Status configuration
 const statusConfig: Record<
@@ -167,6 +168,7 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
 export default function RegradeRequestsTable() {
   const { assignment_id } = useParams();
   const assignmentController = useAssignmentController();
+  const { users } = useUserProfiles();
 
   // Get all rubric checks for the assignment
   const allRubricChecks = useMemo(() => {
@@ -220,21 +222,32 @@ export default function RegradeRequestsTable() {
         cell: ({ getValue }) => <StatusCell status={getValue() as RegradeStatus} />,
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
-          return row.original.status === filterValue;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
+          return filterValues.includes(row.original.status);
         }
       },
       {
         id: "rubric_check",
         header: "Rubric Check",
+        accessorFn: (row) => {
+          const rubricCheckId =
+            row.submission_file_comments?.[0]?.rubric_check_id ||
+            row.submission_artifact_comments?.[0]?.rubric_check_id ||
+            row.submission_comments?.[0]?.rubric_check_id;
+          const rubricCheck = assignmentController.rubricCheckById.get(rubricCheckId || 0);
+          return rubricCheck?.name || "";
+        },
         cell: ({ row }) => <RubricCheckCell row={row.original} />,
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
-          if (!filterValue) return true;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
           const rubricCheckId =
             row.original.submission_file_comments?.[0]?.rubric_check_id ||
             row.original.submission_artifact_comments?.[0]?.rubric_check_id ||
             row.original.submission_comments?.[0]?.rubric_check_id;
-          return rubricCheckId === parseInt(filterValue as string);
+          return filterValues.includes(rubricCheckId?.toString());
         }
       },
       {
@@ -251,17 +264,18 @@ export default function RegradeRequestsTable() {
         ),
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
-          const filterString = String(filterValue).toLowerCase();
-          const studentName = row.original.submissions?.profiles?.name?.toLowerCase();
-          const groupMembers = row.original.submissions?.assignment_groups?.assignment_groups_members;
-          const groupNames = groupMembers
-            ?.map((member) => member.profiles.name)
-            .join(", ")
-            .toLowerCase();
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
 
-          if (studentName && studentName.includes(filterString)) return true;
-          if (groupNames && groupNames.includes(filterString)) return true;
-          return false;
+          // Get the display name for this row
+          let displayName;
+          if (row.original.submissions?.assignment_groups?.assignment_groups_members?.length) {
+            displayName = `Group: ${row.original.submissions.assignment_groups.assignment_groups_members.map((member) => member.profiles.name).join(", ")}`;
+          } else {
+            displayName = row.original.submissions?.profiles?.name || "Unknown";
+          }
+
+          return filterValues.includes(displayName);
         }
       },
       {
@@ -271,10 +285,10 @@ export default function RegradeRequestsTable() {
         cell: ({ getValue }) => <PersonName showAvatar={false} uid={getValue() as string} />,
         enableColumnFilter: true,
         filterFn: (row, id, filterValue) => {
-          if (!filterValue) return true;
-          const filterString = String(filterValue).toLowerCase();
-          const assignee = row.original.assignee?.toLowerCase();
-          return assignee ? assignee.includes(filterString) : false;
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
+          const assignee = row.original.assignee;
+          return assignee ? filterValues.includes(assignee) : false;
         }
       },
       {
@@ -311,23 +325,28 @@ export default function RegradeRequestsTable() {
         enableColumnFilter: true,
         enableSorting: false,
         filterFn: (row, id, filterValue) => {
-          if (filterValue === "yes") {
-            return (
+          if (!filterValue || (Array.isArray(filterValue) && filterValue.length === 0)) return true;
+          const filterValues = Array.isArray(filterValue) ? filterValue : [filterValue];
+
+          if (filterValues.includes("yes")) {
+            const isAppealGranted =
               row.original.status === "closed" &&
               row.original.closed_points !== null &&
               row.original.resolved_points !== null &&
-              row.original.closed_points !== row.original.resolved_points
-            );
+              row.original.closed_points !== row.original.resolved_points;
+            if (isAppealGranted) return true;
           }
-          if (filterValue === "no") {
-            return (
+
+          if (filterValues.includes("no")) {
+            const isAppealNotGranted =
               row.original.status === "closed" &&
               (row.original.closed_points === null ||
                 row.original.resolved_points === null ||
-                row.original.closed_points === row.original.resolved_points)
-            );
+                row.original.closed_points === row.original.resolved_points);
+            if (isAppealNotGranted) return true;
           }
-          return true;
+
+          return false;
         }
       },
       {
@@ -399,9 +418,35 @@ export default function RegradeRequestsTable() {
 
     return Array.from(assignees)
       .sort()
-      .map((assignee) => ({
-        label: assignee,
-        value: assignee
+      .map((assigneeUid) => {
+        const profile = getUserProfile(users, assigneeUid);
+        return {
+          label: profile?.name || assigneeUid,
+          value: assigneeUid
+        };
+      });
+  }, [data, users]);
+
+  // Create options for student filter
+  const studentOptions = useMemo(() => {
+    if (!data) return [];
+
+    const students = new Set<string>();
+    data.forEach((row) => {
+      let displayName;
+      if (row.submissions?.assignment_groups?.assignment_groups_members?.length) {
+        displayName = `Group: ${row.submissions.assignment_groups.assignment_groups_members.map((member) => member.profiles.name).join(", ")}`;
+      } else {
+        displayName = row.submissions?.profiles?.name || "Unknown";
+      }
+      students.add(displayName);
+    });
+
+    return Array.from(students)
+      .sort()
+      .map((student) => ({
+        label: student,
+        value: student
       }));
   }, [data]);
 
@@ -423,13 +468,15 @@ export default function RegradeRequestsTable() {
               size="sm"
               placeholder="All statuses"
               value={
-                (getColumn("status")?.getFilterValue() as string)
-                  ? statusOptions.filter((opt) => (getColumn("status")?.getFilterValue() as string) === opt.value)
+                (getColumn("status")?.getFilterValue() as string[])
+                  ? statusOptions.filter((opt) =>
+                      ((getColumn("status")?.getFilterValue() as string[]) || []).includes(opt.value)
+                    )
                   : []
               }
               onChange={(options) => {
                 const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
-                getColumn("status")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+                getColumn("status")?.setFilterValue(values.length > 0 ? values : undefined);
               }}
               options={statusOptions}
               isClearable
@@ -442,13 +489,26 @@ export default function RegradeRequestsTable() {
           <Text fontSize="sm" fontWeight="medium" mb={1}>
             Filter by Student:
           </Text>
-          <Input
-            placeholder="Search students..."
-            value={(getColumn("student")?.getFilterValue() as string) || ""}
-            onChange={(e) => getColumn("student")?.setFilterValue(e.target.value)}
-            size="sm"
-            width="200px"
-          />
+          <Box width="200px">
+            <Select
+              size="sm"
+              placeholder="All students"
+              value={
+                (getColumn("student")?.getFilterValue() as string[])
+                  ? studentOptions.filter((opt) =>
+                      ((getColumn("student")?.getFilterValue() as string[]) || []).includes(opt.value)
+                    )
+                  : []
+              }
+              onChange={(options) => {
+                const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
+                getColumn("student")?.setFilterValue(values.length > 0 ? values : undefined);
+              }}
+              options={studentOptions}
+              isClearable
+              isMulti
+            />
+          </Box>
         </Box>
 
         <Box>
@@ -460,15 +520,15 @@ export default function RegradeRequestsTable() {
               size="sm"
               placeholder="All"
               value={
-                (getColumn("appeal_granted")?.getFilterValue() as string)
-                  ? appealGrantedOptions.filter(
-                      (opt) => (getColumn("appeal_granted")?.getFilterValue() as string) === opt.value
+                (getColumn("appeal_granted")?.getFilterValue() as string[])
+                  ? appealGrantedOptions.filter((opt) =>
+                      ((getColumn("appeal_granted")?.getFilterValue() as string[]) || []).includes(opt.value)
                     )
                   : []
               }
               onChange={(options) => {
                 const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
-                getColumn("appeal_granted")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+                getColumn("appeal_granted")?.setFilterValue(values.length > 0 ? values : undefined);
               }}
               options={appealGrantedOptions}
               isClearable
@@ -486,15 +546,15 @@ export default function RegradeRequestsTable() {
               size="sm"
               placeholder="All rubric checks"
               value={
-                (getColumn("rubric_check")?.getFilterValue() as string)
-                  ? rubricCheckOptions.filter(
-                      (opt) => (getColumn("rubric_check")?.getFilterValue() as string) === opt.value
+                (getColumn("rubric_check")?.getFilterValue() as string[])
+                  ? rubricCheckOptions.filter((opt) =>
+                      ((getColumn("rubric_check")?.getFilterValue() as string[]) || []).includes(opt.value)
                     )
                   : []
               }
               onChange={(options) => {
                 const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
-                getColumn("rubric_check")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+                getColumn("rubric_check")?.setFilterValue(values.length > 0 ? values : undefined);
               }}
               options={rubricCheckOptions}
               isClearable
@@ -512,13 +572,15 @@ export default function RegradeRequestsTable() {
               size="sm"
               placeholder="All assignees"
               value={
-                (getColumn("assignee")?.getFilterValue() as string)
-                  ? assigneeOptions.filter((opt) => (getColumn("assignee")?.getFilterValue() as string) === opt.value)
+                (getColumn("assignee")?.getFilterValue() as string[])
+                  ? assigneeOptions.filter((opt) =>
+                      ((getColumn("assignee")?.getFilterValue() as string[]) || []).includes(opt.value)
+                    )
                   : []
               }
               onChange={(options) => {
                 const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
-                getColumn("assignee")?.setFilterValue(values.length > 0 ? values[0] : undefined);
+                getColumn("assignee")?.setFilterValue(values.length > 0 ? values : undefined);
               }}
               options={assigneeOptions}
               isClearable

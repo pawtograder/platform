@@ -11,6 +11,7 @@ import {
   supabase,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
@@ -182,11 +183,13 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     for (const { submission_id, assignment, student } of shuffledSubmissions) {
       const status = statuses[Math.floor(Math.random() * statuses.length)];
       const grader = graders[Math.floor(Math.random() * graders.length)];
+      const rubric_check_id = assignment.rubricChecks[Math.random() < 0.5 ? 2 : 3].id;
       await createRegradeRequest(
         submission_id,
         assignment.id,
         student.private_profile_id,
         grader.private_profile_id,
+        rubric_check_id,
         class_id,
         status
       );
