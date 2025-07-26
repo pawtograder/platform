@@ -1,4 +1,5 @@
 import { createClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import {
   ColumnDef,
   getCoreRowModel,
@@ -17,7 +18,7 @@ export interface ServerFilter {
 
 export interface UseCustomTableProps<TData> {
   columns: ColumnDef<TData>[];
-  resource: string;
+  resource: keyof Database["public"]["Tables"];
   serverFilters?: ServerFilter[];
   select?: string;
   initialState?: Partial<TableOptions<TData>["initialState"]>;
@@ -87,15 +88,13 @@ export function useCustomTable<TData>({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const supabase = createClient();
-
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let query = (supabase as any).from(resource).select(select);
+      const supabase = createClient();
+      let query = supabase.from(resource).select(select);
 
       // Apply server filters
       serverFilters.forEach((filter) => {
@@ -142,7 +141,7 @@ export function useCustomTable<TData>({
     } finally {
       setIsLoading(false);
     }
-  }, [resource, serverFilters, select, supabase]);
+  }, [resource, serverFilters, select]);
 
   // Re-fetch data when server filters, resource, or select clause changes
   // The useCallback dependencies ensure fetchData is recreated only when necessary

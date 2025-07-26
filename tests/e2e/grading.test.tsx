@@ -211,12 +211,18 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to open this")
+      .click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to open this")
       .fill(REGRADE_COMMENT);
-    await percySnapshot(page, "Student can add a comment to open the regrade request");
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Open Request", { exact: true })
       .click();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await percySnapshot(page, "Student can add a comment to open the regrade request");
   });
   test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
     await loginAsUser(page, instructor!, course);

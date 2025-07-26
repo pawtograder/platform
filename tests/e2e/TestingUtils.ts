@@ -9,8 +9,8 @@ dotenv.config({ path: ".env.local" });
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
-  const test_run_batch = format(new Date(), "yyyy-MM-dd.HH.mm.ss") + "#" + suffix;
-  const workerIndex = process.env.TEST_WORKER_INDEX || "manual-test";
+  const test_run_batch = format(new Date(), "dd/MM/yy HH:mm:ss") + "#" + suffix;
+  const workerIndex = process.env.TEST_WORKER_INDEX || "";
   return `e2e-${test_run_batch}-${workerIndex}`;
 }
 export type TestingUser = {
@@ -25,11 +25,12 @@ export type TestingUser = {
 };
 
 export async function createClass() {
-  const className = `E2E Test Class ${getTestRunPrefix()}`;
+  const className = `E2E Test Class`;
   const { data: classData, error: classError } = await supabase
     .from("classes")
     .insert({
       name: className,
+      slug: className.toLowerCase().replace(/ /g, "-"),
       start_date: addDays(new Date(), -30).toISOString(),
       end_date: addDays(new Date(), 180).toISOString(),
       late_tokens_per_student: 10,
