@@ -118,7 +118,7 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
     left: 0,
     visible: false,
     mode: "select",
-    close: () => { }
+    close: () => {}
   }));
 
   const [expanded, setExpanded] = useState<number[]>([]);
@@ -170,26 +170,26 @@ export default function CodeFile({ file }: { file: SubmissionFile }) {
   });
   const commentsCSS = showCommentsFeature
     ? {
-      "& .source-code-line": {
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "row",
-        "&:hover": {
-          bg: "yellow.subtle",
-          width: "100%",
-          cursor: "cell"
+        "& .source-code-line": {
+          cursor: "pointer",
+          display: "flex",
+          flexDirection: "row",
+          "&:hover": {
+            bg: "yellow.subtle",
+            width: "100%",
+            cursor: "cell"
+          }
+        },
+        "& .selected": {
+          bg: "yellow.subtle"
         }
-      },
-      "& .selected": {
-        bg: "yellow.subtle"
       }
-    }
     : {
-      "& .source-code-line": {
-        display: "flex",
-        flexDirection: "row"
-      }
-    };
+        "& .source-code-line": {
+          display: "flex",
+          flexDirection: "row"
+        }
+      };
   return (
     <Box
       border="1px solid"
@@ -427,77 +427,78 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   // Check if this is a group submission
 
   return (
-    <RegradeRequestWrapper regradeRequestId={comment.regrade_request_id}>
-      <Box m={0} p={0} w="100%" pb={1}>
-        <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
-          <PersonAvatar size="2xs" uid={comment.author} />
-          <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
-            <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
-              <Flex w="100%" justifyContent="space-between">
-                <HStack flexGrow={10}>
-                  {!comment.eventually_visible && (
-                    <Tooltip content="This comment will never be visible to the student">
-                      <Icon as={FaRegEyeSlash} color="fg.muted" />
-                    </Tooltip>
-                  )}
-                  {comment.eventually_visible && !comment.released && (
-                    <Tooltip content="This comment is not released to the student yet">
-                      <Icon as={FaEyeSlash} />
-                    </Tooltip>
-                  )}
-                  {hasPoints && (
-                    <>
-                      <Icon
-                        as={rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle}
-                        color={rubricCriteria.is_additive ? "green.500" : "red.500"}
-                      />
-                      {pointsText}
-                    </>
-                  )}
-                  <Text fontSize="sm" color="fg.muted">
-                    {rubricCriteria?.name} &gt; {rubricCheck?.name}
-                  </Text>
-                </HStack>
-                <HStack gap={0} flexWrap="wrap">
-                  <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                    {commentAuthor?.name}
-                  </Text>
-                  {comment.submission_review_id && (
-                    <ReviewRoundTag submission_review_id={comment.submission_review_id} />
-                  )}
-                </HStack>
-                <CommentActions comment={comment} setIsEditing={setIsEditing} />
-              </Flex>
-            </Box>
-            <Box pl={2}>
-              <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
-            </Box>
-            <Box pl={2} w="100%">
-              {isEditing ? (
-                <MessageInput
-                  textAreaRef={messageInputRef}
-                  defaultSingleLine={true}
-                  value={comment.comment}
-                  closeButtonText="Cancel"
-                  onClose={() => {
-                    setIsEditing(false);
-                  }}
-                  sendMessage={async (message) => {
-                    await submissionController.submission_file_comments.update(comment.id, { comment: message });
-                    setIsEditing(false);
-                  }}
-                />
-              ) : (
-                <Markdown>{comment.comment}</Markdown>
-              )}
-            </Box>
-            {/* Regrade Request Button */}
-            {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />
-            }
-          </VStack>
-        </HStack>
-      </Box>
-    </RegradeRequestWrapper>
+    <Box role="region" aria-label={`Grading checks on line ${comment.line}`}>
+      <RegradeRequestWrapper regradeRequestId={comment.regrade_request_id}>
+        <Box m={0} p={0} w="100%" pb={1}>
+          <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
+            <PersonAvatar size="2xs" uid={comment.author} />
+            <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
+              <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
+                <Flex w="100%" justifyContent="space-between">
+                  <HStack flexGrow={10}>
+                    {!comment.eventually_visible && (
+                      <Tooltip content="This comment will never be visible to the student">
+                        <Icon as={FaRegEyeSlash} color="fg.muted" />
+                      </Tooltip>
+                    )}
+                    {comment.eventually_visible && !comment.released && (
+                      <Tooltip content="This comment is not released to the student yet">
+                        <Icon as={FaEyeSlash} />
+                      </Tooltip>
+                    )}
+                    {hasPoints && (
+                      <>
+                        <Icon
+                          as={rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle}
+                          color={rubricCriteria.is_additive ? "green.500" : "red.500"}
+                        />
+                        {pointsText}
+                      </>
+                    )}
+                    <Text fontSize="sm" color="fg.muted">
+                      {rubricCriteria?.name} &gt; {rubricCheck?.name}
+                    </Text>
+                  </HStack>
+                  <HStack gap={0} flexWrap="wrap">
+                    <Text fontSize="sm" fontStyle="italic" color="fg.muted">
+                      {commentAuthor?.name}
+                    </Text>
+                    {comment.submission_review_id && (
+                      <ReviewRoundTag submission_review_id={comment.submission_review_id} />
+                    )}
+                  </HStack>
+                  <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                </Flex>
+              </Box>
+              <Box pl={2}>
+                <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
+              </Box>
+              <Box pl={2} w="100%">
+                {isEditing ? (
+                  <MessageInput
+                    textAreaRef={messageInputRef}
+                    defaultSingleLine={true}
+                    value={comment.comment}
+                    closeButtonText="Cancel"
+                    onClose={() => {
+                      setIsEditing(false);
+                    }}
+                    sendMessage={async (message) => {
+                      await submissionController.submission_file_comments.update(comment.id, { comment: message });
+                      setIsEditing(false);
+                    }}
+                  />
+                ) : (
+                  <Markdown>{comment.comment}</Markdown>
+                )}
+              </Box>
+              {/* Regrade Request Button */}
+              {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />}
+            </VStack>
+          </HStack>
+        </Box>
+      </RegradeRequestWrapper>
+    </Box>
   );
 }
 

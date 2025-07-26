@@ -271,7 +271,7 @@ export default class TableController<
     if (!listener) {
       return {
         data,
-        unsubscribe: () => { }
+        unsubscribe: () => {}
       };
     }
     this._itemDataListeners.set(id, [...(this._itemDataListeners.get(id) || []), listener]);
@@ -293,7 +293,7 @@ export default class TableController<
     if (!listener) {
       return {
         data: this._rows,
-        unsubscribe: () => { }
+        unsubscribe: () => {}
       };
     }
     this._listDataListeners.push(listener);

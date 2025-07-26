@@ -32,21 +32,23 @@ type RecentAssignment = GetResult<
 >;
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
-  
+
   // Get recently due assignments (due in last 30 days)
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  
+
   const { data: recentAssignments, error: assignmentsError } = await supabase
     .from("assignments")
-    .select(`
+    .select(
+      `
       *,
       repositories(id, profile_id, assignment_group_id),
       submissions(id, profile_id, assignment_group_id, is_active, submission_reviews!submissions_grading_review_id_fkey(id, completed_at, total_score, completed_by, grader)),
       submission_regrade_requests(id, status),
       assignment_due_date_exceptions(id, student_id, assignment_group_id, hours, minutes),
       classes(time_zone)
-    `)
+    `
+    )
     .eq("class_id", course_id)
     .lte("due_date", new Date().toISOString())
     .gte("due_date", thirtyDaysAgo.toISOString())
@@ -96,29 +98,31 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     });
 
     // Calculate graded submissions
-    const gradedSubmissions = assignment.submissions?.filter((submission) => 
-      submission.submission_reviews?.completed_at !== null && submission.submission_reviews?.completed_by !== null
-    ).length || 0;
+    const gradedSubmissions =
+      assignment.submissions?.filter(
+        (submission) =>
+          submission.submission_reviews?.completed_at !== null && submission.submission_reviews?.completed_by !== null
+      ).length || 0;
 
     // Calculate regrade requests
-    const openRegradeRequests = assignment.submission_regrade_requests?.filter((request) => 
-      request.status === "opened"
-    ).length || 0;
-    
-    const closedRegradeRequests = assignment.submission_regrade_requests?.filter((request) => 
-      request.status === "closed" || request.status === "resolved"
-    ).length || 0;
+    const openRegradeRequests =
+      assignment.submission_regrade_requests?.filter((request) => request.status === "opened").length || 0;
+
+    const closedRegradeRequests =
+      assignment.submission_regrade_requests?.filter(
+        (request) => request.status === "closed" || request.status === "resolved"
+      ).length || 0;
 
     // Calculate students who can still submit (have extensions that extend past now)
     const now = new Date();
     const dueDate = new Date(assignment.due_date);
     let studentsWithValidExtensions = 0;
-    
+
     assignment.assignment_due_date_exceptions?.forEach((exception) => {
       const extensionHours = exception.hours;
       const extensionMinutes = exception.minutes;
       const extendedDueDate = new Date(dueDate.getTime() + (extensionHours * 60 + extensionMinutes) * 60 * 1000);
-      
+
       if (extendedDueDate > now) {
         studentsWithValidExtensions++;
       }
@@ -156,7 +160,8 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <Text fontWeight="semibold">{assignment.title}</Text>
                     </Link>
                     <Badge colorScheme="gray" size="sm">
-                      Due {formatInTimeZone(
+                      Due{" "}
+                      {formatInTimeZone(
                         new TZDate(assignment.due_date),
                         assignment.classes.time_zone || "America/New_York",
                         "MMM d"
@@ -178,11 +183,17 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <DataListItemLabel>Graded/Total</DataListItemLabel>
                       <DataListItemValue>
                         <Flex align="center" gap={2}>
-                          <Text>{stats.gradedSubmissions}/{stats.totalSubmissions}</Text>
+                          <Text>
+                            {stats.gradedSubmissions}/{stats.totalSubmissions}
+                          </Text>
                           {stats.gradedSubmissions === stats.totalSubmissions && stats.totalSubmissions > 0 ? (
-                            <Badge colorScheme="green" size="sm">Complete</Badge>
+                            <Badge colorScheme="green" size="sm">
+                              Complete
+                            </Badge>
                           ) : (
-                            <Badge colorScheme="yellow" size="sm">In Progress</Badge>
+                            <Badge colorScheme="yellow" size="sm">
+                              In Progress
+                            </Badge>
                           )}
                         </Flex>
                       </DataListItemValue>
@@ -191,7 +202,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <DataListItemLabel>Can still submit</DataListItemLabel>
                       <DataListItemValue>
                         {stats.studentsWithValidExtensions > 0 ? (
-                          <Badge colorScheme="blue" size="sm">{stats.studentsWithValidExtensions}</Badge>
+                          <Badge colorScheme="blue" size="sm">
+                            {stats.studentsWithValidExtensions}
+                          </Badge>
                         ) : (
                           <Text>0</Text>
                         )}
@@ -202,14 +215,16 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                       <DataListItemValue>
                         <Flex gap={2}>
                           {stats.openRegradeRequests > 0 && (
-                            <Badge colorScheme="red" size="sm">{stats.openRegradeRequests} open</Badge>
+                            <Badge colorScheme="red" size="sm">
+                              {stats.openRegradeRequests} open
+                            </Badge>
                           )}
                           {stats.closedRegradeRequests > 0 && (
-                            <Badge colorScheme="green" size="sm">{stats.closedRegradeRequests} resolved</Badge>
+                            <Badge colorScheme="green" size="sm">
+                              {stats.closedRegradeRequests} resolved
+                            </Badge>
                           )}
-                          {stats.openRegradeRequests === 0 && stats.closedRegradeRequests === 0 && (
-                            <Text>None</Text>
-                          )}
+                          {stats.openRegradeRequests === 0 && stats.closedRegradeRequests === 0 && <Text>None</Text>}
                         </Flex>
                       </DataListItemValue>
                     </DataListItem>

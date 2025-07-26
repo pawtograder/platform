@@ -4,19 +4,13 @@ import PersonName from "@/components/ui/person-name";
 import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, HStack, Icon, Input, Table, Tag, Text, VStack } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
-import { useTable } from "@refinedev/react-table";
-import {
-  ColumnDef,
-  flexRender,
-  getFilteredRowModel,
-  getCoreRowModel,
-  getPaginationRowModel
-} from "@tanstack/react-table";
+import { useCustomTable } from "@/hooks/useCustomTable";
+import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { AlertCircle, ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaCheck, FaTimes } from "react-icons/fa";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
@@ -143,7 +137,6 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
 
 export default function RegradeRequestsTable() {
   const { assignment_id } = useParams();
-  const [pageCount, setPageCount] = useState(0);
   const assignmentController = useAssignmentController();
 
   // Get all rubric checks for the assignment
@@ -183,18 +176,14 @@ export default function RegradeRequestsTable() {
     [allRubricChecks]
   );
 
-
+  // Server filters for initial data fetching
+  const serverFilters = useMemo(
+    () => [{ field: "assignment_id", operator: "eq" as const, value: assignment_id as string }],
+    [assignment_id]
+  );
 
   const columns = useMemo<ColumnDef<RegradeRequestRow>[]>(
     () => [
-      {
-        id: "assignment_id",
-        accessorKey: "assignment_id",
-        header: "Assignment",
-        filterFn: (row, id, filterValue) => {
-          return String(row.original.assignment_id) === String(filterValue);
-        }
-      },
       {
         id: "status",
         accessorKey: "status",
@@ -322,7 +311,7 @@ export default function RegradeRequestsTable() {
         id: "last_updated_at",
         accessorKey: "last_updated_at",
         header: "Last Updated",
-        cell: ({ getValue }) => { 
+        cell: ({ getValue }) => {
           return formatRelative(new Date(getValue() as string), new Date());
         }
       }
@@ -333,85 +322,64 @@ export default function RegradeRequestsTable() {
   const {
     getHeaderGroups,
     getRowModel,
-    refineCore: { tableQuery: tableQueryResult, current, pageSize, setCurrent },
+    data,
+    isLoading,
+    error,
     resetColumnFilters,
     getColumn,
     getCanPreviousPage,
     getCanNextPage,
-    setPageCount: setTablePageCount,
     resetSorting,
-    getPageCount
-  } = useTable<RegradeRequestRow>({
+    getPageCount,
+    getState,
+    setPageIndex
+  } = useCustomTable<RegradeRequestRow>({
     columns,
+    resource: "submission_regrade_requests",
+    serverFilters,
+    select: `
+      *,
+      submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id),
+      submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id),
+      submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id),
+      submissions!inner(
+          id,
+          profiles(name),
+          assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name)))
+      )
+    `,
     initialState: {
-      columnFilters: [
-        {
-          id: "assignment_id",
-          value: assignment_id as string
-        }
-      ],
       pagination: {
         pageIndex: 0,
         pageSize: 500
       },
       sorting: [{ id: "created_at", desc: false }]
-    },
-    refineCoreProps: {
-      resource: "submission_regrade_requests",
-      pagination: {
-        mode: "off"
-      },
-      filters: {
-        mode: "off"
-      },
-      meta: {
-        select: `
-                *,
-                submission_file_comments!submission_file_comments_regrade_request_id_fkey(rubric_check_id),
-                submission_artifact_comments!submission_artifact_comments_regrade_request_id_fkey(rubric_check_id),
-                submission_comments!submission_comments_regrade_request_id_fkey(rubric_check_id),
-                submissions!inner(
-                    id,
-                    profiles(name),
-                    assignment_groups(assignment_groups_members(profiles!assignment_groups_members_profile_id_fkey(name)))
-                )
-            `
-      }
-    },
-    manualPagination: false,
-    manualFiltering: false,
-    getPaginationRowModel: getPaginationRowModel(),
-    pageCount,
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel()
+    }
   });
 
   // Create options for assignee filter
   const assigneeOptions = useMemo(() => {
-    if (!tableQueryResult?.data?.data) return [];
-    
+    if (!data) return [];
+
     const assignees = new Set<string>();
-    tableQueryResult.data.data.forEach((row) => {
+    data.forEach((row) => {
       if (row.assignee) {
         assignees.add(row.assignee);
       }
     });
-    
+
     return Array.from(assignees)
       .sort()
       .map((assignee) => ({
         label: assignee,
         value: assignee
       }));
-  }, [tableQueryResult?.data?.data]);
+  }, [data]);
 
-  // Update page count when data changes
-  const totalCount = tableQueryResult?.data?.total || 0;
-  const calculatedPageCount = Math.ceil(totalCount / pageSize);
-  if (calculatedPageCount !== pageCount) {
-    setPageCount(calculatedPageCount);
-    setTablePageCount(calculatedPageCount);
-  }
+  // Get pagination state
+  const { pagination } = getState();
+  const { pageIndex, pageSize } = pagination;
+  const totalCount = data?.length || 0;
 
   return (
     <VStack align="stretch" gap={4}>
@@ -516,9 +484,7 @@ export default function RegradeRequestsTable() {
               placeholder="All assignees"
               value={
                 (getColumn("assignee")?.getFilterValue() as string)
-                  ? assigneeOptions.filter(
-                      (opt) => (getColumn("assignee")?.getFilterValue() as string) === opt.value
-                    )
+                  ? assigneeOptions.filter((opt) => (getColumn("assignee")?.getFilterValue() as string) === opt.value)
                   : []
               }
               onChange={(options) => {
@@ -546,51 +512,60 @@ export default function RegradeRequestsTable() {
         </Box>
       </HStack>
 
+      {/* Loading state */}
+      {isLoading && (
+        <Text textAlign="center" color="fg.muted">
+          Loading regrade requests...
+        </Text>
+      )}
+
+      {/* Error state */}
+      {error && (
+        <Text textAlign="center" color="red.500">
+          Error loading data: {error.message}
+        </Text>
+      )}
+
       {/* Table */}
       <Box overflowX="auto">
         <Table.Root size="sm">
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
               <Table.Row key={headerGroup.id}>
-                {headerGroup.headers
-                  .filter((header) => header.id !== "assignment_id")
-                  .map((header) => (
-                    <Table.ColumnHeader key={header.id}>
-                      {header.isPlaceholder ? null : (
-                        <HStack
-                          cursor={header.column.getCanSort() ? "pointer" : "default"}
-                          onClick={header.column.getToggleSortingHandler()}
-                          userSelect="none"
-                        >
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          {header.column.getCanSort() && (
-                            <Icon
-                              as={
-                                header.column.getIsSorted() === "desc"
-                                  ? FaSortDown
-                                  : header.column.getIsSorted() === "asc"
-                                    ? FaSortUp
-                                    : FaSort
-                              }
-                              boxSize={3}
-                            />
-                          )}
-                        </HStack>
-                      )}
-                    </Table.ColumnHeader>
-                  ))}
+                {headerGroup.headers.map((header) => (
+                  <Table.ColumnHeader key={header.id}>
+                    {header.isPlaceholder ? null : (
+                      <HStack
+                        cursor={header.column.getCanSort() ? "pointer" : "default"}
+                        onClick={header.column.getToggleSortingHandler()}
+                        userSelect="none"
+                      >
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {header.column.getCanSort() && (
+                          <Icon
+                            as={
+                              header.column.getIsSorted() === "desc"
+                                ? FaSortDown
+                                : header.column.getIsSorted() === "asc"
+                                  ? FaSortUp
+                                  : FaSort
+                            }
+                            boxSize={3}
+                          />
+                        )}
+                      </HStack>
+                    )}
+                  </Table.ColumnHeader>
+                ))}
               </Table.Row>
             ))}
           </Table.Header>
           <Table.Body>
             {getRowModel().rows.map((row) => (
               <Table.Row key={row.id}>
-                {row
-                  .getVisibleCells()
-                  .filter((cell) => cell.column.id !== "assignment_id")
-                  .map((cell) => (
-                    <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
-                  ))}
+                {row.getVisibleCells().map((cell) => (
+                  <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
+                ))}
               </Table.Row>
             ))}
           </Table.Body>
@@ -600,15 +575,15 @@ export default function RegradeRequestsTable() {
       {/* Pagination */}
       <HStack justifyContent="space-between" alignItems="center">
         <Text fontSize="sm" color="fg.muted">
-          Showing {Math.min((current - 1) * pageSize + 1, totalCount)} to {Math.min(current * pageSize, totalCount)} of{" "}
-          {totalCount} results
+          Showing {Math.min(pageIndex * pageSize + 1, totalCount)} to {Math.min((pageIndex + 1) * pageSize, totalCount)}{" "}
+          of {totalCount} results
         </Text>
 
         <HStack>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => getCanPreviousPage() && setCurrent(current - 1)}
+            onClick={() => getCanPreviousPage() && setPageIndex(pageIndex - 1)}
             disabled={!getCanPreviousPage()}
           >
             Previous
@@ -619,11 +594,11 @@ export default function RegradeRequestsTable() {
             <Input
               size="sm"
               width="60px"
-              value={current}
+              value={pageIndex + 1}
               onChange={(e) => {
-                const page = parseInt(e.target.value, 10);
-                if (!isNaN(page) && page > 0 && page <= getPageCount()) {
-                  setCurrent(page);
+                const page = parseInt(e.target.value, 10) - 1;
+                if (!isNaN(page) && page >= 0 && page < getPageCount()) {
+                  setPageIndex(page);
                 }
               }}
             />
@@ -633,7 +608,7 @@ export default function RegradeRequestsTable() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => getCanNextPage() && setCurrent(current + 1)}
+            onClick={() => getCanNextPage() && setPageIndex(pageIndex + 1)}
             disabled={!getCanNextPage()}
           >
             Next
