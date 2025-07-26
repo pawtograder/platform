@@ -25,10 +25,18 @@ jobs:
           coolify_environment_uuid: ${{ secrets.COOLIFY_ENVIRONMENT_UUID }}
           coolify_supabase_api_url: ${{ secrets.COOLIFY_SUPABASE_API_URL }}
           deployment_app_uuid: ${{ secrets.COOLIFY_DEPLOYMENT_APP_UUID }}
+        env:
+          GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
+          GITHUB_OAUTH_CLIENT_ID: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
+          GITHUB_OAUTH_CLIENT_SECRET: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_SECRET }}
+          GITHUB_OAUTH_PRIVATE_KEY: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_PRIVATE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
       - name: Run Playwright tests
         env:
+          TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
           SUPABASE_URL: ${{ steps.deploy.outputs.supabase_url }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ steps.deploy.outputs.supabase_service_role_key }}
           SUPABASE_ANON_KEY: ${{ steps.deploy.outputs.supabase_anon_key }}
