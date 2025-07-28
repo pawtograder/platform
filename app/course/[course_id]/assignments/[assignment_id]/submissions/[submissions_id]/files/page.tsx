@@ -68,12 +68,10 @@ import {
 import { useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
-import JSZip from "jszip";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
-import zipToHTMLBlobs from "./zipToHTMLBlobs";
 
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
@@ -568,7 +566,7 @@ function ArtifactCheckPopover({
   if (!criteriaOptions || criteriaOptions.length === 0) {
     return (
       <Text fontSize="sm" color="fg.muted">
-        No rubric checks available for artifact annotation.
+        No rubric checks available for this artifact.
       </Text>
     );
   }
@@ -711,9 +709,6 @@ function ArtifactWithComments({
       <Heading size="lg" mb={2}>
         {artifact.name}
       </Heading>
-      <Text fontSize="sm" color="fg.muted" mb={2}>
-        Type: {artifact.data?.format}, Display: {artifact.data?.display}
-      </Text>
 
       <ArtifactCheckPopover artifact={artifact} reviewAssignmentId={reviewAssignmentId} />
 
@@ -740,7 +735,6 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
             artifactId: artifact.id
           })
         });
-        console.log(data)
         setSiteUrl(data.data.url);
       }
       const client = createClient();
@@ -778,17 +772,32 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         return (
           <Box>
             <ClientOnly>
-              <Box borderWidth="1px" borderColor="border.emphasized" borderRadius="md" overflow="hidden">
+              <div
+                style={{
+                  border: "1px solid var(--chakra-colors-border-emphasized)",
+                  borderRadius: "0.375rem",
+                  overflow: "auto",
+                  resize: "both",
+                  height: "400px",
+                  minHeight: "300px",
+                  minWidth: "300px",
+                  width: "100%",
+                  maxWidth: "100%"
+                }}
+              >
                 <iframe
                   src={siteUrl}
-                  className="w-full h-full border-none min-h-[500px]"
+                  className="border-none"
                   style={{
-                    width: "100%"
+                    width: "100%",
+                    height: "100%",
+                    display: "block",
+                    border: "none"
                   }}
                   title={artifact.name}
                   sandbox="allow-scripts"
                 />
-              </Box>
+              </div>
             </ClientOnly>
           </Box>
         );
