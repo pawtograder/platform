@@ -51,7 +51,7 @@ export async function createUserInClass(
 
   if (!userId) {
     console.log("Creating user", user.primary_email);
-    if (user.primary_email.endsWith("@northeastern.edu")) {
+    if (user.primary_email.endsWith("@northeastern.edu") && !user.primary_email.includes("+")) {
       const newUser = await supabase.auth.admin.createUser({
         email: user.primary_email,
         email_confirm: true

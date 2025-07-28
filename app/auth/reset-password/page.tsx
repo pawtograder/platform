@@ -4,10 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
 import Logo from "@/components/ui/logo";
 
-type SearchParams = Message & { code?: string };
+type SearchParams = Message & { token_hash?: string };
 export default async function ResetPassword(props: { searchParams: Promise<SearchParams> }) {
   const { ...message } = await props.searchParams;
-
+  const token_hash = message.token_hash;
   return (
     <Container maxW="md" py={{ base: "12", md: "24" }}>
       <Stack gap="6">
@@ -20,20 +20,21 @@ export default async function ResetPassword(props: { searchParams: Promise<Searc
         <HStack gap="6" w="100%">
           <Separator flex="1" />
           <Text flexShrink="0" textStyle="sm" color="fg.muted">
-            Choose a password to join Pawtograder
+            Reset Password
           </Text>
           <Separator flex="1" />
         </HStack>
 
         <Stack gap="4">
           <form action={setNewPasswordAction}>
+            <input type="hidden" name="token_hash" value={token_hash} />
             <FormMessage message={message} />
             <Box>
               <Input name="password" placeholder="new password" type="password" aria-label="Sign in password" />
             </Box>
             <Box mt="4">
               <Button type="submit" name="action" value="set-new-password" width="100%">
-                Accept Invitation
+                Reset Password
               </Button>
             </Box>
           </form>
