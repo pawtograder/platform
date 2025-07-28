@@ -939,3 +939,7 @@ export type LabSectionWithMeetings = GetResult<
 >;
 
 export type DayOfWeek = "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+
+export type RegradeStatus = Database["public"]["Enums"]["regrade_status"];
+export type RegradeRequest = Database["public"]["Tables"]["submission_regrade_requests"]["Row"];
+export type RegradeRequestComment = Database["public"]["Tables"]["submission_regrade_request_comments"]["Row"];

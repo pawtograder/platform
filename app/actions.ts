@@ -4,17 +4,80 @@ import { createClient } from "@/utils/supabase/server";
 import { encodedRedirect } from "@/utils/utils";
 import { redirect } from "next/navigation";
 
-export const setNewPasswordAction = async (formData: FormData) => {
-  const password = formData.get("password");
+export const confirmEmailAction = async (formData: FormData) => {
+  const token_hash = formData.get("token_hash");
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.updateUser({ password: password as string });
+  const { data, error } = await supabase.auth.verifyOtp({
+    token_hash: token_hash as string,
+    type: "email"
+  });
+  console.log(data);
   if (error) {
-    return encodedRedirect("error", "/sign-in", error.message);
+    return encodedRedirect("error", "/auth/confirm", error.message);
+  }
+  return redirect("/course");
+};
+export const acceptInvitationAction = async (formData: FormData) => {
+  const password = formData.get("password");
+  const token_hash = formData.get("token_hash");
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.verifyOtp({
+    token_hash: token_hash as string,
+    type: "invite"
+  });
+  if (error) {
+    return encodedRedirect("error", "/auth/accept-invitation", error.message);
   }
   if (data.user) {
+    const { error: userError } = await supabase.auth.updateUser({
+      password: password as string
+    });
+    if (userError) {
+      return encodedRedirect("error", "/auth/accept-invitation", userError.message);
+    }
+    return encodedRedirect("success", "/course", "Password set successfully");
+  }
+};
+
+export const setNewPasswordAction = async (formData: FormData) => {
+  const token_hash = formData.get("token_hash");
+  const supabase = await createClient();
+  //Only try to login if the user is not already logged in, to allow multiple efforts to get the password to meet the requirements
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+  if (!user) {
+    const { error } = await supabase.auth.verifyOtp({
+      token_hash: token_hash as string,
+      type: "email"
+    });
+    if (error) {
+      return encodedRedirect("error", "/auth/reset-password", error.message);
+    }
+  }
+  const password = formData.get("password");
+  const { data: updateData, error: updateError } = await supabase.auth.updateUser({ password: password as string });
+  if (updateError) {
+    return encodedRedirect("error", "/auth/reset-password", updateError.message);
+  }
+  if (updateData.user) {
     return encodedRedirect("success", "/course", "Password reset successfully");
   }
 };
+
+export const signInWithMagicLinkAction = async (formData: FormData) => {
+  const token_hash = formData.get("token_hash");
+  const supabase = await createClient();
+  const { error } = await supabase.auth.verifyOtp({
+    token_hash: token_hash as string,
+    type: "magiclink"
+  });
+  if (error) {
+    return encodedRedirect("error", "/auth/magic-link", error.message);
+  }
+  return redirect("/course");
+};
+
 export const signInOrSignUpWithEmailAction = async (data: FormData) => {
   const action = data.get("action");
   const email = data.get("email");
@@ -27,6 +90,7 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
     return resetPasswordAction(email as string);
   }
 };
+
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {

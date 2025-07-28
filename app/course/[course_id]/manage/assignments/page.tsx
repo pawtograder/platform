@@ -6,16 +6,21 @@ import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import SyncStaffTeamButton from "./syncStaffTeamButton";
 
-function numUniqueSubmissions(submissions: { profile_id: string | null; assignment_group_id: number | null }[]) {
-  return new Set(submissions.map((s) => `profile=${s.profile_id},group=${s.assignment_group_id}`)).size;
-}
-
+/**
+ * Renders the assignment management page for a specific course, displaying a table of assignments with relevant actions and statistics.
+ *
+ * Fetches class and assignment overview data for the given course, then displays assignment titles, release and due dates (formatted in the class's time zone), active submission counts, and open regrade request counts. Provides actions to create a new assignment and to sync the staff team.
+ *
+ * @param params - A promise resolving to an object containing the `course_id` of the course to manage assignments for.
+ * @returns A React component rendering the assignments management interface for the specified course.
+ */
 export default async function ManageAssignmentsPage({ params }: { params: Promise<{ course_id: string }> }) {
   const { course_id } = await params;
   const client = await createClient();
+  const { data: classes } = await client.from("classes").select("*").eq("id", Number(course_id));
   const assignments = await client
-    .from("assignments")
-    .select("*, submissions(profile_id, assignment_group_id), classes(time_zone)")
+    .from("assignment_overview")
+    .select("*")
     .eq("class_id", Number(course_id))
     .order("due_date", { ascending: false });
 
@@ -37,7 +42,8 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
             <Table.ColumnHeader>Title</Table.ColumnHeader>
             <Table.ColumnHeader>Release Date</Table.ColumnHeader>
             <Table.ColumnHeader>Due Date</Table.ColumnHeader>
-            <Table.ColumnHeader>Submissions</Table.ColumnHeader>
+            <Table.ColumnHeader>Active Submissions</Table.ColumnHeader>
+            <Table.ColumnHeader>Open Regrade Requests</Table.ColumnHeader>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -50,7 +56,7 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
                 {assignment.release_date
                   ? formatInTimeZone(
                       new TZDate(assignment.release_date),
-                      assignment.classes.time_zone || "America/New_York",
+                      classes?.[0]?.time_zone || "America/New_York",
                       "Pp"
                     )
                   : "N/A"}
@@ -59,12 +65,21 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
                 {assignment.due_date
                   ? formatInTimeZone(
                       new TZDate(assignment.due_date),
-                      assignment.classes.time_zone || "America/New_York",
+                      classes?.[0]?.time_zone || "America/New_York",
                       "Pp"
                     )
                   : "N/A"}
               </Table.Cell>
-              <Table.Cell>{numUniqueSubmissions(assignment.submissions)}</Table.Cell>
+              <Table.Cell>
+                <Link href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
+                  {assignment.active_submissions_count}
+                </Link>
+              </Table.Cell>
+              <Table.Cell>
+                <Link href={`/course/${course_id}/manage/assignments/${assignment.id}/regrade-requests`}>
+                  {assignment.open_regrade_requests_count}
+                </Link>
+              </Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>

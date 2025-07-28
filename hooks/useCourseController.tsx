@@ -14,6 +14,10 @@ import {
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
 
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import { createClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
@@ -21,10 +25,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
-import { createClient } from "@/utils/supabase/client";
-import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import { Box, Spinner } from "@chakra-ui/react";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
