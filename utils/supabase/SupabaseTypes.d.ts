@@ -2682,6 +2682,13 @@ export type Database = {
             foreignKeyName: "help_request_file_references_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
             referencedRelation: "assignments";
             referencedColumns: ["id"];
           },
@@ -7508,10 +7515,6 @@ export type Database = {
         };
         Returns: undefined;
       };
-      user_is_in_help_request: {
-        Args: { p_help_request_id: number; p_user_id?: string };
-        Returns: boolean;
-      };
       update_regrade_request_status: {
         Args: {
           regrade_request_id: number;
@@ -7520,6 +7523,10 @@ export type Database = {
           resolved_points?: number;
           closed_points?: number;
         };
+        Returns: boolean;
+      };
+      user_is_in_help_request: {
+        Args: { p_help_request_id: number; p_user_id?: string };
         Returns: boolean;
       };
     };
