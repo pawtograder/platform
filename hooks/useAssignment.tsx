@@ -2,10 +2,12 @@
 import {
   ActiveSubmissionsWithGradesForAssignment,
   AssignmentWithRubricsAndReferences,
+  RegradeRequest,
   ReviewAssignmentParts,
   ReviewAssignments,
   RubricReviewRound
 } from "@/utils/supabase/DatabaseTypes";
+
 import { Text } from "@chakra-ui/react";
 import { useList, useShow } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -123,9 +125,10 @@ export function useMyReviewAssignments(submission_id?: number) {
 }
 
 /**
- * Returns all referencing rubric checks for which the given check is the referenced check.
- * @param rubric_check_id Check that is referenced
- * @returns the referencing rubric checks
+ * Returns all rubric checks that reference the specified rubric check ID.
+ *
+ * @param rubric_check_id - The ID of the rubric check being referenced
+ * @returns An array of referencing rubric checks, or undefined if no ID is provided
  */
 export function useReferencingRubricChecks(rubric_check_id: number | null | undefined) {
   const controller = useAssignmentController();
@@ -133,6 +136,66 @@ export function useReferencingRubricChecks(rubric_check_id: number | null | unde
     return undefined;
   }
   return controller.referencingChecksById.get(rubric_check_id);
+}
+
+/**
+ * Subscribes to and returns all regrade requests for the current assignment.
+ *
+ * The returned array updates in real time as regrade requests are added, modified, or removed.
+ *
+ * @returns An array of regrade requests associated with the current assignment.
+ */
+export function useRegradeRequests() {
+  const controller = useAssignmentController();
+  const [regradeRequests, setRegradeRequests] = useState<RegradeRequest[]>(controller.regradeRequests.rows);
+
+  useEffect(() => {
+    const { unsubscribe } = controller.regradeRequests.list(setRegradeRequests);
+    setRegradeRequests(controller.regradeRequests.rows);
+    return () => unsubscribe();
+  }, [controller]);
+
+  return regradeRequests;
+}
+
+/**
+ * Subscribes to and returns a single regrade request by its ID, updating the value in real time as the data changes.
+ *
+ * @param regrade_request_id - The ID of the regrade request to retrieve, or `null`/`undefined` to disable the subscription.
+ * @returns The regrade request with the specified ID, or `undefined` if not found or if the ID is not provided.
+ */
+export function useRegradeRequest(regrade_request_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const [regradeRequest, setRegradeRequest] = useState<RegradeRequest | undefined>(
+    regrade_request_id ? controller.regradeRequests.rows.find((rr) => rr.id === regrade_request_id) : undefined
+  );
+
+  useEffect(() => {
+    if (!regrade_request_id) {
+      setRegradeRequest(undefined);
+      return;
+    }
+
+    const { unsubscribe, data } = controller.regradeRequests.getById(regrade_request_id, setRegradeRequest);
+    setRegradeRequest(data);
+    return () => unsubscribe();
+  }, [controller, regrade_request_id]);
+
+  return regradeRequest;
+}
+
+/**
+ * Returns all regrade requests associated with a specific submission.
+ *
+ * @param submission_id - The ID of the submission to filter regrade requests by
+ * @returns An array of regrade requests for the given submission ID
+ */
+export function useRegradeRequestsBySubmission(submission_id: number | null | undefined) {
+  const regradeRequests = useRegradeRequests();
+  return useMemo(
+    () => regradeRequests.filter((rr) => rr.submission_id === submission_id),
+    [regradeRequests, submission_id]
+  );
 }
 
 type OurRubricCheck =
@@ -144,6 +207,7 @@ class AssignmentController {
 
   readonly reviewAssignments: TableController<"review_assignments">;
   readonly reviewAssignmentRubricParts: TableController<"review_assignment_rubric_parts">;
+  readonly regradeRequests: TableController<"submission_regrade_requests">;
 
   rubricCheckById: Map<number, OurRubricCheck> = new Map();
   rubricCriteriaById: Map<
@@ -173,6 +237,12 @@ class AssignmentController {
       query: client.from("review_assignment_rubric_parts").select("*").eq("class_id", class_id),
       client: client,
       table: "review_assignment_rubric_parts",
+      classRealTimeController
+    });
+    this.regradeRequests = new TableController({
+      query: client.from("submission_regrade_requests").select("*").eq("assignment_id", assignment_id),
+      client: client,
+      table: "submission_regrade_requests",
       classRealTimeController
     });
   }
@@ -240,6 +310,7 @@ class AssignmentController {
   get submissions() {
     return this._submissions;
   }
+
   get isReady() {
     return !!this._assignment && this._rubrics.length > 0;
   }
@@ -302,6 +373,15 @@ export function AssignmentProvider({
   );
 }
 
+/**
+ * Loads assignment data, rubrics, and submissions into the provided AssignmentController and manages readiness state.
+ *
+ * Waits for assignment, rubrics, submissions, and required table controllers to be loaded before signaling readiness. Does not render any UI.
+ *
+ * @param assignment_id - The ID of the assignment to load
+ * @param setReady - Callback to set readiness state when all data and controllers are loaded
+ * @param controller - The AssignmentController instance to populate with loaded data
+ */
 function AssignmentControllerCreator({
   assignment_id,
   setReady,
@@ -332,10 +412,11 @@ function AssignmentControllerCreator({
   });
 
   useEffect(() => {
-    controller.reviewAssignments.readyPromise.then(() => {
+    const promises = [controller.reviewAssignments.readyPromise, controller.regradeRequests.readyPromise];
+    Promise.all(promises).then(() => {
       setTableControllersReady(true);
     });
-  }, [controller.reviewAssignments]);
+  }, [controller.reviewAssignments, controller.regradeRequests]);
 
   // Set data in controller
   useEffect(() => {

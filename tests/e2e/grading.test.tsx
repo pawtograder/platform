@@ -65,6 +65,11 @@ const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great 
 const GRADING_REVIEW_COMMENT_2 =
   "This is the kind of code that makes grading enjoyable: well-structured and thoughtful work!";
 
+const REGRADE_COMMENT = "I think that I deserve better than a 10/10!";
+const REGRADE_RESOLUTION = "I do not think it is possible to get more than 10/10!";
+const REGRADE_ESCALATION = "But I heard that Ben Bitdiddle got an 11/10!";
+const REGRADE_FINAL_COMMENT = "Alright, 11/10 it is then!";
+
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
   test("Students can submit self-review early", async ({ page }) => {
@@ -179,7 +184,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Release To Student" }).click();
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
-  test("Students can view their grading results", async ({ page }) => {
+  test("Students can view their grading results and request a regrade", async ({ page }) => {
     await loginAsUser(page, student!, course);
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
@@ -190,15 +195,101 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
-    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(
-      "Grading Review Criteria 20/20"
-    );
-    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(GRADING_REVIEW_COMMENT_1);
-    await expect(page.locator(`#rubric-${assignment!.grading_rubric_id}`)).toContainText(GRADING_REVIEW_COMMENT_2);
+    const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);
+    await expect(rubricSidebar).toContainText("Grading Review Criteria 20/20");
+    await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_1);
+    await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
     await percySnapshot(page, "Student can view their grading results");
 
-    await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(
-      `${instructor!.private_profile_name} applied today`
-    );
+    await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
+    // Find the region with aria-label 'Grading checks on line 4'
+    const region = await page.getByRole("region", { name: "Grading checks on line 4" });
+    await expect(region).toBeVisible();
+    await region.getByRole("button", { name: "Request regrade for this check" }).click();
+    await percySnapshot(page, "Student can request a regrade");
+    await page.getByRole("button", { name: "Draft Regrade Request" }).click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to open this")
+      .click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to open this")
+      .fill(REGRADE_COMMENT);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Open Request", { exact: true })
+      .click();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await percySnapshot(page, "Student can add a comment to open the regrade request");
+  });
+  test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .click();
+    await percySnapshot(page, "Instructors can view the regrade request");
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .fill(REGRADE_RESOLUTION);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Add Comment", { exact: true })
+      .click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
+    await percySnapshot(page, "Instructors can resolve the regrade request");
+    await page.getByRole("spinbutton").fill("10");
+    await page.getByRole("button", { name: "Resolve", exact: true }).click();
+  });
+  test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .fill(REGRADE_ESCALATION);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Add Comment", { exact: true })
+      .click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Appeal to Instructor" }).click();
+    await percySnapshot(page, "Students can appeal their regrade request");
+    await page.getByRole("button", { name: "Escalate Request" }).click();
+  });
+  test("Instructors can view the student's regrade appeal and resolve it", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .fill(REGRADE_FINAL_COMMENT);
+    await percySnapshot(page, "Instructors can view the student's regrade appeal");
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Add Comment", { exact: true })
+      .click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
+    await page.getByRole("spinbutton").fill("11");
+    await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal" }).click();
+    await percySnapshot(page, "Instructors can close the regrade request");
+    await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
   });
 });

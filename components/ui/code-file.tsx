@@ -1,6 +1,6 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import { useRubricById, useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import {
   useSubmission,
   useSubmissionController,
@@ -45,6 +45,8 @@ import LineCommentForm from "./line-comments-form";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
+import RegradeRequestWrapper from "./regrade-request-wrapper";
+import RequestRegradeDialog from "./request-regrade-dialog";
 import { RubricMarkingMenu } from "./rubric-marking-menu";
 import { CommentActions, ReviewRoundTag, StudentVisibilityIndicator } from "./rubric-sidebar";
 import { Skeleton } from "./skeleton";
@@ -381,12 +383,19 @@ export function starryNightGutter(
   tree.children = replacement;
 }
 
+/**
+ * Displays a rubric-based annotation comment on a code line, including points, rubric details, author, and visibility status.
+ *
+ * Allows inline editing of the comment for graders and instructors. If the user is a student and the comment affects their score, provides a dialog to request a regrade, with special handling for group submissions. Shows relevant UI elements based on comment visibility, release status, and regrade request state.
+ */
 function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const commentAuthor = useUserProfile(comment?.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submissionController = useSubmissionController();
+
+  const isGraderOrInstructor = useIsGraderOrInstructor();
 
   const rubricCheck = useRubricCheck(comment?.rubric_check_id);
   const rubricCriteria = useRubricCriteria(rubricCheck?.rubric_criteria_id);
@@ -417,79 +426,98 @@ function LineCheckAnnotation({ comment_id }: { comment_id: number }) {
 
   const { isVisible: willBeVisibleToStudents } = getStudentVisibilityInfo();
 
+  // Check if student can create a regrade request
+  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
+
+  // Check if this is a group submission
+
   return (
-    <Box m={0} p={0} w="100%" pb={1}>
-      <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
-        <PersonAvatar size="2xs" uid={comment.author} />
-        <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
-          <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
-            <Flex w="100%" justifyContent="space-between">
-              <HStack flexGrow={10}>
-                {!comment.eventually_visible && (
-                  <Tooltip content="This comment will never be visible to the student">
-                    <Icon as={FaRegEyeSlash} color="fg.muted" />
-                  </Tooltip>
+    <Box role="region" aria-label={`Grading checks on line ${comment.line}`}>
+      <RegradeRequestWrapper regradeRequestId={comment.regrade_request_id}>
+        <Box m={0} p={0} w="100%" pb={1}>
+          <HStack spaceX={0} mb={0} alignItems="flex-start" w="100%">
+            <PersonAvatar size="2xs" uid={comment.author} />
+            <VStack alignItems="flex-start" spaceY={0} gap={0} w="100%" border="1px solid" borderRadius="md">
+              <Box bg={willBeVisibleToStudents ? "bg.info" : "bg.error"} pl={1} pr={1} borderRadius="md" w="100%">
+                <Flex w="100%" justifyContent="space-between">
+                  <HStack flexGrow={10}>
+                    {!comment.eventually_visible && (
+                      <Tooltip content="This comment will never be visible to the student">
+                        <Icon as={FaRegEyeSlash} color="fg.muted" />
+                      </Tooltip>
+                    )}
+                    {comment.eventually_visible && !comment.released && (
+                      <Tooltip content="This comment is not released to the student yet">
+                        <Icon as={FaEyeSlash} />
+                      </Tooltip>
+                    )}
+                    {hasPoints && (
+                      <>
+                        <Icon
+                          as={rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle}
+                          color={rubricCriteria.is_additive ? "green.500" : "red.500"}
+                        />
+                        {pointsText}
+                      </>
+                    )}
+                    <Text fontSize="sm" color="fg.muted">
+                      {rubricCriteria?.name} &gt; {rubricCheck?.name}
+                    </Text>
+                  </HStack>
+                  <HStack gap={0} flexWrap="wrap">
+                    <Text fontSize="sm" fontStyle="italic" color="fg.muted">
+                      {commentAuthor?.name}
+                    </Text>
+                    {comment.submission_review_id && (
+                      <ReviewRoundTag submission_review_id={comment.submission_review_id} />
+                    )}
+                  </HStack>
+                  <CommentActions comment={comment} setIsEditing={setIsEditing} />
+                </Flex>
+              </Box>
+              <Box pl={2}>
+                <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
+              </Box>
+              <Box pl={2} w="100%">
+                {isEditing ? (
+                  <MessageInput
+                    textAreaRef={messageInputRef}
+                    defaultSingleLine={true}
+                    value={comment.comment}
+                    closeButtonText="Cancel"
+                    onClose={() => {
+                      setIsEditing(false);
+                    }}
+                    sendMessage={async (message) => {
+                      await submissionController.submission_file_comments.update(comment.id, { comment: message });
+                      setIsEditing(false);
+                    }}
+                  />
+                ) : (
+                  <Markdown>{comment.comment}</Markdown>
                 )}
-                {comment.eventually_visible && !comment.released && (
-                  <Tooltip content="This comment is not released to the student yet">
-                    <Icon as={FaEyeSlash} />
-                  </Tooltip>
-                )}
-                {hasPoints && (
-                  <>
-                    <Icon
-                      as={rubricCriteria.is_additive ? FaCheckCircle : FaTimesCircle}
-                      color={rubricCriteria.is_additive ? "green.500" : "red.500"}
-                    />
-                    {pointsText}
-                  </>
-                )}
-                <Text fontSize="sm" color="fg.muted">
-                  {rubricCriteria?.name} &gt; {rubricCheck?.name}
-                </Text>
-              </HStack>
-              <HStack gap={0} flexWrap="wrap">
-                <Text fontSize="sm" fontStyle="italic" color="fg.muted">
-                  {commentAuthor?.name}
-                </Text>
-                {comment.submission_review_id && <ReviewRoundTag submission_review_id={comment.submission_review_id} />}
-              </HStack>
-              <CommentActions comment={comment} setIsEditing={setIsEditing} />
-            </Flex>
-          </Box>
-          <Box pl={2}>
-            <Markdown style={{ fontSize: "0.8rem" }}>{rubricCheck.description}</Markdown>
-          </Box>
-          <Box pl={2} w="100%">
-            {isEditing ? (
-              <MessageInput
-                textAreaRef={messageInputRef}
-                defaultSingleLine={true}
-                value={comment.comment}
-                closeButtonText="Cancel"
-                onClose={() => {
-                  setIsEditing(false);
-                }}
-                sendMessage={async (message) => {
-                  await submissionController.submission_file_comments.update(comment.id, { comment: message });
-                  setIsEditing(false);
-                }}
-              />
-            ) : (
-              <Markdown>{comment.comment}</Markdown>
-            )}
-          </Box>
-        </VStack>
-      </HStack>
+              </Box>
+              {/* Regrade Request Button */}
+              {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />}
+            </VStack>
+          </HStack>
+        </Box>
+      </RegradeRequestWrapper>
     </Box>
   );
 }
 
+/**
+ * Renders a single general comment on a code line, displaying the author's profile, flair, and comment content, with inline editing capabilities.
+ *
+ * If the comment or author profile is not yet loaded, displays a loading skeleton.
+ *
+ * @param comment_id - The ID of the comment to display.
+ * @param submissionReviewId - Optional ID of the submission review, used for context.
+ */
 function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: number; submissionReviewId?: number }) {
   const comment = useSubmissionFileComment(comment_id);
   const authorProfile = useUserProfile(comment?.author);
-  const { private_profile_id } = useClassProfiles();
-  const isAuthor = private_profile_id === comment?.author;
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -528,9 +556,9 @@ function CodeLineComment({ comment_id, submissionReviewId }: { comment_id: numbe
               <Text>commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
-              {isAuthor || authorProfile?.flair ? (
-                <Tag.Root size="md" colorPalette={isAuthor ? "green" : authorProfile?.flair_color} variant="surface">
-                  <Tag.Label>{isAuthor ? "Author" : authorProfile?.flair}</Tag.Label>
+              {authorProfile?.flair ? (
+                <Tag.Root size="md" colorPalette={authorProfile?.flair_color} variant="surface">
+                  <Tag.Label>{authorProfile?.flair}</Tag.Label>
                 </Tag.Root>
               ) : (
                 <></>
@@ -600,6 +628,11 @@ export function formatPoints(option: {
   return ``;
 }
 
+/**
+ * Displays a popup for annotating a specific line in a code file with a rubric check or comment.
+ *
+ * Allows graders to select a rubric check (with optional sub-options), view criteria, and add an optional or required comment to the selected line. Enforces annotation limits per check and provides context-sensitive UI for marking or direct selection modes. Handles submission of new annotation comments, including points and visibility settings.
+ */
 function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: LineActionPopupComponentProps) {
   const submissionController = useSubmissionController();
   const submission = useSubmission();
@@ -951,7 +984,8 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
                   submission_review_id: submissionReviewId ?? null,
                   eventually_visible: selectedCheckOption.check
                     ? selectedCheckOption.check.student_visibility !== "never"
-                    : true
+                    : true,
+                  regrade_request_id: null
                 };
                 try {
                   await submissionController.submission_file_comments.create(values);
@@ -972,6 +1006,13 @@ function LineActionPopup({ lineNumber, top, left, visible, close, mode, file }: 
   );
 }
 
+/**
+ * Renders all comments and rubric annotations for a specific line of code, along with the reply form if allowed.
+ *
+ * Displays line-specific comments and rubric-based annotations, filtering visibility based on user role and submission release status. Disables the reply form and "Add Comment" button if any comment on the line has an active regrade request.
+ *
+ * @param lineNumber - The line number for which to display comments and annotations.
+ */
 function CodeLineComments({ lineNumber }: { lineNumber: number }) {
   const {
     submission,
@@ -983,6 +1024,7 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
   } = useCodeLineCommentContext();
   const isGraderOrInstructor = useIsGraderOrInstructor();
   const isReplyEnabled = isGraderOrInstructor || submission.released !== null;
+  const hasARegradeRequest = allCommentsForFile.some((comment) => comment.regrade_request_id !== null);
   const [showReply, setShowReply] = useState(isReplyEnabled);
 
   const commentsToDisplay = useMemo(() => {
@@ -1038,14 +1080,15 @@ function CodeLineComments({ lineNumber }: { lineNumber: number }) {
             <CodeLineComment key={comment.id} comment_id={comment.id} submissionReviewId={submissionReviewId} />
           )
         )}
-        {showReply ? (
+        {showReply && !hasARegradeRequest && (
           <LineCommentForm
             lineNumber={lineNumber}
             submission={submission}
             file={file}
             submissionReviewId={submissionReviewId}
           />
-        ) : (
+        )}
+        {!showReply && !hasARegradeRequest && (
           <Box display="flex" justifyContent="flex-end">
             <Button colorPalette="green" onClick={() => setShowReply(true)}>
               Add Comment
