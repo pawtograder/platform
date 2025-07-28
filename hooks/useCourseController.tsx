@@ -14,7 +14,7 @@ import {
   UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
 
-import { constructFromSymbol, TZDate } from "@date-fns/tz";
+import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -186,7 +186,7 @@ export function useDiscussionThreadTeaser(id: number, watchFields?: DiscussionTh
     });
     setTeaser(data);
     return unsubscribe;
-  }, [controller, id]);
+  }, [controller, id, watchFields]);
   return teaser;
 }
 export type UpdateCallback<T> = (data: T) => void;
@@ -216,6 +216,75 @@ export class CourseController {
       profileId,
       isStaff
     });
+
+    this._setupRealtimeSubscriptions();
+  }
+
+  private _setupRealtimeSubscriptions() {
+    if (!this._classRealTimeController) return;
+
+    this._classRealTimeController.subscribeToTable("profiles", (message) => {
+      this.handleProfileEvent({
+        type: message.operation?.toLowerCase() as "created" | "updated" | "deleted",
+        payload: message.data as UserProfile,
+        channel: "profiles",
+        date: new Date()
+      });
+    });
+
+    this._classRealTimeController.subscribeToTable("user_roles", (message) => {
+      this.handleUserRoleEvent({
+        type: message.operation?.toLowerCase() as "created" | "updated" | "deleted",
+        payload: message.data as UserRoleWithUser,
+        channel: "user_roles",
+        date: new Date()
+      });
+    });
+
+    this._classRealTimeController.subscribeToTable("discussion_threads", (message) => {
+      this.handleDiscussionThreadTeaserEvent({
+        type: message.operation?.toLowerCase() as "created" | "updated" | "deleted",
+        payload: message.data as DiscussionThreadTeaser,
+        channel: "discussion_threads",
+        date: new Date()
+      });
+    });
+
+    this._classRealTimeController.subscribeToTable("discussion_thread_read_status", (message) => {
+      this.handleReadStatusEvent({
+        type: message.operation?.toLowerCase() as "created" | "updated" | "deleted",
+        payload: message.data as DiscussionThreadReadStatus,
+        channel: "discussion_thread_read_status",
+        date: new Date()
+      });
+    });
+
+    this._classRealTimeController.subscribeToTable("tags", (message) => {
+      this.handleTagEvent({
+        type: message.operation?.toLowerCase() as "created" | "updated" | "deleted",
+        payload: message.data as Tag,
+        channel: "tags",
+        date: new Date()
+      });
+    });
+
+    this._classRealTimeController.subscribeToTable("lab_sections", (message) => {
+      this.handleLabSectionEvent({
+        type: message.operation?.toLowerCase() as "created" | "updated" | "deleted",
+        payload: message.data as LabSection,
+        channel: "lab_sections",
+        date: new Date()
+      });
+    });
+
+    this._classRealTimeController.subscribeToTable("lab_section_meetings", (message) => {
+      this.handleLabSectionMeetingEvent({
+        type: message.operation?.toLowerCase() as "created" | "updated" | "deleted",
+        payload: message.data as LabSectionMeeting,
+        channel: "lab_section_meetings",
+        date: new Date()
+      });
+    });
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -243,7 +312,6 @@ export class CourseController {
   private tagListSubscribers: UpdateCallback<Tag[]>[] = [];
   private profileTagSubscribers: Map<string, UpdateCallback<Tag[]>[]> = new Map();
 
-  // Lab sections data
   private labSections: LabSection[] = [];
   private labSectionMeetings: LabSectionMeeting[] = [];
   private labSectionListSubscribers: UpdateCallback<LabSection[]>[] = [];
@@ -455,7 +523,6 @@ export class CourseController {
       const isRoot = updatedStatus.discussion_thread_root_id === updatedStatus.discussion_thread_id;
       const existingStatuses = Array.from(this.discussionThreadReadStatuses.values());
 
-      // Fetch current children_count from the teaser cache
       const getChildrenCount = (threadId: number): number => {
         return this.discussionThreadTeasers.find((t) => t.id === threadId)?.children_count ?? 0;
       };
@@ -801,7 +868,6 @@ export class CourseController {
       labSectionId: labSectionIdOverride
     }: { studentPrivateProfileId: string; labSectionId?: number }
   ): Date {
-    // If assignment doesn't use lab-based scheduling, return original due date
     if (!studentPrivateProfileId && !labSectionIdOverride) {
       throw new Error("No student private profile ID or lab section ID override provided");
     }
@@ -809,11 +875,9 @@ export class CourseController {
       return new Date(assignment.due_date);
     }
 
-    // Get student's lab section
     const labSectionId = labSectionIdOverride || this.getStudentLabSectionId(studentPrivateProfileId);
     if (!labSectionId) {
       console.log("Student not in a lab section, falling back to original due date");
-      // Student not in a lab section, fall back to original due date
       return new Date(assignment.due_date);
     }
     const labSection = this.labSections.find((section) => section.id === labSectionId);
@@ -833,7 +897,6 @@ export class CourseController {
       .sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime());
 
     if (relevantMeetings.length === 0) {
-      // No lab meeting found before due date, fall back to original due date
       return new Date(assignment.due_date);
     }
 
@@ -844,48 +907,22 @@ export class CourseController {
       this.course.time_zone ?? "America/New_York"
     );
 
-    // Add the minutes offset to the lab meeting date
     const effectiveDueDate = addMinutes(labMeetingDate, assignment.minutes_due_after_lab);
 
     return effectiveDueDate;
   }
-}
 
-function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
-  const { user } = useAuthState();
-  const course = useCourse();
-  useEffect(() => {
-    controller.course = course;
-  }, [course, controller]);
-  const threadReadStatuses = useList<DiscussionThreadReadStatus>({
-    resource: "discussion_thread_read_status",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "user_id", operator: "eq", value: user?.id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto",
-    onLiveEvent: (event) => {
-      controller.handleReadStatusEvent(event);
-    }
-  });
-  useEffect(() => {
-    if (threadReadStatuses.data) {
-      controller.setDiscussionThreadReadStatuses(threadReadStatuses.data.data);
-    }
-  }, [controller, threadReadStatuses.data]);
+  async loadInitialData() {
+    await this.loadProfiles();
+    await this.loadUserRoles();
+    await this.loadDiscussionThreads();
+    await this.loadTags();
+    await this.loadLabSections();
+    await this.loadLabSectionMeetings();
+    this._isLoaded = true;
+  }
 
-  // Replace useList with direct Supabase API calls for profiles and roles
-  const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
-  const [roles, setRoles] = useState<UserRoleWithUser[]>([]);
-  const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
-  const [isLoadingRoles, setIsLoadingRoles] = useState(true);
-
-  // Function to fetch all profiles with pagination
-  const fetchAllProfiles = useCallback(async () => {
+  private async loadProfiles() {
     const supabase = createClient();
     let allProfiles: UserProfile[] = [];
     let from = 0;
@@ -896,7 +933,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
-        .eq("class_id", course_id)
+        .eq("class_id", this.courseId)
         .range(from, from + pageSize - 1);
 
       if (error) {
@@ -913,12 +950,12 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       }
     }
 
-    setUserProfiles(allProfiles);
-    setIsLoadingProfiles(false);
-  }, [course_id]);
+    for (const profile of allProfiles) {
+      this.userProfiles.set(profile.id, { ...profile });
+    }
+  }
 
-  // Function to fetch all roles with pagination
-  const fetchAllRoles = useCallback(async () => {
+  private async loadUserRoles() {
     const supabase = createClient();
     let allRoles: UserRoleWithUser[] = [];
     let from = 0;
@@ -929,7 +966,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       const { data, error } = await supabase
         .from("user_roles")
         .select("*, users(*)")
-        .eq("class_id", course_id)
+        .eq("class_id", this.courseId)
         .range(from, from + pageSize - 1);
 
       if (error) {
@@ -946,44 +983,292 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       }
     }
 
-    setRoles(allRoles);
-    setIsLoadingRoles(false);
-  }, [course_id]);
-
-  // Fetch profiles and roles on mount
-  useEffect(() => {
-    fetchAllProfiles();
-    fetchAllRoles();
-  }, [fetchAllProfiles, fetchAllRoles]);
-
-  // Update controller when both profiles and roles are loaded
-  useEffect(() => {
-    if (!isLoadingProfiles && !isLoadingRoles && userProfiles.length > 0 && roles.length > 0) {
-      controller.setUserProfiles(userProfiles, roles);
+    // Update internal roles maps and link profiles
+    for (const role of allRoles) {
+      this.userRoles.set(role.user_id, role);
+      this.userRolesByPrivateProfileId.set(role.private_profile_id, role);
+      const privateProfile = this.userProfiles.get(role.private_profile_id);
+      const publicProfile = this.userProfiles.get(role.public_profile_id);
+      if (privateProfile && publicProfile) {
+        publicProfile.private_profile = privateProfile;
+      }
     }
-  }, [controller, userProfiles, roles, isLoadingProfiles, isLoadingRoles]);
 
-  const query = useList<DiscussionThread>({
-    resource: "discussion_threads",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "root_class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "manual",
-    onLiveEvent: (event) => {
-      controller.handleDiscussionThreadTeaserEvent(event);
+    // Fire all profile callbacks after linking
+    for (const id of this.userProfileSubscribers.keys()) {
+      const callbacks = this.userProfileSubscribers.get(id);
+      if (callbacks) {
+        callbacks.forEach((cb) => cb(this.userProfiles.get(id)!));
+      }
     }
-  });
-  const { data: rootDiscusisonThreads } = query;
+  }
+
+  private async loadDiscussionThreads() {
+    const supabase = createClient();
+    let allThreads: DiscussionThread[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("discussion_threads")
+        .select("*")
+        .eq("root_class_id", this.courseId)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error("Error fetching discussion threads:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allThreads = [...allThreads, ...data];
+        from += pageSize;
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    this.discussionThreadTeasers = allThreads;
+    this.discussionThreadTeaserListSubscribers.forEach((cb) => cb(this.discussionThreadTeasers));
+  }
+
+  async loadDiscussionThreadReadStatusForUser(userId: string) {
+    const supabase = createClient();
+    let allReadStatuses: DiscussionThreadReadStatus[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("discussion_thread_read_status")
+        .select("*")
+        .eq("user_id", userId)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error("Error fetching discussion thread read status:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allReadStatuses = [...allReadStatuses, ...data];
+        from += pageSize;
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    this.setDiscussionThreadReadStatuses(allReadStatuses);
+  }
+
+  private async loadTags() {
+    const supabase = createClient();
+    let allTags: Tag[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("tags")
+        .select("*")
+        .eq("class_id", this.courseId)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error("Error fetching tags:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allTags = [...allTags, ...data];
+        from += pageSize;
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    this.tags = allTags;
+    this.tagListSubscribers.forEach((callback) => callback(allTags));
+  }
+
+  private async loadLabSections() {
+    const supabase = createClient();
+    let allLabSections: LabSection[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("lab_sections")
+        .select("*")
+        .eq("class_id", this.courseId)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error("Error fetching lab sections:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allLabSections = [...allLabSections, ...data];
+        from += pageSize;
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    this.labSections = allLabSections;
+    this.labSectionListSubscribers.forEach((cb) => cb(allLabSections));
+  }
+
+  private async loadLabSectionMeetings() {
+    const supabase = createClient();
+    let allLabSectionMeetings: LabSectionMeeting[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from("lab_section_meetings")
+        .select("*")
+        .eq("class_id", this.courseId)
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error("Error fetching lab section meetings:", error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allLabSectionMeetings = [...allLabSectionMeetings, ...data];
+        from += pageSize;
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    this.labSectionMeetings = allLabSectionMeetings;
+    this.labSectionMeetingListSubscribers.forEach((cb) => cb(allLabSectionMeetings));
+  }
+
+  handleProfileEvent(event: LiveEvent) {
+    if (event.type === "created" || event.type === "updated") {
+      const profile = event.payload as UserProfile;
+      this.userProfiles.set(profile.id, { ...profile });
+
+      // Update linked private profile if it exists
+      const role = this.userRolesByPrivateProfileId.get(profile.id);
+      if (role) {
+        const publicProfile = this.userProfiles.get(role.public_profile_id);
+        if (publicProfile) {
+          publicProfile.private_profile = profile;
+        }
+      }
+
+      const subscribers = this.userProfileSubscribers.get(profile.id);
+      if (subscribers) {
+        subscribers.forEach((cb) => cb(this.userProfiles.get(profile.id)!));
+      }
+    } else if (event.type === "deleted") {
+      const profile = event.payload as UserProfile;
+      this.userProfiles.delete(profile.id);
+
+      const subscribers = this.userProfileSubscribers.get(profile.id);
+      if (subscribers) {
+        subscribers.forEach((cb) => cb(undefined as unknown as UserProfileWithPrivateProfile));
+      }
+    }
+  }
+
+  handleUserRoleEvent(event: LiveEvent) {
+    if (event.type === "created" || event.type === "updated") {
+      const role = event.payload as UserRoleWithUser;
+      this.userRoles.set(role.user_id, role);
+      this.userRolesByPrivateProfileId.set(role.private_profile_id, role);
+
+      // Link profiles
+      const privateProfile = this.userProfiles.get(role.private_profile_id);
+      const publicProfile = this.userProfiles.get(role.public_profile_id);
+      if (privateProfile && publicProfile) {
+        publicProfile.private_profile = privateProfile;
+
+        const subscribers = this.userProfileSubscribers.get(role.public_profile_id);
+        if (subscribers) {
+          subscribers.forEach((cb) => cb(publicProfile));
+        }
+      }
+    } else if (event.type === "deleted") {
+      const role = event.payload as UserRoleWithUser;
+      this.userRoles.delete(role.user_id);
+      this.userRolesByPrivateProfileId.delete(role.private_profile_id);
+    }
+  }
+
+  handleLabSectionEvent(event: LiveEvent) {
+    if (event.type === "created") {
+      const labSection = event.payload as LabSection;
+      this.labSections.push(labSection);
+      this.labSectionListSubscribers.forEach((cb) => cb(this.labSections));
+    } else if (event.type === "updated") {
+      const labSection = event.payload as LabSection;
+      const index = this.labSections.findIndex((ls) => ls.id === labSection.id);
+      if (index !== -1) {
+        this.labSections[index] = labSection;
+        this.labSectionListSubscribers.forEach((cb) => cb(this.labSections));
+      }
+    } else if (event.type === "deleted") {
+      const labSection = event.payload as LabSection;
+      this.labSections = this.labSections.filter((ls) => ls.id !== labSection.id);
+      this.labSectionListSubscribers.forEach((cb) => cb(this.labSections));
+    }
+  }
+
+  handleLabSectionMeetingEvent(event: LiveEvent) {
+    if (event.type === "created") {
+      const meeting = event.payload as LabSectionMeeting;
+      this.labSectionMeetings.push(meeting);
+      this.labSectionMeetingListSubscribers.forEach((cb) => cb(this.labSectionMeetings));
+    } else if (event.type === "updated") {
+      const meeting = event.payload as LabSectionMeeting;
+      const index = this.labSectionMeetings.findIndex((m) => m.id === meeting.id);
+      if (index !== -1) {
+        this.labSectionMeetings[index] = meeting;
+        this.labSectionMeetingListSubscribers.forEach((cb) => cb(this.labSectionMeetings));
+      }
+    } else if (event.type === "deleted") {
+      const meeting = event.payload as LabSectionMeeting;
+      this.labSectionMeetings = this.labSectionMeetings.filter((m) => m.id !== meeting.id);
+      this.labSectionMeetingListSubscribers.forEach((cb) => cb(this.labSectionMeetings));
+    }
+  }
+}
+
+function CourseControllerProviderImpl({ controller, course_id }: { controller: CourseController; course_id: number }) {
+  const { user } = useAuthState();
+  const course = useCourse();
   useEffect(() => {
-    if (rootDiscusisonThreads?.data) {
-      controller.setDiscussionThreadTeasers(rootDiscusisonThreads.data);
-    }
-  }, [controller, rootDiscusisonThreads?.data]);
+    controller.course = course;
+  }, [course, controller]);
+  useEffect(() => {
+    const loadData = async () => {
+      await controller.loadInitialData();
+      if (user?.id) {
+        await controller.loadDiscussionThreadReadStatusForUser(user.id);
+      }
+    };
+    loadData();
+  }, [controller, user?.id]);
 
   const { data: notifications } = useList<Notification>({
     resource: "notifications",
@@ -1041,6 +1326,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       controller.setGeneric("discussion_thread_watchers", threadWatches.data);
     }
   }, [controller, threadWatches?.data]);
+
   const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
     queryOptions: {
@@ -1062,73 +1348,6 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       controller.setGeneric("assignment_due_date_exceptions", dueDateExceptions.data);
     }
   }, [controller, dueDateExceptions?.data]);
-  const { data: tags } = useList<Tag>({
-    resource: "tags",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      {
-        operator: "or",
-        value: [
-          { field: "visible", operator: "eq", value: true },
-          { field: "creator_id", operator: "eq", value: user?.id }
-        ]
-      }
-    ],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto",
-    onLiveEvent: (event) => {
-      controller.handleTagEvent(event);
-    }
-  });
-  useEffect(() => {
-    if (tags?.data) {
-      controller.setTags(tags.data);
-    }
-  }, [controller, tags?.data]);
-
-  // Fetch lab sections
-  const { data: labSections } = useList<LabSection>({
-    resource: "lab_sections",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto"
-  });
-  useEffect(() => {
-    if (labSections?.data) {
-      controller.setLabSections(labSections.data);
-    }
-  }, [controller, labSections?.data]);
-
-  // Fetch lab section meetings
-  const { data: labSectionMeetings } = useList<LabSectionMeeting>({
-    resource: "lab_section_meetings",
-    queryOptions: {
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "auto"
-  });
-  useEffect(() => {
-    if (labSectionMeetings?.data) {
-      controller.setLabSectionMeetings(labSectionMeetings.data);
-    }
-  }, [controller, labSectionMeetings?.data]);
 
   return <></>;
 }
@@ -1186,7 +1405,6 @@ export function useAssignmentDueDate(
   const [labSections, setLabSections] = useState<LabSection[]>();
   const [labSectionMeetings, setLabSectionMeetings] = useState<LabSectionMeeting[]>();
 
-  // Get due date exceptions
   useEffect(() => {
     if (assignment.due_date) {
       const { data: dueDateExceptions, unsubscribe } = controller.listGenericData<AssignmentDueDateException>(
@@ -1198,7 +1416,6 @@ export function useAssignmentDueDate(
     }
   }, [assignment, controller]);
 
-  // Get lab sections and meetings
   useEffect(() => {
     const { data: labSections, unsubscribe: unsubscribeLabSections } = controller.listLabSections((data) =>
       setLabSections(data)
@@ -1233,7 +1450,6 @@ export function useAssignmentDueDate(
     const originalDueDate = new TZDate(assignment.due_date, time_zone);
     const hasLabScheduling = assignment.minutes_due_after_lab !== null;
 
-    // Calculate effective due date (lab-based or original)
     let effectiveDueDate = originalDueDate;
     let labSectionId: number | null = null;
 
