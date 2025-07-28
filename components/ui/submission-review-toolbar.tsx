@@ -73,6 +73,11 @@ function ActiveReviewPicker() {
   );
 }
 
+/**
+ * Renders a button and popover interface for marking the active submission review as complete.
+ *
+ * Displays missing required and optional rubric checks and criteria, and prevents completion until all required checks are addressed. On completion, updates the review status and shows a success or error notification.
+ */
 export function CompleteReviewButton() {
   const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
@@ -88,7 +93,6 @@ export function CompleteReviewButton() {
     !missing_required_criteria ||
     !missing_optional_criteria
   ) {
-    console.log("No active submission review, showing loading instead of popover??");
     // Render a loading state or disabled button
     return (
       <Button variant="surface" loading>
@@ -168,20 +172,18 @@ export function CompleteReviewButton() {
               {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
                 <Text>All checks have been applied. Click the button below to mark the review as complete.</Text>
               )}
-              {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
+              {missing_required_checks.length == 0 && (
                 <Button
                   variant="solid"
                   colorPalette="green"
                   loading={isLoading}
                   onClick={async () => {
                     try {
-                      console.log("Marking review as complete", activeSubmissionReview.id, private_profile_id);
                       setIsLoading(true);
                       await submissionController.submission_reviews.update(activeSubmissionReview.id, {
                         completed_at: new Date().toISOString(),
                         completed_by: private_profile_id
                       });
-                      console.log("Review marked as complete", activeSubmissionReview.id, private_profile_id);
                       toaster.success({
                         title: "Review marked as complete",
                         description: "Your review has been marked as complete."
@@ -218,7 +220,6 @@ function ReviewAssignmentActions() {
   const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const { time_zone } = useCourse();
   const rubric = useRubricById(activeSubmissionReview?.rubric_id);
-  console.log("ReviewAssignmentActions", { activeReviewAssignment, activeSubmissionReview });
   if (!activeReviewAssignment || !activeSubmissionReview || activeSubmissionReview.completed_at) {
     return <></>;
   }
@@ -274,7 +275,6 @@ export default function SubmissionReviewToolbar() {
   const selfReviewSettings = useSelfReviewSettings();
   const activeReviewAssignmentId = useActiveReviewAssignmentId();
   const canSubmitEarlyForSelfReview = selfReviewSettings.enabled && selfReviewSettings.allow_early;
-  console.log("SubmissionReviewToolbar", { writableReviews, canSubmitEarlyForSelfReview, activeReviewAssignmentId });
   if (
     (!writableReviews || writableReviews.length === 0 || writableReviews.length === 1) &&
     !canSubmitEarlyForSelfReview &&

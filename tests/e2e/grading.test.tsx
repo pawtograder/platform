@@ -1,10 +1,18 @@
-import { test, expect, type Page } from "@playwright/test";
+import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import percySnapshot from "@percy/playwright";
-import { createClient } from "@supabase/supabase-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { expect, test, type Page } from "@playwright/test";
+import { addDays } from "date-fns";
 import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
+import {
+  createClass,
+  createUserInClass,
+  insertAssignment,
+  insertPreBakedSubmission,
+  loginAsUser,
+  TestingUser
+} from "./TestingUtils";
 
+dotenv.config({ path: ".env.local" });
 // Helper function to retry clicks that should make textboxes appear
 async function clickWithTextboxRetry(
   page: Page,
@@ -29,216 +37,52 @@ async function clickWithTextboxRetry(
   }
 }
 
-const password = "test";
-const test_run_batch = "abcd" + Math.random().toString(36).substring(2, 15);
-const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-const student_email = `student-${workerIndex}-${test_run_batch}@pawtograder.net`;
-const instructor_email = `instructor-${workerIndex}-${test_run_batch}@pawtograder.net`;
+let course: Course;
+let student: TestingUser | undefined;
+let instructor: TestingUser | undefined;
 let submission_id: number | undefined;
+let assignment: Assignment | undefined;
 test.beforeAll(async () => {
-  console.log(`Configuring test env on ${process.env.SUPABASE_URL}`);
-  const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  //Add a student to the database
-
-  const { data: studentData, error: studentError } = await supabase.auth.admin.createUser({
-    email: student_email,
-    password: password,
-    email_confirm: true
+  course = await createClass();
+  student = await createUserInClass({ role: "student", class_id: course.id });
+  instructor = await createUserInClass({ role: "instructor", class_id: course.id });
+  assignment = await insertAssignment({
+    due_date: addDays(new Date(), 1).toUTCString(),
+    class_id: course.id
   });
-  if (studentError) {
-    console.error(studentError);
-    throw new Error("Failed to create student user");
-  }
-  const new_student_uid = studentData?.user?.id;
-  const student_private_profile_id = await supabase
-    .from("user_roles")
-    .select("private_profile_id")
-    .eq("user_id", new_student_uid)
-    .single();
-  if (!student_private_profile_id.data?.private_profile_id) {
-    throw new Error("Student private profile id not found");
-  }
-  const { data: instructorData, error: instructorError } = await supabase.auth.admin.createUser({
-    email: instructor_email,
-    password: password,
-    email_confirm: true
+
+  const submission_res = await insertPreBakedSubmission({
+    student_profile_id: student.private_profile_id,
+    assignment_id: assignment!.id,
+    class_id: course.id
   });
-  if (instructorError) {
-    console.error(instructorError);
-    throw new Error("Failed to create instructor user");
-  }
-  const new_instructor_uid = instructorData?.user?.id;
-  const instructor_private_profile_id = await supabase
-    .from("user_roles")
-    .select("private_profile_id")
-    .eq("user_id", new_instructor_uid)
-    .single();
-  if (!instructor_private_profile_id.data?.private_profile_id) {
-    throw new Error("Instructor private profile id not found");
-  }
-
-  //Insert a submission for the student
-  const { data: repositoryData, error: repositoryError } = await supabase
-    .from("repositories")
-    .insert({
-      assignment_id: 1,
-      repository: `not-actually/repository-${test_run_batch}-${workerIndex}`,
-      class_id: 1,
-      profile_id: student_private_profile_id.data?.private_profile_id,
-      synced_handout_sha: "none"
-    })
-    .select("id")
-    .single();
-  if (repositoryError) {
-    console.error(repositoryError);
-    throw new Error("Failed to create repository");
-  }
-  const repository_id = repositoryData?.id;
-  const { data: checkRunData, error: checkRunError } = await supabase
-    .from("repository_check_runs")
-    .insert({
-      class_id: 1,
-      repository_id: repository_id,
-      check_run_id: 1,
-      status: "{}",
-      sha: "none",
-      commit_message: "none"
-    })
-    .select("id")
-    .single();
-  if (checkRunError) {
-    console.error(checkRunError);
-    throw new Error("Failed to create check run");
-  }
-  const check_run_id = checkRunData?.id;
-  const { data: submissionData, error: submissionError } = await supabase
-    .from("submissions")
-    .insert({
-      assignment_id: 1,
-      profile_id: student_private_profile_id.data?.private_profile_id,
-      sha: "none",
-      repository: "not-actually/repository",
-      run_attempt: 1,
-      run_number: 1,
-      class_id: 1,
-      repository_check_run_id: check_run_id,
-      repository_id: repository_id
-    })
-    .select("id")
-    .single();
-  if (submissionError) {
-    console.error(submissionError);
-    throw new Error("Failed to create submission");
-  }
-  submission_id = submissionData?.id;
-  const { error: submissionFileError } = await supabase.from("submission_files").insert({
-    name: "sample.java",
-    contents: `package com.pawtograder.example.java;
-
-public class Entrypoint {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
-    }
-
-  /*
-   * This method takes two integers and returns their sum.
-   * 
-   * @param a the first integer
-   * @param b the second integer
-   * @return the sum of a and b
-   */
-  public int doMath(int a, int b) {
-      return a+b;
-  }
-
-  /**
-   * This method returns a message, "Hello, World!"
-   * @return
-   */
-  public String getMessage() {
-      
-      return "Hello, World!";
-  }
-}`,
-    class_id: 1,
-    submission_id: submission_id,
-    profile_id: student_private_profile_id.data?.private_profile_id
-  });
-  if (submissionFileError) {
-    console.error(submissionFileError);
-    throw new Error("Failed to create submission file");
-  }
-  const { data: graderResultData, error: graderResultError } = await supabase
-    .from("grader_results")
-    .insert({
-      submission_id: submission_id,
-      score: 5,
-      class_id: 1,
-      profile_id: instructor_private_profile_id.data?.private_profile_id,
-      lint_passed: true,
-      lint_output: "no lint output",
-      lint_output_format: "markdown",
-      max_score: 10
-    })
-    .select("id")
-    .single();
-  if (graderResultError) {
-    console.error(graderResultError);
-    throw new Error("Failed to create grader result");
-  }
-  const { error: graderResultTestError } = await supabase.from("grader_result_tests").insert([
-    {
-      score: 5,
-      max_score: 5,
-      name: "test 1",
-      name_format: "text",
-      output: "here is a bunch of output\n**wow**",
-      output_format: "markdown",
-      class_id: 1,
-      student_id: student_private_profile_id.data?.private_profile_id,
-      grader_result_id: graderResultData.id,
-      is_released: true
-    },
-    {
-      score: 5,
-      max_score: 5,
-      name: "test 2",
-      name_format: "text",
-      output: "here is a bunch of output\n**wow**",
-      output_format: "markdown",
-      class_id: 1,
-      student_id: student_private_profile_id.data?.private_profile_id,
-      grader_result_id: graderResultData.id,
-      is_released: true
-    }
-  ]);
-  if (graderResultTestError) {
-    console.error(graderResultTestError);
-    throw new Error("Failed to create grader result test");
-  }
+  submission_id = submission_res.submission_id;
 });
 
 const SELF_REVIEW_COMMENT_1 = "I'm pretty sure this code works, but I'm not betting my grade on it";
 const SELF_REVIEW_COMMENT_2 = "This method is so clean it could pass a white glove test";
-const GRADING_REVIEW_COMMENT_1 = "Your code is like a mystery novel - I have no idea what's going to happen next";
-const GRADING_REVIEW_COMMENT_2 = "This is the kind of code that makes me question my career choices";
+const GRADING_REVIEW_COMMENT_1 = "Your code is clear and easy to follow—great job on making your logic understandable!";
+const GRADING_REVIEW_COMMENT_2 =
+  "This is the kind of code that makes grading enjoyable: well-structured and thoughtful work!";
+
+const REGRADE_COMMENT = "I think that I deserve better than a 10/10!";
+const REGRADE_RESOLUTION = "I do not think it is possible to get more than 10/10!";
+const REGRADE_ESCALATION = "But I heard that Ben Bitdiddle got an 11/10!";
+const REGRADE_FINAL_COMMENT = "Alright, 11/10 it is then!";
 
 test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
   test("Students can submit self-review early", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(student_email);
-    await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(password);
-    await page.getByRole("textbox", { name: "Sign in password" }).press("Enter");
-    await page.getByRole("button", { name: "Sign in with email" }).click();
-    await page.getByRole("link", { name: "Demo Assignment" }).click();
-
+    await loginAsUser(page, student!, course);
     //Wait for the realtime connection status to be connected
     await expect(
       page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
     ).toBeVisible();
+
+    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+
+    await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
     await percySnapshot(page, "Student can submit self-review early");
@@ -291,17 +135,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   });
 
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(instructor_email);
-    await page.getByRole("textbox", { name: "Sign in password" }).click();
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(password);
-    await page.getByRole("button", { name: "Sign in with email" }).click();
-    await expect(page.getByRole("link", { name: "Demo Assignment" })).toBeVisible();
-    await page.goto(`/course/1/assignments/1/submissions/${submission_id}`);
+    await loginAsUser(page, instructor!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await page.getByRole("button", { name: "Files" }).click();
 
-    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(`${student_email} applied today at`);
+    await expect(page.getByLabel("Rubric: Self-Review Rubric")).toContainText(
+      `${student!.private_profile_name} applied today at`
+    );
     //Make sure that we get a very nice screenshot with a fully-loaded page
     await expect(page.getByText("public static void main(")).toBeVisible();
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
@@ -342,24 +184,112 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Release To Student" }).click();
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
-  test("Students can view their grading results", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("textbox", { name: "Sign in email" }).click();
-    await page.getByRole("textbox", { name: "Sign in email" }).fill(student_email);
-    await page.getByRole("textbox", { name: "Sign in email" }).press("Tab");
-    await page.getByRole("textbox", { name: "Sign in password" }).fill(password);
-    await page.getByRole("button", { name: "Sign in with email" }).click();
-    await page.getByRole("link", { name: "Demo Assignment" }).click();
+  test("Students can view their grading results and request a regrade", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
     await page.getByRole("button", { name: "Files" }).click();
     await page.getByText("public int doMath(int a, int").click();
 
-    await expect(page.locator("#rubric-1")).toContainText("Grading Review Criteria 20/20");
-    await expect(page.locator("#rubric-1")).toContainText(GRADING_REVIEW_COMMENT_1);
-    await expect(page.locator("#rubric-1")).toContainText(GRADING_REVIEW_COMMENT_2);
+    const rubricSidebar = page.locator(`#rubric-${assignment!.grading_rubric_id}`);
+    await expect(rubricSidebar).toContainText("Grading Review Criteria 20/20");
+    await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_1);
+    await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
     await percySnapshot(page, "Student can view their grading results");
 
-    await expect(page.getByLabel("Rubric: Grading Rubric")).toContainText(`${instructor_email} applied today`);
+    await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
+    // Find the region with aria-label 'Grading checks on line 4'
+    const region = await page.getByRole("region", { name: "Grading checks on line 4" });
+    await expect(region).toBeVisible();
+    await region.getByRole("button", { name: "Request regrade for this check" }).click();
+    await percySnapshot(page, "Student can request a regrade");
+    await page.getByRole("button", { name: "Draft Regrade Request" }).click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to open this")
+      .click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to open this")
+      .fill(REGRADE_COMMENT);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Open Request", { exact: true })
+      .click();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await percySnapshot(page, "Student can add a comment to open the regrade request");
+  });
+  test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .click();
+    await percySnapshot(page, "Instructors can view the regrade request");
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .fill(REGRADE_RESOLUTION);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Add Comment", { exact: true })
+      .click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
+    await percySnapshot(page, "Instructors can resolve the regrade request");
+    await page.getByRole("spinbutton").fill("10");
+    await page.getByRole("button", { name: "Resolve", exact: true }).click();
+  });
+  test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
+    await loginAsUser(page, student!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .fill(REGRADE_ESCALATION);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Add Comment", { exact: true })
+      .click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Appeal to Instructor" }).click();
+    await percySnapshot(page, "Students can appeal their regrade request");
+    await page.getByRole("button", { name: "Escalate Request" }).click();
+  });
+  test("Instructors can view the student's regrade appeal and resolve it", async ({ page }) => {
+    await loginAsUser(page, instructor!, course);
+
+    await expect(page.getByText("Upcoming Assignments")).toBeVisible();
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}/files`);
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .click();
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByPlaceholder("Add a comment to continue the")
+      .fill(REGRADE_FINAL_COMMENT);
+    await percySnapshot(page, "Instructors can view the student's regrade appeal");
+    await page
+      .getByRole("region", { name: "Grading checks on line 4" })
+      .getByLabel("Add Comment", { exact: true })
+      .click();
+    await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
+    await page.getByRole("spinbutton").fill("11");
+    await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal" }).click();
+    await percySnapshot(page, "Instructors can close the regrade request");
+    await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
   });
 });
