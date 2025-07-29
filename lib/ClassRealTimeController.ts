@@ -357,6 +357,7 @@ export class ClassRealTimeController {
   }
 
   private async _resubscribeToStaffChannel() {
+    console.log("Resubscribing to staff channel" + this._objDebugId);
     if (!this._isStaff) return;
 
     this._staffChannel = this._client.channel(`class:${this._classId}:staff`, {
@@ -374,6 +375,7 @@ export class ClassRealTimeController {
   }
 
   private async _resubscribeToUserChannel() {
+    console.log("Resubscribing to user channel" + this._objDebugId);
     this._userChannel = this._client.channel(`class:${this._classId}:user:${this._profileId}`, {
       config: { private: true }
     });
@@ -383,7 +385,7 @@ export class ClassRealTimeController {
     });
 
     this._userChannel.subscribe(async (status, err) => {
-      console.log(`User channel status: class:${this._classId}:user:${this._profileId}`, status, err);
+      console.log(`User channel status: class:${this._classId}:user:${this._profileId}`, status, err, this._objDebugId);
       await this._handleSubscriptionStateEvent(this._userChannel!, status, err);
     });
   }
@@ -588,7 +590,7 @@ export class ClassRealTimeController {
       });
 
       channels.graders.subscribe(async (status, err) => {
-        console.log(`Submission graders channel status: ${gradersChannelName}`, status, err);
+        console.log(`Submission graders channel status: ${gradersChannelName}`, status, err, this._objDebugId);
         await this._handleSubscriptionStateEvent(channels.graders!, status, err);
       });
     }
@@ -604,7 +606,7 @@ export class ClassRealTimeController {
     });
 
     channels.user.subscribe(async (status, err) => {
-      console.log(`Submission user channel status: ${userChannelName}`, status, err);
+      console.log(`Submission user channel status: ${userChannelName}`, status, err, this._objDebugId);
       await this._handleSubscriptionStateEvent(channels.user!, status, err);
     });
 
