@@ -252,7 +252,6 @@ class AssignmentController {
   }
   // Assignment
   set assignment(assignment: AssignmentWithRubricsAndReferences) {
-    console.log("Setting assignment", assignment);
     if (this._assignment) {
       //TODO: refine.dev does a pretty bad job with invalidation on a complex query like this... but we never want it to be invalidated anyway I guess?
       return;

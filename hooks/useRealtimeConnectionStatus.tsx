@@ -9,19 +9,15 @@ export function useRealtimeConnectionStatus(): ConnectionStatus | null {
   const courseController = useCourseController();
   const classRealTimeController = courseController.classRealTimeController;
 
-  console.log("Rendering useRealtimeConnectionStatus");
   useEffect(() => {
-    console.log("Status before subscribing", classRealTimeController.getConnectionStatus());
     setStatus(classRealTimeController.getConnectionStatus());
 
     const unsubscribe = classRealTimeController.subscribeToStatus((newStatus) => {
-      console.log("New statusreceived", newStatus);
       setStatus(newStatus);
     });
 
     return () => {
       if (unsubscribe) {
-        console.log("Unsubscribing from status changes");
         unsubscribe();
       }
     };
