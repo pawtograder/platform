@@ -1,6 +1,6 @@
 "use client";
 
-import { Icon, Button, Input, Dialog, Field, NativeSelect } from "@chakra-ui/react";
+import { Icon, Button, Input, Dialog, Field, NativeSelect, Text } from "@chakra-ui/react";
 import { FaPlus } from "react-icons/fa";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
@@ -68,6 +68,11 @@ export default function AddSingleStudent() {
             <Dialog.Title>Add Course Member</Dialog.Title>
           </Dialog.Header>
           <Dialog.Body mb={2}>
+            <Text fontSize="sm" color="fg.muted">
+              Add a single user to the course by email. Specify an @northeastern.edu email address to allow the user to
+              sign in with their Northeastern credentials. Otherwise, the user will be invited to create a new
+              Pawtograder account with an email and password.
+            </Text>
             <form onSubmit={handleSubmit(onSubmit)}>
               <Field.Root invalid={!!errors.email}>
                 <Field.Label>Email</Field.Label>

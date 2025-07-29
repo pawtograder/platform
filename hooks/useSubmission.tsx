@@ -1078,12 +1078,15 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
         ...rubrics.filter((r) => r.review_round === "self-review" || assignments.some((a) => a.rubric_id === r.id))
       );
     }
-    return submissionReviews?.filter(
+    const ret = submissionReviews?.filter(
       (sr) =>
         writableRubrics.some((r) => r.id === sr.rubric_id) &&
         (rubric_id === undefined || sr.rubric_id === rubric_id) &&
         (role.role === "instructor" || role.role == "grader" || !sr.completed_at)
     );
+    //Make sure no duplicates by review id
+    const uniqueReviews = ret?.filter((sr, index, self) => index === self.findIndex((t) => t.id === sr.id));
+    return uniqueReviews;
   }, [role, rubrics, submissionReviews, assignments, rubric_id]);
   return memoizedReviews;
 }
