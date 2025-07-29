@@ -9,6 +9,7 @@ export function useRealtimeConnectionStatus(): ConnectionStatus | null {
   const courseController = useCourseController();
   const classRealTimeController = courseController.classRealTimeController;
 
+  console.log("Rendering useRealtimeConnectionStatus");
   useEffect(() => {
     console.log("Status before subscribing", classRealTimeController.getConnectionStatus());
     setStatus(classRealTimeController.getConnectionStatus());
