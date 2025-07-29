@@ -601,8 +601,9 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
     repo,
     per_page: 100
   });
-
-  const existingUsernames = existingAccess.data.map((c) => c.login);
+  const existingUsernames = existingAccess.data
+    .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
+    .map((c) => c.login);
   console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
   if (staffTeamUsernames.length && !existingUsernames.includes(staffTeamUsernames[0])) {
     await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
