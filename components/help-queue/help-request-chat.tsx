@@ -1140,7 +1140,12 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
                     <HelpRequestAssignment request={request} />
                     {/* Moderation Action Button */}
                     <Tooltip content="Moderate">
-                      <Button size="sm" colorPalette="orange" variant="surface" onClick={() => moderationModal.openModal()}>
+                      <Button
+                        size="sm"
+                        colorPalette="orange"
+                        variant="surface"
+                        onClick={() => moderationModal.openModal()}
+                      >
                         <Icon as={BsShield} fontSize="md!" />
                       </Button>
                     </Tooltip>

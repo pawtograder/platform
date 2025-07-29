@@ -66,14 +66,7 @@ const ReplyPreview = ({
     : replyToMessage;
 
   return (
-    <Box
-      p={3}
-      bg="bg.muted"
-      borderTopRadius="md"
-      borderTop="3px solid"
-      borderColor="blue.500"
-      fontSize="sm"
-    >
+    <Box p={3} bg="bg.muted" borderTopRadius="md" borderTop="3px solid" borderColor="blue.500" fontSize="sm">
       <HStack justify="space-between" align="start">
         <Box flex={1}>
           <Text fontWeight="medium" fontSize="xs" color="fg.default" mb={1}>
@@ -92,14 +85,7 @@ const ReplyPreview = ({
             {getMessageContent(fullMessage)}
           </Text>
         </Box>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onCancel}
-          color="fg"
-          minW="auto"
-          p={1}
-        >
+        <Button size="sm" variant="ghost" onClick={onCancel} color="fg" minW="auto" p={1}>
           <Icon as={X} boxSize={4} />
         </Button>
       </HStack>
@@ -360,14 +346,7 @@ export const RealtimeChat = ({
   // Show loading state during validation
   if (isValidating) {
     return (
-      <Flex
-        direction="column"
-        height="100%"
-        width="100%"
-        bg="bg.subtle"
-        justify="center"
-        align="center"
-      >
+      <Flex direction="column" height="100%" width="100%" bg="bg.subtle" justify="center" align="center">
         <Text fontSize="sm" color="fg.muted">
           Connecting to chat...
         </Text>
@@ -378,22 +357,8 @@ export const RealtimeChat = ({
   // Show error state if not authorized or connection failed
   if (!isAuthorized || connectionError) {
     return (
-      <Flex
-        direction="column"
-        height="100%"
-        width="100%"
-        bg="bg.subtle"
-        justify="center"
-        align="center"
-        p={4}
-      >
-        <Box
-          p={4}
-          bg="bg.error"
-          borderRadius="md"
-          border="1px"
-          borderColor="border.error"
-        >
+      <Flex direction="column" height="100%" width="100%" bg="bg.subtle" justify="center" align="center" p={4}>
+        <Box p={4} bg="bg.error" borderRadius="md" border="1px" borderColor="border.error">
           <Text fontSize="sm" color="fg.error">
             {connectionError || "Unable to connect to chat"}
           </Text>
@@ -406,12 +371,7 @@ export const RealtimeChat = ({
     <Flex direction="column" height="100%" width="100%" bg="bg.subtle">
       {/* Connection status indicator */}
       {!isConnected && (
-        <Box
-          p={2}
-          bg="bg.warning"
-          borderBottom="1px"
-          borderColor="border.emphasized"
-        >
+        <Box p={2} bg="bg.warning" borderBottom="1px" borderColor="border.emphasized">
           <Text fontSize="xs" color="fg.warning" textAlign="center">
             Reconnecting to chat...
           </Text>
@@ -504,12 +464,7 @@ export const RealtimeChat = ({
       </Box>
 
       {moderationStatus.isBanned ? (
-        <Box
-          p={4}
-          borderTop="1px"
-          borderColor="border.emphasized"
-          bg="bg.error"
-        >
+        <Box p={4} borderTop="1px" borderColor="border.emphasized" bg="bg.error">
           <Text fontSize="sm" color="red.fg" textAlign="center">
             {moderationStatus.isPermanentBan
               ? "You are permanently banned from sending messages in office hours."

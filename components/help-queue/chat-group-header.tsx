@@ -17,7 +17,7 @@ export const ChatGroupHeader = (props: Props) => {
   const { icon, title, count, children, defaultOpen = true } = props;
 
   return (
-    <Collapsible.Root defaultOpen={defaultOpen}> 
+    <Collapsible.Root defaultOpen={defaultOpen}>
       <Collapsible.Trigger asChild>
         <HStack
           color="fg.muted"
