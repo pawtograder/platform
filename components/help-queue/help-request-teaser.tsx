@@ -4,6 +4,7 @@ import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonVideo2 } from "r
 import Markdown from "react-markdown";
 import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { getQueueTypeColor } from "@/lib/utils";
+import { formatRelative } from "date-fns";
 
 interface MessageData {
   user: string;
@@ -105,6 +106,13 @@ export const HelpRequestTeaser = (props: Props) => {
     );
   };
 
+  const stripTrailingQueueName = (name: string) => {
+    if (name.endsWith(" Queue")) {
+      return name.slice(0, -5);
+    }
+    return name;
+  };
+
   return (
     <HStack
       align="flex-start"
@@ -114,9 +122,20 @@ export const HelpRequestTeaser = (props: Props) => {
       _hover={{ bg: "bg.muted" }}
       rounded="md"
       bg={selected ? "bg.muted" : ""}
+      role="listitem"
+      aria-label={`${message}`}
     >
       <Box pt="1">{renderStudentsAvatars()}</Box>
       <Stack spaceY="0" fontSize="sm" flex="1" truncate>
+        <HStack spaceX="1" justify="space-between">
+          {queue && (
+            <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="surface" size="xs">
+              <Icon as={getQueueIcon(queue.queue_type)} fontSize="xs" />
+              {stripTrailingQueueName(queue.name)}
+            </Badge>
+          )}
+          <Text fontSize="xs">{formatRelative(new Date(updatedAt), new Date())}</Text>
+        </HStack>
         <HStack spaceX="1" justify="space-between">
           <Box flex="1" truncate>
             {renderStudentsDisplay()}
@@ -128,13 +147,6 @@ export const HelpRequestTeaser = (props: Props) => {
                 Live
               </Badge>
             )}
-            {queue && (
-              <Badge colorPalette={getQueueTypeColor(queue.queue_type)} variant="solid" size="xs">
-                <Icon as={getQueueIcon(queue.queue_type)} fontSize="xs" />
-                {queue.name}
-              </Badge>
-            )}
-            <Text fontSize="xs">{updatedAt}</Text>
           </HStack>
         </HStack>
         <Box truncate>

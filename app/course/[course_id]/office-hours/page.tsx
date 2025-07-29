@@ -167,6 +167,8 @@ export default function OfficeHoursPage() {
                     <Card.Root
                       key={`queue-${queue.id}-${queue.name}`}
                       variant="outline"
+                      role="region"
+                      aria-label={`Help queue: ${queue.name}`}
                       _hover={{ borderColor: "border.emphasized" }}
                     >
                       <Card.Body>

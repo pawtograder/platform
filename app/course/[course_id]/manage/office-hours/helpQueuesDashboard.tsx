@@ -127,6 +127,8 @@ export default function HelpQueuesDashboard() {
             borderRadius="md"
             alignItems="center"
             justifyContent="space-between"
+            role="region"
+            aria-label={`Help queue: ${queue.name}`}
           >
             <Box>
               <Text fontWeight="medium">{queue.name}</Text>

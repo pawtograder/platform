@@ -68,8 +68,7 @@ const ReplyPreview = ({
   return (
     <Box
       p={3}
-      bg="gray.50"
-      _dark={{ bg: "gray.700" }}
+      bg="bg.muted"
       borderTopRadius="md"
       borderTop="3px solid"
       borderColor="blue.500"
@@ -77,12 +76,11 @@ const ReplyPreview = ({
     >
       <HStack justify="space-between" align="start">
         <Box flex={1}>
-          <Text fontWeight="medium" fontSize="xs" color="gray.600" _dark={{ color: "gray.300" }} mb={1}>
+          <Text fontWeight="medium" fontSize="xs" color="fg.default" mb={1}>
             Replying to {getMessageAuthor(fullMessage)}
           </Text>
           <Text
-            color="gray.500"
-            _dark={{ color: "gray.400" }}
+            color="fg.muted"
             overflow="hidden"
             textOverflow="ellipsis"
             style={{
@@ -98,8 +96,7 @@ const ReplyPreview = ({
           size="sm"
           variant="ghost"
           onClick={onCancel}
-          color="gray.500"
-          _dark={{ color: "gray.400" }}
+          color="fg"
           minW="auto"
           p={1}
         >
@@ -367,12 +364,11 @@ export const RealtimeChat = ({
         direction="column"
         height="100%"
         width="100%"
-        bg="white"
-        _dark={{ bg: "gray.800" }}
+        bg="bg.subtle"
         justify="center"
         align="center"
       >
-        <Text fontSize="sm" color="gray.500" _dark={{ color: "gray.400" }}>
+        <Text fontSize="sm" color="fg.muted">
           Connecting to chat...
         </Text>
       </Flex>
@@ -386,21 +382,19 @@ export const RealtimeChat = ({
         direction="column"
         height="100%"
         width="100%"
-        bg="white"
-        _dark={{ bg: "gray.800" }}
+        bg="bg.subtle"
         justify="center"
         align="center"
         p={4}
       >
         <Box
           p={4}
-          bg="red.50"
-          _dark={{ bg: "red.900", borderColor: "red.700" }}
+          bg="bg.error"
           borderRadius="md"
           border="1px"
-          borderColor="red.200"
+          borderColor="border.error"
         >
-          <Text fontSize="sm" color="red.700" _dark={{ color: "red.300" }}>
+          <Text fontSize="sm" color="fg.error">
             {connectionError || "Unable to connect to chat"}
           </Text>
         </Box>
@@ -409,17 +403,16 @@ export const RealtimeChat = ({
   }
 
   return (
-    <Flex direction="column" height="100%" width="100%" bg="white" _dark={{ bg: "gray.800" }}>
+    <Flex direction="column" height="100%" width="100%" bg="bg.subtle">
       {/* Connection status indicator */}
       {!isConnected && (
         <Box
           p={2}
-          bg="yellow.50"
-          _dark={{ bg: "yellow.900", borderColor: "yellow.700" }}
+          bg="bg.warning"
           borderBottom="1px"
-          borderColor="yellow.200"
+          borderColor="border.emphasized"
         >
-          <Text fontSize="xs" color="yellow.700" _dark={{ color: "yellow.300" }} textAlign="center">
+          <Text fontSize="xs" color="fg.warning" textAlign="center">
             Reconnecting to chat...
           </Text>
         </Box>
@@ -437,7 +430,7 @@ export const RealtimeChat = ({
       >
         {allMessages.length === 0 ? (
           <Flex justify="center" align="center" height="100%">
-            <Text fontSize="sm" color="gray.500" _dark={{ color: "gray.400" }} textAlign="center">
+            <Text fontSize="sm" color="fg.muted" textAlign="center">
               No messages yet. Start the conversation!
             </Text>
           </Flex>
@@ -514,11 +507,10 @@ export const RealtimeChat = ({
         <Box
           p={4}
           borderTop="1px"
-          borderColor="gray.200"
-          bg="red.50"
-          _dark={{ borderColor: "gray.600", bg: "red.900" }}
+          borderColor="border.emphasized"
+          bg="bg.error"
         >
-          <Text fontSize="sm" color="red.700" _dark={{ color: "red.300" }} textAlign="center">
+          <Text fontSize="sm" color="red.fg" textAlign="center">
             {moderationStatus.isPermanentBan
               ? "You are permanently banned from sending messages in office hours."
               : moderationStatus.timeRemainingMs
@@ -527,7 +519,7 @@ export const RealtimeChat = ({
           </Text>
         </Box>
       ) : (
-        <Box borderTop="1px" borderColor="gray.200" _dark={{ borderColor: "gray.600" }}>
+        <Box borderTop="1px" borderColor="border.emphasized">
           {/* Reply Preview */}
           {replyToMessage && (
             <ReplyPreview replyToMessage={replyToMessage} onCancel={cancelReply} allMessages={allMessages} />
@@ -538,8 +530,7 @@ export const RealtimeChat = ({
             <Flex gap={2} width="100%" align="center">
               <Input
                 borderRadius="full"
-                bg="white"
-                _dark={{ bg: "gray.800" }}
+                bg="bg.subtle"
                 fontSize="sm"
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
@@ -558,6 +549,7 @@ export const RealtimeChat = ({
                   style={{
                     animation: "slideInFromRight 0.3s ease-out"
                   }}
+                  aria-label="Send message"
                 >
                   <Icon as={Send} boxSize={4} />
                 </Button>

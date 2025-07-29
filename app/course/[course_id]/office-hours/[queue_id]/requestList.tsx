@@ -68,7 +68,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
       <Text fontSize="lg" fontWeight="medium">
         {`Help Requests (${requests.length})`}
       </Text>
-      <Stack spaceY={4}>
+      <Stack spaceY={4} role="list" aria-label="Help requests">
         {requests
           .sort((a, b) => {
             // Sort by resolved_at if available, otherwise by created_at
@@ -81,6 +81,8 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
               key={request.id}
               variant="outline"
               cursor="pointer"
+              role="listitem"
+              aria-label={`Help request ${request.id}`}
               _hover={{ borderColor: "border.emphasized" }}
               onClick={(e) => expandOnly(e, request.id)}
             >

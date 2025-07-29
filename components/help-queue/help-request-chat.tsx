@@ -1139,16 +1139,18 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
                     {/* Assignment Management */}
                     <HelpRequestAssignment request={request} />
                     {/* Moderation Action Button */}
-                    <Button size="sm" colorPalette="orange" onClick={() => moderationModal.openModal()}>
-                      <Icon as={BsShield} fontSize="md!" />
-                      Moderate
-                    </Button>
+                    <Tooltip content="Moderate">
+                      <Button size="sm" colorPalette="orange" variant="surface" onClick={() => moderationModal.openModal()}>
+                        <Icon as={BsShield} fontSize="md!" />
+                      </Button>
+                    </Tooltip>
 
                     {/* Karma Entry Button */}
-                    <Button size="sm" colorPalette="yellow" onClick={() => karmaModal.openModal()}>
-                      <Icon as={BsStar} fontSize="md!" />
-                      Karma
-                    </Button>
+                    <Tooltip content="Karma">
+                      <Button size="sm" colorPalette="yellow" variant="surface" onClick={() => karmaModal.openModal()}>
+                        <Icon as={BsStar} fontSize="md!" />
+                      </Button>
+                    </Tooltip>
                   </>
                 )}
 

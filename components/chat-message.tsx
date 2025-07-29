@@ -210,7 +210,7 @@ const ReadReceiptIndicator = ({
   if (readCount === 0) {
     return (
       <Tooltip content="No one has read this message yet" showArrow>
-        <Icon as={Check} boxSize={3} color="gray.400" _dark={{ color: "gray.500" }} />
+        <Icon as={Check} boxSize={3} color="fg.muted" />
       </Tooltip>
     );
   }
@@ -218,9 +218,9 @@ const ReadReceiptIndicator = ({
   return (
     <Tooltip content={<ReadReceiptTooltipContent readReceipts={messageReadReceipts} />} showArrow>
       <HStack gap={1} align="center" cursor="pointer">
-        <Icon as={CheckCheck} boxSize={3} color="blue.500" _dark={{ color: "blue.400" }} />
+        <Icon as={CheckCheck} boxSize={3} color="fg.info" />
         {readCount > 1 && (
-          <Text fontSize="2xs" color="gray.500" _dark={{ color: "gray.400" }}>
+          <Text fontSize="2xs" color="fg.muted">
             {readCount}
           </Text>
         )}
@@ -269,17 +269,16 @@ const ReplyContext = ({
       py={2}
       mb={1}
       borderLeft="3px solid"
-      borderColor="gray.300"
-      bg="gray.50"
+      borderColor="border.emphasized"
+      bg="bg.emphasized"
       borderRadius="md"
       fontSize="xs"
-      _dark={{ borderColor: "gray.600", bg: "gray.700" }}
     >
-      <Text fontWeight="medium" color="gray.600" mb={1} _dark={{ color: "gray.300" }}>
+      <Text fontWeight="medium" color="fg.muted" mb={1}>
         Replying to {getReplyDisplayName()}
       </Text>
       <Text
-        color="gray.500"
+        color="fg.muted"
         lineHeight="1.3"
         overflow="hidden"
         textOverflow="ellipsis"
@@ -288,7 +287,6 @@ const ReplyContext = ({
           WebkitLineClamp: 2,
           WebkitBoxOrient: "vertical"
         }}
-        _dark={{ color: "gray.400" }}
       >
         {getMessageContent(originalMessage)}
       </Text>
@@ -347,7 +345,7 @@ export const ChatMessageItem = ({
               <Text fontWeight="medium">{getDisplayName()}</Text>
               <UserRoleBadge authorId={authorId} helpRequestStudentIds={helpRequestStudentIds} />
             </HStack>
-            <Text color="gray.500" _dark={{ color: "gray.400" }} fontSize="xs">
+            <Text color="fg.muted" fontSize="xs">
               {new Date(getMessageTimestamp(message)).toLocaleTimeString("en-US", {
                 hour: "2-digit",
                 minute: "2-digit",
@@ -372,12 +370,9 @@ export const ChatMessageItem = ({
             borderRadius="xl"
             fontSize="sm"
             w="fit-content"
-            bg={isOwnMessage ? "blue.500" : "gray.100"}
-            color={isOwnMessage ? "white" : "black"}
-            _dark={{
-              bg: isOwnMessage ? "blue.500" : "gray.700",
-              color: isOwnMessage ? "white" : "white"
-            }}
+            borderColor="border.emphasized"
+            bg={isOwnMessage ? "blue.solid" : "bg.emphasized"}
+            color={isOwnMessage ? "blue.contrast" : "fg.default"}
             position="relative"
             _hover={{
               "& .reply-button": {
