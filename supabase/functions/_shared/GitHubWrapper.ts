@@ -342,7 +342,7 @@ export async function getRepos(org: string) {
   return repos;
 }
 
-export async function createRepo(org: string, repoName: string, template_repo: string): string {
+export async function createRepo(org: string, repoName: string, template_repo: string, {is_template_repo }: {is_template_repo?: boolean} = {}): string {
   console.log("Creating repo", org, repoName, template_repo);
   const octokit = await getOctoKit(org);
   if (!octokit) {
@@ -364,7 +364,8 @@ export async function createRepo(org: string, repoName: string, template_repo: s
     await octokit.request("PATCH /repos/{owner}/{repo}", {
       owner: org,
       repo: repoName,
-      allow_squash_merge: false
+      allow_squash_merge: false,
+      template: is_template_repo ? true : false
     });
     //Get the head SHA
     const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {

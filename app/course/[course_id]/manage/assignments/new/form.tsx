@@ -9,12 +9,12 @@ import {
   Fieldset,
   Input,
   NativeSelectField,
-  NativeSelectRoot
+  NativeSelectRoot,
+  Text
 } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import { appendTimezoneOffset } from "@/lib/utils";
@@ -301,7 +301,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
 
 export default function AssignmentForm({
   form,
-  onSubmit
+  onSubmit,
 }: {
   form: UseFormReturnType<Assignment>;
   onSubmit: (values: FieldValues) => void;
@@ -379,32 +379,6 @@ export default function AssignmentForm({
                   },
                   maxLength: { value: 16, message: "Slug must be less than 16 characters" }
                 })}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
-              label="Template repository"
-              helperText="A link to a repository that will be used as a template for each student's assignment"
-              errorText={errors.template_repo?.message?.toString()}
-              invalid={errors.template_repo ? true : false}
-            >
-              <Controller
-                control={control}
-                name="template_repo"
-                render={({ field }) => {
-                  return (
-                    <RepoSelector
-                      templateReposOnly
-                      name={field.name}
-                      value={field.value ? field.value : ""}
-                      onBlur={field.onBlur}
-                      onChange={(val) => {
-                        field.onChange(val);
-                      }}
-                    />
-                  );
-                }}
               />
             </Field>
           </Fieldset.Content>
@@ -500,7 +474,7 @@ export default function AssignmentForm({
               </Checkbox.Root>
             </Field>
           </Fieldset.Content>
-          <Fieldset.Content>
+          {/* <Fieldset.Content>
             <Field
               label="Description URL"
               helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"
@@ -523,7 +497,7 @@ export default function AssignmentForm({
                 })}
               />
             </Field>
-          </Fieldset.Content>
+          </Fieldset.Content> */}
           <GroupConfigurationSubform form={form} timezone={timezone} />
           <SelfEvaluationSubform form={form} />
           <Fieldset.Content>

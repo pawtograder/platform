@@ -1,5 +1,5 @@
 import { createClient } from "@/utils/supabase/server";
-import { Box, DataList, HStack, VStack } from "@chakra-ui/react";
+import { Box, DataList, HStack, Link, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import AssignmentsTable from "./assignmentsTable";
@@ -12,7 +12,7 @@ export default async function AssignmentHome({
   const client = await createClient();
   const { data: assignment } = await client
     .from("assignments")
-    .select("*, classes(time_zone)")
+    .select("*, classes(time_zone), autograder(grader_repo)")
     .eq("id", Number.parseInt(assignment_id))
     .single();
   if (!assignment) {
@@ -47,6 +47,22 @@ export default async function AssignmentHome({
                         "Pp"
                       )
                     : "N/A"}
+                </DataList.ItemValue>
+              </DataList.Item>
+              <DataList.Item>
+                <DataList.ItemLabel>Handout repo</DataList.ItemLabel>
+                <DataList.ItemValue>
+                  <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
+                    {assignment.template_repo}
+                  </Link> 
+                </DataList.ItemValue>
+              </DataList.Item>
+              <DataList.Item>
+                <DataList.ItemLabel>Grader repo</DataList.ItemLabel>
+                <DataList.ItemValue>
+                  <Link href={`https://github.com/${assignment.autograder?.grader_repo}`} target="_blank">
+                    {assignment.autograder?.grader_repo}
+                  </Link>
                 </DataList.ItemValue>
               </DataList.Item>
             </DataList.Root>
