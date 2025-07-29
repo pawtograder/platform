@@ -193,7 +193,7 @@ async function expectStudentsReceivedExactlyTheseEmails({
 test.describe("Emailer", () => {
   test("Emailing students in a class section or lab section", async ({ page }) => {
     await loginAsUser(page, instructor);
-    await expect(page.getByText(course!.name!)).toBeVisible();
+    await expect(page.getByRole("link", { name: course.name! })).toBeVisible();
     await page.goto(`/course/${course.id}/manage/course/emails`);
     const section1Message = await sendBatchEmails({ page, target_text: "Students", class_section_text: section1.name });
     const section2Message = await sendBatchEmails({ page, target_text: "Students", class_section_text: section2.name });

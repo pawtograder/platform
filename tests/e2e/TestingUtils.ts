@@ -428,6 +428,20 @@ export async function insertAssignment({
 }): Promise<Assignment & { rubricChecks: RubricCheck[] }> {
   const title = `Assignment #${assignmentIdx.assignment}Test`;
   assignmentIdx.assignment++;
+  const { data: selfReviewSettingData, error: selfReviewSettingError } = await supabase
+    .from("assignment_self_review_settings")
+    .insert({
+      class_id: class_id,
+      enabled: true,
+      deadline_offset: 2,
+      allow_early: true
+    })
+    .select("id")
+    .single();
+  if (selfReviewSettingError) {
+    throw new Error(`Failed to create self review setting: ${selfReviewSettingError.message}`);
+  }
+  const self_review_setting_id = selfReviewSettingData.id;
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
     .insert({
@@ -443,8 +457,8 @@ export async function insertAssignment({
       class_id: class_id,
       slug: `assignment-${assignmentIdx.assignment}`,
       group_config: "individual",
-      self_review_setting_id: 1,
-      allow_not_graded_submissions: allow_not_graded_submissions || false
+      allow_not_graded_submissions: allow_not_graded_submissions || false,
+      self_review_setting_id: self_review_setting_id
     })
     .select("id")
     .single();
