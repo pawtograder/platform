@@ -31,13 +31,6 @@ type ManagedChannel = {
 };
 
 /**
- * Determines if the provided error relates to an expired token.
- */
-const isTokenExpiredError = (err: Error) => {
-  return err.message?.startsWith('"Token has expired');
-};
-
-/**
  * Singleton that manages Supabase realtime channel subscriptions and routes messages
  * to multiple ClassRealTimeController instances. This prevents issues where multiple
  * controllers try to subscribe to the same channel (only first subscription works).
@@ -157,12 +150,10 @@ export class RealtimeChannelManager {
       if (document.hidden) {
         console.debug(`Channel error in '${topic}', but tab is hidden. Will reconnect when visible.`);
         return;
-      } else if (err && isTokenExpiredError(err)) {
-        console.debug(`Token expired causing channel error in '${topic}'. Refreshing session and resubscribing.`);
-        this._resubscribeToChannel(topic);
-        return;
       } else {
         console.warn(`Channel error in '${topic}': `, err?.message);
+        console.debug(`Refreshing session and resubscribing to channel '${topic}'`);
+        this._resubscribeToChannel(topic);
       }
     }
 
