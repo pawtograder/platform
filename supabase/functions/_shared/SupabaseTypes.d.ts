@@ -3620,6 +3620,7 @@ export type Database = {
           assignee_profile_id: string;
           assignment_id: number;
           class_id: number;
+          completed_at: string | null;
           created_at: string;
           due_date: string;
           id: number;
@@ -3633,6 +3634,7 @@ export type Database = {
           assignee_profile_id: string;
           assignment_id: number;
           class_id: number;
+          completed_at?: string | null;
           created_at?: string;
           due_date: string;
           id?: number;
@@ -3646,6 +3648,7 @@ export type Database = {
           assignee_profile_id?: string;
           assignment_id?: number;
           class_id?: number;
+          completed_at?: string | null;
           created_at?: string;
           due_date?: string;
           id?: number;

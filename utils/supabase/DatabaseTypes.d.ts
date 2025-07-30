@@ -666,7 +666,6 @@ export type SelfReviewSettings = GetResult<
   "*"
 >;
 
-
 export type ReviewAssignments = GetResult<
   Database["public"],
   Database["public"]["Tables"]["review_assignments"]["Row"],

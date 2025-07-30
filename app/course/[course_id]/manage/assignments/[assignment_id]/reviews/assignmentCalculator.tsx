@@ -145,11 +145,13 @@ export class TAAssignmentSolver {
   historicalWorkload: Map<string, number>;
   workloadReductionFactor: number;
   taCapacities: Map<string, number>;
+  graderPreferences: Map<string, string>;
 
   constructor(
     tas: UserRoleWithConflictsAndName[],
     submissions: SubmissionWithGrading[],
     historicalWorkload: Map<string, number> = new Map(),
+    graderPreferences: Map<string, string> = new Map(),
     workloadReductionFactor: number = 1 // reduced gradually if this makes assignment impossible
   ) {
     this.tas = tas;
@@ -158,6 +160,7 @@ export class TAAssignmentSolver {
     this.historicalWorkload = historicalWorkload;
     this.workloadReductionFactor = workloadReductionFactor;
     this.taCapacities = new Map();
+    this.graderPreferences = graderPreferences;
 
     this.source = "SOURCE";
     this.sink = "SINK";
@@ -258,34 +261,95 @@ export class TAAssignmentSolver {
       };
     }
 
-    this.buildNetwork();
+    // Phase 1: Try to satisfy as many preferences as possible
+    const preferenceResult = this.solveWithPreferences();
 
-    // First, find maximum possible assignment
-    const maxPossibleFlow = this.flow.maxFlow(this.source, this.sink);
+    // Phase 2: Complete the assignment with remaining students and available TA capacity
+    const finalResult = this.completeAssignment(preferenceResult);
 
-    if (maxPossibleFlow < this.submissions.length) {
+    return finalResult;
+  }
+
+  solveWithPreferences(): {
+    assignedSubmissions: Set<number>;
+    taAssignments: Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]>;
+    remainingCapacity: Map<string, number>;
+  } {
+    const assignedSubmissions = new Set<number>();
+    const taAssignments = new Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]>();
+    const remainingCapacity = new Map<string, number>();
+
+    // Initialize assignments and remaining capacity
+    for (const ta of this.tas) {
+      taAssignments.set(ta, []);
+      remainingCapacity.set(ta.private_profile_id, this.taCapacities.get(ta.private_profile_id)!);
+    }
+
+    // Try to assign students to their preferred graders
+    for (const submission of this.submissions) {
+      if (!submission.profile_id) continue;
+
+      const preferredGraderId = this.graderPreferences.get(submission.profile_id);
+
+      if (preferredGraderId) {
+        const preferredTA = this.tas.find((ta) => ta.private_profile_id === preferredGraderId);
+
+        if (
+          preferredTA &&
+          !this.hasConflict(preferredTA, submission) &&
+          remainingCapacity.get(preferredGraderId)! > 0
+        ) {
+          // Assign this submission to the preferred TA
+          taAssignments.get(preferredTA)!.push(submission);
+          assignedSubmissions.add(submission.id);
+          remainingCapacity.set(preferredGraderId, remainingCapacity.get(preferredGraderId)! - 1);
+        }
+      }
+    }
+
+    return { assignedSubmissions, taAssignments, remainingCapacity };
+  }
+
+  completeAssignment(preferenceResult: {
+    assignedSubmissions: Set<number>;
+    taAssignments: Map<UserRoleWithConflictsAndName, SubmissionWithGrading[]>;
+    remainingCapacity: Map<string, number>;
+  }): AssignmentResult {
+    const { assignedSubmissions, taAssignments, remainingCapacity } = preferenceResult;
+
+    // Get unassigned submissions
+    const unassignedSubmissions = this.submissions.filter((s) => !assignedSubmissions.has(s.id));
+
+    if (unassignedSubmissions.length === 0) {
+      // All submissions were assigned via preferences!
+      const isBalanced = this.verifyBalance(taAssignments);
       return {
-        success: false,
-        error: `Cannot assign all students. Maximum possible assignments: ${maxPossibleFlow}`,
-        assignments: null,
+        success: isBalanced,
+        assignments: taAssignments,
+        minAssignments: this.minAssignments,
+        maxAssignments: this.maxAssignments,
+        totalFlow: this.submissions.length,
         taCapacities: this.taCapacities
       };
     }
 
-    // Now we need to ensure balanced assignment
-    // We'll use a modified approach with capacity constraints on TAs
-    this.flow = new NetworkFlow(); // Reset
+    // Use max flow to assign remaining submissions
+    this.flow = new NetworkFlow();
 
-    // Rebuild with TA capacity constraints
+    // Build network for remaining assignments
+    // Layer 1: Source to TAs (with remaining capacity)
     for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
-      const capacity = this.taCapacities.get(ta.private_profile_id)!;
-      this.flow.addEdge(this.source, taNode, capacity);
+      const capacity = remainingCapacity.get(ta.private_profile_id)!;
+      if (capacity > 0) {
+        this.flow.addEdge(this.source, taNode, capacity);
+      }
     }
 
+    // Layer 2: TAs to unassigned students (capacity 1, only if no conflict)
     for (const ta of this.tas) {
       const taNode = this.taPrefix + ta.private_profile_id;
-      for (const submission of this.submissions) {
+      for (const submission of unassignedSubmissions) {
         const studentNode = this.studentPrefix + submission.id;
         if (!this.hasConflict(ta, submission)) {
           this.flow.addEdge(taNode, studentNode, 1);
@@ -293,34 +357,40 @@ export class TAAssignmentSolver {
       }
     }
 
-    for (const submission of this.submissions) {
+    // Layer 3: Unassigned students to Sink (capacity 1)
+    for (const submission of unassignedSubmissions) {
       const studentNode = this.studentPrefix + submission.id;
-      this.flow.addEdge(studentNode, this.sink, 1); // Each student needs exactly 1 TA
+      this.flow.addEdge(studentNode, this.sink, 1);
     }
 
-    const finalFlow = this.flow.maxFlow(this.source, this.sink);
+    const flow = this.flow.maxFlow(this.source, this.sink);
 
-    if (finalFlow < this.submissions.length) {
+    if (flow < unassignedSubmissions.length) {
       return {
         success: false,
-        error: `Cannot create balanced assignment. Achieved flow: ${finalFlow}`,
+        error: `Cannot assign all remaining students. Missing assignments: ${unassignedSubmissions.length - flow}`,
         assignments: null,
         taCapacities: this.taCapacities
       };
     }
 
-    // Extract assignments from the flow
-    const assignments = this.extractAssignments();
+    // Extract additional assignments from flow and merge with preference assignments
+    const additionalAssignments = this.extractAssignments();
 
-    // Verify balance constraints
-    const isBalanced = this.verifyBalance(assignments);
+    // Merge the assignments
+    for (const [ta, additionalSubmissions] of additionalAssignments) {
+      const existingSubmissions = taAssignments.get(ta) || [];
+      taAssignments.set(ta, [...existingSubmissions, ...additionalSubmissions]);
+    }
+
+    const isBalanced = this.verifyBalance(taAssignments);
 
     return {
       success: isBalanced,
-      assignments: assignments,
+      assignments: taAssignments,
       minAssignments: this.minAssignments,
       maxAssignments: this.maxAssignments,
-      totalFlow: finalFlow,
+      totalFlow: this.submissions.length,
       taCapacities: this.taCapacities
     };
   }

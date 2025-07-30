@@ -13,9 +13,10 @@ import {
   useDroppable,
   UniqueIdentifier
 } from "@dnd-kit/core";
-import { Box, VStack, HStack, Text, Badge, Container, Card, Flex } from "@chakra-ui/react";
+import { Box, VStack, HStack, Text, Badge, Card, Flex, SimpleGrid } from "@chakra-ui/react";
 import { CSS } from "@dnd-kit/utilities";
 import { DraftReviewAssignment, UserRoleWithConflictsAndName } from "./page";
+import StudentInfoCard from "@/components/ui/student-info-card";
 
 function getDraggableId(item: DraftReviewAssignment): string {
   return item.part ? `submission-${item.submission.id}-part-${item.part.id}` : `submission-${item.submission.id}`;
@@ -45,6 +46,8 @@ function DraggableItem({ item }: DraggableItemProps) {
 
   return (
     <Card.Root
+      p={0}
+      m={0}
       ref={setNodeRef}
       style={style}
       {...listeners}
@@ -57,11 +60,10 @@ function DraggableItem({ item }: DraggableItemProps) {
       border={isDragging ? "2px solid" : "1px solid"}
       borderColor={isDragging ? "blue.300" : "gray.200"}
     >
-      <Card.Body>
+      <Card.Body p={0} m={2}>
         <HStack gap={3}>
-          <Text flex={1}>
-            {item.submitter.profiles.name} {item.part ? `(${item.part.name})` : ""}
-          </Text>
+          <StudentInfoCard private_profile_id={item.submitter.private_profile_id} />{" "}
+          {item.part ? `(${item.part.name})` : ""}
         </HStack>
       </Card.Body>
     </Card.Root>
@@ -196,7 +198,7 @@ export default function DragAndDropExample({
   const activeItem = activeId ? draftReviews.find((item) => getDraggableId(item) === activeId) : null;
 
   return (
-    <Container maxW="6xl" py={8}>
+    <Box>
       <Flex gap={8}>
         <DndContext
           sensors={sensors}
@@ -204,7 +206,7 @@ export default function DragAndDropExample({
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <Flex gap={6}>
+          <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} gap={6}>
             {categories
               .sort((a, b) => {
                 return a.title.localeCompare(b.title);
@@ -228,11 +230,11 @@ export default function DragAndDropExample({
                   </Box>
                 );
               })}
-          </Flex>
+          </SimpleGrid>
 
           <DragOverlay>{activeItem ? <DraggableItem item={activeItem} /> : null}</DragOverlay>
         </DndContext>
       </Flex>
-    </Container>
+    </Box>
   );
 }

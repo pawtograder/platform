@@ -1,51 +1,44 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import {
+  DialogActionTrigger,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle,
+  DialogTrigger
+} from "@/components/ui/dialog";
+import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
 import {
-  ReviewAssignment,
-  ReviewAssignmentRubricParts,
+  ReviewAssignmentParts,
+  ReviewAssignments,
   Rubric,
   RubricPart,
   Submission,
   SubmissionReview,
-  Tag,
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
-import {
-  Accordion,
-  Box,
-  Checkbox,
-  Container,
-  Field,
-  Fieldset,
-  Flex,
-  Heading,
-  HStack,
-  Icon,
-  Input,
-  Separator,
-  Text,
-  VStack
-} from "@chakra-ui/react";
-import { TZDate } from "@date-fns/tz";
-import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
-import { MultiValue, Select } from "chakra-react-select";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Container, Field, Heading, HStack, List, Separator, Text, VStack } from "@chakra-ui/react";
+import { useDelete, useInvalidate, useList } from "@refinedev/core";
+import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
-import { FaPlus } from "react-icons/fa";
-import { LuCheck, LuChevronDown } from "react-icons/lu";
+import { useEffect, useState } from "react";
+import { MdClear } from "react-icons/md";
 import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
-import { AssignmentResult, TAAssignmentSolver } from "./assignmentCalculator";
 import AssignReviewModal from "./assignReviewModal";
-import DragAndDropExample from "./dragAndDrop";
 import ReviewsTable, { PopulatedReviewAssignment } from "./ReviewsTable";
-import useTags from "@/hooks/useTags";
-import TagDisplay from "@/components/ui/tag";
 
-type ReviewAssignmentsWithParts = ReviewAssignment & { review_assignment_rubric_parts: ReviewAssignmentRubricParts[] };
+type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
+
+export type ReviewAssignmentsWithParts = ReviewAssignments & {
+  review_assignment_rubric_parts: ReviewAssignmentParts[];
+};
 
 export type SubmissionWithGrading = Submission & {
   submission_reviews: SubmissionReview[];
@@ -73,6 +66,167 @@ export type DraftReviewAssignment = {
 
 export type RubricWithParts = Rubric & { rubric_parts: RubricPart[] };
 
+// Clear Assignments Dialog Component
+function ClearAssignmentsDialog({ onAssignmentCleared }: { onAssignmentCleared: () => void }) {
+  const { course_id, assignment_id } = useParams();
+  const { mutateAsync: deleteAssignment } = useDelete();
+  const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
+  const [isClearing, setIsClearing] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+
+  // Reset selected rubric when dialog closes
+  useEffect(() => {
+    if (!isOpen) {
+      setSelectedRubric(undefined);
+    }
+  }, [isOpen]);
+
+  const { data: gradingRubrics } = useList<RubricWithParts>({
+    resource: "rubrics",
+    meta: {
+      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
+    },
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "assignment_id", operator: "eq", value: assignment_id },
+      { field: "review_round", operator: "ne", value: "self-review" } // Exclude self-review
+    ],
+    queryOptions: {
+      enabled: !!course_id && !!assignment_id
+    }
+  });
+
+  const { data: reviewAssignments } = useList({
+    resource: "review_assignments",
+    meta: {
+      select:
+        "*, submissions!review_assignments_submission_id_fkey(submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id))"
+    },
+    filters: [
+      { field: "assignment_id", operator: "eq", value: assignment_id },
+      { field: "rubric_id", operator: "eq", value: selectedRubric?.id }
+    ],
+    queryOptions: {
+      enabled: !!selectedRubric && !!assignment_id
+    },
+    pagination: {
+      pageSize: 1000
+    }
+  });
+
+  const incompleteAssignments =
+    (
+      reviewAssignments?.data as
+        | (ReviewAssignmentRow & {
+            submissions?: { submission_reviews?: { completed_at: string | null; grader: string; rubric_id: number }[] };
+          })[]
+        | undefined
+    )?.filter((assignment) => {
+      // Check if the assignment has no completed review
+      const hasCompletedReview = assignment.submissions?.submission_reviews?.some(
+        (review) =>
+          review.completed_at &&
+          review.grader === assignment.assignee_profile_id &&
+          review.rubric_id === assignment.rubric_id
+      );
+      return !hasCompletedReview;
+    }) || [];
+
+  const handleClearAssignments = async () => {
+    if (!selectedRubric || incompleteAssignments.length === 0) return;
+
+    setIsClearing(true);
+    try {
+      // Delete all incomplete review assignments for the selected rubric
+      await Promise.all(
+        incompleteAssignments.map((assignment) =>
+          deleteAssignment({
+            resource: "review_assignments",
+            id: assignment.id
+          })
+        )
+      );
+
+      toaster.success({
+        title: "Assignments Cleared",
+        description: `Successfully cleared ${incompleteAssignments.length} incomplete assignments for ${selectedRubric.name}`
+      });
+
+      onAssignmentCleared();
+      setIsOpen(false);
+    } catch (error) {
+      toaster.error({
+        title: "Error Clearing Assignments",
+        description: error instanceof Error ? error.message : "Failed to clear assignments"
+      });
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  return (
+    <DialogRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
+      <DialogTrigger asChild>
+        <Button variant="outline" colorPalette="red">
+          <MdClear style={{ marginRight: "8px" }} /> Clear Assignments
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Clear Assignments</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <VStack align="stretch" gap={4}>
+            <Field.Root>
+              <Field.Label>Select rubric to clear assignments from</Field.Label>
+              <Select
+                value={selectedRubric ? { label: selectedRubric.name, value: selectedRubric } : null}
+                onChange={(e) => setSelectedRubric(e?.value)}
+                options={gradingRubrics?.data.map((rubric) => ({
+                  label: rubric.name,
+                  value: rubric
+                }))}
+                placeholder="Choose a rubric..."
+              />
+              <Field.HelperText>Self-review rubrics are not included in this list</Field.HelperText>
+            </Field.Root>
+
+            {selectedRubric && (
+              <Box p={4} bg="warning.subtle" border="1px solid" borderColor="warning.border" borderRadius="md">
+                <Text fontWeight="bold" color="warning.fg" mb={2}>
+                  ⚠️ Warning
+                </Text>
+                <Text color="warning.fg" mb={2}>
+                  This action will permanently delete all incomplete review assignments for the &ldquo;
+                  {selectedRubric.name}&rdquo; rubric.
+                </Text>
+                <List.Root color="warning.fg" fontSize="sm">
+                  <List.Item>{incompleteAssignments.length} incomplete assignment(s) will be deleted</List.Item>
+                  <List.Item>Only assignments that have not been completed will be removed</List.Item>
+                  <List.Item>This action cannot be undone</List.Item>
+                </List.Root>
+              </Box>
+            )}
+          </VStack>
+        </DialogBody>
+        <DialogFooter>
+          <DialogActionTrigger asChild>
+            <Button variant="outline">Cancel</Button>
+          </DialogActionTrigger>
+          <Button
+            onClick={handleClearAssignments}
+            disabled={!selectedRubric || incompleteAssignments.length === 0 || isClearing}
+            colorPalette="red"
+            loading={isClearing}
+          >
+            {isClearing ? "Clearing..." : `Clear ${incompleteAssignments.length} Assignment(s)`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </DialogRoot>
+  );
+}
+
 // Main Page Component
 export default function ReviewAssignmentsPage() {
   const { course_id, assignment_id } = useParams();
@@ -93,19 +247,24 @@ export default function ReviewAssignmentsPage() {
     <Container maxW="container.xl" py={4}>
       <Toaster />
 
-      <HStack justifyContent="space-between" mb={4}>
-        <Heading size="lg">Manage Review Assignments</Heading>
-        <Button
-          onClick={() => {
-            openAssignModal(null);
-          }}
-          variant="solid"
-        >
-          <FaPlus style={{ marginRight: "8px" }} /> Assign Single Review
-        </Button>
-      </HStack>
-      <Separator></Separator>
-      <ReviewAssignmentAccordion handleReviewAssignmentChange={handleReviewAssignmentChange} />
+      <Heading size="lg">Manage Review Assignments</Heading>
+      <Separator mb={4} />
+
+      <VStack align="stretch" gap={4} mb={6}>
+        <Heading size="md">Assignment Management</Heading>
+        <HStack gap={4} wrap="wrap">
+          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/bulk-assign`}>
+            Bulk Assign Grading
+          </Link>
+          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
+            Reassign Grading by Grader
+          </Link>
+          <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/assign`}>
+            Assign Single Review
+          </Link>
+          <ClearAssignmentsDialog onAssignmentCleared={handleReviewAssignmentChange} />
+        </HStack>
+      </VStack>
 
       <Heading size="md">Current Assignments</Heading>
       <Separator w="100%" mb={2} />
@@ -129,714 +288,5 @@ export default function ReviewAssignmentsPage() {
         />
       )}
     </Container>
-  );
-}
-
-function ReviewAssignmentAccordion({ handleReviewAssignmentChange }: { handleReviewAssignmentChange: () => void }) {
-  const { course_id, assignment_id } = useParams();
-  const [selectedRubric, setSelectedRubric] = useState<RubricWithParts>();
-  const [submissionsToDo, setSubmissionsToDo] = useState<SubmissionWithGrading[]>();
-  const [role, setRole] = useState<string>("Graders");
-  const [draftReviews, setDraftReviews] = useState<DraftReviewAssignment[]>([]);
-  const [dueDate, setDueDate] = useState<string>("");
-  const [selectedUser, setSelectedUser] = useState<UserRoleWithConflictsAndName>();
-  const [currentSegment, setCurrentSegment] = useState<"assign grading" | "reassign grading">();
-  const [baseOnAll, setBaseOnAll] = useState<boolean>(false);
-  const [selectedTags, setSelectedTags] = useState<
-    MultiValue<{
-      label: string;
-      value: Tag;
-    }>
-  >([]);
-  const [selectedRubricParts, setSelectedRubricParts] = useState<boolean>();
-
-  const { mutateAsync } = useCreate();
-  const { mutateAsync: deleteValues } = useDelete();
-  const course = useCourse();
-
-  const { data: gradingRubrics } = useList<RubricWithParts>({
-    resource: "rubrics",
-    meta: {
-      select: "*, rubric_parts!rubric_parts_rubric_id_fkey(*)"
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "assignment_id", operator: "eq", value: assignment_id },
-      { field: "review_round", operator: "ne", value: "self-review" }
-    ],
-    queryOptions: {
-      enabled: !!course_id && !!assignment_id
-    }
-  });
-  const gradingRubric = gradingRubrics?.data.find((rubric) => rubric.review_round === "grading-review");
-  const { data: activeSubmissions } = useList<SubmissionWithGrading>({
-    resource: "submissions",
-    meta: {
-      select:
-        "*, submission_reviews!submission_reviews_submission_id_fkey(*), review_assignments!review_assignments_submission_id_fkey(*, review_assignment_rubric_parts!review_assignment_rubric_parts_review_assignment_id_fkey(*)), assignment_groups!submissions_assignment_group_id_fkey(assignment_groups_members!assignment_groups_members_assignment_group_id_fkey(profile_id))"
-    },
-    filters: [
-      { field: "class_id", operator: "eq", value: course_id },
-      { field: "assignment_id", operator: "eq", value: assignment_id },
-      { field: "is_active", operator: "eq", value: true },
-      { field: "submission_reviews.rubric_id", operator: "eq", value: selectedRubric?.id },
-      { field: "review_assignments.rubric_id", operator: "eq", value: selectedRubric?.id }
-    ],
-    queryOptions: {
-      enabled: !!selectedRubric && !!assignment_id && !!course_id
-    },
-    pagination: {
-      pageSize: 1000
-    }
-  });
-
-  const { data: userRoles } = useList<UserRoleWithConflictsAndName>({
-    resource: "user_roles",
-    meta: {
-      select:
-        "*, profiles!user_roles_private_profile_id_fkey(name, grading_conflicts!grading_conflicts_grader_profile_id_fkey(*))"
-    },
-    filters: [{ field: "class_id", operator: "eq", value: course_id }],
-    pagination: {
-      pageSize: 1000
-    }
-  });
-
-  function shuffle<T>(array: T[]): T[] {
-    const shuffled = [...array];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    return shuffled;
-  }
-
-  // shuffled course staff to avoid those created first from consistently getting more assignments when
-  // submissions / course_staff has a remainder
-  const courseStaff = shuffle(
-    userRoles?.data.filter((user) => {
-      return user.role === "grader" || user.role === "instructor";
-    }) ?? []
-  );
-
-  /**
-   * If any of the prior fields are changed, draft reviews should be cleared.
-   */
-  useEffect(() => {
-    setDraftReviews([]);
-  }, [selectedRubric, role, selectedUser, dueDate]);
-
-  /**
-   * Populate submissions to do for assigning grading
-   */
-  useEffect(() => {
-    if (selectedRubric && activeSubmissions && currentSegment === "assign grading") {
-      setSubmissionsToDo(
-        activeSubmissions.data.filter((sub) => {
-          return (
-            !sub.review_assignments.find(
-              (assign) => assign.rubric_id === selectedRubric.id // TODO
-            ) &&
-            !sub.submission_reviews.find((review) => {
-              return review.completed_at !== null && review.rubric_id === selectedRubric.id;
-            })
-          );
-        })
-      );
-    }
-  }, [selectedRubric, activeSubmissions, currentSegment]);
-
-  /**
-   * Populate submissions to do for reassigning grading
-   */
-  useEffect(() => {
-    if (selectedUser && activeSubmissions && selectedRubric && currentSegment === "reassign grading") {
-      const submissionsWithSelectedAssigned = activeSubmissions.data.filter(
-        (sub) =>
-          !!sub.review_assignments.find(
-            (assign) =>
-              assign.assignee_profile_id === selectedUser.private_profile_id && assign.rubric_id === selectedRubric.id
-          )
-      );
-      const incompleteAssignments = submissionsWithSelectedAssigned.filter((sub) => {
-        return !sub.submission_reviews.find((review) => {
-          return review.completed_by === selectedUser.private_profile_id;
-        });
-      });
-      setSubmissionsToDo(incompleteAssignments);
-    }
-  }, [selectedUser, activeSubmissions, currentSegment, selectedRubric]);
-
-  /**
-   * Creates a list of the users who will be assigned submissions to grade based on category.
-   */
-  const selectedGraders = useCallback(() => {
-    const users =
-      courseStaff?.filter((staff) => {
-        if (role === "Graders") {
-          return staff.role === "grader";
-        } else if (role === "Instructors") {
-          return staff.role === "instructor";
-        } else if (role == "Instructors and graders") {
-          return staff.role === "grader" || staff.role === "instructor";
-        } else {
-          return false;
-        }
-      }) ?? [];
-    if (selectedTags.length === 0) {
-      return users.filter((user) => user.private_profile_id !== selectedUser?.private_profile_id);
-    }
-    const matchingProfileIds = new Set(
-      tags
-        .filter((tag) =>
-          selectedTags.some(
-            (selectedTag) => selectedTag.value.color === tag.color && selectedTag.value.name === tag.name
-          )
-        )
-        .map((tag) => tag.profile_id)
-    );
-    return users.filter(
-      (user) =>
-        user.private_profile_id !== selectedUser?.private_profile_id && matchingProfileIds.has(user.private_profile_id)
-    );
-  }, [courseStaff, role, selectedUser, selectedTags]);
-
-  /**
-   * Generates reviews based on the initial selected information and grading conflicts.
-   */
-  const generateReviews = () => {
-    const users = selectedGraders();
-    if (users.length === 0) {
-      toaster.create({
-        title: `Warning: No ${role}`,
-        description: `Could not find any ${role.toLowerCase()} for this course to grade this assignment`
-      });
-      return;
-    } else if (!submissionsToDo) {
-      toaster.create({
-        title: `Warning: No submissions`,
-        description: `Could not find any submissions to grade this assignment`
-      });
-      return;
-    }
-    if (!selectedRubric?.id) {
-      toaster.create({
-        title: `Error: No rubric found`,
-        description: `Was unable to find a rubric and therefore could not generate reviews`
-      });
-      return;
-    }
-
-    const historicalWorkload = new Map<string, number>();
-    if (baseOnAll) {
-      baseOnAllCalculator(historicalWorkload);
-    }
-
-    if (selectedRubricParts) {
-      const reviewAssignments = generateReviewsByRubricPart(users, submissionsToDo, historicalWorkload);
-      setDraftReviews(reviewAssignments);
-    } else {
-      const reviewAssignments = generateReviewsByRubric(users, submissionsToDo, historicalWorkload);
-      setDraftReviews(reviewAssignments);
-    }
-  };
-
-  const generateReviewsByRubric = (
-    users: UserRoleWithConflictsAndName[],
-    submissionsToDo: SubmissionWithGrading[],
-    historicalWorkload: Map<string, number>
-  ) => {
-    const result = new TAAssignmentSolver(users, submissionsToDo, historicalWorkload).solve();
-    if (result.error) {
-      toaster.error({ title: "Error drafting reviews", description: result.error });
-    }
-    return toReview(result);
-  };
-
-  const generateReviewsByRubricPart = (
-    users: UserRoleWithConflictsAndName[],
-    submissionsToDo: SubmissionWithGrading[],
-    historicalWorkload: Map<string, number>
-  ) => {
-    if (!selectedRubric?.rubric_parts.length || selectedRubric?.rubric_parts.length === 0) {
-      toaster.error({
-        title: "Error drafting reviews",
-        description: "Unable to create assignments by part because rubric has no parts"
-      });
-      return [];
-    }
-    const groups = splitIntoGroups(users, selectedRubric?.rubric_parts.length);
-    const returnResult = [];
-    for (let x = 0; x < groups.length; x += 1) {
-      const result = new TAAssignmentSolver(groups[x], submissionsToDo, historicalWorkload).solve();
-      if (result.error) {
-        toaster.error({ title: "Error drafting reviews", description: result.error });
-      }
-      returnResult.push(toReview(result, selectedRubric?.rubric_parts[x]));
-    }
-    return returnResult.reduce((prev, cur) => {
-      return prev.concat(cur);
-    }, [] as DraftReviewAssignment[]);
-  };
-
-  function splitIntoGroups<T>(arr: T[], numGroups: number) {
-    if (numGroups <= 0 || arr.length === 0) return [];
-    if (numGroups >= arr.length) return arr.map((item) => [item]);
-
-    const baseSize = Math.floor(arr.length / numGroups);
-    const remainder = arr.length % numGroups;
-
-    return Array.from({ length: numGroups }, (_, i) => {
-      const start = i * baseSize + Math.min(i, remainder);
-      const size = baseSize + (i < remainder ? 1 : 0);
-      return arr.slice(start, start + size);
-    });
-  }
-
-  /**
-   * For each assignee, determines the number of relevant submissions that should be taken into account when assigning them more work.
-   * In this case, we consider only the number of review assignments they have already been tasked to complete for this rubric on this assignment.
-   *
-   * @param historicalWorkload map to populate of assignee_private_profile_id -> number of relevant submissions
-   */
-  const baseOnAllCalculator = useCallback(
-    (historicalWorkload: Map<string, number>) => {
-      for (const submission of activeSubmissions?.data ?? []) {
-        for (const review of submission.review_assignments.filter((rev) => rev.rubric_id === selectedRubric?.id)) {
-          historicalWorkload.set(
-            review.assignee_profile_id,
-            (historicalWorkload.get(review.assignee_profile_id) ?? 0) + 1
-          );
-        }
-      }
-    },
-    [activeSubmissions, selectedRubric]
-  );
-
-  /**
-   * Translates the result of the assignment calculator to a set of draft reviews with all the information necessary to then
-   * assign the reviews.
-   * @param result the result of the assignment calculator
-   */
-  const toReview = useCallback(
-    (result: AssignmentResult, part?: RubricPart) => {
-      const reviewAssignments: DraftReviewAssignment[] = [];
-      result.assignments?.entries().forEach((entry) => {
-        const user: UserRoleWithConflictsAndName = entry[0];
-        const submissions: SubmissionWithGrading[] = entry[1];
-        submissions.forEach((submission) => {
-          const to = userRoles?.data.find((item) => {
-            return item.private_profile_id === submission.profile_id;
-          });
-          if (!to) {
-            toaster.error({
-              title: "Error drafting reviews",
-              description: `Failed to find user for submission #${submission.id}`
-            });
-            return;
-          }
-          reviewAssignments.push({
-            assignee: user,
-            submitter: to,
-            submission: submission,
-            part: part
-          });
-        });
-      });
-      return reviewAssignments;
-    },
-    [userRoles]
-  );
-
-  /**
-   * Creates the review assignments based on the draft reviews.
-   */
-  const assignReviews = async () => {
-    if (!selectedRubric) {
-      toaster.error({ title: "Error creating review assignments", description: "Failed to find rubric" });
-      return false;
-    } else if (!course_id) {
-      toaster.error({ title: "Error creating review assignments", description: "Failed to find current course" });
-      return false;
-    }
-
-    await clearIncompleteAssignmentsForUser();
-
-    const submissionReviewPromises = (draftReviews ?? []).map(async (review) => ({
-      review,
-      submissionReviewId: await submissionReviewIdForReview(review)
-    }));
-
-    const reviewsWithSubmissionIds = await Promise.all(submissionReviewPromises);
-
-    const validReviews = reviewsWithSubmissionIds.filter(({ submissionReviewId }) => submissionReviewId);
-
-    if (validReviews.length === 0) {
-      toaster.error({ title: "Error", description: "No valid reviews to assign" });
-      return false;
-    }
-
-    const reviewAssignmentPromises = validReviews.map(({ review, submissionReviewId }) =>
-      mutateAsync({
-        resource: "review_assignments",
-        values: {
-          assignee_profile_id: review.assignee.private_profile_id,
-          submission_id: review.submission.id,
-          assignment_id: Number(assignment_id),
-          rubric_id: selectedRubric.id,
-          class_id: Number(course_id),
-          submission_review_id: submissionReviewId,
-          due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
-        }
-      }).then((result) => ({ review, result }))
-    );
-
-    const createdAssignments = await Promise.all(reviewAssignmentPromises);
-
-    const rubricPartPromises = createdAssignments
-      .filter(({ review }) => review.part)
-      .map(({ review, result }) =>
-        mutateAsync({
-          resource: "review_assignment_rubric_parts",
-          values: {
-            review_assignment_id: result.data.id,
-            rubric_part_id: review.part?.id,
-            class_id: course_id
-          }
-        })
-      );
-
-    if (rubricPartPromises.length > 0) {
-      await Promise.all(rubricPartPromises);
-    }
-
-    handleReviewAssignmentChange();
-    clearStateData();
-  };
-  /**
-   * Seraches for the submission review id for this review assignment.  If none found, creates a new submission
-   * review to use.
-   * @param review draft assignment to search
-   * @returns submission review id for review assignment creation
-   */
-  const submissionReviewIdForReview = useCallback(
-    async (review: DraftReviewAssignment) => {
-      let submissionReviewId: number;
-      if (review.submission.submission_reviews.length > 0) {
-        submissionReviewId = review.submission.submission_reviews[0].id;
-      } else {
-        const { data: rev } = await mutateAsync({
-          resource: "submission_reviews",
-          values: {
-            total_score: 0,
-            tweak: 0,
-            class_id: course_id,
-            submission_id: review.submission.id,
-            name: selectedRubric?.name,
-            rubric_id: selectedRubric?.id
-          }
-        });
-        submissionReviewId = Number(rev.id);
-      }
-      if (isNaN(submissionReviewId)) {
-        toaster.error({
-          title: "Error creating review assignments",
-          description: `Failed to find or create submission review for ${review.submitter.profiles.name}`
-        });
-      }
-      return submissionReviewId;
-    },
-    [selectedRubric, course_id, mutateAsync]
-  );
-
-  useEffect(() => {
-    if (gradingRubric) {
-      setSelectedRubric(gradingRubric);
-    }
-    if (activeSubmissions && gradingRubric) {
-      const submissionsToDo = activeSubmissions.data.filter((sub) => {
-        return (
-          sub.review_assignments.length === 0 &&
-          !sub.submission_reviews.find((review) => {
-            return review.completed_at !== null && review.rubric_id === gradingRubric.id;
-          })
-        );
-      });
-      if (submissionsToDo.length > 0) {
-        setCurrentSegment("assign grading");
-      }
-    }
-  }, [gradingRubric, activeSubmissions]);
-
-  const { tags } = useTags();
-
-  const uniqueTags: Tag[] = Array.from(
-    tags
-      .reduce((map, tag) => {
-        if (!map.has(tag.name + tag.color + tag.visible)) {
-          map.set(tag.name + tag.color + tag.visible, tag);
-        }
-        return map;
-      }, new Map())
-      .values()
-  );
-
-  /**
-   * Clear state data so the modal is fresh when reopened
-   */
-  const clearStateData = useCallback(() => {
-    setSelectedRubric(gradingRubric);
-    setSubmissionsToDo(undefined);
-    setRole("Graders");
-    setDraftReviews([]);
-    setDueDate("");
-    setSelectedUser(undefined);
-    setBaseOnAll(false);
-    setSelectedRubricParts(false);
-    setSelectedTags([]);
-  }, [gradingRubric]);
-
-  /**
-   * Deletes all of the review-assignments for the selected user that are incomplete for this
-   * rubric and assignment.  Used when review assignments are being reassigned.
-   */
-  const clearIncompleteAssignmentsForUser = useCallback(async () => {
-    if (currentSegment !== "reassign grading") {
-      return Promise.resolve();
-    }
-    const valuesToDelete = submissionsToDo
-      ?.flatMap((submission) => submission.review_assignments)
-      .filter((review) => {
-        return review.assignee_profile_id === selectedUser?.private_profile_id;
-      });
-    const deletePromises = (valuesToDelete ?? []).map(
-      async (value) =>
-        await deleteValues({
-          resource: "review_assignments",
-          id: value.id
-        })
-    );
-    return Promise.all(deletePromises);
-  }, [currentSegment, submissionsToDo, selectedUser, deleteValues]);
-
-  /**
-   * Fields used by both assign and reassign grading tabs
-   */
-  function BaseFields() {
-    return (
-      <VStack align="flex-start" maxW={"lg"} gap={0}>
-        <Field.Root>
-          <Field.Label>Choose rubric</Field.Label>
-          <Select
-            value={{ label: selectedRubric?.name, value: selectedRubric }}
-            onChange={(e) => setSelectedRubric(e?.value)}
-            options={gradingRubrics?.data.map((rubric) => {
-              return { label: rubric.name, value: rubric };
-            })}
-          />
-        </Field.Root>
-        <Field.Root>
-          <Checkbox.Root checked={selectedRubricParts} onCheckedChange={(e) => setSelectedRubricParts(!!e.checked)}>
-            <Checkbox.Control>
-              <Checkbox.HiddenInput />
-              <LuCheck />
-            </Checkbox.Control>
-            <Checkbox.Label fontSize="sm">Assign {role.toLowerCase()} by rubric part</Checkbox.Label>
-          </Checkbox.Root>
-        </Field.Root>
-        <Text fontSize={"sm"}>
-          {currentSegment === "assign grading"
-            ? submissionsToDo && submissionsToDo.length > 0
-              ? `There are ${submissionsToDo.length} active submissions that are unassigned and ungraded for this rubric
-          on this assignment.`
-              : `All submissions have been assigned and graded for this rubric on this assignment.`
-            : `There are ${submissionsToDo?.length ?? 0} active submissions assigned ${
-                selectedUser?.profiles.name ? `to ${selectedUser?.profiles.name}` : ""
-              } that are incomplete for this rubric on this assignment.`}
-        </Text>
-        <Field.Root>
-          <Field.Label>Select role to assign reviews to</Field.Label>
-          <Select
-            onChange={(e) => {
-              if (e?.value) {
-                setRole(e.value.toString());
-              }
-            }}
-            value={{ label: role, value: role }}
-            options={[
-              { label: "Instructors", value: "Instructors" },
-              { label: "Graders", value: "Graders" },
-              { label: "Instructors and graders", value: "Instructors and graders" }
-            ]}
-          />
-        </Field.Root>
-
-        <Field.Root>
-          <Field.Label>Filter {role.toLowerCase()} by tag</Field.Label>
-          <Select
-            isMulti={true}
-            onChange={(e) => {
-              setSelectedTags(e);
-            }}
-            value={selectedTags}
-            options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
-            components={{
-              Option: ({ data, ...props }) => (
-                <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer" _hover={{ bg: "gray.100" }}>
-                  {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
-                </Box>
-              ),
-              MultiValue: ({ data, ...props }) => (
-                <Box key={data.value.id} {...props.innerProps} p="4px 8px" cursor="pointer">
-                  {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
-                </Box>
-              )
-            }}
-          />
-          <Field.HelperText>Only assign work to {role.toLowerCase()} with one of these tags</Field.HelperText>
-        </Field.Root>
-        <Heading size="sm">Load balancing</Heading>
-        <Field.Root>
-          <Select
-            value={
-              baseOnAll
-                ? { label: "Balance based on all assignments", value: true }
-                : { label: "Balance based on new assignments", value: false }
-            }
-            onChange={(e) => {
-              if (e) {
-                setBaseOnAll(e?.value);
-              }
-            }}
-            options={[
-              { label: "Balance based on new assignments", value: false },
-              { label: "Balance based on all assignments", value: true }
-            ]}
-          />
-        </Field.Root>
-
-        <Field.Root>
-          <Field.Label>Review due date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
-          <Input
-            type="datetime-local"
-            value={
-              dueDate
-                ? new Date(dueDate)
-                    .toLocaleString("sv-SE", {
-                      timeZone: course.classes.time_zone ?? "America/New_York"
-                    })
-                    .replace(" ", "T")
-                : ""
-            }
-            onChange={(e) => {
-              const value = e.target.value;
-              if (value) {
-                // Treat inputted date as course timezone regardless of user location
-                const [date, time] = value.split("T");
-                const [year, month, day] = date.split("-");
-                const [hour, minute] = time.split(":");
-
-                // Create TZDate with these exact values in course timezone
-                const tzDate = new TZDate(
-                  parseInt(year),
-                  parseInt(month) - 1,
-                  parseInt(day),
-                  parseInt(hour),
-                  parseInt(minute),
-                  0,
-                  0,
-                  course.classes.time_zone ?? "America/New_York"
-                );
-                setDueDate(tzDate.toString());
-              } else {
-                setDueDate("");
-              }
-            }}
-          />
-        </Field.Root>
-        <Button
-          maxWidth={"md"}
-          onClick={generateReviews}
-          variant="subtle"
-          disabled={!dueDate || !selectedRubric || !role || submissionsToDo?.length === 0}
-          marginBottom={"2"}
-        >
-          Generate Reviews
-        </Button>
-        {draftReviews.length > 0 && (
-          <Flex flexDir={"column"} gap="3" padding="2">
-            <DragAndDropExample
-              draftReviews={draftReviews}
-              setDraftReviews={setDraftReviews}
-              courseStaffWithConflicts={selectedGraders() ?? []}
-            />
-            <Button maxWidth={"md"} variant="subtle" onClick={() => assignReviews()} float={"right"}>
-              Assign
-            </Button>
-          </Flex>
-        )}
-      </VStack>
-    );
-  }
-
-  return (
-    <>
-      <Accordion.Root
-        collapsible
-        value={currentSegment ? [currentSegment] : []}
-        marginBottom={"2"}
-        onValueChange={(e) => {
-          clearStateData();
-          if (e.value.length > 0) {
-            setCurrentSegment(e.value[0] as "assign grading" | "reassign grading");
-          } else {
-            setCurrentSegment(undefined);
-          }
-        }}
-      >
-        <Accordion.Item key={1} value={"assign grading"}>
-          <Accordion.ItemTrigger>
-            <Heading size="md">Assign grading</Heading>
-            <Accordion.ItemIndicator>
-              <Icon as={LuChevronDown} />
-            </Accordion.ItemIndicator>
-          </Accordion.ItemTrigger>
-          <Accordion.ItemContent>
-            <Fieldset.Root>
-              <Fieldset.Content>
-                <BaseFields />
-              </Fieldset.Content>
-            </Fieldset.Root>
-          </Accordion.ItemContent>
-        </Accordion.Item>
-        <Accordion.Item key={2} value={"reassign grading"}>
-          <Accordion.ItemTrigger>
-            <Heading size="md">Reassign grading</Heading>
-            <Accordion.ItemIndicator>
-              <Icon as={LuChevronDown} />
-            </Accordion.ItemIndicator>
-          </Accordion.ItemTrigger>
-          <Accordion.ItemContent>
-            <Fieldset.Root maxW={"lg"}>
-              <Fieldset.Content>
-                <Field.Root>
-                  <Field.Label>Select grader whose remaining work you want to reassign</Field.Label>
-                  <Select
-                    value={{ label: selectedUser?.profiles.name, value: selectedUser }}
-                    onChange={(e) => {
-                      setSelectedUser(e?.value);
-                    }}
-                    options={courseStaff?.map((staff) => {
-                      return { label: staff.profiles.name, value: staff };
-                    })}
-                  />
-                </Field.Root>
-                <BaseFields />
-              </Fieldset.Content>
-            </Fieldset.Root>
-          </Accordion.ItemContent>
-        </Accordion.Item>
-      </Accordion.Root>
-    </>
   );
 }
