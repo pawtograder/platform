@@ -342,7 +342,12 @@ export async function getRepos(org: string) {
   return repos;
 }
 
-export async function createRepo(org: string, repoName: string, template_repo: string, {is_template_repo }: {is_template_repo?: boolean} = {}): string {
+export async function createRepo(
+  org: string,
+  repoName: string,
+  template_repo: string,
+  { is_template_repo }: { is_template_repo?: boolean } = {}
+): string {
   console.log("Creating repo", org, repoName, template_repo);
   const octokit = await getOctoKit(org);
   if (!octokit) {
@@ -469,13 +474,51 @@ export async function archiveRepoAndLock(org: string, repo: string) {
     name: newName
   });
 }
-
-export async function syncStaffTeam(org: string, courseSlug: string, githubUsernames: string[]) {
+/**
+ * Syncs the staff team for a course.
+ *
+ * @param org The organization name.
+ * @param courseSlug The course slug.
+ * @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the staff team.
+ *     This function should be idempotent, and should not throw an error if the team already exists (or not).
+ *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
+ */
+export async function syncStaffTeam(org: string, courseSlug: string, githubUsernamesFetcher: () => Promise<string[]>) {
+  await syncTeam(`${courseSlug}-staff`, org, githubUsernamesFetch);
+}
+/**
+ * Syncs the student team for a course.
+ *
+ * @param org The organization name.
+ * @param courseSlug The course slug.
+ * @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the student team.
+ *     This function should be idempotent, and should not throw an error if the team already exists (or not).
+ *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
+ */
+export async function syncStudentTeam(
+  org: string,
+  courseSlug: string,
+  githubUsernamesFetcher: () => Promise<string[]>
+) {
+  await syncTeam(`${courseSlug}-students`, org, githubUsernamesFetcher);
+}
+/**
+ * Syncs a team for a course.
+ *
+ * This function is used to sync the members of a team for a course.
+ * It is used to ensure that the team has the correct members, and to add and remove members as needed.
+ *
+ * @param team_slug The slug of the team to sync.
+ * @param org The organization name.
+ * @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the team.
+ *     This function should be idempotent, and should not throw an error if the team already exists (or not).
+ *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
+ */
+export async function syncTeam(team_slug: string, org: string, githubUsernamesFetcher: () => Promise<string[]>) {
   const octokit = await getOctoKit(org);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
-  const team_slug = `${courseSlug}-staff`;
   let team_id: number;
   try {
     const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
@@ -497,28 +540,32 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
       throw e;
     }
   }
-  let members: Endpoints["GET /orgs/{org}/teams/{team_id}/members"]["response"]["data"][] = [];
+  let members: Endpoints["GET /orgs/{org}/teams/{team_slug}/members"]["response"]["data"][] = [];
   try {
-    const { data } = await octokit.request("GET /orgs/{org}/teams/{team_id}/members", {
+    const data = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
-      team_id,
+      team_slug,
       per_page: 100
     });
+    console.log(`Found ${data.length} members in team ${team_slug}`);
+    console.log(JSON.stringify(data, null, 2));
     members = data;
   } catch (e) {
     if (e instanceof RequestError && e.message.includes("Not Found")) {
+      console.log(`Team ${team_slug} not found`);
+      console.log(e);
       //This seems to happen when there are no members in the team?
       members = [];
     } else {
       throw e;
     }
   }
-
+  const githubUsernames = await githubUsernamesFetcher();
   const existingMembers = new Map(members.map((m) => [m.login, m]));
   const newMembers = githubUsernames.filter((u) => u && !existingMembers.has(u));
   const removeMembers = existingMembers.keys().filter((u) => u && !githubUsernames.includes(u));
-  console.log(`Staff team: ${team_slug} intended members:`);
-  console.log(githubUsernames.join(", "));
+  console.log(`Class team: ${team_slug} intended members: ${githubUsernames.join(", ")}`);
+  console.log(`Existing members in team ${team_slug}: ${members.map((m) => m.login).join(", ")}`);
   for (const username of newMembers) {
     await octokit.request("PUT /orgs/{org}/teams/{team_slug}/memberships/{username}", {
       org,
@@ -535,6 +582,29 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
     });
   }
 }
+export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string) {
+  const octokit = await getOctoKit(org);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+  const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}", {
+    org,
+    team_slug
+  });
+  const user = await octokit.request("GET /users/{username}", {
+    username: githubUsername
+  });
+  const userID = user.data.id;
+  const teamID = team.data.id;
+  console.log(`Team ${team_slug} has id ${teamID}`);
+  const resp = await octokit.request("POST /orgs/{org}/invitations", {
+    org,
+    role: "direct_member",
+    invitee_id: userID,
+    team_ids: [teamID]
+  });
+  console.log(`Invitation response: ${JSON.stringify(resp.data)}`);
+}
 const staffTeamCache = new Map<string, string[]>();
 const orgMembershipCache = new Map<string, string[]>();
 export async function syncRepoPermissions(org: string, repo: string, courseSlug: string, githubUsernames: string[]) {
@@ -550,11 +620,11 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
   }
   const team_slug = `${courseSlug}-staff`;
   if (!staffTeamCache.has(courseSlug)) {
-    const team = await octokit.request("GET /orgs/{org}/teams/{team_slug}/members", {
+    const team = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
       org,
       team_slug
     });
-    const staffGithubUsernames = team.data.map((m) => m.login);
+    const staffGithubUsernames = team.map((m) => m.login);
     staffTeamCache.set(courseSlug, staffGithubUsernames);
     console.log("staff team", staffGithubUsernames);
   }
@@ -572,13 +642,13 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
   const orgMembers = orgMembershipCache.get(org) || [];
   console.log(`${org} org members: ${orgMembers.join(", ")}`);
 
-  const existingInvitations = await octokit.request("GET /repos/{owner}/{repo}/invitations", {
+  const existingInvitations = await octokit.paginate("GET /repos/{owner}/{repo}/invitations", {
     owner: org,
-    repo,
-    per_page: 100
+    repo
   });
+
   //Find expired invitations and re-send
-  const expiredInvitations = existingInvitations.data.filter((i) => i.expired);
+  const expiredInvitations = existingInvitations.filter((i) => i.expired);
   for (const invitation of expiredInvitations) {
     const invitee = invitation.invitee?.login;
     if (invitee) {
@@ -616,7 +686,7 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
     });
   }
   const newAccess = githubUsernames.filter(
-    (u) => !existingUsernames.includes(u) && !existingInvitations.data.some((i) => i.invitee?.login === u)
+    (u) => !existingUsernames.includes(u) && !existingInvitations.some((i) => i.invitee?.login === u)
   );
   const removeAccess = existingUsernames.filter(
     (u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u) && !orgMembers.includes(u)

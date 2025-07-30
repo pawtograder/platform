@@ -9,8 +9,7 @@ import {
   Fieldset,
   Input,
   NativeSelectField,
-  NativeSelectRoot,
-  Text
+  NativeSelectRoot
 } from "@chakra-ui/react";
 import { Controller, FieldValues } from "react-hook-form";
 
@@ -301,7 +300,7 @@ function SelfEvaluationSubform({ form }: { form: UseFormReturnType<Assignment> }
 
 export default function AssignmentForm({
   form,
-  onSubmit,
+  onSubmit
 }: {
   form: UseFormReturnType<Assignment>;
   onSubmit: (values: FieldValues) => void;

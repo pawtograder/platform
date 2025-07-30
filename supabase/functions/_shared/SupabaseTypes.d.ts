@@ -5722,7 +5722,9 @@ export type Database = {
           canvas_id: number | null;
           class_id: number;
           class_section_id: number | null;
+          github_org_confirmed: boolean | null;
           id: number;
+          invitation_date: string | null;
           lab_section_id: number | null;
           private_profile_id: string;
           public_profile_id: string;
@@ -5733,7 +5735,9 @@ export type Database = {
           canvas_id?: number | null;
           class_id: number;
           class_section_id?: number | null;
+          github_org_confirmed?: boolean | null;
           id?: number;
+          invitation_date?: string | null;
           lab_section_id?: number | null;
           private_profile_id: string;
           public_profile_id: string;
@@ -5744,7 +5748,9 @@ export type Database = {
           canvas_id?: number | null;
           class_id?: number;
           class_section_id?: number | null;
+          github_org_confirmed?: boolean | null;
           id?: number;
+          invitation_date?: string | null;
           lab_section_id?: number | null;
           private_profile_id?: string;
           public_profile_id?: string;
@@ -6785,6 +6791,14 @@ export type Database = {
       };
       sync_lab_section_meetings: {
         Args: { lab_section_id_param: number };
+        Returns: undefined;
+      };
+      sync_staff_github_team: {
+        Args: { class_id: number };
+        Returns: undefined;
+      };
+      sync_student_github_team: {
+        Args: { class_id: number };
         Returns: undefined;
       };
       update_card_progress: {

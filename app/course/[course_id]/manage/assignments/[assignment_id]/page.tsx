@@ -54,7 +54,7 @@ export default async function AssignmentHome({
                 <DataList.ItemValue>
                   <Link href={`https://github.com/${assignment.template_repo}`} target="_blank">
                     {assignment.template_repo}
-                  </Link> 
+                  </Link>
                 </DataList.ItemValue>
               </DataList.Item>
               <DataList.Item>

@@ -1,4 +1,4 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts"
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
@@ -18,7 +18,12 @@ async function handleRequest(req: Request) {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  const { data: assignment } = await adminSupabase.from("assignments").select("slug,classes(slug,github_org)").eq("id", assignment_id).eq("class_id", class_id).single();
+  const { data: assignment } = await adminSupabase
+    .from("assignments")
+    .select("slug,classes(slug,github_org)")
+    .eq("id", assignment_id)
+    .eq("class_id", class_id)
+    .single();
 
   if (!assignment) {
     throw new UserVisibleError("Assignment not found");
@@ -35,15 +40,18 @@ async function handleRequest(req: Request) {
   await syncRepoPermissions(solutionRepoOrg, solutionRepoName, assignment.classes.slug, []);
   const graderConfig = await getFileFromRepo(`${solutionRepoOrg}/${solutionRepoName}`, "pawtograder.yml");
   const asObj = (await parse(graderConfig.content)) as Json;
-  await adminSupabase.from("autograder").update({
-    grader_repo: `${solutionRepoOrg}/${solutionRepoName}`,
-    config: asObj,
-  }).eq("id", assignment_id);
+  await adminSupabase
+    .from("autograder")
+    .update({
+      grader_repo: `${solutionRepoOrg}/${solutionRepoName}`,
+      config: asObj
+    })
+    .eq("id", assignment_id);
 
   return {
     repo_name: solutionRepoName,
-    org_name: solutionRepoOrg,
-  }
+    org_name: solutionRepoOrg
+  };
 }
 
 Deno.serve(async (req) => {

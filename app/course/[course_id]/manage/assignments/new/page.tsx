@@ -1,7 +1,11 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useCourseController";
-import { assignmentCreateHandoutRepo, assignmentCreateSolutionRepo, assignmentGroupCopyGroupsFromAssignment, githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
+import {
+  assignmentCreateHandoutRepo,
+  assignmentCreateSolutionRepo,
+  assignmentGroupCopyGroupsFromAssignment
+} from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -79,8 +83,14 @@ export default function NewAssignmentPage() {
           description: error.message
         });
       } else {
-        await assignmentCreateHandoutRepo({ assignment_id: data.id, class_id: Number.parseInt(course_id as string) }, supabase);
-        await assignmentCreateSolutionRepo({ assignment_id: data.id, class_id: Number.parseInt(course_id as string) }, supabase);
+        await assignmentCreateHandoutRepo(
+          { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+          supabase
+        );
+        await assignmentCreateSolutionRepo(
+          { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
+          supabase
+        );
         //Potentially copy groups from another assignment
         if (getValues("copy_groups_from_assignment")) {
           await assignmentGroupCopyGroupsFromAssignment(
