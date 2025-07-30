@@ -31,7 +31,6 @@ export type PopulatedReviewAssignment = GetResult<
   "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"
 >;
 
-
 interface ReviewsTableProps {
   assignmentId: string | number;
   openAssignModal: (data: PopulatedReviewAssignment | null) => void;
@@ -107,10 +106,13 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   }, []);
 
   // Helper function to create filter options from unique values
-  const createFilterOptions = useCallback((data: PopulatedReviewAssignment[], accessor: (row: PopulatedReviewAssignment) => string): SelectOption[] => {
-    const uniqueValues = Array.from(new Set(data.map(accessor).filter(Boolean)));
-    return uniqueValues.map(value => ({ value, label: value }));
-  }, []);
+  const createFilterOptions = useCallback(
+    (data: PopulatedReviewAssignment[], accessor: (row: PopulatedReviewAssignment) => string): SelectOption[] => {
+      const uniqueValues = Array.from(new Set(data.map(accessor).filter(Boolean)));
+      return uniqueValues.map((value) => ({ value, label: value }));
+    },
+    []
+  );
 
   const columns = useMemo<ColumnDef<PopulatedReviewAssignment>[]>(
     () => [
@@ -272,7 +274,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
                 confirmHeader="Delete Review Assignment"
                 confirmText="Are you sure you want to delete this review assignment?"
                 onConfirm={() => handleDelete(row.original.id)}
-                onCancel={() => { }}
+                onCancel={() => {}}
                 trigger={
                   <IconButton aria-label="Delete review assignment" colorPalette="red" variant="ghost" size="sm">
                     <FaTrash />
@@ -287,12 +289,19 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
   );
   const tableController = useMemo(() => {
-    const query = supabase.from("review_assignments").
-      select("*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))")
-      .eq("assignment_id", Number(assignmentId)).not("rubric_id", "eq", selfReviewRubric?.id || 0)
+    const query = supabase
+      .from("review_assignments")
+      .select(
+        "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"
+      )
+      .eq("assignment_id", Number(assignmentId))
+      .not("rubric_id", "eq", selfReviewRubric?.id || 0);
 
-
-    return new TableController<"review_assignments", "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))", number>({
+    return new TableController<
+      "review_assignments",
+      "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))",
+      number
+    >({
       query,
       client: supabase,
       table: "review_assignments",
@@ -300,7 +309,10 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     });
   }, [classRealTimeController, supabase, assignmentId, selfReviewRubric]);
 
-  const table = useTableControllerTable<"review_assignments","*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"> ({
+  const table = useTableControllerTable<
+    "review_assignments",
+    "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"
+  >({
     columns,
     tableController,
     initialState: {
@@ -346,10 +358,14 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
       }),
       rubric: createFilterOptions(data, (row) => row.rubrics?.name || "N/A"),
       status: createFilterOptions(data, (row) => getReviewStatus(row)),
-      rubricPart: createFilterOptions(data, (row) =>
-        row.review_assignment_rubric_parts?.reduce((past: string, part) => {
-          return past + part.rubric_parts.name + " ";
-        }, "")?.trim() ?? "All"
+      rubricPart: createFilterOptions(
+        data,
+        (row) =>
+          row.review_assignment_rubric_parts
+            ?.reduce((past: string, part) => {
+              return past + part.rubric_parts.name + " ";
+            }, "")
+            ?.trim() ?? "All"
       )
     };
   }, [data, createFilterOptions, getReviewStatus]);
@@ -394,9 +410,12 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
                             size="sm"
                             placeholder={`Filter ${typeof header.column.columnDef.header === "string" ? header.column.columnDef.header : header.column.id}`}
                             options={filterOptions[header.column.id as keyof typeof filterOptions] || []}
-                            value={((header.column.getFilterValue() as string[]) || []).map(val => ({ value: val, label: val }))}
+                            value={((header.column.getFilterValue() as string[]) || []).map((val) => ({
+                              value: val,
+                              label: val
+                            }))}
                             onChange={(selectedOptions: MultiValue<SelectOption>) => {
-                              const values = selectedOptions.map(option => option.value);
+                              const values = selectedOptions.map((option) => option.value);
                               header.column.setFilterValue(values.length > 0 ? values : undefined);
                             }}
                             aria-label={`Filter by ${typeof header.column.columnDef.header === "string" ? header.column.columnDef.header : header.column.id}`}
