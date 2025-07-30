@@ -3,6 +3,7 @@ import { Alert } from "@/components/ui/alert";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import { Switch } from "@/components/ui/switch";
+import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { GraderResultOutput, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -20,7 +21,7 @@ import {
 import { useShow } from "@refinedev/core";
 import { formatDistanceToNow } from "date-fns";
 import { useParams } from "next/navigation";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 export type GraderResultTestData = {
   hide_score?: string;
@@ -65,7 +66,11 @@ export default function GraderResults() {
         "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*))"
     }
   });
-  const [showHiddenOutput, setShowHiddenOutput] = useState(true);
+  const isObfuscatedGradesMode = useObfuscatedGradesMode();
+  const [showHiddenOutput, setShowHiddenOutput] = useState(!isObfuscatedGradesMode);
+  useEffect(() => {
+    setShowHiddenOutput(!isObfuscatedGradesMode);
+  }, [isObfuscatedGradesMode]);
   if (query.isLoading) {
     return (
       <Box>

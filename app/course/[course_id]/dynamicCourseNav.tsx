@@ -25,6 +25,7 @@ import React, { Fragment, useEffect, useRef, useState } from "react";
 import { FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
+  FiBookOpen,
   FiClipboard,
   FiCompass,
   FiMenu,
@@ -33,7 +34,9 @@ import {
   FiStar,
   FiUsers
 } from "react-icons/fi";
+import { TbCards } from "react-icons/tb";
 import UserMenu from "../UserMenu";
+import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -44,6 +47,7 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/assignments`
   },
   { name: "Discussion", icon: FiStar, target: `/course/${courseID}/discussion` },
+  { name: "Flashcards", icon: TbCards, student_only: true, target: `/course/${courseID}/flashcards` },
   {
     name: "Get Help Now",
     student_only: true,
@@ -58,6 +62,8 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/help`,
     feature_flag: "office-hours"
   },
+  { name: "Gradebook", icon: FiBookOpen, student_only: true, target: `/course/${courseID}/gradebook` },
+  { name: "Gradebook", icon: FiBookOpen, instructor_only: true, target: `/course/${courseID}/manage/gradebook` },
   {
     name: "Course Settings",
     icon: FiSettings,
@@ -65,8 +71,11 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/course/`,
     submenu: [
       { name: "Enrollments", icon: FiUsers, target: `/course/${courseID}/manage/course/enrollments` },
+      { name: "Lab Sections", icon: MdOutlineScience, target: `/course/${courseID}/manage/course/lab-sections` },
+      { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
-      { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` }
+      { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
+      { name: "Emailer", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` }
     ]
   }
 ];
@@ -296,7 +305,7 @@ export default function DynamicCourseNav() {
                 </Link>
               </Text>
             </HStack>
-            <HStack width="100%">
+            <HStack width="100%" mt={2}>
               {filteredLinks.map((link) => {
                 if (link.submenu) {
                   return (

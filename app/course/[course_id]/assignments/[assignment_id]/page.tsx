@@ -1,114 +1,127 @@
+"use client";
 import { ActiveSubmissionIcon } from "@/components/ui/active-submission-icon";
 import { AssignmentDueDate } from "@/components/ui/assignment-due-date";
 import Markdown from "@/components/ui/markdown";
 import SelfReviewNotice from "@/components/ui/self-review-notice";
-import { Repository, SelfReviewSettings, UserRole } from "@/utils/supabase/DatabaseTypes";
-import { createClient } from "@/utils/supabase/server";
-import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table, Text, VStack } from "@chakra-ui/react";
+import useAuthState from "@/hooks/useAuthState";
+import {
+  Assignment,
+  Repository,
+  SelfReviewSettings,
+  SubmissionWithGraderResultsAndReview,
+  UserRole,
+  UserRoleWithCourse
+} from "@/utils/supabase/DatabaseTypes";
+import { Alert, Box, Flex, Heading, HStack, Link, Skeleton, Table } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
+import { CrudFilter, useList } from "@refinedev/core";
 import { format } from "date-fns";
+import { useParams } from "next/navigation";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import { NotGradedSubmissionIcon } from "@/components/ui/not-graded-submission-icon";
 
-function RepositoriesInfo({ repositories }: { repositories: Repository[] }) {
-  if (repositories?.length === 0) {
-    return (
-      <Text fontSize="sm" color="text.muted">
-        No repositories found. Please refresh the page. If this issue persists, please contact your instructor.
-      </Text>
-    );
+export default function AssignmentPage() {
+  const { course_id, assignment_id } = useParams();
+  const { user } = useAuthState();
+  const { data: enrollmentData } = useList<UserRoleWithCourse>({
+    resource: "user_roles",
+    meta: {
+      select: "*, classes(time_zone)",
+      limit: 1
+    },
+    filters: [
+      { field: "class_id", operator: "eq", value: course_id },
+      { field: "user_id", operator: "eq", value: user?.id }
+    ],
+    queryOptions: {
+      enabled: !!user
+    }
+  });
+  const enrollment = enrollmentData && enrollmentData.data.length > 0 ? enrollmentData.data[0] : null;
+
+  const { data: assignmentData } = useList<Assignment>({
+    resource: "assignments",
+    meta: {
+      select: "*",
+      limit: 1
+    },
+    filters: [
+      {
+        field: "id",
+        operator: "eq",
+        value: assignment_id
+      }
+    ]
+  });
+  const { data: submissionsData } = useList<SubmissionWithGraderResultsAndReview>({
+    resource: "submissions",
+    meta: {
+      select: "*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)",
+      order: "created_at, { ascending: false }"
+    },
+    filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
+    sorters: [
+      {
+        field: "created_at",
+        order: "desc"
+      }
+    ]
+  });
+  const { data: groupData } = useList({
+    resource: "assignment_groups_members",
+    meta: {
+      select: "*, assignment_groups!id(*)"
+    },
+    filters: [
+      {
+        field: "assignment_id",
+        operator: "eq",
+        value: assignment_id
+      },
+      {
+        field: "profile_id",
+        operator: "eq",
+        value: enrollment?.private_profile_id
+      }
+    ],
+    queryOptions: {
+      enabled: assignmentData?.data[0].group_config !== "individual" && !!enrollment?.private_profile_id
+    }
+  });
+
+  const assignment_group_id: number | undefined =
+    groupData && groupData.data.length > 0 ? groupData.data[0].assignment_group_id : null;
+
+  const filters: CrudFilter[] = [{ field: "assignment_id", operator: "eq", value: assignment_id }];
+  if (assignment_group_id) {
+    filters.push({ field: "assignment_group_id", operator: "eq", value: assignment_group_id });
+  } else if (enrollment?.private_profile_id) {
+    filters.push({ field: "profile_id", operator: "eq", value: enrollment?.private_profile_id });
   }
-  if (repositories?.length === 1) {
-    return (
-      <HStack>
-        <Text fontSize="sm" fontWeight="bold">
-          Repository:{" "}
-        </Text>
-        <Link href={`https://github.com/${repositories[0].repository}`}>{repositories[0].repository}</Link>
-      </HStack>
-    );
-  }
-  const groupRepo = repositories.find((r) => r.assignment_group_id !== null);
-  const personalRepo = repositories.find((r) => r.assignment_group_id === null);
-  return (
-    <VStack textAlign="left" alignItems="flex-start" fontSize="sm" color="text.muted">
-      <HStack>
-        <Text fontWeight="bold" fontSize="sm">
-          Current group repository:
-        </Text>{" "}
-        <Link href={`https://github.com/${groupRepo?.repository}`}>{groupRepo?.repository}</Link>
-      </HStack>
-      <Text fontWeight="bold">
-        Note that you have multiple repositories currently. Please be sure that you are developing in the correct one
-        (the current group repository).
-      </Text>
-      <Text>
-        Individual repository (not in use, you are now in a group):{" "}
-        <Link href={`https://github.com/${personalRepo?.repository}`}>{personalRepo?.repository}</Link>
-      </Text>
-    </VStack>
-  );
-}
-export default async function AssignmentPage({
-  params
-}: {
-  params: Promise<{ course_id: string; assignment_id: string }>;
-}) {
-  const { course_id, assignment_id } = await params;
-  const client = await createClient();
-  const {
-    data: { user }
-  } = await client.auth.getUser();
-  if (!user) {
-    return <div>You are not logged in</div>;
-  }
-  const { data: enrollment } = await client
-    .from("user_roles")
-    .select("*, classes(time_zone)")
-    .eq("class_id", Number.parseInt(course_id))
-    .eq("user_id", user.id)
-    .single();
-  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
-  const { data: assignment } = await client
-    .from("assignments")
-    .select("*")
-    .eq("id", Number.parseInt(assignment_id))
-    .single();
-  if (!assignment) {
+  const { data: repositoriesData } = useList<Repository>({ resource: "repositories", filters });
+
+  const { data: reviewSettingsData } = useList<SelfReviewSettings>({
+    resource: "assignment_self_review_settings",
+    meta: {
+      select: "*",
+      limit: 1
+    },
+    filters: [{ field: "id", operator: "eq", value: assignmentData?.data[0].self_review_setting_id }],
+    queryOptions: {
+      enabled: !!assignmentData && assignmentData.data.length !== 0
+    }
+  });
+
+  if (!assignmentData || assignmentData.data.length === 0) {
     return <div>Assignment not found</div>;
   }
 
-  const { data: submissions } = await client
-    .from("submissions")
-    .select("*, grader_results(*), submission_reviews!submissions_grading_review_id_fkey(*)")
-    .eq("assignment_id", Number.parseInt(assignment_id))
-    .order("created_at", { ascending: false });
-
-  let assignment_group_id: number | undefined;
-  if (assignment.group_config !== "individual" && enrollment?.private_profile_id) {
-    const { data: group } = await client
-      .from("assignment_groups_members")
-      .select("*, assignment_groups!id(*)")
-      .eq("assignment_id", Number.parseInt(assignment_id))
-      .eq("profile_id", enrollment.private_profile_id)
-      .single();
-    assignment_group_id = group?.assignment_group_id;
-  }
-  const { data: repositories } = await client
-    .from("repositories")
-    .select("*")
-    .eq("assignment_id", Number.parseInt(assignment_id))
-    .or(
-      assignment_group_id
-        ? `assignment_group_id.eq.${assignment_group_id},profile_id.eq.${enrollment?.private_profile_id}`
-        : `profile_id.eq.${enrollment?.private_profile_id}`
-    );
-
-  const { data: review_settings } = await client
-    .from("assignment_self_review_settings")
-    .select("*")
-    .eq("id", assignment.self_review_setting_id)
-    .single();
+  const assignment = assignmentData.data[0];
+  const repositories = repositoriesData?.data;
+  const submissions = submissionsData?.data;
+  const review_settings = reviewSettingsData && reviewSettingsData.data.length > 0 ? reviewSettingsData.data[0] : null;
+  const timeZone = enrollment?.classes?.time_zone || "America/New_York";
 
   if (!enrollment) {
     return <Skeleton height="40" width="100%" />;
@@ -134,12 +147,10 @@ export default async function AssignmentPage({
           </Alert.Description>
         </Alert.Root>
       ) : (
-        <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-          <RepositoriesInfo repositories={repositories ?? []} />
-        </Box>
+        <></>
       )}
-      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle">
-        <ManageGroupWidget assignment={assignment} />
+      <Box m={4} borderWidth={1} borderColor="bg.emphasized" borderRadius={4} p={4} bg="bg.subtle" maxW="4xl">
+        <ManageGroupWidget assignment={assignment} repositories={repositories ?? []} />
       </Box>
       <SelfReviewNotice
         review_settings={review_settings ?? ({} as SelfReviewSettings)}
@@ -156,7 +167,7 @@ export default async function AssignmentPage({
         assignment_group_id={assignment_group_id}
         profile_id={enrollment?.private_profile_id}
       />
-      <Table.Root maxW="xl">
+      <Table.Root maxW="2xl">
         <Table.Header>
           <Table.Row>
             <Table.ColumnHeader>Submission #</Table.ColumnHeader>
@@ -168,10 +179,11 @@ export default async function AssignmentPage({
         </Table.Header>
         <Table.Body>
           {submissions?.map((submission) => (
-            <Table.Row key={submission.id}>
+            <Table.Row key={submission.id} bg={submission.is_not_graded ? "bg.warning" : ""}>
               <Table.Cell>
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
                   {submission.is_active ? <ActiveSubmissionIcon /> : ""}
+                  {submission.is_not_graded ? <NotGradedSubmissionIcon /> : ""}
                   {!assignment_group_id || submission.assignment_group_id
                     ? submission.ordinal
                     : `(Old #${submission.ordinal})`}
@@ -200,7 +212,9 @@ export default async function AssignmentPage({
                     ? `${submission.submission_reviews?.total_score}/${assignment.total_points}`
                     : submission.is_active
                       ? "Pending"
-                      : ""}
+                      : submission.is_not_graded
+                        ? "Not for grading"
+                        : ""}
                 </Link>
               </Table.Cell>
             </Table.Row>

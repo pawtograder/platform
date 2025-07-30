@@ -26,7 +26,10 @@ import Link from "@/components/ui/link";
 import NotificationsBox from "@/components/ui/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState, { useCourse } from "@/hooks/useAuthState";
+import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { createClient } from "@/utils/supabase/client";
 import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Avatar } from "@chakra-ui/react";
@@ -34,14 +37,17 @@ import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import { HiOutlineSupport } from "react-icons/hi";
+import { TbSpy, TbSpyOff } from "react-icons/tb";
 
 function SupportMenu() {
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
-        <IconButton variant="outline" colorPalette="gray" size="sm">
-          <HiOutlineSupport />
-        </IconButton>
+        <Tooltip content="Support & Documentation" showArrow>
+          <IconButton variant="outline" colorPalette="gray" size="sm">
+            <HiOutlineSupport />
+          </IconButton>
+        </Tooltip>
       </Menu.Trigger>
       <Portal>
         <Menu.Positioner>
@@ -557,12 +563,118 @@ function UserSettingsMenu() {
     </Drawer.Root>
   );
 }
+function ObfuscatedGradesModePicker() {
+  const isObfuscated = useObfuscatedGradesMode();
+  const setIsObfuscated = useSetObfuscatedGradesMode();
+  return (
+    <Tooltip content={isObfuscated ? "Show all grades" : "Obfuscate grades in UI"} showArrow>
+      <IconButton
+        variant="outline"
+        size="sm"
+        onClick={() => setIsObfuscated(!isObfuscated)}
+        aria-label="Toggle obfuscated grades mode"
+        css={{ _icon: { width: "5", height: "5" } }}
+      >
+        <Icon as={isObfuscated ? TbSpyOff : TbSpy} />
+      </IconButton>
+    </Tooltip>
+  );
+}
+
+function ConnectionStatusIndicator() {
+  const status = useRealtimeConnectionStatus();
+
+  if (!status) {
+    return null;
+  }
+
+  const getStatusColor = () => {
+    switch (status.overall) {
+      case "connected":
+        return "green.emphasized";
+      case "partial":
+        return "orange.emphasized";
+      case "disconnected":
+        return "red.solid";
+      case "connecting":
+        return "yellow.solid";
+      default:
+        return "gray.muted";
+    }
+  };
+
+  const getStatusText = () => {
+    switch (status.overall) {
+      case "connected":
+        return "All realtime connections active";
+      case "partial":
+        return "Some realtime connections failed";
+      case "disconnected":
+        return "No realtime connections active";
+      case "connecting":
+        return "Connecting to realtime channels...";
+      default:
+        return "Unknown status";
+    }
+  };
+
+  const getChannelTypeName = (type: string) => {
+    switch (type) {
+      case "staff":
+        return "Staff data";
+      case "user":
+        return "Your class data";
+      case "submission_graders":
+        return "Staff submission data for this submission";
+      case "submission_user":
+        return "Your submission data for this submission";
+      default:
+        return type;
+    }
+  };
+
+  const tooltipContent = (
+    <VStack alignItems="flex-start" gap={1} fontSize="sm">
+      <Text fontWeight="bold">{getStatusText()}</Text>
+      <Text fontSize="xs" color="gray.300">
+        {status.channels.length} channel{status.channels.length !== 1 ? "s" : ""}
+      </Text>
+      {status.channels.map((channel, index) => (
+        <HStack key={index} fontSize="xs" gap={2}>
+          <Box width={2} height={2} borderRadius="full" bg={channel.state === "joined" ? "green.400" : "red.400"} />
+          <Text>
+            {getChannelTypeName(channel.type)}
+            {channel.submissionId ? ` (${channel.submissionId})` : ""}
+          </Text>
+          <Text color="gray.400">({channel.state})</Text>
+        </HStack>
+      ))}
+    </VStack>
+  );
+
+  return (
+    <Tooltip content={tooltipContent} showArrow>
+      <Box
+        width={3}
+        height={3}
+        borderRadius="full"
+        bg={getStatusColor()}
+        aria-label={`Realtime connection status: ${getStatusText()}`}
+        role="note"
+        cursor="help"
+        flexShrink={0}
+      />
+    </Tooltip>
+  );
+}
 export default function UserMenu() {
   return (
-    <HStack>
+    <HStack minWidth={0}>
+      <ConnectionStatusIndicator />
       <SupportMenu />
       <ColorModeButton colorPalette="gray" variant="outline" />
       <NotificationsBox />
+      <ObfuscatedGradesModePicker />
       <UserSettingsMenu />
     </HStack>
   );

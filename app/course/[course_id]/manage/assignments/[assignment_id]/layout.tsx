@@ -2,12 +2,13 @@
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
+import { Select } from "chakra-react-select";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
-import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaUsers, FaSearch } from "react-icons/fa";
+import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
-import { Select } from "chakra-react-select";
+import { AssignmentProvider } from "@/hooks/useAssignment";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
@@ -29,6 +30,11 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaSearch
   },
   { label: "Manage Groups", href: `/course/${courseId}/manage/assignments/${assignmentId}/groups`, icon: FaUsers },
+  {
+    label: "Manage Regrade Requests",
+    href: `/course/${courseId}/manage/assignments/${assignmentId}/regrade-requests`,
+    icon: FaPooStorm
+  },
   { label: "Test Assignment", href: `/course/${courseId}/manage/assignments/${assignmentId}/test`, icon: FaPlay },
   {
     label: "Rerun Autograder",
@@ -36,6 +42,13 @@ const LinkItems = (courseId: number, assignmentId: number) => [
     icon: FaPooStorm
   }
 ];
+/**
+ * Provides a responsive layout for assignment management pages, including navigation and content display.
+ *
+ * Renders assignment-specific navigation links and content for both desktop and mobile views, fetching assignment data and supplying context via an AssignmentProvider. Displays the assignment title and renders nested page content.
+ *
+ * @param children - The content to display within the assignment layout
+ */
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
   const { course_id, assignment_id } = useParams();
   const { data: assignment } = useOne<Assignment>({
@@ -47,7 +60,7 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
   const router = useRouter();
 
   return (
-    <>
+    <AssignmentProvider assignment_id={Number(assignment_id)}>
       <Flex pt={4} display={{ base: "none", lg: "flex" }}>
         <Box w="xs" pr={2} flex={0}>
           <VStack align="flex-start">
@@ -101,11 +114,11 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
             }))}
           />
         </Box>
-        <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4}>
+        <Box mt={4} borderColor="border.muted" borderWidth="2px" borderRadius="md" p={2}>
           <Heading size="lg">Assignment: {assignment ? assignment.data?.title : "Loading..."}</Heading>
           <Box>{children}</Box>
         </Box>
       </Flex>
-    </>
+    </AssignmentProvider>
   );
 }

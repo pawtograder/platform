@@ -1,6 +1,7 @@
 import { TZDate } from "@date-fns/tz";
 import { clsx, type ClassValue } from "clsx";
 import { differenceInHours, formatDistance } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
@@ -18,16 +19,18 @@ export function dueDateAdvice(date: string | null, courseTimezone?: string) {
   return advice;
 }
 
-export function formatDueDate(date: string | null, courseTimezone?: string) {
+export function formatDueDateInTimezone(
+  date: string | null,
+  courseTimezone?: string,
+  includeTimezone?: boolean,
+  giveAdvice?: boolean
+) {
   if (!date) {
     return "N/A";
   }
-  return (
-    new Date(date).toLocaleDateString() +
-    " " +
-    new Date(date).toLocaleTimeString() +
-    dueDateAdvice(date, courseTimezone)
-  );
+  const timezone = includeTimezone ? ` (${courseTimezone}) ` : "";
+  const advice = giveAdvice === true ? dueDateAdvice(date, courseTimezone) : "";
+  return formatInTimeZone(date, courseTimezone || "America/New_York", "MMM d h:mm aaa") + timezone + advice;
 }
 
 export function appendTimezoneOffset(date: string | null, timezone: string) {

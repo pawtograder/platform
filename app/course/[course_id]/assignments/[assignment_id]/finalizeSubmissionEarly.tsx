@@ -1,150 +1,74 @@
 "use client";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import {
-  Assignment,
-  AssignmentDueDateException,
-  AssignmentGroupMember,
-  Submission
-} from "@/utils/supabase/DatabaseTypes";
+import { createClient } from "@/utils/supabase/client";
+import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
-import { CrudFilter, useCreate, useList } from "@refinedev/core";
-import { addHours, addMinutes, differenceInMinutes } from "date-fns";
-import { useParams } from "next/navigation";
 
+/**
+ * Renders a button that allows the user to finalize their assignment submission early, updating the due date to the current time for themselves and any group members.
+ *
+ * Displays a confirmation dialog before executing the finalization. The button is disabled if not enabled or while loading. Upon confirmation, triggers a backend procedure to finalize the submission and updates the loading state accordingly.
+ *
+ * @param assignment - The assignment to be finalized early.
+ * @param private_profile_id - The user's profile identifier.
+ * @param enabled - Whether the finalize button is enabled.
+ * @param setLoading - Callback to update the loading state.
+ * @param loading - Indicates if the finalize action is in progress.
+ *
+ * @returns A React component rendering the finalize submission button with confirmation dialog.
+ */
 export default function FinalizeSubmissionEarly({
   assignment,
-  private_profile_id
+  private_profile_id,
+  enabled,
+  setLoading,
+  loading
 }: {
   assignment: Assignment;
   private_profile_id: string;
+  enabled: boolean;
+  setLoading: (loading: boolean) => void;
+  loading: boolean;
 }) {
-  const { course_id } = useParams();
-  const { mutate: create } = useCreate();
-  const { data: groupMember } = useList<AssignmentGroupMember>({
-    resource: "assignment_groups_members",
-    meta: {
-      select: "*"
-    },
-    filters: [
-      { field: "profile_id", operator: "eq", value: private_profile_id },
-      { field: "assignment_id", operator: "eq", value: assignment.id }
-    ],
-    pagination: { pageSize: 1 }
-  });
-
-  const group_id =
-    groupMember?.data && groupMember?.data.length > 0 ? groupMember.data[0].assignment_group_id : undefined;
-
-  const groupOrProfileFilterStudent: CrudFilter = group_id
-    ? {
-        field: "assignment_group_id",
-        operator: "eq",
-        value: group_id
-      }
-    : {
-        field: "student_id",
-        operator: "eq",
-        value: private_profile_id
-      };
-  const groupOrProfileFilter: CrudFilter = group_id
-    ? {
-        field: "assignment_group_id",
-        operator: "eq",
-        value: group_id
-      }
-    : {
-        field: "profile_id",
-        operator: "eq",
-        value: private_profile_id
-      };
-
-  // records of student's group already moving their due date forward.  you shouldn't move your due
-  // date forward multiple times
-  const { data: extensionRecordsForStudent } = useList<AssignmentDueDateException>({
-    resource: "assignment_due_date_exceptions",
-    meta: {
-      select: "*"
-    },
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment.id }, groupOrProfileFilterStudent]
-  });
-
-  const { data: activeSubmission } = useList<Submission>({
-    resource: "submissions",
-    meta: {
-      select: "*"
-    },
-    filters: [
-      { field: "assignment_id", operator: "eq", value: assignment.id },
-      groupOrProfileFilter,
-      { field: "is_active", operator: "eq", value: true }
-    ]
-  });
+  const supabase = createClient();
 
   // makes the due date for the student and all group members NOW rather than previous.  rounds back.
   // ex if something is due at 9:15pm and the student marks "finished" at 6:30pm, their deadline will be moved
   // back 3 hours to 6:15pm so they can access the self review immediately.
-  const finalizeSubmission = () => {
-    if (group_id) {
-      create({
-        resource: "assignment_due_date_exceptions",
-        values: {
-          class_id: course_id,
-          assignment_id: assignment.id,
-          assignment_group_id: group_id,
-          creator_id: private_profile_id,
-          hours: -1 * Math.floor(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
-          minutes: (-1 * differenceInMinutes(new Date(assignment.due_date), new Date())) % 60,
-          tokens_consumed: 0
-        }
+  const finalizeSubmission = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.rpc("finalize_submission_early", {
+        this_assignment_id: assignment.id,
+        this_profile_id: private_profile_id
       });
-    } else {
-      create({
-        resource: "assignment_due_date_exceptions",
-        values: {
-          class_id: course_id,
-          assignment_id: assignment.id,
-          student_id: private_profile_id,
-          creator_id: private_profile_id,
-          hours: -1 * Math.floor(differenceInMinutes(new Date(assignment.due_date), new Date()) / 60),
-          minutes: (-1 * differenceInMinutes(new Date(assignment.due_date), new Date())) % 60,
-          tokens_consumed: 0
-        }
-      });
+
+      if (error) {
+        console.error("Error finalizing submission:", error);
+        // You might want to show a toast notification here
+        return;
+      }
+
+      const result = data as { success: boolean; error?: string; message?: string };
+
+      if (result && !result.success) {
+        console.error("Failed to finalize submission:", result.error);
+        // You might want to show a toast notification here
+        return;
+      }
+    } catch (err) {
+      console.error("Unexpected error finalizing submission:", err);
+    } finally {
+      setLoading(false);
     }
   };
-
-  function deadlinePassed(): boolean {
-    if (extensionRecordsForStudent === undefined) {
-      return differenceInMinutes(Date.now(), new Date(assignment.due_date)) > 0;
-    } else {
-      const extension = extensionRecordsForStudent.data.reduce(
-        (prev, cur) => {
-          return { hours: cur.hours + prev.hours, minutes: cur.minutes + prev.minutes };
-        },
-        { hours: 0, minutes: 0 }
-      );
-      const modifiedDueDate = addMinutes(addHours(new Date(assignment.due_date), extension.hours), extension.minutes);
-      return differenceInMinutes(Date.now(), modifiedDueDate) > 0;
-    }
-  }
 
   return (
     <Box width="50%" alignItems={"center"}>
       <PopConfirm
         triggerLabel="Finalize Submission Early"
         trigger={
-          <Button
-            variant="surface"
-            colorPalette="green"
-            disabled={
-              (extensionRecordsForStudent?.data &&
-                extensionRecordsForStudent.data.filter((record) => {
-                  return record.hours < 0 || record.minutes < 0;
-                }).length > 0) ||
-              deadlinePassed() ||
-              (activeSubmission && activeSubmission.data.length === 0)
-            }
-          >
+          <Button variant="surface" colorPalette="green" loading={loading} disabled={!enabled}>
             Finalize Submission Early
           </Button>
         }

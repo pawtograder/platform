@@ -1,11 +1,34 @@
 "use client";
 
-import { useMyReviewAssignments, useReviewAssignment, useSelfReviewSettings } from "@/hooks/useAssignment";
-import { Box, Button, Heading, HStack, Icon, List, Popover, SegmentGroup, Text, VStack } from "@chakra-ui/react";
+import {
+  useMyReviewAssignments,
+  useReviewAssignment,
+  useRubricById,
+  useRubrics,
+  useSelfReviewSettings
+} from "@/hooks/useAssignment";
+import {
+  Box,
+  Button,
+  Heading,
+  HStack,
+  Icon,
+  List,
+  Popover,
+  SegmentGroup,
+  Skeleton,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
-import { useSubmission, useSubmissionReviews, useWritableSubmissionReviews } from "@/hooks/useSubmission";
+import {
+  useSubmission,
+  useSubmissionController,
+  useSubmissionReview,
+  useWritableSubmissionReviews
+} from "@/hooks/useSubmission";
 import {
   useActiveReviewAssignmentId,
   useActiveSubmissionReview,
@@ -13,10 +36,9 @@ import {
   useMissingRubricChecksForActiveReview,
   useSetActiveSubmissionReviewId
 } from "@/hooks/useSubmissionReview";
-import { formatDueDate } from "@/lib/utils";
-import { SubmissionReviewWithRubric } from "@/utils/supabase/DatabaseTypes";
-import { useUpdate } from "@refinedev/core";
+import { formatDueDateInTimezone } from "@/lib/utils";
 import { formatDate } from "date-fns";
+import { useState } from "react";
 import { FaRegCheckCircle } from "react-icons/fa";
 import PersonName from "./person-name";
 import SelfReviewDueDateInformation from "./self-review-due-date-information";
@@ -26,11 +48,15 @@ function ActiveReviewPicker() {
   const activeSubmissionReviewId = useActiveSubmissionReviewId();
   const writableSubmissionReviews = useWritableSubmissionReviews();
   const setActiveSubmissionReviewId = useSetActiveSubmissionReviewId();
+  const rubrics = useRubrics();
+  if (activeSubmissionReviewId && !writableSubmissionReviews?.find((wr) => wr.id === activeSubmissionReviewId)) {
+    return <Skeleton />;
+  }
   return (
     <HStack gap={2}>
       <Text>Select a review to work on:</Text>
       <SegmentGroup.Root
-        value={`${activeSubmissionReviewId}`}
+        value={activeSubmissionReviewId?.toString() ?? ""}
         onValueChange={(value) => {
           setActiveSubmissionReviewId(Number(value.value));
         }}
@@ -38,7 +64,7 @@ function ActiveReviewPicker() {
         <SegmentGroup.Indicator />
         {writableSubmissionReviews?.map((review) => (
           <SegmentGroup.Item key={review.id} value={review.id.toString()}>
-            <SegmentGroup.ItemText>{review.rubrics.name}</SegmentGroup.ItemText>
+            <SegmentGroup.ItemText>{rubrics.find((r) => r.id === review.rubric_id)?.name}</SegmentGroup.ItemText>
             <SegmentGroup.ItemHiddenInput />
           </SegmentGroup.Item>
         ))}
@@ -47,18 +73,21 @@ function ActiveReviewPicker() {
   );
 }
 
+/**
+ * Renders a button and popover interface for marking the active submission review as complete.
+ *
+ * Displays missing required and optional rubric checks and criteria, and prevents completion until all required checks are addressed. On completion, updates the review status and shows a success or error notification.
+ */
 export function CompleteReviewButton() {
-  const { mutateAsync: updateReview } = useUpdate<SubmissionReviewWithRubric>({
-    resource: "submission_reviews"
-  });
+  const submissionController = useSubmissionController();
   const { private_profile_id } = useClassProfiles();
   const { missing_required_checks, missing_optional_checks, missing_required_criteria, missing_optional_criteria } =
     useMissingRubricChecksForActiveReview();
   const activeSubmissionReview = useActiveSubmissionReview();
+  const [isLoading, setIsLoading] = useState(false);
 
   if (
     !activeSubmissionReview ||
-    !activeSubmissionReview.rubrics ||
     !missing_required_checks ||
     !missing_optional_checks ||
     !missing_required_criteria ||
@@ -143,19 +172,31 @@ export function CompleteReviewButton() {
               {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
                 <Text>All checks have been applied. Click the button below to mark the review as complete.</Text>
               )}
-              {missing_required_checks.length == 0 && missing_optional_checks.length == 0 && (
+              {missing_required_checks.length == 0 && (
                 <Button
                   variant="solid"
                   colorPalette="green"
+                  loading={isLoading}
                   onClick={async () => {
-                    await updateReview({
-                      id: activeSubmissionReview.id,
-                      values: { completed_at: new Date(), completed_by: private_profile_id }
-                    });
-                    toaster.success({
-                      title: "Review marked as complete",
-                      description: "Your review has been marked as complete."
-                    });
+                    try {
+                      setIsLoading(true);
+                      await submissionController.submission_reviews.update(activeSubmissionReview.id, {
+                        completed_at: new Date().toISOString(),
+                        completed_by: private_profile_id
+                      });
+                      toaster.success({
+                        title: "Review marked as complete",
+                        description: "Your review has been marked as complete."
+                      });
+                    } catch (error) {
+                      console.error("Error marking review as complete", error);
+                      toaster.error({
+                        title: "Error marking review as complete",
+                        description: "An error occurred while marking the review as complete."
+                      });
+                    } finally {
+                      setIsLoading(false);
+                    }
                   }}
                 >
                   Mark as Complete
@@ -178,51 +219,54 @@ function ReviewAssignmentActions() {
   const activeSubmissionReview = useActiveSubmissionReview();
   const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
   const { time_zone } = useCourse();
-  if (!activeReviewAssignment || !activeSubmissionReview) {
+  const rubric = useRubricById(activeSubmissionReview?.rubric_id);
+  if (!activeReviewAssignment || !activeSubmissionReview || activeSubmissionReview.completed_at) {
     return <></>;
   }
   return (
     <HStack w="100%" alignItems="center" justifyContent="space-between">
       {activeReviewAssignment && (
         <Text textAlign="left">
-          Your {activeSubmissionReview?.rubrics.name} review is required by{" "}
-          {formatDueDate(activeReviewAssignment.due_date, time_zone || "America/New_York")}. When you are done, click
-          &quot;Complete Review&quot;.
+          Your {rubric?.name} review is required by{" "}
+          {formatDueDateInTimezone(activeReviewAssignment.due_date, time_zone || "America/New_York", false, true)}. When
+          you are done, click &quot;Complete Review&quot;.
         </Text>
       )}
-      {activeSubmissionReview && <CompleteReviewButton />}
+      {activeSubmissionReview && activeReviewAssignment && <CompleteReviewButton />}
     </HStack>
   );
 }
 
-function CompletedReviewHistory() {
-  const allReviews = useSubmissionReviews();
-  const submission = useSubmission();
-  const myAssignedReviews = useMyReviewAssignments(submission?.id);
-  const completedAssignedReviews = myAssignedReviews.filter((ra) =>
-    allReviews?.some((wr) => wr.id === ra.submission_review_id && wr.completed_at)
-  );
-  if (completedAssignedReviews.length === 0) {
+function AssignedReviewHistory({ review_assignment_id }: { review_assignment_id: number }) {
+  const reviewAssignment = useReviewAssignment(review_assignment_id);
+  const submissionReview = useSubmissionReview(reviewAssignment?.submission_review_id);
+  const rubric = useRubricById(reviewAssignment?.rubric_id);
+  if (
+    !reviewAssignment ||
+    !submissionReview ||
+    !submissionReview.completed_at ||
+    !rubric ||
+    !submissionReview.completed_by
+  ) {
     return <></>;
   }
   return (
-    <VStack w="100%" alignItems="flex-start">
-      {completedAssignedReviews.map((ra) => {
-        const submissionReview = allReviews?.find((wr) => wr.id === ra.submission_review_id);
-        if (!submissionReview || !submissionReview.completed_at || !submissionReview.completed_by) {
-          return <></>;
-        }
-        return (
-          <HStack key={ra.id} gap={1}>
-            <Text>
-              {submissionReview?.rubrics.name} completed on{" "}
-              {formatDate(submissionReview?.completed_at, "MM/dd/yyyy hh:mm a")} by{" "}
-            </Text>
-            <PersonName uid={submissionReview.completed_by} showAvatar={false} />
-          </HStack>
-        );
+    <Text>
+      {rubric.name} completed on {formatDate(submissionReview?.completed_at, "MM/dd/yyyy hh:mm a")} by{" "}
+      <PersonName uid={submissionReview.completed_by} showAvatar={false} />
+    </Text>
+  );
+}
+
+function CompletedReviewHistory() {
+  const submission = useSubmission();
+  const myAssignedReviews = useMyReviewAssignments(submission?.id);
+  return (
+    <>
+      {myAssignedReviews.map((ra) => {
+        return <AssignedReviewHistory key={ra.id} review_assignment_id={ra.id} />;
       })}
-    </VStack>
+    </>
   );
 }
 
@@ -239,19 +283,13 @@ export default function SubmissionReviewToolbar() {
     return <></>;
   }
   return (
-    <HStack
-      w="100%"
-      justifyContent="space-between"
-      p={2}
-      borderRadius="md"
-      borderWidth="1px"
-      borderColor="border.info"
-      bg="bg.info"
-    >
-      <SelfReviewDueDateInformation />
-      {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
-      <ReviewAssignmentActions />
+    <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
+      <SelfReviewDueDateInformation /> {/* TODO: This is not working */}
+      <HStack w="100%" justifyContent="space-between">
+        {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
+        <ReviewAssignmentActions /> {/* TODO: This is not showing up */}
+      </HStack>
       <CompletedReviewHistory />
-    </HStack>
+    </Box>
   );
 }

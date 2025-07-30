@@ -1,7 +1,11 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { HStack, Avatar, Text, VStack, TextProps } from "@chakra-ui/react";
+import { Avatar, HStack, Text, TextProps, VStack } from "@chakra-ui/react";
+import { memo } from "react";
 
-export default function PersonName({
+const MemoizedPersonName = memo(PersonName);
+export default MemoizedPersonName;
+
+function PersonName({
   uid,
   size = "sm",
   showAvatar = true,
@@ -13,14 +17,15 @@ export default function PersonName({
   textProps?: TextProps;
 }) {
   const userProfile = useUserProfile(uid);
+  if (!showAvatar) {
+    return <>{userProfile?.name}</>;
+  }
   return (
-    <HStack>
-      {showAvatar && (
-        <Avatar.Root size={size}>
-          <Avatar.Image src={userProfile?.avatar_url} />
-          <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
-        </Avatar.Root>
-      )}
+    <HStack w="100%">
+      <Avatar.Root size={size}>
+        <Avatar.Image src={userProfile?.avatar_url} />
+        <Avatar.Fallback>{userProfile?.name?.charAt(0)}</Avatar.Fallback>
+      </Avatar.Root>
       <VStack>
         <Text {...textProps}>{userProfile?.name}</Text>
       </VStack>

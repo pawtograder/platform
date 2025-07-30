@@ -42,7 +42,6 @@ export default function TestAssignmentPage() {
       { field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }
     ]
   });
-  console.log(repository?.data);
   if (!assignment?.data || !submissions?.data) {
     return <Skeleton height="100px" />;
   }

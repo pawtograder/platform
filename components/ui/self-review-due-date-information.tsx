@@ -11,6 +11,7 @@ import { useAssignmentDueDate } from "@/hooks/useCourseController";
 import { useWritableSubmissionReviews } from "@/hooks/useSubmission";
 import { HStack, Text, VStack } from "@chakra-ui/react";
 import { addHours } from "date-fns";
+import { useState } from "react";
 
 export default function SelfReviewDueDateInformation() {
   const settings = useSelfReviewSettings();
@@ -19,10 +20,12 @@ export default function SelfReviewDueDateInformation() {
   const myReviews = useWritableSubmissionReviews();
   const { private_profile_id } = useClassProfiles();
   const { assignment } = useAssignmentController();
-  const dueDate = useAssignmentDueDate(assignment);
+  const dueDate = useAssignmentDueDate(assignment, { studentPrivateProfileId: private_profile_id });
   const selfReviewDueDate = addHours(dueDate.dueDate || new Date(), settings.deadline_offset || 0);
   const selfReviewAssignment = myReviewAssignments.find((a) => a.rubric_id === selfReviewRubric?.id);
+  const [isLoading, setIsLoading] = useState(false);
   const isGrader = useIsGraderOrInstructor();
+
   if (!settings.enabled || !myReviews || !assignment || isGrader) {
     return <></>;
   }
@@ -33,21 +36,27 @@ export default function SelfReviewDueDateInformation() {
           <VStack justifyContent="start" alignItems="start" w="100%">
             <Text>
               A self review will be due at {selfReviewDueDate.toLocaleString()} ({settings.deadline_offset} hours after
-              the your coding assignment due date).
+              the coding assignment due date).
             </Text>
             <Text fontSize="sm" color="fg.muted">
               If you are finished with the programming assignment, you can submit your self review early. However, once
               you begin the self review, you will not be able to change your submission.
             </Text>
           </VStack>
-          <FinalizeSubmissionEarly assignment={assignment} private_profile_id={private_profile_id} />
+          <FinalizeSubmissionEarly
+            assignment={assignment}
+            private_profile_id={private_profile_id}
+            enabled={settings.allow_early}
+            setLoading={setIsLoading}
+            loading={isLoading}
+          />
         </HStack>
       );
     }
     return (
       <Text>
         A self-review will be due at {selfReviewDueDate.toLocaleString()} ({settings.deadline_offset} hours after the
-        your coding assignment due date).
+        coding assignment due date).
       </Text>
     );
   }

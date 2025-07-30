@@ -1,6 +1,8 @@
 /**
  * Variables:
  * {course_name} - The name of the course
+ * {class_section} - The name of the student's class section (user-specific)
+ * {lab_section} - The name of the student's lab section (user-specific)
  */
 export const emailTemplates = {
   /**
@@ -13,6 +15,10 @@ export const emailTemplates = {
    * {requestor_name} - The name of the requestor
    * {decision_maker_name} - The name of the decision maker
    * {status} - The status of the request
+   *
+   * Emailer variables:
+   * {subject} - The slug of the assignment
+   * {body} - The general body of the email, which may contain additional variables
    */
   assignment_group_member: {
     join: {
@@ -54,6 +60,12 @@ export const emailTemplates = {
     reply: {
       subject: "{course_name} - {thread_name} has a new reply from {reply_author_name}",
       body: "{reply_author_name} has replied to your post in {thread_name}. Read more details in Pawtograder at {thread_url}"
+    }
+  },
+  email: {
+    create: {
+      subject: "{course_name} - {subject}",
+      body: "{body}"
     }
   }
 };

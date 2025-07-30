@@ -8,11 +8,16 @@ import {
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
+import { useCourseController } from "@/hooks/useCourseController";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import { createClient } from "@/utils/supabase/client";
 import {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
+  RegradeRequestComment,
   RubricChecks,
   RubricCriteriaWithRubricChecks,
   SubmissionArtifact,
@@ -21,218 +26,86 @@ import {
   SubmissionFile,
   SubmissionFileComment,
   SubmissionReview,
-  SubmissionReviewWithRubric,
-  SubmissionWithAllRelatedData,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
 import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
-import { LiveEvent, useInvalidate, useList, useShow } from "@refinedev/core";
+import { useShow } from "@refinedev/core";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Unsubscribe } from "./useCourseController";
 import { SubmissionReviewProvider } from "./useSubmissionReview";
-
-type ListUpdateCallback<T> = (
-  data: T[],
-  {
-    entered,
-    left,
-    updated
-  }: {
-    entered: T[];
-    left: T[];
-    updated: T[];
-  }
-) => void;
-type ItemUpdateCallback<T> = (data: T) => void;
 
 class SubmissionController {
   private _submission?: SubmissionWithFilesGraderResultsOutputTestsAndRubric;
   private _file?: SubmissionFile;
   private _artifact?: SubmissionArtifact;
 
-  private genericDataSubscribers: { [key in string]: Map<number, ItemUpdateCallback<unknown>[]> } = {};
-  private genericData: { [key in string]: Map<number, unknown> } = {};
-  private genericDataListSubscribers: { [key in string]: ListUpdateCallback<unknown>[] } = {};
+  readonly submission_comments: TableController<"submission_comments">;
+  readonly submission_file_comments: TableController<"submission_file_comments">;
+  readonly submission_artifact_comments: TableController<"submission_artifact_comments">;
+  readonly submission_reviews: TableController<"submission_reviews">;
+  readonly submission_regrade_request_comments: TableController<"submission_regrade_request_comments">;
 
-  private genericDataTypeToId: { [key in string]: (item: unknown) => number } = {};
+  readonly readyPromise: Promise<[void, void, void, void, void]>;
 
-  registerGenericDataType(typeName: string, idGetter: (item: unknown) => number) {
-    if (!this.genericDataTypeToId[typeName]) {
-      this.genericDataTypeToId[typeName] = idGetter;
-      this.genericDataSubscribers[typeName] = new Map();
-      this.genericDataListSubscribers[typeName] = [];
-    }
+  constructor(
+    client: SupabaseClient<Database>,
+    submission_id: number,
+    class_id: number,
+    classRealTimeController: ClassRealTimeController
+  ) {
+    this.submission_comments = new TableController({
+      client,
+      table: "submission_comments",
+      query: client.from("submission_comments").select("*").eq("submission_id", submission_id),
+      classRealTimeController,
+      submissionId: submission_id
+    });
+    this.submission_file_comments = new TableController({
+      client,
+      table: "submission_file_comments",
+      query: client.from("submission_file_comments").select("*").eq("submission_id", submission_id),
+      classRealTimeController,
+      submissionId: submission_id
+    });
+    this.submission_artifact_comments = new TableController({
+      client,
+      table: "submission_artifact_comments",
+      query: client.from("submission_artifact_comments").select("*").eq("submission_id", submission_id),
+      classRealTimeController,
+      submissionId: submission_id
+    });
+    this.submission_reviews = new TableController({
+      client,
+      table: "submission_reviews",
+      query: client.from("submission_reviews").select("*").eq("submission_id", submission_id),
+      classRealTimeController,
+      submissionId: submission_id
+    });
+    this.submission_regrade_request_comments = new TableController({
+      client,
+      table: "submission_regrade_request_comments",
+      query: client.from("submission_regrade_request_comments").select("*").eq("submission_id", submission_id),
+      classRealTimeController,
+      submissionId: submission_id
+    });
+    this.readyPromise = Promise.all([
+      this.submission_comments.readyPromise,
+      this.submission_file_comments.readyPromise,
+      this.submission_artifact_comments.readyPromise,
+      this.submission_reviews.readyPromise,
+      this.submission_regrade_request_comments.readyPromise
+    ]);
   }
 
-  setGeneric(typeName: string, data: unknown[]) {
-    if (!this.genericData[typeName]) {
-      this.genericData[typeName] = new Map();
-    }
-    const idGetter = this.genericDataTypeToId[typeName];
-    for (const item of data) {
-      const id = idGetter(item);
-      this.genericData[typeName].set(id, item);
-      const itemSubscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-      itemSubscribers.forEach((cb) => cb(item));
-    }
-    const listSubscribers = this.genericDataListSubscribers[typeName] || [];
-    // TODO is this over-called?
-    listSubscribers.forEach((cb) =>
-      cb(Array.from(this.genericData[typeName].values()), { entered: data as unknown[], left: [], updated: [] })
-    );
+  close() {
+    this.submission_comments.close();
+    this.submission_file_comments.close();
+    this.submission_artifact_comments.close();
+    this.submission_reviews.close();
+    this.submission_regrade_request_comments.close();
   }
-  listGenericData<T>(
-    typeName: string,
-    callback?: ListUpdateCallback<T>,
-    filter?: (item: T) => boolean
-  ): { unsubscribe: Unsubscribe; data: T[] } {
-    const subscribers = this.genericDataListSubscribers[typeName] || [];
-    let filteredCallback = callback as ListUpdateCallback<unknown> | undefined;
-    if (filteredCallback && callback) {
-      if (filter) {
-        filteredCallback = (data, { entered, left, updated }) => {
-          const filteredData = data.filter(filter as (value: unknown) => boolean);
-          const filteredEntered = entered.filter(filter as (value: unknown) => boolean);
-          const filteredLeft = left.filter(filter as (value: unknown) => boolean);
-          const filteredUpdated = updated.filter(filter as (value: unknown) => boolean);
-          (callback as ListUpdateCallback<unknown>)(filteredData, {
-            entered: filteredEntered,
-            left: filteredLeft,
-            updated: filteredUpdated
-          });
-        };
-      }
-      subscribers.push(filteredCallback);
-    }
-    this.genericDataListSubscribers[typeName] = subscribers;
-    const currentData = this.genericData[typeName]?.values() || [];
-    if (filter) {
-      return {
-        unsubscribe: () => {
-          this.genericDataListSubscribers[typeName] =
-            this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
-        },
-        data: (Array.from(currentData) as T[]).filter(filter)
-      };
-    }
-    return {
-      unsubscribe: () => {
-        this.genericDataListSubscribers[typeName] =
-          this.genericDataListSubscribers[typeName]?.filter((cb) => cb !== filteredCallback) || [];
-      },
-      data: Array.from(currentData) as T[]
-    };
-  }
-  getValueWithSubscription<T>(
-    typeName: string,
-    id: number | ((item: T) => boolean),
-    callback?: ItemUpdateCallback<T>
-  ): { unsubscribe: Unsubscribe; data: T | undefined } {
-    if (!this.genericDataTypeToId[typeName]) {
-      throw new Error(`No id getter for type ${typeName}`);
-    }
-    if (typeof id === "function") {
-      const idPredicate = id as (item: unknown) => boolean; // Assertion for id function
-      const relevantIds = Array.from(this.genericData[typeName]?.keys() || []).filter((_id) => {
-        const item = this.genericData[typeName]?.get(_id);
-        return item !== undefined && idPredicate(item);
-      });
-      if (relevantIds.length == 0) {
-        return {
-          unsubscribe: () => {},
-          data: undefined
-        };
-      } else if (relevantIds.length == 1) {
-        const foundId = relevantIds[0];
-        const subscribers = this.genericDataSubscribers[typeName]?.get(foundId) || [];
-        if (callback) {
-          this.genericDataSubscribers[typeName]?.set(foundId, [
-            ...subscribers,
-            callback as ItemUpdateCallback<unknown>
-          ]);
-        }
-        return {
-          unsubscribe: () => {
-            this.genericDataSubscribers[typeName]?.set(
-              foundId,
-              subscribers.filter((cb) => cb !== callback)
-            );
-          },
-          data: this.genericData[typeName]?.get(foundId) as T | undefined
-        };
-      } else {
-        throw new Error(`Multiple ids found for type ${typeName}`);
-      }
-    } else if (typeof id === "number") {
-      const subscribers = this.genericDataSubscribers[typeName]?.get(id) || [];
-      if (callback) {
-        this.genericDataSubscribers[typeName]?.set(id, [...subscribers, callback as ItemUpdateCallback<unknown>]);
-      }
-      return {
-        unsubscribe: () => {
-          this.genericDataSubscribers[typeName]?.set(
-            id,
-            subscribers.filter((cb) => cb !== callback)
-          );
-        },
-        data: this.genericData[typeName]?.get(id) as T | undefined
-      };
-    } else {
-      throw new Error(`Invalid id type ${typeof id}`);
-    }
-  }
-
-  handleGenericDataEvent(typeName: string, event: LiveEvent) {
-    const body = event.payload as unknown; // Assertion for event.payload
-    const idGetter = this.genericDataTypeToId[typeName];
-
-    if (!idGetter) {
-      toaster.error({
-        title: "Error",
-        description: `No id getter registered for type ${typeName}`
-      });
-      return;
-    }
-
-    const id = idGetter(body);
-
-    // Ensure the maps are initialized before handling events
-    if (!this.genericData[typeName]) {
-      this.genericData[typeName] = new Map();
-    }
-    if (!this.genericDataSubscribers[typeName]) {
-      this.genericDataSubscribers[typeName] = new Map();
-    }
-    if (!this.genericDataListSubscribers[typeName]) {
-      this.genericDataListSubscribers[typeName] = [];
-    }
-
-    if (event.type === "created") {
-      this.genericData[typeName].set(id, body);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(body));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) => {
-        const allData = Array.from(this.genericData[typeName].values());
-        cb(allData, { entered: [body], left: [], updated: [] });
-      });
-    } else if (event.type === "updated") {
-      const existing = this.genericData[typeName]?.get(id);
-      const updated = existing ? { ...existing, ...(body as object) } : body;
-      this.genericData[typeName].set(id, updated);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(updated));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [], updated: [updated] })
-      );
-    } else if (event.type === "deleted") {
-      this.genericData[typeName].delete(id);
-      this.genericDataSubscribers[typeName]?.get(id)?.forEach((cb) => cb(undefined));
-      this.genericDataListSubscribers[typeName]?.forEach((cb) =>
-        cb(Array.from(this.genericData[typeName].values()), { entered: [], left: [body], updated: [] })
-      );
-    }
-  }
-  constructor() {}
 
   get isReady() {
     return this._submission !== undefined;
@@ -276,10 +149,40 @@ export function SubmissionProvider({
   children: React.ReactNode;
 }) {
   const params = useParams();
-  const controller = useRef<SubmissionController>(new SubmissionController());
-  const [ready, setReady] = useState(false);
-
   const submission_id = initial_submission_id ?? Number(params.submissions_id);
+  const class_id = Number(params.course_id);
+  const controller = useRef<SubmissionController | null>(null);
+  const [ready, setReady] = useState(false);
+  const [newControllersReady, setNewControllersReady] = useState(false);
+  const [isLoadingNewController, setIsLoadingNewController] = useState(false);
+  const courseController = useCourseController();
+
+  if (controller.current === null) {
+    controller.current = new SubmissionController(
+      createClient(),
+      submission_id,
+      class_id,
+      courseController.classRealTimeController
+    );
+    setIsLoadingNewController(true);
+    setNewControllersReady(false);
+  }
+  useEffect(() => {
+    return () => {
+      if (controller.current) {
+        controller.current.close();
+        controller.current = null;
+      }
+    };
+  }, []);
+  useEffect(() => {
+    if (controller.current && isLoadingNewController) {
+      setIsLoadingNewController(false);
+      controller.current.readyPromise.then(() => {
+        setNewControllersReady(true);
+      });
+    }
+  }, [controller, isLoadingNewController]);
 
   if (isNaN(submission_id)) {
     toaster.error({
@@ -292,20 +195,19 @@ export function SubmissionProvider({
   return (
     <SubmissionContext.Provider value={{ submissionController: controller.current }}>
       <SubmissionControllerCreator submission_id={submission_id} setReady={setReady} />
-      {ready && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
+      {(!ready || !newControllersReady) && <Spinner />}
+      {ready && newControllersReady && <SubmissionReviewProvider>{children}</SubmissionReviewProvider>}
     </SubmissionContext.Provider>
   );
 }
 export function useSubmissionFileComments({
   file_id,
   onEnter,
-  onLeave,
-  onUpdate
+  onLeave
 }: {
   file_id?: number;
   onEnter?: (comment: SubmissionFileComment[]) => void;
   onLeave?: (comment: SubmissionFileComment[]) => void;
-  onUpdate?: (comment: SubmissionFileComment[]) => void;
 }) {
   const [comments, setComments] = useState<SubmissionFileComment[]>([]);
   const ctx = useContext(SubmissionContext);
@@ -316,28 +218,44 @@ export function useSubmissionFileComments({
       setComments([]);
       return;
     }
-    const { unsubscribe, data } = submissionController.listGenericData<SubmissionFileComment>(
-      "submission_file_comments",
-      (data, { entered, left, updated }) => {
-        setComments(data.filter((comment) => comment.deleted_at === null));
-        if (onEnter) {
-          onEnter(entered.filter((comment) => comment.deleted_at === null));
-        }
-        if (onLeave) {
-          onLeave(left.filter((comment) => comment.deleted_at === null));
-        }
-        if (onUpdate) {
-          onUpdate(updated.filter((comment) => comment.deleted_at === null));
-        }
-      },
-      (item) => file_id === undefined || item.submission_file_id === file_id
+    const { unsubscribe, data } = submissionController.submission_file_comments.list((data, { entered, left }) => {
+      setComments(
+        data.filter(
+          (comment) =>
+            (comment.deleted_at === null || comment.deleted_at === undefined) &&
+            (file_id === undefined || comment.submission_file_id === file_id)
+        )
+      );
+      if (onEnter) {
+        onEnter(
+          entered.filter(
+            (comment) =>
+              (comment.deleted_at === null || comment.deleted_at === undefined) &&
+              (file_id === undefined || comment.submission_file_id === file_id)
+          )
+        );
+      }
+      if (onLeave) {
+        onLeave(
+          left.filter(
+            (comment) =>
+              (comment.deleted_at === null || comment.deleted_at === undefined) &&
+              (file_id === undefined || comment.submission_file_id === file_id)
+          )
+        );
+      }
+    });
+    const filteredData = data.filter(
+      (comment) =>
+        (comment.deleted_at === null || comment.deleted_at === undefined) &&
+        (file_id === undefined || comment.submission_file_id === file_id)
     );
-    setComments(data.filter((comment) => comment.deleted_at === null));
+    setComments(filteredData);
     if (onEnter) {
-      onEnter(data.filter((comment) => comment.deleted_at === null));
+      onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, file_id, onEnter, onLeave, onUpdate]);
+  }, [submissionController, file_id, onEnter, onLeave]);
 
   if (!submissionController) {
     return [];
@@ -347,12 +265,10 @@ export function useSubmissionFileComments({
 
 export function useSubmissionComments({
   onEnter,
-  onLeave,
-  onUpdate
+  onLeave
 }: {
   onEnter?: (comment: SubmissionComments[]) => void;
   onLeave?: (comment: SubmissionComments[]) => void;
-  onUpdate?: (comment: SubmissionComments[]) => void;
 }) {
   const [comments, setComments] = useState<SubmissionComments[]>([]);
   const ctx = useContext(SubmissionContext);
@@ -363,28 +279,23 @@ export function useSubmissionComments({
       setComments([]);
       return;
     }
-    const { unsubscribe, data } = submissionController.listGenericData<SubmissionComments>(
-      "submission_comments",
-      (data, { entered, left, updated }) => {
-        const filteredData = data.filter((comment) => comment.deleted_at === null);
-        setComments(filteredData);
-        if (onEnter) {
-          onEnter(entered.filter((comment) => comment.deleted_at === null));
-        }
-        if (onLeave) {
-          onLeave(left.filter((comment) => comment.deleted_at === null));
-        }
-        if (onUpdate) {
-          onUpdate(updated.filter((comment) => comment.deleted_at === null));
-        }
+    const { unsubscribe, data } = submissionController.submission_comments.list((data, { entered, left }) => {
+      const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
+      setComments(filteredData);
+      if (onEnter) {
+        onEnter(entered.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
       }
-    );
-    setComments(data.filter((comment) => comment.deleted_at === null));
+      if (onLeave) {
+        onLeave(left.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined));
+      }
+    });
+    const filteredData = data.filter((comment) => comment.deleted_at === null || comment.deleted_at === undefined);
+    setComments(filteredData);
     if (onEnter) {
-      onEnter(data.filter((comment) => comment.deleted_at === null));
+      onEnter(filteredData);
     }
     return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave, onUpdate]);
+  }, [submissionController, onEnter, onLeave]);
 
   if (!submissionController) {
     return [];
@@ -392,14 +303,21 @@ export function useSubmissionComments({
   return comments;
 }
 
+/**
+ * Provides a live-updating list of artifact comments for the current submission, excluding deleted comments.
+ *
+ * Invokes optional callbacks when comments are added or removed.
+ *
+ * @param onEnter - Called with newly entered artifact comments.
+ * @param onLeave - Called with artifact comments that have been removed.
+ * @returns An array of current, non-deleted artifact comments for the submission.
+ */
 export function useSubmissionArtifactComments({
   onEnter,
-  onLeave,
-  onUpdate
+  onLeave
 }: {
   onEnter?: (comment: SubmissionArtifactComment[]) => void;
   onLeave?: (comment: SubmissionArtifactComment[]) => void;
-  onUpdate?: (comment: SubmissionArtifactComment[]) => void;
 }) {
   const [comments, setComments] = useState<SubmissionArtifactComment[]>([]);
   const ctx = useContext(SubmissionContext);
@@ -410,27 +328,102 @@ export function useSubmissionArtifactComments({
       setComments([]);
       return;
     }
-    const { unsubscribe, data } = submissionController.listGenericData<SubmissionArtifactComment>(
-      "submission_artifact_comments",
-      (data, { entered, left, updated }) => {
-        setComments(data.filter((comment) => comment.deleted_at === null));
+    const { unsubscribe, data } = submissionController.submission_artifact_comments.list((data, { entered, left }) => {
+      setComments(data.filter((comment) => comment.deleted_at === null));
+      if (onEnter) {
+        onEnter(entered.filter((comment) => comment.deleted_at === null));
+      }
+      if (onLeave) {
+        onLeave(left.filter((comment) => comment.deleted_at === null));
+      }
+    });
+    const filteredData = data.filter((comment) => comment.deleted_at === null);
+    setComments(filteredData);
+    if (onEnter) {
+      onEnter(filteredData);
+    }
+    return () => unsubscribe();
+  }, [submissionController, onEnter, onLeave]);
+
+  if (!submissionController) {
+    return [];
+  }
+  return comments;
+}
+/**
+ * Subscribes to and returns regrade request comments for the current submission, optionally filtered by a specific regrade request ID.
+ *
+ * Invokes optional callbacks when comments are added or removed from the filtered set.
+ *
+ * @param submission_regrade_request_id - If provided, filters comments to those matching this regrade request ID.
+ * @param onEnter - Optional callback invoked with comments that have entered the filtered set.
+ * @param onLeave - Optional callback invoked with comments that have left the filtered set.
+ * @returns An array of regrade request comments matching the filter.
+ */
+export function useSubmissionRegradeRequestComments({
+  submission_regrade_request_id,
+  onEnter,
+  onLeave
+}: {
+  submission_regrade_request_id?: number;
+  onEnter?: (comment: RegradeRequestComment[]) => void;
+  onLeave?: (comment: RegradeRequestComment[]) => void;
+}) {
+  const [comments, setComments] = useState<RegradeRequestComment[]>([]);
+  const ctx = useContext(SubmissionContext);
+  const submissionController = ctx?.submissionController;
+
+  useEffect(() => {
+    if (!submissionController) {
+      setComments([]);
+      return;
+    }
+    const { unsubscribe, data } = submissionController.submission_regrade_request_comments.list(
+      (data, { entered, left }) => {
+        const filteredData = data.filter(
+          (comment) =>
+            submission_regrade_request_id === undefined ||
+            comment.submission_regrade_request_id === submission_regrade_request_id
+        );
+        setComments(filteredData);
         if (onEnter) {
-          onEnter(entered.filter((comment) => comment.deleted_at === null));
+          onEnter(
+            entered.filter(
+              (comment) =>
+                submission_regrade_request_id === undefined ||
+                comment.submission_regrade_request_id === submission_regrade_request_id
+            )
+          );
         }
         if (onLeave) {
-          onLeave(left.filter((comment) => comment.deleted_at === null));
-        }
-        if (onUpdate) {
-          onUpdate(updated.filter((comment) => comment.deleted_at === null));
+          onLeave(
+            left.filter(
+              (comment) =>
+                submission_regrade_request_id === undefined ||
+                comment.submission_regrade_request_id === submission_regrade_request_id
+            )
+          );
         }
       }
     );
-    setComments(data.filter((comment) => comment.deleted_at === null));
+    setComments(
+      data.filter(
+        (comment) =>
+          submission_regrade_request_id === undefined ||
+          comment.submission_regrade_request_id === submission_regrade_request_id
+      )
+    );
     if (onEnter) {
-      onEnter(data.filter((comment) => comment.deleted_at === null));
+      onEnter(
+        data.filter(
+          (comment) =>
+            submission_regrade_request_id === undefined ||
+            comment.submission_regrade_request_id === submission_regrade_request_id
+        )
+      );
     }
     return () => unsubscribe();
-  }, [submissionController, onEnter, onLeave, onUpdate]);
+  }, [submissionController, submission_regrade_request_id, onEnter, onLeave]);
 
   if (!submissionController) {
     return [];
@@ -438,6 +431,88 @@ export function useSubmissionArtifactComments({
   return comments;
 }
 
+/**
+ * Returns a reactive submission file comment by its ID, updating as the comment changes in real time.
+ *
+ * @param comment_id - The ID of the submission file comment to subscribe to
+ * @returns The submission file comment object, or undefined if not found
+ */
+export function useSubmissionFileComment(comment_id: number) {
+  const submissionController = useSubmissionController();
+  const [comment, setComment] = useState<SubmissionFileComment | undefined>(
+    submissionController.submission_file_comments.getById(comment_id).data
+  );
+  useEffect(() => {
+    const { unsubscribe, data } = submissionController.submission_file_comments.getById(comment_id, (data) => {
+      setComment(data);
+    });
+    setComment(data);
+    return () => unsubscribe();
+  }, [submissionController, comment_id]);
+  return comment;
+}
+export function useSubmissionArtifactComment(comment_id: number) {
+  const submissionController = useSubmissionController();
+  const [comment, setComment] = useState<SubmissionArtifactComment | undefined>(
+    submissionController.submission_artifact_comments.getById(comment_id).data
+  );
+  useEffect(() => {
+    const { unsubscribe, data } = submissionController.submission_artifact_comments.getById(comment_id, (data) => {
+      setComment(data);
+    });
+    setComment(data);
+    return () => unsubscribe();
+  }, [submissionController, comment_id]);
+  return comment;
+}
+export function useSubmissionComment(comment_id: number) {
+  const submissionController = useSubmissionController();
+  const [comment, setComment] = useState<SubmissionComments | undefined>(
+    submissionController.submission_comments.getById(comment_id).data
+  );
+  useEffect(() => {
+    const { unsubscribe, data } = submissionController.submission_comments.getById(comment_id, (data) => {
+      setComment(data);
+    });
+    setComment(data);
+    return () => unsubscribe();
+  }, [submissionController, comment_id]);
+  return comment;
+}
+export function useSubmissionCommentByType(comment_id: number, type: "file" | "artifact" | "submission") {
+  const ctx = useContext(SubmissionContext);
+  const [comment, setComment] = useState<
+    PossiblyTentativeResult<SubmissionFileComment | SubmissionArtifactComment | SubmissionComments> | undefined
+  >(undefined);
+  if (!ctx) {
+    throw new Error("SubmissionContext not found");
+  }
+  const submissionController = ctx.submissionController;
+  useEffect(() => {
+    if (type === "file") {
+      const { unsubscribe, data } = submissionController.submission_file_comments.getById(comment_id, (data) => {
+        setComment(data);
+      });
+      setComment(data);
+      return () => unsubscribe();
+    }
+    if (type === "artifact") {
+      const { unsubscribe, data } = submissionController.submission_artifact_comments.getById(comment_id, (data) => {
+        setComment(data);
+      });
+      setComment(data);
+      return () => unsubscribe();
+    }
+    if (type === "submission") {
+      const { unsubscribe, data } = submissionController.submission_comments.getById(comment_id, (data) => {
+        setComment(data);
+      });
+      setComment(data);
+      return () => unsubscribe();
+    }
+  }, [submissionController, comment_id, type]);
+  return comment;
+}
 function SubmissionControllerCreator({
   submission_id,
   setReady
@@ -451,26 +526,8 @@ function SubmissionControllerCreator({
   }
   const submissionController = ctx.submissionController;
 
-  // Register all generic data types BEFORE setting up live subscriptions
-  submissionController.registerGenericDataType(
-    "submission_file_comments",
-    (item: unknown) => (item as SubmissionFileComment).id
-  );
-  submissionController.registerGenericDataType(
-    "submission_comments",
-    (item: unknown) => (item as SubmissionComments).id
-  );
-  submissionController.registerGenericDataType(
-    "submission_reviews",
-    (item: unknown) => (item as SubmissionReviewWithRubric).id
-  );
-  submissionController.registerGenericDataType(
-    "submission_artifact_comments",
-    (item: unknown) => (item as SubmissionArtifactComment).id
-  );
-
   // Single comprehensive query to load all data upfront
-  const { query } = useShow<SubmissionWithAllRelatedData>({
+  const { query } = useShow<SubmissionWithFilesGraderResultsOutputTestsAndRubric>({
     resource: "submissions",
     id: submission_id,
     meta: {
@@ -480,11 +537,7 @@ function SubmissionControllerCreator({
         submission_files(*),
         assignment_groups(*, assignment_groups_members(*, profiles!profile_id(*))),
         grader_results(*, grader_result_tests(*), grader_result_output(*)),
-        submission_artifacts(*),
-        submission_file_comments(*),
-        submission_comments(*),
-        submission_reviews!submission_reviews_submission_id_fkey(*, rubrics(*, rubric_parts(*, rubric_criteria(*, rubric_checks(*))))),
-        submission_artifact_comments!submission_artifact_comments_submission_id_fkey(*)
+        submission_artifacts(*)
       `.trim()
     }
   });
@@ -493,143 +546,14 @@ function SubmissionControllerCreator({
   // We need these enabled to receive live events, but we'll ignore the initial data since we already loaded it
   const [liveSubscriptionsReady, setLiveSubscriptionsReady] = useState(false);
 
-  const assignmentController = useAssignmentController();
-
-  useList<SubmissionFileComment>({
-    resource: "submission_file_comments",
-    filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "manual",
-    queryOptions: {
-      enabled: true, // Need to enable to receive live events
-      refetchOnMount: false, // Don't refetch on mount since we have data
-      refetchOnReconnect: true,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    onLiveEvent: (event) => {
-      submissionController.handleGenericDataEvent("submission_file_comments", event);
-    }
-  });
-
-  useList<SubmissionReviewWithRubric>({
-    resource: "submission_reviews",
-    meta: {
-      select: "*, rubrics(*, rubric_criteria(*, rubric_checks(*)))"
-    },
-    filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "manual",
-    queryOptions: {
-      enabled: true, // Need to enable to receive live events
-      refetchOnMount: false,
-      refetchOnReconnect: true,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    onLiveEvent: (event) => {
-      submissionController.handleGenericDataEvent("submission_reviews", event);
-    }
-  });
-
-  useList<SubmissionComments>({
-    resource: "submission_comments",
-    filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "manual",
-    queryOptions: {
-      enabled: true, // Need to enable to receive live events
-      refetchOnMount: false,
-      refetchOnReconnect: true,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    onLiveEvent: (event) => {
-      submissionController.handleGenericDataEvent("submission_comments", event);
-    }
-  });
-
-  useList<SubmissionArtifactComment>({
-    resource: "submission_artifact_comments",
-    filters: [{ field: "submission_id", operator: "eq", value: submission_id }],
-    pagination: {
-      pageSize: 1000
-    },
-    liveMode: "manual",
-    queryOptions: {
-      enabled: true, // Need to enable to receive live events
-      refetchOnMount: false,
-      refetchOnReconnect: true,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      cacheTime: Infinity
-    },
-    onLiveEvent: (event) => {
-      submissionController.handleGenericDataEvent("submission_artifact_comments", event);
-    }
-  });
-  const invalidate = useInvalidate();
-
   // Process the main query data once it's loaded
   useEffect(() => {
     if (query.data?.data && !query.isLoading) {
       const data = query.data.data;
-
-      // Set the main submission data (without the extra fields)
-      const {
-        submission_file_comments,
-        submission_comments,
-        submission_reviews,
-        submission_artifact_comments,
-        ...submissionData
-      } = data;
-
-      submissionController.submission = submissionData as SubmissionWithFilesGraderResultsOutputTestsAndRubric;
-
-      // Set all the related data
-      if (submission_file_comments) {
-        submissionController.setGeneric("submission_file_comments", submission_file_comments);
-      }
-      if (submission_comments) {
-        submissionController.setGeneric("submission_comments", submission_comments);
-      }
-      if (submission_reviews) {
-        submissionController.setGeneric("submission_reviews", submission_reviews);
-      }
-      if (submission_artifact_comments) {
-        submissionController.setGeneric("submission_artifact_comments", submission_artifact_comments);
-      }
-
-      const unsubscribeFromReviewAssignmentsChanges = assignmentController.getReviewAssignments((reviewAssignments) => {
-        //Make sure that we have a submission review fetched for this: it might exist but not be in the list due to RLS
-        const { data: submissionReviews } =
-          submissionController.listGenericData<SubmissionReviewWithRubric>("submission_reviews");
-        const reviewAssignmentsWithSubmissionReviews = reviewAssignments.filter((reviewAssignment) => {
-          return !submissionReviews.some((review) => review.id === reviewAssignment.submission_review_id);
-        });
-        if (reviewAssignmentsWithSubmissionReviews.length > 0) {
-          invalidate({
-            resource: "submission_reviews",
-            invalidates: ["all"]
-          });
-        }
-      });
-
+      submissionController.submission = data;
       setLiveSubscriptionsReady(true);
-      return () => {
-        unsubscribeFromReviewAssignmentsChanges.unsubscribe();
-      };
     }
-  }, [query.data, query.isLoading, submissionController, assignmentController, invalidate]);
+  }, [query.data, query.isLoading, submissionController]);
 
   // Set ready when everything is loaded
   useEffect(() => {
@@ -825,47 +749,57 @@ export function useRubricCriteriaInstances({
 
   return filteredComments;
 }
-export function useSubmissionReviews() {
+
+export function useSubmissionReview(reviewId?: number) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
-  const [reviews, setReviews] = useState<SubmissionReviewWithRubric[] | undefined>(undefined);
+  const [review, setReview] = useState<SubmissionReview | undefined>(undefined);
+  useEffect(() => {
+    if (!ctx || !controller || !reviewId) {
+      return;
+    }
+    const { unsubscribe, data } = controller.submission_reviews.getById(reviewId, (data) => {
+      setReview(data);
+    });
+    setReview(data);
+    return () => unsubscribe();
+  }, [ctx, controller, reviewId]);
+  return review;
+}
+export function useSubmissionReviews() {
+  const ctx = useContext(SubmissionContext);
+  const controller = ctx?.submissionController;
+  const [reviews, setReviews] = useState<SubmissionReview[] | undefined>(controller?.submission_reviews.rows);
   useEffect(() => {
     if (!ctx || !controller) {
       return;
     }
-    const { unsubscribe, data } = controller.listGenericData<SubmissionReviewWithRubric>(
-      "submission_reviews",
-      (data) => {
-        setReviews(data);
-      }
-    );
+    const { unsubscribe, data } = controller.submission_reviews.list((data) => {
+      setReviews(data);
+    });
     setReviews(data);
     return () => unsubscribe();
-  }, [ctx, controller]);
+  }, [ctx, controller, controller?.submission_reviews]);
   return reviews;
 }
 
-export function useSubmissionReviewOrGradingReview(reviewId?: number | null) {
+export function useSubmissionReviewOrGradingReview(reviewId: number) {
   const ctx = useContext(SubmissionContext);
   const controller = useSubmissionController();
-  const [review, setReview] = useState<SubmissionReviewWithRubric | undefined>(undefined);
+  const initialValue = controller.submission_reviews.getById(reviewId).data;
+  const [review, setReview] = useState<SubmissionReview | undefined>(initialValue);
+  if (!ctx || !controller) {
+    throw new Error("useSubmissionReviewOrGradingReview must be used within a SubmissionContext");
+  }
 
   useEffect(() => {
-    if (!ctx || !controller || (!reviewId && !ctx.submissionController.submission.grading_review_id)) {
-      setReview(undefined);
-      return;
-    }
-    const effectiveReviewId = reviewId || ctx.submissionController.submission.grading_review_id;
-
-    const { unsubscribe, data } = controller.getValueWithSubscription<SubmissionReviewWithRubric>(
-      "submission_reviews",
-      effectiveReviewId ?? -1,
-      (data) => {
-        setReview(data);
-      }
-    );
+    const { unsubscribe, data } = controller.submission_reviews.getById(reviewId, (data) => {
+      setReview(data);
+    });
     setReview(data);
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+    };
   }, [ctx, controller, reviewId]);
 
   return review;
@@ -996,15 +930,10 @@ export function useSubmissionReviewByAssignmentId(reviewAssignmentId?: number | 
 
     if (reviewAssignment && controller) {
       // Try to find an existing submission_review
-      const { unsubscribe, data: existingReview } = controller.getValueWithSubscription<SubmissionReview>(
-        "submission_reviews",
-        (sr) =>
-          sr.submission_id === reviewAssignment.submission_id &&
-          sr.rubric_id === reviewAssignment.rubric_id &&
-          sr.grader === reviewAssignment.assignee_profile_id,
+      const { unsubscribe, data: existingReview } = controller.submission_reviews.getById(
+        reviewAssignment.submission_review_id,
         (updatedReview) => {
           setSubmissionReview(updatedReview);
-          // Potentially set loading to false if this is the final state we expect after update
         }
       );
 
@@ -1089,33 +1018,26 @@ export function useSubmissionReviewForRubric(rubricId?: number | null): Submissi
   const ctx = useContext(SubmissionContext);
   const controller = ctx?.submissionController;
   const submission = controller?.submission;
-  const { private_profile_id } = useClassProfiles();
+  const reviews = useSubmissionReviews();
 
   const [submissionReview, setSubmissionReview] = useState<SubmissionReview | undefined>(undefined);
 
   useEffect(() => {
-    if (!rubricId || !submission || !controller || !private_profile_id) {
+    if (!rubricId || !submission || !controller) {
       setSubmissionReview(undefined);
       return;
     }
-
-    // Try to find an existing submission review for this rubric
-    const { unsubscribe, data: existingReview } = controller.getValueWithSubscription<SubmissionReview>(
-      "submission_reviews",
-      (sr) => sr.submission_id === submission.id && sr.rubric_id === rubricId,
-      (updatedReview) => {
-        setSubmissionReview(updatedReview);
-      }
+    const desiredReview = reviews?.find(
+      (review) => review.submission_id === submission.id && review.rubric_id === rubricId
     );
-
-    if (existingReview) {
-      setSubmissionReview(existingReview);
-    } else {
-      setSubmissionReview(undefined);
+    if (desiredReview) {
+      setSubmissionReview(desiredReview);
+      const { unsubscribe } = controller.submission_reviews.getById(desiredReview.id, (updatedReview) => {
+        setSubmissionReview(updatedReview);
+      });
+      return () => unsubscribe();
     }
-
-    return () => unsubscribe();
-  }, [rubricId, submission, controller, private_profile_id]);
+  }, [rubricId, submission, controller, reviews]);
 
   return submissionReview;
 }
@@ -1156,12 +1078,15 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
         ...rubrics.filter((r) => r.review_round === "self-review" || assignments.some((a) => a.rubric_id === r.id))
       );
     }
-    return submissionReviews?.filter(
+    const ret = submissionReviews?.filter(
       (sr) =>
         writableRubrics.some((r) => r.id === sr.rubric_id) &&
         (rubric_id === undefined || sr.rubric_id === rubric_id) &&
         (role.role === "instructor" || role.role == "grader" || !sr.completed_at)
     );
+    //Make sure no duplicates by review id
+    const uniqueReviews = ret?.filter((sr, index, self) => index === self.findIndex((t) => t.id === sr.id));
+    return uniqueReviews;
   }, [role, rubrics, submissionReviews, assignments, rubric_id]);
   return memoizedReviews;
 }

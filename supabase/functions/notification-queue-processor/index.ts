@@ -66,20 +66,41 @@ export type AssignmentGroupJoinRequestNotification = NotificationEnvelope & {
   decision_maker_name?: string;
 };
 
+export type EmailNotification = NotificationEnvelope & {
+  type: "email";
+  action: "create";
+  subject: string;
+  body: string;
+  cc_emails: { emails: string[] };
+  reply_to?: string;
+};
+
 async function sendEmail(params: {
   adminSupabase: SupabaseClient<Database>;
   transporter: nodemailer.Transporter;
   notification: QueueMessage<Notification>;
   emails: { email: string | null; user_id: string }[];
   courses: { name: string | null; slug: string | null; id: number }[];
+  userRoles: {
+    user_id: string;
+    class_section: string | null;
+    lab_section_id: number | null;
+    lab_section_name: string | null;
+  }[];
 }) {
-  const { adminSupabase, transporter, notification, emails, courses } = params;
+  const { adminSupabase, transporter, notification, emails, courses, userRoles } = params;
 
   if (!notification.message.body) {
     console.error(`No body found for notification ${notification.message.id}`);
     return;
   }
   const body = notification.message.body as NotificationEnvelope;
+  const cc_emails: string[] = [];
+  if ("cc_emails" in body) {
+    const data = body.cc_emails as { emails: string[] };
+    data.emails.forEach((email) => cc_emails.push(email));
+  }
+
   let emailTemplate = emailTemplates[body.type as keyof typeof emailTemplates];
   if (!emailTemplate) {
     console.error(`No email template found for notification type ${body.type}`);
@@ -100,6 +121,12 @@ async function sendEmail(params: {
   let emailBody = emailTemplate.body as string;
   //Fill in the variables using the keys of body
   const variables = Object.keys(body);
+  if ("subject" in body) {
+    emailSubject = emailBody.replace("{subject}", body["subject" as keyof NotificationEnvelope]);
+  }
+  if ("body" in body) {
+    emailBody = emailBody.replace("{body}", body["body" as keyof NotificationEnvelope]);
+  }
   for (const variable of variables) {
     emailSubject = emailSubject.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
     emailBody = emailBody.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
@@ -131,13 +158,27 @@ async function sendEmail(params: {
     console.error(`No recipient found for notification ${notification.msg_id}, ${JSON.stringify(notification)}`);
     return;
   }
+
+  // Replace user-specific template variables
+  const userRole = userRoles.find((role) => role.user_id === recipient.user_id);
+  if (userRole) {
+    if (userRole.class_section) {
+      emailBody = emailBody.replace("{class_section}", userRole.class_section);
+      emailSubject = emailSubject.replace("{class_section}", userRole.class_section);
+    }
+    if (userRole.lab_section_name) {
+      emailBody = emailBody.replace("{lab_section}", userRole.lab_section_name);
+      emailSubject = emailSubject.replace("{lab_section}", userRole.lab_section_name);
+    }
+  }
   try {
     console.log(`Sending email to ${recipient.email}`);
     console.log(transporter);
     await transporter.sendMail({
       from: "Pawtograder <" + Deno.env.get("SMTP_FROM") + ">",
       to: recipient.email,
-      replyTo: Deno.env.get("SMTP_REPLY_TO"),
+      cc: cc_emails,
+      replyTo: body["reply_to" as keyof NotificationEnvelope] ?? Deno.env.get("SMTP_REPLY_TO"),
       subject: emailSubject,
       text: emailBody
     });
@@ -188,6 +229,29 @@ async function processNotificationQueue() {
         "id",
         Array.from(uniqueCourseIds).filter((id) => id)
       );
+
+    // Fetch user roles with class sections and lab sections
+    const { data: userRoles, error: userRolesError } = await adminSupabase
+      .schema("public")
+      .from("user_roles")
+      .select(
+        `
+        user_id,
+        class_section_id,
+        lab_section_id,
+        class_sections(name),
+        lab_sections(name)
+      `
+      )
+      .in(
+        "user_id",
+        Array.from(uniqueEmails).filter((email) => email)
+      )
+      .in(
+        "class_id",
+        Array.from(uniqueCourseIds).filter((id) => id)
+      );
+
     if (emailsError) {
       console.error(`Error fetching emails: ${emailsError?.message}`);
       return;
@@ -196,6 +260,19 @@ async function processNotificationQueue() {
       console.error(`Error fetching courses: ${coursesError?.message}`);
       return;
     }
+    if (userRolesError) {
+      console.error(`Error fetching user roles: ${userRolesError?.message}`);
+      return;
+    }
+
+    // Transform user roles data to include section names
+    const transformedUserRoles =
+      userRoles?.map((role) => ({
+        user_id: role.user_id,
+        class_section: role.class_sections?.name || null,
+        lab_section_id: role.lab_section_id,
+        lab_section_name: role.lab_sections?.name || null
+      })) || [];
     const transporter = nodemailer.createTransport({
       pool: false,
       host: Deno.env.get("SMTP_HOST") || "",
@@ -213,13 +290,14 @@ async function processNotificationQueue() {
           transporter,
           notification: notification as QueueMessage<Notification>,
           emails,
-          courses
+          courses,
+          userRoles: transformedUserRoles
         })
       )
     );
   }
 }
-Deno.serve(async (req) => {
+Deno.serve(async () => {
   await processNotificationQueue();
   return new Response(JSON.stringify({}), { headers: { "Content-Type": "application/json" } });
 });
