@@ -2,16 +2,15 @@ import { addDays, subDays } from "date-fns";
 import dotenv from "dotenv";
 import {
   createClass,
-  createUserInClass,
-  insertAssignment,
-  insertPreBakedSubmission,
-  gradeSubmission,
   createDueDateException,
   createRegradeRequest,
+  createUserInClass,
+  gradeSubmission,
+  insertAssignment,
+  insertPreBakedSubmission,
   supabase,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
