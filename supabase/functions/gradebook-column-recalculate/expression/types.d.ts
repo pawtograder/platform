@@ -9,3 +9,5 @@ export type GradebookColumnStudentWithMaxScore = Omit<GradebookColumnStudent, "s
 export type SubmissionReview = Database["public"]["Tables"]["submission_reviews"]["Row"];
 export type GradebookColumn = Database["public"]["Tables"]["gradebook_columns"]["Row"];
 export type Assignment = Database["public"]["Tables"]["assignments"]["Row"];
+export type SubmissionWithGradesForAssignment =
+  Database["public"]["Views"]["submissions_with_grades_for_assignment"]["Row"];
