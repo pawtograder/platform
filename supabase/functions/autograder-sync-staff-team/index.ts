@@ -41,12 +41,11 @@ async function handleRequest(req: Request) {
     }
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
       const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
-        () =>
-          adminSupabase
-            .from("user_roles")
-            .select("users(github_username)")
-            .eq("class_id", course_id)
-            .or("role.eq.instructor,role.eq.grader")
+        adminSupabase
+          .from("user_roles")
+          .select("users(github_username)")
+          .eq("class_id", course_id)
+          .or("role.eq.instructor,role.eq.grader")
       );
       if (staffError) {
         console.error(staffError);
@@ -71,12 +70,11 @@ async function handleRequest(req: Request) {
     }
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
       const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
-        () =>
-          supabase
-            .from("user_roles")
-            .select("users(github_username)")
-            .eq("class_id", course_id)
-            .or("role.eq.instructor,role.eq.grader")
+        supabase
+          .from("user_roles")
+          .select("users(github_username)")
+          .eq("class_id", course_id)
+          .or("role.eq.instructor,role.eq.grader")
       );
       if (staffError) {
         console.error(staffError);

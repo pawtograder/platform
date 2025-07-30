@@ -484,7 +484,7 @@ export async function archiveRepoAndLock(org: string, repo: string) {
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
 export async function syncStaffTeam(org: string, courseSlug: string, githubUsernamesFetcher: () => Promise<string[]>) {
-  await syncTeam(`${courseSlug}-staff`, org, githubUsernamesFetch);
+  await syncTeam(`${courseSlug}-staff`, org, githubUsernamesFetcher);
 }
 /**
  * Syncs the student team for a course.
