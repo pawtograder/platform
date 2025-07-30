@@ -22,6 +22,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 
 type RecentAssignment = GetResult<
   Database["public"],
@@ -144,6 +145,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   return (
     <VStack spaceY={8} align="stretch" p={8}>
       <Heading size="xl">Course Dashboard</Heading>
+      <ResendOrgInvitation />
 
       <Box>
         <Heading size="lg" mb={4}>

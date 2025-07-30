@@ -104,7 +104,6 @@ async function handleRequest(req: Request) {
         // Make sure that the repo exists
         if (groupMembership.assignment_groups.repositories.length === 0) {
           console.log("Creating repo");
-          const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
 
           console.log("Repo created");
           //Add the repo to the database
@@ -112,14 +111,28 @@ async function handleRequest(req: Request) {
             Deno.env.get("SUPABASE_URL")!,
             Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
           );
-          const { error } = await adminSupabase.from("repositories").insert({
-            class_id: assignment.class_id!,
-            assignment_group_id: group.id,
-            assignment_id: assignment.id,
-            repository: `${c.classes!.github_org}/${repoName}`,
-            synced_repo_sha: headSha,
-            synced_handout_sha: assignment.latest_template_sha
-          });
+          const { error, data: dbRepo } = await adminSupabase
+            .from("repositories")
+            .insert({
+              class_id: assignment.class_id!,
+              assignment_group_id: group.id,
+              assignment_id: assignment.id,
+              repository: `${c.classes!.github_org}/${repoName}`,
+              synced_handout_sha: assignment.latest_template_sha
+            })
+            .select("id")
+            .single();
+          if (error) {
+            console.error(error);
+            throw new UserVisibleError(`Error creating repo: ${error}`);
+          }
+          const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
+          await adminSupabase
+            .from("repositories")
+            .update({
+              synced_repo_sha: headSha
+            })
+            .eq("id", dbRepo!.id);
           if (error) {
             console.error(error);
             throw new UserVisibleError(`Error creating repo: ${error}`);

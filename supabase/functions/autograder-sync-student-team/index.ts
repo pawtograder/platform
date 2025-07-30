@@ -1,15 +1,15 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { syncStaffTeam } from "../_shared/GitHubWrapper.ts";
+import { syncStudentTeam } from "../_shared/GitHubWrapper.ts";
 import {
   assertUserIsInstructor,
-  fetchAllPages,
   UserVisibleError,
-  wrapRequestHandler
+  wrapRequestHandler,
+  fetchAllPages
 } from "../_shared/HandlerUtils.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
-//See also autograder-sync-student-team
+//See also autograder-sync-staff-team
 async function handleRequest(req: Request) {
   const secret = req.headers.get("x-edge-function-secret");
   if (secret) {
@@ -39,23 +39,25 @@ async function handleRequest(req: Request) {
     if (!classData) {
       throw new UserVisibleError("No class found for course");
     }
-    await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
-      const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
+
+    await syncStudentTeam(classData.github_org!, classData.slug!, async () => {
+      const { data: students, error: studentsError } = await fetchAllPages<{
+        users: { github_username: string | null };
+      }>(
         adminSupabase
           .from("user_roles")
           .select("users(github_username)")
           .eq("class_id", course_id)
-          .or("role.eq.instructor,role.eq.grader")
+          .or("role.eq.student")
       );
-      if (staffError) {
-        console.error(staffError);
-        throw new UserVisibleError("Error fetching staff");
+      if (studentsError) {
+        console.error(studentsError);
+        throw new UserVisibleError("Error fetching students");
       }
-      return staff!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
+      return students!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
     });
   } else {
     const { course_id } = (await req.json()) as { course_id: number };
-
     const { supabase } = await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
     const { data: classData, error: classError } = await supabase
       .from("classes")
@@ -68,19 +70,15 @@ async function handleRequest(req: Request) {
     if (!classData) {
       throw new UserVisibleError("No class found for course");
     }
-    await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
-      const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
-        supabase
-          .from("user_roles")
-          .select("users(github_username)")
-          .eq("class_id", course_id)
-          .or("role.eq.instructor,role.eq.grader")
-      );
-      if (staffError) {
-        console.error(staffError);
-        throw new UserVisibleError("Error fetching staff");
+    await syncStudentTeam(classData.github_org!, classData.slug!, async () => {
+      const { data: students, error: studentsError } = await fetchAllPages<{
+        users: { github_username: string | null };
+      }>(supabase.from("user_roles").select("users(github_username)").eq("class_id", course_id).or("role.eq.student"));
+      if (studentsError) {
+        console.error(studentsError);
+        throw new UserVisibleError("Error fetching students");
       }
-      return staff!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
+      return students!.filter((s) => s.users.github_username).map((s) => s.users.github_username!);
     });
   }
 }
