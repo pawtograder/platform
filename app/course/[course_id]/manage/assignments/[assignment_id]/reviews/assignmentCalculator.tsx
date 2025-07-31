@@ -199,9 +199,9 @@ export class TAAssignmentSolver {
    * EFFECT: reductions can cause issues so in case of insufficient support, we gradually decrease workload factor.
    */
   validateCapacityConstraints(): { isValid: boolean; error?: string } {
-    let totalCapacity = 0;
     let success = false;
     while (!success) {
+      let totalCapacity = 0;
       for (const ta of this.tas) {
         const capacity = this.calculateTACapacity(ta.private_profile_id);
         this.taCapacities.set(ta.private_profile_id, capacity);
