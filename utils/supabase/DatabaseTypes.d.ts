@@ -114,6 +114,13 @@ export type UserRoleWithCourse = GetResult<
   Database["public"]["Tables"]["user_roles"]["Relationships"],
   "*, classes(*)"
 >;
+export type UserRoleWithCourseAndUser = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["user_roles"]["Row"],
+  "user_roles",
+  Database["public"]["Tables"]["user_roles"]["Relationships"],
+  "*, classes(*), users(*)"
+>;
 
 export type Repo = Database["public"]["Tables"]["repositories"]["Row"];
 

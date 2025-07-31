@@ -6,6 +6,7 @@ import {
   createRegradeRequest,
   createUserInClass,
   gradeSubmission,
+  insertAssignment,
   insertPreBakedSubmission,
   supabase,
   type TestingUser

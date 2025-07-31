@@ -1,5 +1,6 @@
 "use client";
 import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { Alert } from "@/components/ui/alert";
 import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
@@ -118,11 +119,7 @@ export default function StudentPage() {
     <LinkAccount />
   ) : assignmentsWithoutRepos?.length ? (
     <>
-      <Alert status="info">
-        GitHub repos created for you. You have been *invited* to join them. You will need to accept the invitation
-        within the next 7 days. You will find the invitation in your email (whichever you use for GitHub), and also in
-        your <Link href="https://github.com/notifications">GitHub notifications</Link>.
-      </Alert>
+      <Alert status="info">GitHub repos created for you. You may need to refresh this page to see them.</Alert>
     </>
   ) : (
     <></>
@@ -230,6 +227,7 @@ export default function StudentPage() {
   return (
     <Container>
       {actions}
+      <ResendOrgInvitation />
       <Heading size="lg" mb={4}>
         Upcoming Assignments
       </Heading>

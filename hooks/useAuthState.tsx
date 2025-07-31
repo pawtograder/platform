@@ -1,11 +1,11 @@
 "use client";
-import { UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
 import { User } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext } from "react";
 type AuthStateContextType = {
   user: User | null;
-  roles: UserRoleWithCourse[];
+  roles: UserRoleWithCourseAndUser[];
 };
 const AuthStateContext = createContext<AuthStateContextType>({ user: null, roles: [] });
 export function AuthStateProvider({
@@ -15,7 +15,7 @@ export function AuthStateProvider({
 }: {
   children: React.ReactNode;
   user: User | null;
-  roles: UserRoleWithCourse[];
+  roles: UserRoleWithCourseAndUser[];
 }) {
   return <AuthStateContext.Provider value={{ user, roles }}>{children}</AuthStateContext.Provider>;
 }

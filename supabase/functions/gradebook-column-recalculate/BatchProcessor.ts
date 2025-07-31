@@ -11,10 +11,9 @@ export async function runHandler() {
   );
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_column_recalculate",
-    sleep_seconds: 5,
-    n: 10000
+    sleep_seconds: 20,
+    n: 500
   });
-  const startTime = Date.now();
   console.log(`Reading ${result.data?.length} messages from gradebook_column_recalculate queue`);
   if (result.error) {
     console.error(result.error);
@@ -33,8 +32,8 @@ export async function runHandler() {
       gradebook_column_student_id: s.message.gradebook_column_student_id,
       is_private: s.message.is_private,
       debug: s,
-      onComplete: () => {
-        adminSupabase
+      onComplete: async () => {
+        await adminSupabase
           .schema("pgmq_public")
           .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
       }
