@@ -71,6 +71,10 @@ export function useIsGraderOrInstructor() {
   return role.role === "grader" || role.role === "instructor";
 }
 
+export function useIsStudent() {
+  const { role } = useClassProfiles();
+  return role.role === "student";
+}
 /**
  * Returns the user role object matching the specified private profile ID from all visible roles.
  *

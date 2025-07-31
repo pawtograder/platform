@@ -23,6 +23,45 @@ import Link from "next/link";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import { getPrivateProfileId } from "@/lib/ssrUtils";
+
+// Custom styled DataListRoot with reduced vertical spacing
+const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
+  <DataListRoot
+    {...props}
+    css={{
+      gap: 1,
+      "& > *": {
+        marginBottom: "0 !important",
+        paddingBottom: "0 !important"
+      },
+      "& > *:last-child": {
+        marginBottom: "0 !important",
+        paddingBottom: "0 !important"
+      }
+    }}
+  >
+    {children}
+  </DataListRoot>
+);
+
+// Custom styled CardRoot with reduced padding
+const CompactCardRoot = ({ children, ...props }: React.ComponentProps<typeof CardRoot>) => (
+  <CardRoot
+    {...props}
+    css={{
+      "& .chakra-card__header": {
+        padding: "0.75rem !important"
+      },
+      "& .chakra-card__body": {
+        padding: "0.75rem !important",
+        paddingTop: "0 !important"
+      }
+    }}
+  >
+    {children}
+  </CardRoot>
+);
 
 type RecentAssignment = GetResult<
   Database["public"],
@@ -33,6 +72,9 @@ type RecentAssignment = GetResult<
 >;
 export default async function InstructorDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
+
+  // Get current user's private profile ID for review assignments
+  const private_profile_id = await getPrivateProfileId(course_id);
 
   // Get recently due assignments (due in last 30 days)
   const thirtyDaysAgo = new Date();
@@ -84,6 +126,21 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .eq("class_id", course_id)
     .eq("status", "open")
     .order("created_at", { ascending: true });
+
+  // Get review assignments for current user
+  const { data: allReviewAssignmentsSummary } = private_profile_id
+    ? await supabase
+        .from("review_assignments_summary_by_assignee")
+        .select("*")
+        .eq("class_id", course_id)
+        .eq("assignee_profile_id", private_profile_id)
+        .order("soonest_due_date", { ascending: true })
+    : { data: null };
+
+  //Show all review assignments that are not completed, and then up to 2 most recent fully completed
+  const reviewAssignmentsSummary = allReviewAssignmentsSummary
+    ?.filter((summary) => (summary.incomplete_reviews ?? 0) > 0)
+    .concat(allReviewAssignmentsSummary?.filter((summary) => (summary.incomplete_reviews ?? 0) === 0).slice(0, 2));
 
   const calculateAssignmentStatistics = (assignment: RecentAssignment) => {
     // Calculate unique submitters (students or groups who have submitted)
@@ -141,12 +198,89 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
       studentsWithValidExtensions
     };
   };
+  const { data: course } = await supabase.from("classes").select("time_zone").eq("id", course_id).single();
 
   return (
-    <VStack spaceY={8} align="stretch" p={8}>
+    <VStack spaceY={0} align="stretch" p={2}>
       <Heading size="xl">Course Dashboard</Heading>
       <ResendOrgInvitation />
 
+      {/* Review Assignments Section */}
+      {reviewAssignmentsSummary && reviewAssignmentsSummary.length > 0 && (
+        <Box>
+          <Heading size="lg" mb={4}>
+            Grading Status
+          </Heading>
+          <Stack spaceY={4}>
+            {reviewAssignmentsSummary.map((reviewSummary) => (
+              <CompactCardRoot key={`${reviewSummary.assignment_id}`}>
+                <CardHeader>
+                  <Flex justify="space-between" align="center">
+                    <Link
+                      prefetch={true}
+                      href={`/course/${course_id}/manage/assignments/${reviewSummary.assignment_id}`}
+                    >
+                      <Text fontWeight="semibold">{reviewSummary.assignment_title}</Text>
+                    </Link>
+                    <Badge colorScheme={(reviewSummary.incomplete_reviews ?? 0) > 0 ? "red" : "green"} size="sm">
+                      {(reviewSummary.incomplete_reviews ?? 0) > 0
+                        ? `${reviewSummary.incomplete_reviews ?? 0} pending`
+                        : "All complete"}
+                    </Badge>
+                  </Flex>
+                </CardHeader>
+                <CardBody>
+                  <CompactDataListRoot orientation="horizontal">
+                    <DataListItem>
+                      <DataListItemLabel>Total Reviews</DataListItemLabel>
+                      <DataListItemValue>{reviewSummary.total_reviews}</DataListItemValue>
+                    </DataListItem>
+                    <DataListItem>
+                      <DataListItemLabel>Completed</DataListItemLabel>
+                      <DataListItemValue>
+                        <Flex align="center" gap={2}>
+                          <Text>{reviewSummary.completed_reviews}</Text>
+                          {reviewSummary.completed_reviews === reviewSummary.total_reviews ? (
+                            <Badge colorScheme="green" size="sm">
+                              ✓
+                            </Badge>
+                          ) : null}
+                        </Flex>
+                      </DataListItemValue>
+                    </DataListItem>
+                    <DataListItem>
+                      <DataListItemLabel>Remaining</DataListItemLabel>
+                      <DataListItemValue>
+                        {(reviewSummary.incomplete_reviews ?? 0) > 0 ? (
+                          <Badge colorScheme="orange" size="sm">
+                            {reviewSummary.incomplete_reviews ?? 0}
+                          </Badge>
+                        ) : (
+                          <Text>0</Text>
+                        )}
+                      </DataListItemValue>
+                    </DataListItem>
+                    <DataListItem>
+                      <DataListItemLabel>Due</DataListItemLabel>
+                      <DataListItemValue>
+                        <Text fontSize="sm">
+                          {reviewSummary.soonest_due_date
+                            ? formatInTimeZone(
+                                new TZDate(reviewSummary.soonest_due_date),
+                                course?.time_zone || "America/New_York",
+                                "MMM d, h:mm a"
+                              )
+                            : "No due date"}
+                        </Text>
+                      </DataListItemValue>
+                    </DataListItem>
+                  </CompactDataListRoot>
+                </CardBody>
+              </CompactCardRoot>
+            ))}
+          </Stack>
+        </Box>
+      )}
       <Box>
         <Heading size="lg" mb={4}>
           Recently Due Assignments
@@ -155,7 +289,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
           {recentAssignments?.map((assignment: RecentAssignment) => {
             const stats = calculateAssignmentStatistics(assignment);
             return (
-              <CardRoot key={assignment.id}>
+              <CompactCardRoot key={assignment.id}>
                 <CardHeader>
                   <Flex justify="space-between" align="center">
                     <Link prefetch={true} href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
@@ -172,7 +306,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                   </Flex>
                 </CardHeader>
                 <CardBody>
-                  <DataListRoot orientation="horizontal">
+                  <CompactDataListRoot orientation="horizontal">
                     <DataListItem>
                       <DataListItemLabel>Students accepted</DataListItemLabel>
                       <DataListItemValue>{stats.totalRepositories}</DataListItemValue>
@@ -230,9 +364,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                         </Flex>
                       </DataListItemValue>
                     </DataListItem>
-                  </DataListRoot>
+                  </CompactDataListRoot>
                 </CardBody>
-              </CardRoot>
+              </CompactCardRoot>
             );
           })}
         </Stack>
@@ -245,14 +379,14 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
         <Stack spaceY={4}>
           {upcomingAssignments?.map((assignment) => {
             return (
-              <CardRoot key={assignment.id}>
+              <CompactCardRoot key={assignment.id}>
                 <CardHeader>
                   <Link prefetch={true} href={`/course/${course_id}/manage/assignments/${assignment.id}`}>
                     {assignment.title}
                   </Link>
                 </CardHeader>
                 <CardBody>
-                  <DataListRoot orientation="horizontal">
+                  <CompactDataListRoot orientation="horizontal">
                     <DataListItem>
                       <DataListItemLabel>Due</DataListItemLabel>
                       <DataListItemValue>
@@ -275,9 +409,9 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                         {new Set(assignment.submissions.map((s) => s.profile_id)).size}
                       </DataListItemValue>
                     </DataListItem>
-                  </DataListRoot>
+                  </CompactDataListRoot>
                 </CardBody>
-              </CardRoot>
+              </CompactCardRoot>
             );
           })}
         </Stack>

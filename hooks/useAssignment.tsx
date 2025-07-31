@@ -1,24 +1,61 @@
 "use client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
+  AssignmentGroup,
   AssignmentWithRubricsAndReferences,
   RegradeRequest,
   ReviewAssignmentParts,
   ReviewAssignments,
-  RubricReviewRound
+  RubricReviewRound,
+  Submission
 } from "@/utils/supabase/DatabaseTypes";
 
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import TableController from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
-import { useList, useShow } from "@refinedev/core";
+import { useShow } from "@refinedev/core";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useClassProfiles } from "./useClassProfiles";
-import TableController from "@/lib/TableController";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { useCourseController } from "./useCourseController";
+
+export function useSubmission(submission_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const [submission, setSubmission] = useState<Submission | undefined>(undefined);
+  useEffect(() => {
+    if (!submission_id) {
+      setSubmission(undefined);
+      return;
+    }
+    const { data, unsubscribe } = controller.submissions.getById(submission_id, (data) => {
+      setSubmission(data);
+    });
+    setSubmission(data);
+    return () => unsubscribe();
+  }, [controller, submission_id]);
+  return submission;
+}
+
+export function useAssignmentGroup(assignment_group_id: number | null | undefined) {
+  const controller = useAssignmentController();
+  const [assignmentGroup, setAssignmentGroup] = useState<AssignmentGroup | undefined>(undefined);
+  useEffect(() => {
+    if (!assignment_group_id) {
+      setAssignmentGroup(undefined);
+      return;
+    }
+    const { data, unsubscribe } = controller.assignmentGroups.getById(assignment_group_id, (data) => {
+      setAssignmentGroup(data);
+    });
+    setAssignmentGroup(data);
+    return () => unsubscribe();
+  }, [controller, assignment_group_id]);
+  return assignmentGroup;
+}
+
 export function useSelfReviewSettings() {
   const controller = useAssignmentController();
   return controller.assignment.assignment_self_review_settings;
@@ -83,7 +120,16 @@ export function useReviewAssignmentRubricParts(review_assignment_id: number | nu
   }, [reviewAssignmentRubricParts, review_assignment_id]);
   return filteredParts;
 }
-
+export function useActiveSubmissions() {
+  const controller = useAssignmentController();
+  const [submissions, setSubmissions] = useState<Submission[]>(controller.submissions.rows);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.submissions.list(setSubmissions);
+    setSubmissions(data);
+    return () => unsubscribe();
+  }, [controller]);
+  return submissions;
+}
 export function useReviewAssignment(review_assignment_id: number | null | undefined) {
   const controller = useAssignmentController();
 
@@ -208,6 +254,8 @@ class AssignmentController {
   readonly reviewAssignments: TableController<"review_assignments">;
   readonly reviewAssignmentRubricParts: TableController<"review_assignment_rubric_parts">;
   readonly regradeRequests: TableController<"submission_regrade_requests">;
+  readonly submissions: TableController<"submissions">;
+  readonly assignmentGroups: TableController<"assignment_groups">;
 
   rubricCheckById: Map<number, OurRubricCheck> = new Map();
   rubricCriteriaById: Map<
@@ -227,6 +275,18 @@ class AssignmentController {
     class_id: number;
     classRealTimeController: ClassRealTimeController;
   }) {
+    this.submissions = new TableController({
+      query: client.from("submissions").select("*").eq("assignment_id", assignment_id).eq("is_active", true),
+      client: client,
+      table: "submissions",
+      classRealTimeController
+    });
+    this.assignmentGroups = new TableController({
+      query: client.from("assignment_groups").select("*").eq("assignment_id", assignment_id),
+      client: client,
+      table: "assignment_groups",
+      classRealTimeController
+    });
     this.reviewAssignments = new TableController({
       query: client.from("review_assignments").select("*").eq("assignment_id", assignment_id),
       client: client,
@@ -249,10 +309,12 @@ class AssignmentController {
   close() {
     this.reviewAssignments.close();
     this.reviewAssignmentRubricParts.close();
+    this.regradeRequests.close();
+    this.submissions.close();
+    this.assignmentGroups.close();
   }
   // Assignment
   set assignment(assignment: AssignmentWithRubricsAndReferences) {
-    console.log("Setting assignment", assignment);
     if (this._assignment) {
       //TODO: refine.dev does a pretty bad job with invalidation on a complex query like this... but we never want it to be invalidated anyway I guess?
       return;
@@ -302,13 +364,6 @@ class AssignmentController {
         }
       }
     }
-  }
-  // Submissions
-  set submissions(submissions: ActiveSubmissionsWithGradesForAssignment[]) {
-    this._submissions = submissions;
-  }
-  get submissions() {
-    return this._submissions;
   }
 
   get isReady() {
@@ -403,14 +458,6 @@ function AssignmentControllerCreator({
     }
   });
 
-  // Submissions (minimal info)
-  const { data: submissionsData } = useList<ActiveSubmissionsWithGradesForAssignment>({
-    resource: "submissions_with_grades_for_assignment",
-    filters: [{ field: "assignment_id", operator: "eq", value: assignment_id }],
-    pagination: { pageSize: 1000 },
-    queryOptions: { enabled: !!assignment_id }
-  });
-
   useEffect(() => {
     const promises = [controller.reviewAssignments.readyPromise, controller.regradeRequests.readyPromise];
     Promise.all(promises).then(() => {
@@ -424,13 +471,11 @@ function AssignmentControllerCreator({
       controller.assignment = assignmentQuery.data.data;
     }
     controller.rubrics = assignmentQuery.data?.data.rubrics || [];
-    if (submissionsData?.data) {
-      controller.submissions = submissionsData.data;
-    }
+
     if (!assignmentQuery.isLoading && assignmentQuery.data?.data && tableControllersReady) {
       setReady(true);
     }
-  }, [assignmentQuery.data, assignmentQuery.isLoading, submissionsData, controller, setReady, tableControllersReady]);
+  }, [assignmentQuery.data, assignmentQuery.isLoading, controller, setReady, tableControllersReady]);
 
   return null;
 }

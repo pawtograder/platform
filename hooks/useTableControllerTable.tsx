@@ -3,6 +3,7 @@ import {
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
+  getSortedRowModel,
   useReactTable,
   TableOptions
 } from "@tanstack/react-table";
@@ -139,6 +140,7 @@ export function useTableControllerTable<
     columns,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     manualPagination: false,
     manualFiltering: false,

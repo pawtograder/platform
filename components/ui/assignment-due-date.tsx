@@ -204,8 +204,6 @@ export function AssignmentDueDate({
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
-  console.log(dueDate, time_zone);
-  console.log(formatInTimeZone(new TZDate(dueDate, time_zone), time_zone, "MMM d h:mm aaa"));
   return (
     <Flex gap={1} wrap="wrap" maxWidth="100%">
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
