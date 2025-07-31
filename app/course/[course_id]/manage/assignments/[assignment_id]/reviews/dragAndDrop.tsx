@@ -184,18 +184,6 @@ export default function DragAndDropExample({
       });
   }
 
-  Array.from(
-    draftReviews
-      .reduce((map, item) => {
-        map.set(item.assignee.private_profile_id, {
-          id: item.assignee.private_profile_id,
-          title: item.assignee.profiles.name
-        });
-        return map;
-      }, new Map<string, { id: string; title: string }>())
-      .values()
-  );
-
   const getItemsByAssignee = (assignee_profile_id: string): DraftReviewAssignment[] => {
     return draftReviews.filter((item) => item.assignee.private_profile_id === assignee_profile_id);
   };

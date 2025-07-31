@@ -26,10 +26,19 @@ begin
     target_submission_review_id := NEW.submission_review_id;
     completing_user_id := NEW.completed_by;
     
-    -- Get the rubric_id for this submission review
+    -- Add advisory lock to prevent race conditions during concurrent updates
+    perform pg_advisory_xact_lock(target_submission_review_id);
+    
+    -- Get the rubric_id for this submission review with existence check
     select rubric_id into target_rubric_id
     from submission_reviews 
     where id = target_submission_review_id;
+    
+    -- Check if submission_review exists and raise warning if not
+    if not found then
+        raise warning 'submission_review with id % does not exist', target_submission_review_id;
+        return NEW;
+    end if;
     
     if target_rubric_id is null then
         return NEW;
@@ -316,7 +325,7 @@ CREATE INDEX IF NOT EXISTS "idx_assignments_class_id_due_date" ON "public"."assi
 CREATE INDEX IF NOT EXISTS "idx_assignments_covering" ON "public"."assignments" USING "btree" ("id") INCLUDE ("title", "release_date", "due_date", "class_id");
 
 ALTER POLICY "Assignees can view their own review assignments" ON "public"."review_assignments"
-  USING (  (authorizeforprofile(assignee_profile_id) AND ((release_date IS NULL) OR (timezone('utc'::text, now()) >= release_date))));
+  USING (  (authorizeforprofile(assignee_profile_id) AND ((release_date IS NULL) OR (now() >= release_date))));
 
 -- Add RLS policy to allow review assignment assignees to mark their assignments as completed
 CREATE POLICY "Assignees can mark their review assignments as completed" 
@@ -361,7 +370,7 @@ FROM review_assignments ra
 INNER JOIN assignments a ON a.id = ra.assignment_id
 WHERE 
   -- Only include review assignments that have been released
-  (ra.release_date IS NULL OR ra.release_date <= timezone('utc'::text, now()))
+  (ra.release_date IS NULL OR ra.release_date <= now())
 GROUP BY 
   ra.assignee_profile_id, 
   ra.assignment_id, 
@@ -371,3 +380,14 @@ GROUP BY
 CREATE INDEX IF NOT EXISTS "idx_review_assignments_assignee_assignment_released" 
 ON "public"."review_assignments" 
 USING "btree" ("assignee_profile_id", "assignment_id", "release_date", "completed_at");
+
+-- Indexes to optimize the check_and_complete_submission_review() trigger function
+-- Index on rubric_parts(rubric_id) to optimize the aggregate query counting total rubric parts
+CREATE INDEX IF NOT EXISTS "idx_rubric_parts_rubric_id" 
+ON "public"."rubric_parts" 
+USING "btree" ("rubric_id");
+
+-- Index on review_assignment_rubric_parts(review_assignment_id) to optimize the joins in the trigger
+CREATE INDEX IF NOT EXISTS "idx_review_assignment_rubric_parts_review_assignment_id" 
+ON "public"."review_assignment_rubric_parts" 
+USING "btree" ("review_assignment_id");

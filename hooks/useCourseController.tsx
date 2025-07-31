@@ -25,7 +25,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
-import TableController from "@/lib/TableController";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
