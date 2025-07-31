@@ -547,6 +547,14 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
     // Get the selected rubric parts
     const selectedParts = selectedRubricPartsForFilter.map((option) => option.value);
+    if (selectedParts.length > users.length) {
+      toaster.error({
+        title: "Error drafting reviews",
+        description:
+          "Not enough graders to assign all parts. Please select fewer parts or more graders, or use 'Assign by Submission' mode"
+      });
+      return [];
+    }
 
     const groups = splitIntoGroups(users, selectedParts.length);
     const returnResult = [];

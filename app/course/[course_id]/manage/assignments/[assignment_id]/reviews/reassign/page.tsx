@@ -22,6 +22,7 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
+import { createClient } from "@/utils/supabase/client";
 import { MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -87,11 +88,13 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       value: UserRoleWithConflictsAndName;
     }>
   >([]);
+  const [originalRubricParts, setOriginalRubricParts] = useState<Map<number, RubricPart[]>>(new Map());
 
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
   const course = useCourse();
   const { tags } = useTags();
+  const supabase = createClient();
 
   const { data: gradingRubrics } = useList<RubricWithParts>({
     resource: "rubrics",
@@ -163,7 +166,16 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
    */
   useEffect(() => {
     setDraftReviews([]);
-  }, [selectedRubric, role, selectedUser, dueDate, assignmentMode, selectedRubricPartsForFilter, selectedUsers]);
+  }, [
+    selectedRubric,
+    role,
+    selectedUser,
+    dueDate,
+    assignmentMode,
+    selectedRubricPartsForFilter,
+    selectedUsers,
+    originalRubricParts
+  ]);
 
   /**
    * Populate submissions to do for reassigning grading
@@ -183,6 +195,25 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
         });
       });
       setSubmissionsToDo(incompleteAssignments);
+
+      // Capture original rubric parts for each submission before clearing assignments
+      const rubricPartsMap = new Map<number, RubricPart[]>();
+      incompleteAssignments.forEach((submission) => {
+        const userAssignment = submission.review_assignments.find(
+          (assign) =>
+            assign.assignee_profile_id === selectedUser.private_profile_id && assign.rubric_id === selectedRubric.id
+        );
+        if (userAssignment && selectedRubric) {
+          const assignedParts = userAssignment.review_assignment_rubric_parts
+            .map((part) => {
+              return selectedRubric.rubric_parts.find((rubricPart) => rubricPart.id === part.rubric_part_id);
+            })
+            .filter((part): part is RubricPart => part !== undefined);
+
+          rubricPartsMap.set(submission.id, assignedParts);
+        }
+      });
+      setOriginalRubricParts(rubricPartsMap);
     }
   }, [selectedUser, activeSubmissions, selectedRubric]);
 
@@ -295,6 +326,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       const reviewAssignments = generateReviewsByFilteredParts(users, submissionsToDo, historicalWorkload);
       setDraftReviews(reviewAssignments);
     } else {
+      // For "by_submission" mode, preserve the original rubric parts that were assigned
       const reviewAssignments = generateReviewsByRubric(users, submissionsToDo, historicalWorkload);
       setDraftReviews(reviewAssignments);
     }
@@ -309,7 +341,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     if (result.error) {
       toaster.error({ title: "Error drafting reviews", description: result.error });
     }
-    return toReview(result);
+    return toReviewWithOriginalParts(result);
   };
 
   const generateReviewsByRubricPart = (
@@ -415,6 +447,76 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
 
   /**
    * Translates the result of the assignment calculator to a set of draft reviews with all the information necessary to then
+   * assign the reviews, using original rubric parts when available.
+   * @param result the result of the assignment calculator
+   */
+  const toReviewWithOriginalParts = useCallback(
+    (result: AssignmentResult) => {
+      const reviewAssignments: DraftReviewAssignment[] = [];
+      result.assignments?.entries().forEach((entry) => {
+        const user: UserRoleWithConflictsAndName = entry[0];
+        const submissions: SubmissionWithGrading[] = entry[1];
+        submissions.forEach((submission) => {
+          // Get all group members or just the single submitter
+          const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+            { profile_id: submission.profile_id }
+          ];
+
+          // Find UserRoleWithConflictsAndName for each group member
+          const submitters: UserRoleWithConflictsAndName[] = [];
+          for (const member of groupMembers) {
+            const memberUserRole = userRoles?.data.find((item) => {
+              return item.private_profile_id === member.profile_id;
+            });
+            if (!memberUserRole) {
+              toaster.error({
+                title: "Error drafting reviews",
+                description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+              });
+              return;
+            }
+            submitters.push(memberUserRole);
+          }
+
+          if (submitters.length === 0) {
+            toaster.error({
+              title: "Error drafting reviews",
+              description: `No valid submitters found for submission #${submission.id}`
+            });
+            return;
+          }
+
+          // Get the original rubric parts for this submission
+          const originalParts = originalRubricParts.get(submission.id) || [];
+
+          if (originalParts.length > 0) {
+            // Create separate assignments for each original rubric part
+            originalParts.forEach((part) => {
+              reviewAssignments.push({
+                assignee: user,
+                submitters: submitters,
+                submission: submission,
+                part: part
+              });
+            });
+          } else {
+            // No specific parts were originally assigned, create assignment without parts
+            reviewAssignments.push({
+              assignee: user,
+              submitters: submitters,
+              submission: submission,
+              part: undefined
+            });
+          }
+        });
+      });
+      return reviewAssignments;
+    },
+    [userRoles, originalRubricParts]
+  );
+
+  /**
+   * Translates the result of the assignment calculator to a set of draft reviews with all the information necessary to then
    * assign the reviews.
    * @param result the result of the assignment calculator
    */
@@ -495,39 +597,90 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       return false;
     }
 
-    const reviewAssignmentPromises = validReviews.map(({ review, submissionReviewId }) =>
-      mutateAsync({
-        resource: "review_assignments",
-        values: {
-          assignee_profile_id: review.assignee.private_profile_id,
-          submission_id: review.submission.id,
-          assignment_id: Number(assignment_id),
-          rubric_id: selectedRubric.id,
-          class_id: Number(course_id),
-          submission_review_id: submissionReviewId,
-          due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
-        }
-      }).then((result) => ({ review, result }))
-    );
+    const { data: existingAssignments, error: existingAssignmentsError } = await supabase
+      .from("review_assignments")
+      .select(
+        "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
+      )
+      .eq("assignment_id", Number(assignment_id))
+      .eq("rubric_id", selectedRubric.id);
 
-    const createdAssignments = await Promise.all(reviewAssignmentPromises);
-
-    const rubricPartPromises = createdAssignments
-      .filter(({ review }) => review.part)
-      .map(({ review, result }) =>
-        mutateAsync({
-          resource: "review_assignment_rubric_parts",
-          values: {
-            review_assignment_id: result.data.id,
-            rubric_part_id: review.part?.id,
-            class_id: course_id
-          }
-        })
-      );
-
-    if (rubricPartPromises.length > 0) {
-      await Promise.all(rubricPartPromises);
+    if (existingAssignmentsError) {
+      toaster.error({ title: "Error", description: "Error fetching existing review assignments" });
+      return false;
     }
+
+    const assignmentsToUpdate = existingAssignments
+      .filter((assignment) => {
+        return validReviews.find(
+          ({ review, submissionReviewId }) =>
+            assignment.assignee_profile_id === review.assignee.private_profile_id &&
+            assignment.submission_review_id === submissionReviewId
+        );
+      })
+      .map((assignment) => assignment.id);
+    await supabase
+      .from("review_assignments")
+      .update({
+        completed_at: null
+      })
+      .in("id", assignmentsToUpdate);
+
+    const assignmentsToCreate = validReviews
+      .filter(({ review, submissionReviewId }) => {
+        return !existingAssignments.find(
+          (assignment) =>
+            assignment.assignee_profile_id === review.assignee.private_profile_id &&
+            assignment.submission_review_id === submissionReviewId
+        );
+      })
+      .map(({ review, submissionReviewId }) => ({
+        assignee_profile_id: review.assignee.private_profile_id,
+        submission_id: review.submission.id,
+        assignment_id: Number(assignment_id),
+        rubric_id: selectedRubric.id,
+        class_id: Number(course_id),
+        submission_review_id: submissionReviewId,
+        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+      }));
+    await supabase.from("review_assignments").insert(assignmentsToCreate);
+
+    const { data: allReviewAssignments, error: allReviewAssignmentsError } = await supabase
+      .from("review_assignments")
+      .select(
+        "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
+      )
+      .eq("assignment_id", Number(assignment_id))
+      .eq("rubric_id", selectedRubric.id);
+
+    if (allReviewAssignmentsError) {
+      toaster.error({ title: "Error", description: "Error fetching all review assignments" });
+      return false;
+    }
+    //Now insert all the review assignment parts as needed
+    const reviewAssignmentPartsToCreate = validReviews
+      .map(({ review, submissionReviewId }) => {
+        if (review.part) {
+          const assignment = allReviewAssignments.find(
+            (assignment) =>
+              assignment.assignee_profile_id === review.assignee.private_profile_id &&
+              assignment.submission_review_id === submissionReviewId
+          );
+          if (!assignment || !assignment.id) {
+            toaster.error({ title: "Error", description: "Error finding review assignment for review" });
+            return undefined;
+          }
+          return {
+            review_assignment_id: assignment.id,
+            rubric_part_id: review.part.id,
+            class_id: Number(course_id)
+          };
+        } else {
+          return undefined;
+        }
+      })
+      .filter((part) => part !== undefined);
+    await supabase.from("review_assignment_rubric_parts").insert(reviewAssignmentPartsToCreate);
 
     toaster.success({
       title: "Reviews Reassigned",
@@ -600,6 +753,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     setSelectedRubricPartsForFilter([]);
     setSelectedTags([]);
     setSelectedUsers([]);
+    setOriginalRubricParts(new Map());
   }, []);
 
   /**
@@ -675,7 +829,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
               />
               <Field.HelperText>
                 {assignmentMode === "by_submission" &&
-                  "Each grader grades all rubric parts of each assigned submission"}
+                  "Each grader will be assigned the same rubric parts that were originally assigned to the selected grader"}
                 {assignmentMode === "by_rubric_part" && "Split rubric parts across graders evenly"}
                 {assignmentMode === "by_filtered_parts" && "Select specific rubric parts to split across graders"}
               </Field.HelperText>
@@ -706,6 +860,12 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                 selectedUser?.profiles.name ? `to ${selectedUser?.profiles.name}` : ""
               } that are incomplete for this rubric on this assignment.`}
             </Text>
+            {assignmentMode === "by_submission" && originalRubricParts.size > 0 && (
+              <Text fontSize={"sm"} color="blue.600" fontStyle="italic">
+                Note: Original rubric part assignments will be preserved. The new graders will get the same rubric parts
+                that were originally assigned to {selectedUser?.profiles.name}.
+              </Text>
+            )}
             <Field.Root>
               <Field.Label>Select role to assign reviews to</Field.Label>
               <Select
