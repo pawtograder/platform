@@ -198,6 +198,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
       studentsWithValidExtensions
     };
   };
+  const { data: course } = await supabase.from("classes").select("time_zone").eq("id", course_id).single();
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
@@ -266,7 +267,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
                           {reviewSummary.soonest_due_date
                             ? formatInTimeZone(
                                 new TZDate(reviewSummary.soonest_due_date),
-                                "America/New_York", // You might want to get this from assignment data
+                                course?.time_zone || "America/New_York",
                                 "MMM d, h:mm a"
                               )
                             : "No due date"}
