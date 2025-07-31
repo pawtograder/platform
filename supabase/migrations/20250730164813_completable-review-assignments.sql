@@ -58,6 +58,11 @@ begin
     from rubric_parts 
     where rubric_id = target_rubric_id;
 
+    if all_rubric_parts_count = 0 then
+        -- nothing to grade – abort to avoid false “complete”
+        return NEW;
+    end if;
+
     -- Check if there are any rubric parts assigned to review assignments for this submission review
     if exists (
         select 1 
