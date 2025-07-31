@@ -72,3 +72,191 @@ create trigger trigger_check_and_complete_submission_review
     after update on review_assignments
     for each row
     execute function check_and_complete_submission_review();
+
+
+-- Performance optimization indexes for submissions_with_grades_for_assignment view
+-- These indexes target the expensive joins identified in the query plan
+-- Identified while testing review assignments feature
+
+
+-- Index on submission_reviews profile lookup columns (used in multiple LEFT JOINs to profiles)
+CREATE INDEX IF NOT EXISTS "idx_submission_reviews_grader" ON "public"."submission_reviews" USING "btree" ("grader");
+CREATE INDEX IF NOT EXISTS "idx_submission_reviews_meta_grader" ON "public"."submission_reviews" USING "btree" ("meta_grader");
+CREATE INDEX IF NOT EXISTS "idx_submission_reviews_completed_by" ON "public"."submission_reviews" USING "btree" ("completed_by");
+CREATE INDEX IF NOT EXISTS "idx_submission_reviews_checked_by" ON "public"."submission_reviews" USING "btree" ("checked_by");
+
+-- Composite indexes for submissions table to optimize joins
+CREATE INDEX IF NOT EXISTS "idx_submissions_profile_assignment_active" ON "public"."submissions" USING "btree" ("profile_id", "assignment_id", "is_active");
+CREATE INDEX IF NOT EXISTS "idx_submissions_assignment_group_assignment_active" ON "public"."submissions" USING "btree" ("assignment_group_id", "assignment_id", "is_active") WHERE "assignment_group_id" IS NOT NULL;
+
+-- Composite indexes for assignment_groups_members to optimize joins
+CREATE INDEX IF NOT EXISTS "idx_assignment_groups_members_profile_assignment" ON "public"."assignment_groups_members" USING "btree" ("profile_id", "assignment_id");
+CREATE INDEX IF NOT EXISTS "idx_assignment_groups_members_assignment_group_assignment" ON "public"."assignment_groups_members" USING "btree" ("assignment_group_id", "assignment_id");
+
+-- Optimize user_roles filtering for the student role
+CREATE INDEX IF NOT EXISTS "idx_user_roles_role_class_profile" ON "public"."user_roles" USING "btree" ("role", "class_id", "private_profile_id");
+
+-- Composite index for assignment_due_date_exceptions to optimize the expensive nested loop
+CREATE INDEX IF NOT EXISTS "idx_assignment_due_date_exceptions_student_assignment_group" ON "public"."assignment_due_date_exceptions" USING "btree" ("student_id", "assignment_group_id");
+
+-- Index for grader_results lookup by submission_id
+CREATE INDEX IF NOT EXISTS "idx_grader_results_submission_id_covering" ON "public"."grader_results" USING "btree" ("submission_id") INCLUDE ("grader_sha", "grader_action_sha");
+
+-- Restructured submissions_with_grades_for_assignment view for better performance
+-- This addresses the fundamental structural issues causing the 80M+ row filtering
+
+DROP VIEW IF EXISTS public.submissions_with_grades_for_assignment;
+
+-- Create a more efficient view using CTEs and better join logic
+CREATE OR REPLACE VIEW public.submissions_with_grades_for_assignment 
+WITH (security_invoker='true') 
+AS
+WITH student_roles AS (
+  -- Pre-filter student roles to reduce working set
+  SELECT r.id, r.private_profile_id, r.class_id
+  FROM user_roles r
+  WHERE r.role = 'student'::app_role
+),
+
+-- Separate CTEs for individual and group submissions to avoid complex CASE logic
+individual_submissions AS (
+  SELECT 
+    sr.id as user_role_id,
+    sr.private_profile_id,
+    sr.class_id,
+    a.id as assignment_id,
+    s.id as submission_id,
+    NULL::bigint as assignment_group_id,
+    a.due_date
+  FROM student_roles sr
+  INNER JOIN assignments a ON a.class_id = sr.class_id
+  INNER JOIN submissions s ON (
+    s.profile_id = sr.private_profile_id 
+    AND s.assignment_id = a.id 
+    AND s.is_active = true
+  )
+),
+
+group_submissions AS (
+  SELECT 
+    sr.id as user_role_id,
+    sr.private_profile_id,
+    sr.class_id,
+    a.id as assignment_id,
+    s.id as submission_id,
+    agm.assignment_group_id,
+    a.due_date
+  FROM student_roles sr
+  INNER JOIN assignments a ON a.class_id = sr.class_id
+  INNER JOIN assignment_groups_members agm ON (
+    agm.profile_id = sr.private_profile_id 
+    AND agm.assignment_id = a.id
+  )
+  INNER JOIN submissions s ON (
+    s.assignment_group_id = agm.assignment_group_id 
+    AND s.assignment_id = a.id 
+    AND s.is_active = true
+  )
+),
+
+-- Union individual and group submissions
+all_submissions AS (
+  SELECT * FROM individual_submissions
+  UNION ALL
+  SELECT * FROM group_submissions
+),
+
+-- Handle due date exceptions more efficiently
+due_date_extensions AS (
+  SELECT 
+    COALESCE(student_id, ag.profile_id) as effective_student_id,
+    COALESCE(ade.assignment_group_id, ag.assignment_group_id) as effective_assignment_group_id,
+    sum(ade.tokens_consumed) as tokens_consumed,
+    sum(ade.hours) as hours
+  FROM assignment_due_date_exceptions ade
+  LEFT JOIN assignment_groups_members ag ON ade.assignment_group_id = ag.assignment_group_id
+  GROUP BY 
+    COALESCE(student_id, ag.profile_id),
+    COALESCE(ade.assignment_group_id, ag.assignment_group_id)
+),
+
+-- Main submission data with extensions
+submissions_with_extensions AS (
+  SELECT 
+    asub.*,
+    COALESCE(dde.tokens_consumed, 0) as tokens_consumed,
+    COALESCE(dde.hours, 0) as hours
+  FROM all_submissions asub
+  LEFT JOIN due_date_extensions dde ON (
+    dde.effective_student_id = asub.private_profile_id
+    AND (
+      (asub.assignment_group_id IS NULL AND dde.effective_assignment_group_id IS NULL)
+      OR (asub.assignment_group_id = dde.effective_assignment_group_id)
+    )
+  )
+)
+
+-- Final selection with all joins
+SELECT 
+  swe.user_role_id as id,
+  swe.class_id,
+  swe.assignment_id,
+  p.id as student_private_profile_id,
+  p.name,
+  p.sortable_name,
+  s.id AS activesubmissionid,
+  s.created_at,
+  s.released,
+  s.repository,
+  s.sha,
+  rev.total_autograde_score AS autograder_score,
+  rev.grader,
+  rev.meta_grader,
+  rev.total_score,
+  rev.tweak,
+  rev.completed_by,
+  rev.completed_at,
+  rev.checked_at,
+  rev.checked_by,
+  graderprofile.name AS assignedgradername,
+  metagraderprofile.name AS assignedmetagradername,
+  completerprofile.name AS gradername,
+  checkgraderprofile.name AS checkername,
+  ag.name AS groupname,
+  swe.tokens_consumed,
+  swe.hours,
+  swe.due_date,
+  (swe.due_date + ('01:00:00'::interval * swe.hours::double precision)) AS late_due_date,
+  ar.grader_sha,
+  ar.grader_action_sha
+FROM submissions_with_extensions swe
+INNER JOIN profiles p ON p.id = swe.private_profile_id
+INNER JOIN submissions s ON s.id = swe.submission_id
+LEFT JOIN submission_reviews rev ON rev.id = s.grading_review_id
+LEFT JOIN grader_results ar ON ar.submission_id = s.id
+LEFT JOIN assignment_groups ag ON ag.id = swe.assignment_group_id
+LEFT JOIN profiles completerprofile ON completerprofile.id = rev.completed_by
+LEFT JOIN profiles graderprofile ON graderprofile.id = rev.grader
+LEFT JOIN profiles metagraderprofile ON metagraderprofile.id = rev.meta_grader
+LEFT JOIN profiles checkgraderprofile ON checkgraderprofile.id = rev.checked_by;
+
+
+-- Performance optimization indexes for assignment_overview view
+-- These indexes target the GROUP BY operations and WHERE clauses in the subqueries
+
+-- Composite index for submissions aggregation (assignment_id, is_active)
+-- This supports both the WHERE clause and GROUP BY efficiently
+CREATE INDEX IF NOT EXISTS "idx_submissions_assignment_id_is_active" ON "public"."submissions" USING "btree" ("assignment_id", "is_active");
+
+-- Composite index for submission_regrade_requests aggregation (assignment_id, status)  
+-- This supports both the WHERE clause and GROUP BY efficiently
+CREATE INDEX IF NOT EXISTS "idx_submission_regrade_requests_assignment_id_status" ON "public"."submission_regrade_requests" USING "btree" ("assignment_id", "status");
+
+-- Index on assignments.class_id for filtering (the primary use case)
+CREATE INDEX IF NOT EXISTS "idx_assignments_class_id_due_date" ON "public"."assignments" USING "btree" ("class_id", "due_date");
+
+-- Covering index for assignments to avoid table lookups in the main query
+CREATE INDEX IF NOT EXISTS "idx_assignments_covering" ON "public"."assignments" USING "btree" ("id") INCLUDE ("title", "release_date", "due_date", "class_id");
+
+ALTER POLICY "Assignees can view their own review assignments" ON "public"."review_assignments"
+  USING (  (authorizeforprofile(assignee_profile_id) AND ((release_date IS NULL) OR (timezone('utc'::text, now()) >= release_date))))

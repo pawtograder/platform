@@ -425,19 +425,38 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
         const user: UserRoleWithConflictsAndName = entry[0];
         const submissions: SubmissionWithGrading[] = entry[1];
         submissions.forEach((submission) => {
-          const to = userRoles?.data.find((item) => {
-            return item.private_profile_id === submission.profile_id;
-          });
-          if (!to) {
+          // Get all group members or just the single submitter
+          const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+            { profile_id: submission.profile_id }
+          ];
+
+          // Find UserRoleWithConflictsAndName for each group member
+          const submitters: UserRoleWithConflictsAndName[] = [];
+          for (const member of groupMembers) {
+            const memberUserRole = userRoles?.data.find((item) => {
+              return item.private_profile_id === member.profile_id;
+            });
+            if (!memberUserRole) {
+              toaster.error({
+                title: "Error drafting reviews",
+                description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+              });
+              return;
+            }
+            submitters.push(memberUserRole);
+          }
+
+          if (submitters.length === 0) {
             toaster.error({
               title: "Error drafting reviews",
-              description: `Failed to find user for submission #${submission.id}`
+              description: `No valid submitters found for submission #${submission.id}`
             });
             return;
           }
+
           reviewAssignments.push({
             assignee: user,
-            submitter: to,
+            submitters: submitters,
             submission: submission,
             part: part
           });
@@ -547,7 +566,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
       if (isNaN(submissionReviewId)) {
         toaster.error({
           title: "Error creating review assignments",
-          description: `Failed to find or create submission review for ${review.submitter.profiles.name}`
+          description: `Failed to find or create submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}`
         });
       }
       return submissionReviewId;

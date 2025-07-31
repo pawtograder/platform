@@ -61,10 +61,18 @@ function DraggableItem({ item }: DraggableItemProps) {
       borderColor={isDragging ? "blue.300" : "gray.200"}
     >
       <Card.Body p={0} m={2}>
-        <HStack gap={3}>
-          <StudentInfoCard private_profile_id={item.submitter.private_profile_id} />{" "}
-          {item.part ? `(${item.part.name})` : ""}
-        </HStack>
+        <VStack gap={2} align="flex-start">
+          <HStack gap={2} wrap="wrap">
+            {item.submitters.map((submitter) => (
+              <StudentInfoCard key={submitter.private_profile_id} private_profile_id={submitter.private_profile_id} />
+            ))}
+          </HStack>
+          {item.part && (
+            <Text fontSize="sm" color="text.muted">
+              ({item.part.name})
+            </Text>
+          )}
+        </VStack>
       </Card.Body>
     </Card.Root>
   );
@@ -131,6 +139,7 @@ export default function DragAndDropExample({
   const categories: { id: string; title: string }[] = courseStaffWithConflicts?.map((staff) => {
     return { id: staff.private_profile_id, title: staff.profiles.name };
   });
+  console.log(draftReviews);
 
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -170,11 +179,8 @@ export default function DragAndDropExample({
     return !!courseStaffWithConflicts
       ?.find((staff) => staff.private_profile_id === over_id)
       ?.profiles.grading_conflicts.find((conflict) => {
-        return (
-          conflict.student_profile_id === draggedItem?.submitter.private_profile_id ||
-          draggedItem?.submission.assignment_groups?.assignment_groups_members
-            .map((member) => member.profile_id)
-            .includes(conflict.student_profile_id)
+        return draggedItem?.submitters.some(
+          (submitter) => conflict.student_profile_id === submitter.private_profile_id
         );
       });
   }

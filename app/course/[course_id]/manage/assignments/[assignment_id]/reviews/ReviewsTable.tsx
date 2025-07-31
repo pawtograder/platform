@@ -19,7 +19,7 @@ import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
 import { useCallback, useMemo } from "react";
-import { FaEdit, FaTrash } from "react-icons/fa";
+import { FaEdit, FaTrash, FaDownload } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
 
 // Type definitions
@@ -104,6 +104,249 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
     return "Pending";
   }, []);
+
+  // CSV Export function
+  const exportToCSV = useCallback(async () => {
+    try {
+      // Enhanced query for CSV export with emails and extensions
+      const { data: csvData, error } = await supabase
+        .from("review_assignments")
+        .select(
+          `
+          *,
+          profiles!assignee_profile_id(*),
+          rubrics(*),
+          submissions(*,
+            profiles!profile_id(*),
+            assignment_groups(*,
+              assignment_groups_members(*,
+                profiles!profile_id(*)
+              )
+            ),
+            assignments(*),
+            submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)
+          ),
+          review_assignment_rubric_parts(*,
+            rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name)
+          )
+        `
+        )
+        .eq("assignment_id", Number(assignmentId))
+        .not("rubric_id", "eq", selfReviewRubric?.id || 0)
+        .limit(1000);
+
+      if (error) {
+        toaster.error({ title: "Error fetching data for export", description: error.message });
+        return;
+      }
+
+      if (!csvData || csvData.length === 0) {
+        toaster.error({ title: "No data to export" });
+        return;
+      }
+
+      // Get user emails for assignees and submission authors
+      const profileIds = new Set<string>();
+
+      // Collect all profile IDs we need emails for
+      csvData.forEach((ra) => {
+        profileIds.add(ra.assignee_profile_id);
+        if (ra.submissions?.profile_id) {
+          profileIds.add(ra.submissions.profile_id);
+        }
+        if (ra.submissions?.assignment_groups?.assignment_groups_members) {
+          ra.submissions.assignment_groups.assignment_groups_members.forEach((member) => {
+            if (member.profile_id) {
+              profileIds.add(member.profile_id);
+            }
+          });
+        }
+      });
+
+      // Fetch emails for all profiles
+      const { data: emailData, error: emailError } = await supabase
+        .from("user_roles")
+        .select(
+          `
+          private_profile_id,
+          users(email)
+        `
+        )
+        .eq("class_id", course.classes.id)
+        .limit(1000);
+
+      if (emailError) {
+        toaster.error({ title: "Error fetching emails", description: emailError.message });
+      }
+
+      // Create email lookup map
+      const emailMap = new Map<string, string>();
+      emailData?.forEach((item) => {
+        if (item.private_profile_id && item.users && "email" in item.users && typeof item.users.email === "string") {
+          emailMap.set(item.private_profile_id, item.users.email);
+        }
+      });
+
+      // Fetch extension data for submissions
+      const { data: extensionData, error: extensionError } = await supabase
+        .from("assignment_due_date_exceptions")
+        .select("*")
+        .eq("assignment_id", Number(assignmentId))
+        .limit(1000);
+
+      if (extensionError) {
+        toaster.error({ title: "Error fetching extensions", description: extensionError.message });
+      }
+
+      // Create extension lookup map
+      const extensionMap = new Map<
+        string,
+        Array<{
+          id: number;
+          student_id: string | null;
+          assignment_group_id: number | null;
+          hours: number;
+          tokens_consumed: number;
+          minutes: number;
+          note: string | null;
+        }>
+      >();
+      extensionData?.forEach((ext) => {
+        const key = ext.student_id || ext.assignment_group_id?.toString();
+        if (key) {
+          if (!extensionMap.has(key)) {
+            extensionMap.set(key, []);
+          }
+          extensionMap.get(key)!.push(ext);
+        }
+      });
+
+      // Generate CSV rows
+      const csvRows = csvData.map((ra) => {
+        const assigneeEmail = emailMap.get(ra.assignee_profile_id) || "N/A";
+
+        // Get student emails and names
+        let studentEmails: string[] = [];
+        let studentNames: string[] = [];
+
+        if (ra.submissions?.assignment_groups?.assignment_groups_members) {
+          // Group submission - get all member emails and names
+          studentEmails = ra.submissions.assignment_groups.assignment_groups_members
+            .map((member) => emailMap.get(member.profile_id))
+            .filter((email): email is string => Boolean(email));
+
+          studentNames = ra.submissions.assignment_groups.assignment_groups_members
+            .map((member) => member.profiles?.name || member.profile_id)
+            .filter(Boolean);
+        } else if (ra.submissions?.profile_id) {
+          // Individual submission
+          const email = emailMap.get(ra.submissions.profile_id);
+          if (email) studentEmails = [email];
+
+          const name = ra.submissions.profiles?.name || ra.submissions.profile_id;
+          if (name) studentNames = [name];
+        }
+
+        // Get extension info
+        let extensionInfo = "None";
+        const submissionProfile = ra.submissions?.profile_id;
+        const submissionGroup = ra.submissions?.assignment_group_id;
+
+        const extensions = [
+          ...(submissionProfile ? extensionMap.get(submissionProfile) || [] : []),
+          ...(submissionGroup ? extensionMap.get(submissionGroup.toString()) || [] : [])
+        ];
+
+        if (extensions.length > 0) {
+          const totalHours = extensions.reduce((sum, ext) => sum + (ext.hours || 0), 0);
+          const totalTokens = extensions.reduce((sum, ext) => sum + (ext.tokens_consumed || 0), 0);
+          const totalMinutes = extensions.reduce((sum, ext) => sum + (ext.minutes || 0), 0);
+          const notes = extensions.map((ext) => ext.note).filter(Boolean);
+
+          extensionInfo = `${totalHours}h ${totalMinutes}m, ${totalTokens} tokens`;
+          if (notes.length > 0) {
+            extensionInfo += ` (${notes.join("; ")})`;
+          }
+        }
+
+        return {
+          assignee: ra.profiles?.name || ra.assignee_profile_id,
+          assignee_email: assigneeEmail,
+          submission: ra.submissions
+            ? ra.submissions.assignment_groups?.name
+              ? `Group: ${ra.submissions.assignment_groups.name}`
+              : ra.submissions.profiles?.name || `Submission ID: ${ra.submissions.id}`
+            : "N/A",
+          student_names: studentNames.join(", ") || "N/A",
+          student_emails: studentEmails.join(", ") || "N/A",
+          rubric: ra.rubrics?.name || "N/A",
+          due_date: ra.due_date
+            ? format(new TZDate(ra.due_date, course.classes.time_zone ?? "America/New_York"), "P p")
+            : "N/A",
+          status: getReviewStatus(ra),
+          rubric_part:
+            ra.review_assignment_rubric_parts
+              ?.reduce((past: string, part) => {
+                return past + part.rubric_parts.name + " ";
+              }, "")
+              ?.trim() || "All",
+          extensions: extensionInfo
+        };
+      });
+
+      // Convert to CSV
+      if (csvRows.length === 0) {
+        toaster.error({ title: "No data to export" });
+        return;
+      }
+
+      const headers = [
+        "Assignee",
+        "Assignee Email",
+        "Submission (Student/Group)",
+        "Student Names",
+        "Student Email(s)",
+        "Rubric",
+        "Due Date",
+        "Status",
+        "Rubric Part",
+        "Extensions"
+      ];
+
+      const csvContent = [
+        headers.join(","),
+        ...csvRows.map((row) =>
+          [
+            `"${row.assignee}"`,
+            `"${row.assignee_email}"`,
+            `"${row.submission}"`,
+            `"${row.student_names}"`,
+            `"${row.student_emails}"`,
+            `"${row.rubric}"`,
+            `"${row.due_date}"`,
+            `"${row.status}"`,
+            `"${row.rubric_part}"`,
+            `"${row.extensions}"`
+          ].join(",")
+        )
+      ].join("\n");
+
+      // Download CSV
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.setAttribute("href", url);
+      link.setAttribute("download", `review-assignments-${assignmentId}.csv`);
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toaster.success({ title: "CSV exported successfully" });
+    } catch {
+      toaster.error({ title: "Error exporting CSV", description: "An unexpected error occurred" });
+    }
+  }, [assignmentId, supabase, selfReviewRubric, getReviewStatus, course.classes.time_zone]);
 
   // Helper function to create filter options from unique values
   const createFilterOptions = useCallback(
@@ -382,6 +625,15 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
   return (
     <VStack align="stretch" w="100%">
+      <HStack justifyContent="space-between" alignItems="center" mb={4}>
+        <Text fontSize="lg" fontWeight="bold">
+          Review Assignments
+        </Text>
+        <Button onClick={exportToCSV} size="sm" variant="outline" colorPalette="blue">
+          <FaDownload style={{ marginRight: "8px" }} />
+          Export CSV
+        </Button>
+      </HStack>
       <Table.Root>
         <Table.Header>
           {getHeaderGroups().map((headerGroup) => (

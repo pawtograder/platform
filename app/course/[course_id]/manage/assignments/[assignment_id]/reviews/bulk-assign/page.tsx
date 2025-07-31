@@ -122,6 +122,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }>
   >([]);
   const [selectedReferenceAssignment, setSelectedReferenceAssignment] = useState<Assignment>();
+  const [numGradersToSelect, setNumGradersToSelect] = useState<number>(0);
+  const [isGraderListExpanded, setIsGraderListExpanded] = useState<boolean>(false);
 
   const { mutateAsync } = useCreate();
   const [isGeneratingReviews, setIsGeneratingReviews] = useState(false);
@@ -215,10 +217,14 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   // shuffled course staff to avoid those created first from consistently getting more assignments when
   // submissions / course_staff has a remainder
-  const courseStaff = shuffle(
-    userRoles?.data.filter((user) => {
-      return user.role === "grader" || user.role === "instructor";
-    }) ?? []
+  const courseStaff = useMemo(
+    () =>
+      shuffle(
+        userRoles?.data.filter((user) => {
+          return user.role === "grader" || user.role === "instructor";
+        }) ?? []
+      ),
+    [userRoles]
   );
 
   useEffect(() => {
@@ -245,7 +251,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     selectedClassSections,
     selectedLabSections,
     selectedStudentTags,
-    selectedReferenceAssignment
+    selectedReferenceAssignment,
+    numGradersToSelect
   ]);
 
   /**
@@ -399,27 +406,42 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     return selectedUsers.map((option) => option.value);
   }, [selectedGraders, selectedUsers]);
 
+  // Memoized sorted version of selectedUsers for display
+  const sortedSelectedUsers = useMemo(() => {
+    return [...selectedUsers].sort((a, b) => a.label.localeCompare(b.label));
+  }, [selectedUsers]);
+
   /**
    * Auto-populate selectedUsers when the available users change based on role/tag filters
+   * or when numGradersToSelect changes
    */
   useEffect(() => {
     const availableUsers = selectedGraders();
+
+    // Set default number of graders to select to all available users
+    if (numGradersToSelect === 0 || numGradersToSelect > availableUsers.length) {
+      setNumGradersToSelect(availableUsers.length);
+      return; // Exit early to avoid setting users twice
+    }
+
     const userOptions = availableUsers.map((user) => ({
       label: user.profiles.name,
       value: user
     }));
 
-    // If no users are currently selected, or if some selected users are no longer available,
-    // reset to include all available users
-    if (
-      selectedUsers.length === 0 ||
-      selectedUsers.some(
-        (selected) => !availableUsers.find((user) => user.private_profile_id === selected.value.private_profile_id)
-      )
-    ) {
-      setSelectedUsers(userOptions);
-    }
-  }, [selectedGraders, selectedUsers]);
+    // Always regenerate the selected users when dependencies change
+    const numToSelect = Math.min(numGradersToSelect || availableUsers.length, availableUsers.length);
+    const shuffledUsers = shuffle(userOptions);
+    const selectedSubset = shuffledUsers.slice(0, numToSelect);
+    setSelectedUsers(selectedSubset);
+  }, [selectedGraders, numGradersToSelect]);
+
+  /**
+   * Reset grader list expansion when selected users change
+   */
+  useEffect(() => {
+    setIsGraderListExpanded(false);
+  }, [selectedUsers]);
 
   /**
    * Generates reviews based on the initial selected information and grading conflicts.
@@ -592,19 +614,38 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         const user: UserRoleWithConflictsAndName = entry[0];
         const submissions: SubmissionWithGrading[] = entry[1];
         submissions.forEach((submission) => {
-          const to = userRoles?.data.find((item) => {
-            return item.private_profile_id === submission.profile_id;
-          });
-          if (!to) {
+          // Get all group members or just the single submitter
+          const groupMembers = submission.assignment_groups?.assignment_groups_members || [
+            { profile_id: submission.profile_id }
+          ];
+
+          // Find UserRoleWithConflictsAndName for each group member
+          const submitters: UserRoleWithConflictsAndName[] = [];
+          for (const member of groupMembers) {
+            const memberUserRole = userRoles?.data.find((item) => {
+              return item.private_profile_id === member.profile_id;
+            });
+            if (!memberUserRole) {
+              toaster.error({
+                title: "Error drafting reviews",
+                description: `Failed to find user for group member with profile ID ${member.profile_id} in submission #${submission.id}`
+              });
+              return;
+            }
+            submitters.push(memberUserRole);
+          }
+
+          if (submitters.length === 0) {
             toaster.error({
               title: "Error drafting reviews",
-              description: `Failed to find user for submission #${submission.id}`
+              description: `No valid submitters found for submission #${submission.id}`
             });
             return;
           }
+
           reviewAssignments.push({
             assignee: user,
-            submitter: to,
+            submitters: submitters,
             submission: submission,
             part: part
           });
@@ -763,7 +804,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       if (isNaN(submissionReviewId)) {
         toaster.error({
           title: "Error creating review assignments",
-          description: `Failed to find or create submission review for ${review.submitter.profiles.name}`
+          description: `Failed to find or create submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}`
         });
       }
       return submissionReviewId;
@@ -807,6 +848,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     setSelectedLabSections([]);
     setSelectedStudentTags([]);
     setSelectedReferenceAssignment(undefined);
+    setNumGradersToSelect(0);
+    setIsGraderListExpanded(false);
     invalidate({ resource: "submissions", invalidates: ["all"] });
   }, [invalidate, gradingRubric]);
   const availableRubrics = useMemo(() => {
@@ -1020,22 +1063,167 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             </Field.Root>
 
             <Field.Root>
+              <Field.Label>Number of {role.toLowerCase()} to select</Field.Label>
+              <Input
+                type="number"
+                min={1}
+                max={selectedGraders().length}
+                value={numGradersToSelect || ""}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value);
+                  if (!isNaN(value) && value > 0) {
+                    setNumGradersToSelect(Math.min(value, selectedGraders().length));
+                  }
+                }}
+                placeholder={`Max ${selectedGraders().length}`}
+              />
+              <Field.HelperText>
+                Select how many {role.toLowerCase()} to randomly choose from {selectedGraders().length} available.
+                Defaults to all available {role.toLowerCase()}.
+              </Field.HelperText>
+            </Field.Root>
+
+            <Field.Root>
               <Field.Label>Select specific {role.toLowerCase()} to assign work to</Field.Label>
               <Select
                 isMulti={true}
                 onChange={(e) => {
                   setSelectedUsers(e);
                 }}
-                value={selectedUsers}
+                value={sortedSelectedUsers}
                 options={selectedGraders().map((user) => ({
                   label: user.profiles.name,
                   value: user
                 }))}
+                components={{
+                  MultiValue: ({ data, removeProps, ...props }) => {
+                    const allValues = props.selectProps.value as typeof selectedUsers;
+                    const currentIndex = allValues.findIndex(
+                      (item) => item.value.private_profile_id === data.value.private_profile_id
+                    );
+
+                    // If more than 10 selected and not expanded, only show first 9 and a "+X more" indicator
+                    if (allValues.length > 10 && !isGraderListExpanded) {
+                      if (currentIndex < 9) {
+                        return (
+                          <Box
+                            key={data.value.private_profile_id}
+                            display="inline-flex"
+                            alignItems="center"
+                            bg="bg.subtle"
+                            borderRadius="md"
+                            m={1}
+                            p={1}
+                            fontSize="sm"
+                          >
+                            {data.label}
+                            <Button
+                              size="xs"
+                              variant="ghost"
+                              minH="auto"
+                              h="18px"
+                              w="18px"
+                              p={0}
+                              onClick={(e) => removeProps.onClick?.(e as unknown as React.MouseEvent<HTMLDivElement>)}
+                              onMouseDown={(e) =>
+                                removeProps.onMouseDown?.(e as unknown as React.MouseEvent<HTMLDivElement>)
+                              }
+                              onTouchEnd={(e) =>
+                                removeProps.onTouchEnd?.(e as unknown as React.TouchEvent<HTMLDivElement>)
+                              }
+                            >
+                              ×
+                            </Button>
+                          </Box>
+                        );
+                      } else if (currentIndex === 9) {
+                        return (
+                          <Box
+                            key="more-indicator"
+                            display="inline-flex"
+                            alignItems="center"
+                            bg="bg.info"
+                            borderRadius="md"
+                            p={1}
+                            m={1}
+                            fontSize="sm"
+                            fontWeight="medium"
+                            cursor="pointer"
+                            _hover={{ bg: "blue.200" }}
+                            onClick={() => setIsGraderListExpanded(true)}
+                          >
+                            +{allValues.length - 9} more
+                          </Box>
+                        );
+                      } else {
+                        return null;
+                      }
+                    }
+
+                    // Default behavior: show all items (either ≤10 items or expanded view)
+                    const isLastItem = currentIndex === allValues.length - 1;
+
+                    return (
+                      <>
+                        <Box
+                          key={data.value.private_profile_id}
+                          display="inline-flex"
+                          alignItems="center"
+                          bg="bg.subtle"
+                          borderRadius="md"
+                          p={1}
+                          m={1}
+                          fontSize="sm"
+                        >
+                          {data.label}
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            minH="auto"
+                            h="18px"
+                            w="18px"
+                            p={0}
+                            ml={1}
+                            onClick={(e) => removeProps.onClick?.(e as unknown as React.MouseEvent<HTMLDivElement>)}
+                            onMouseDown={(e) =>
+                              removeProps.onMouseDown?.(e as unknown as React.MouseEvent<HTMLDivElement>)
+                            }
+                            onTouchEnd={(e) =>
+                              removeProps.onTouchEnd?.(e as unknown as React.TouchEvent<HTMLDivElement>)
+                            }
+                          >
+                            ×
+                          </Button>
+                        </Box>
+                        {/* Show "Show less" button only when expanded and this is the last item and there are >10 total */}
+                        {isLastItem && isGraderListExpanded && allValues.length > 10 && (
+                          <Box
+                            key="show-less-indicator"
+                            display="inline-flex"
+                            alignItems="center"
+                            bg="gray.200"
+                            borderRadius="md"
+                            px={2}
+                            py={1}
+                            fontSize="sm"
+                            fontWeight="medium"
+                            cursor="pointer"
+                            _hover={{ bg: "gray.300" }}
+                            onClick={() => setIsGraderListExpanded(false)}
+                          >
+                            Show less
+                          </Box>
+                        )}
+                      </>
+                    );
+                  }
+                }}
               />
               <Field.HelperText>
-                {selectedUsers.length === 0
-                  ? `All available ${role.toLowerCase()} will be assigned work`
-                  : `Only ${selectedUsers.length} selected ${role.toLowerCase()} will be assigned work`}
+                {sortedSelectedUsers.length} out of {selectedGraders().length} available {role.toLowerCase()} selected.
+                {sortedSelectedUsers.length === 0
+                  ? ` All available ${role.toLowerCase()} will be assigned work.`
+                  : ` These ${sortedSelectedUsers.length} ${role.toLowerCase()} will be assigned work.`}
               </Field.HelperText>
             </Field.Root>
 

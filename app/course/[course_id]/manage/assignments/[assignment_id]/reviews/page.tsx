@@ -59,7 +59,7 @@ export type UserRoleWithConflictsAndName = UserRole & {
 
 export type DraftReviewAssignment = {
   assignee: UserRoleWithConflictsAndName;
-  submitter: UserRoleWithConflictsAndName;
+  submitters: UserRoleWithConflictsAndName[];
   submission: SubmissionWithGrading;
   part?: RubricPart;
 };
