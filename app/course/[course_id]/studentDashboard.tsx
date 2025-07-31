@@ -49,7 +49,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     .order("created_at", { ascending: true });
 
   return (
-    <VStack spaceY={8} align="stretch" p={8}>
+    <VStack spaceY={0} align="stretch" p={2}>
       <Heading size="xl">Course Dashboard</Heading>
       <ResendOrgInvitation />
 

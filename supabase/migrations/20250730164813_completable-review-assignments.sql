@@ -1,6 +1,9 @@
 -- Add completed_at column to review_assignments
 alter table review_assignments add column completed_at timestamp with time zone;
 
+-- Add completed_by column to review_assignments
+alter table review_assignments add column completed_by uuid references profiles(id);
+
 -- Create trigger function to auto-complete submission reviews when all review assignments are done
 create or replace function check_and_complete_submission_review()
 returns trigger
@@ -21,7 +24,7 @@ begin
 
     -- Get the submission review and rubric info
     target_submission_review_id := NEW.submission_review_id;
-    completing_user_id := NEW.assignee_profile_id;
+    completing_user_id := NEW.completed_by;
     
     -- Get the rubric_id for this submission review
     select rubric_id into target_rubric_id
@@ -46,21 +49,45 @@ begin
     from rubric_parts 
     where rubric_id = target_rubric_id;
 
-    -- Count completed review assignments that cover all rubric parts for this submission review
-    -- We need to ensure that every rubric part has at least one completed review assignment
-    select count(distinct rarp.rubric_part_id) into completed_review_assignments_count
-    from review_assignment_rubric_parts rarp
-    join review_assignments ra on ra.id = rarp.review_assignment_id
-    where ra.submission_review_id = target_submission_review_id
-    and ra.completed_at is not null;
+    -- Check if there are any rubric parts assigned to review assignments for this submission review
+    if exists (
+        select 1 
+        from review_assignment_rubric_parts rarp
+        join review_assignments ra on ra.id = rarp.review_assignment_id
+        where ra.submission_review_id = target_submission_review_id
+    ) then
+        -- Case 1: Specific rubric parts are assigned
+        -- Count completed review assignments that cover all rubric parts for this submission review
+        -- We need to ensure that every rubric part has at least one completed review assignment
+        select count(distinct rarp.rubric_part_id) into completed_review_assignments_count
+        from review_assignment_rubric_parts rarp
+        join review_assignments ra on ra.id = rarp.review_assignment_id
+        where ra.submission_review_id = target_submission_review_id
+        and ra.completed_at is not null;
 
-    -- If all rubric parts have completed review assignments, complete the submission review
-    if completed_review_assignments_count = all_rubric_parts_count then
-        update submission_reviews 
-        set 
-            completed_at = NEW.completed_at,
-            completed_by = completing_user_id
-        where id = target_submission_review_id;
+        -- If all rubric parts have completed review assignments, complete the submission review
+        if completed_review_assignments_count = all_rubric_parts_count then
+            update submission_reviews 
+            set 
+                completed_at = NEW.completed_at,
+                completed_by = completing_user_id
+            where id = target_submission_review_id;
+        end if;
+    else
+        -- Case 2: No specific rubric parts assigned (review assignments cover entire rubric)
+        -- Check if all review assignments for this submission review are completed
+        if not exists (
+            select 1 
+            from review_assignments ra
+            where ra.submission_review_id = target_submission_review_id
+            and ra.completed_at is null
+        ) then
+            update submission_reviews 
+            set 
+                completed_at = NEW.completed_at,
+                completed_by = completing_user_id
+            where id = target_submission_review_id;
+        end if;
     end if;
 
     return NEW;
@@ -72,6 +99,36 @@ create trigger trigger_check_and_complete_submission_review
     after update on review_assignments
     for each row
     execute function check_and_complete_submission_review();
+
+-- Create trigger function to auto-complete remaining review assignments when submission review is completed
+create or replace function complete_remaining_review_assignments()
+returns trigger
+language plpgsql
+security definer
+as $$
+begin
+    -- Only proceed if completed_at was just set (not updated from one non-null value to another)
+    if OLD.completed_at is not null or NEW.completed_at is null then
+        return NEW;
+    end if;
+
+    -- Complete any remaining incomplete review assignments for this submission review
+    update review_assignments 
+    set 
+        completed_at = NEW.completed_at,
+        completed_by = NEW.completed_by
+    where submission_review_id = NEW.id
+    and completed_at is null;
+
+    return NEW;
+end;
+$$;
+
+-- Create trigger on submission_reviews table
+create trigger trigger_complete_remaining_review_assignments
+    after update on submission_reviews
+    for each row
+    execute function complete_remaining_review_assignments();
 
 
 -- Performance optimization indexes for submissions_with_grades_for_assignment view
@@ -259,4 +316,58 @@ CREATE INDEX IF NOT EXISTS "idx_assignments_class_id_due_date" ON "public"."assi
 CREATE INDEX IF NOT EXISTS "idx_assignments_covering" ON "public"."assignments" USING "btree" ("id") INCLUDE ("title", "release_date", "due_date", "class_id");
 
 ALTER POLICY "Assignees can view their own review assignments" ON "public"."review_assignments"
-  USING (  (authorizeforprofile(assignee_profile_id) AND ((release_date IS NULL) OR (timezone('utc'::text, now()) >= release_date))))
+  USING (  (authorizeforprofile(assignee_profile_id) AND ((release_date IS NULL) OR (timezone('utc'::text, now()) >= release_date))));
+
+-- Add RLS policy to allow review assignment assignees to mark their assignments as completed
+CREATE POLICY "Assignees can mark their review assignments as completed" 
+ON "public"."review_assignments" 
+FOR UPDATE 
+TO "authenticated" 
+USING (
+    -- Must be the assignee of this review assignment
+    "public"."authorizeforprofile"("assignee_profile_id")
+    AND
+    -- completed_at must currently be NULL (not already completed)
+    "completed_at" IS NULL
+) 
+WITH CHECK (
+    -- Must be the assignee of this review assignment  
+    "public"."authorizeforprofile"("assignee_profile_id")
+    AND
+    -- completed_at must be set to non-NULL (marking as completed)
+    "completed_at" IS NOT NULL
+    AND
+    -- completed_by must be set to the current user's profile
+    "public"."authorizeforprofile"("completed_by")
+);
+
+-- View for review assignment summary by assignee
+-- Provides summary information about review assignments grouped by assignment
+-- for use in instructor/grader dashboards
+CREATE OR REPLACE VIEW public.review_assignments_summary_by_assignee 
+WITH (security_invoker='true') 
+AS
+SELECT 
+  ra.assignee_profile_id,
+  ra.assignment_id,
+  ra.class_id,
+  a.title as assignment_title,
+  COUNT(*) as total_reviews,
+  COUNT(ra.completed_at) as completed_reviews,
+  COUNT(*) - COUNT(ra.completed_at) as incomplete_reviews,
+  MIN(ra.due_date) as soonest_due_date,
+  MIN(ra.release_date) as earliest_release_date
+FROM review_assignments ra
+INNER JOIN assignments a ON a.id = ra.assignment_id
+WHERE 
+  -- Only include review assignments that have been released
+  (ra.release_date IS NULL OR ra.release_date <= timezone('utc'::text, now()))
+GROUP BY 
+  ra.assignee_profile_id, 
+  ra.assignment_id, 
+  ra.class_id,
+  a.title;
+-- Index to optimize the view performance
+CREATE INDEX IF NOT EXISTS "idx_review_assignments_assignee_assignment_released" 
+ON "public"."review_assignments" 
+USING "btree" ("assignee_profile_id", "assignment_id", "release_date", "completed_at");

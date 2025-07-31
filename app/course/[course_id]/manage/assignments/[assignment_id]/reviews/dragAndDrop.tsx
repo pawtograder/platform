@@ -139,7 +139,6 @@ export default function DragAndDropExample({
   const categories: { id: string; title: string }[] = courseStaffWithConflicts?.map((staff) => {
     return { id: staff.private_profile_id, title: staff.profiles.name };
   });
-  console.log(draftReviews);
 
   const [activeId, setActiveId] = useState<string | null>(null);
 
