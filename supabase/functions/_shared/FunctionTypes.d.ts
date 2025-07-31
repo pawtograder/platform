@@ -226,3 +226,23 @@ export type AssignmentGroupInstructorCreateRequest = {
 export type RepositoryCheckRun = Omit<Database["public"]["Tables"]["repository_check_runs"]["Row"], "status"> & {
   status: CheckRunStatus;
 };
+
+export type AssignmentCreateHandoutRepoRequest = {
+  assignment_id: number;
+  class_id: number;
+};
+
+export type AssignmentCreateHandoutRepoResponse = {
+  repo_name: string;
+  org_name: string;
+};
+
+export type AssignmentCreateSolutionRepoRequest = {
+  assignment_id: number;
+  class_id: number;
+};
+
+export type AssignmentCreateSolutionRepoResponse = {
+  repo_name: string;
+  org_name: string;
+};

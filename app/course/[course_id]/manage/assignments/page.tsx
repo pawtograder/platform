@@ -24,6 +24,10 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
     .eq("class_id", Number(course_id))
     .order("due_date", { ascending: false });
 
+  if (assignments.error) {
+    console.error(assignments.error);
+  }
+
   let actions = <></>;
   actions = (
     <HStack p={2}>

@@ -14,7 +14,6 @@ import {
 import { Controller, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import { appendTimezoneOffset } from "@/lib/utils";
@@ -384,32 +383,6 @@ export default function AssignmentForm({
           </Fieldset.Content>
           <Fieldset.Content>
             <Field
-              label="Template repository"
-              helperText="A link to a repository that will be used as a template for each student's assignment"
-              errorText={errors.template_repo?.message?.toString()}
-              invalid={errors.template_repo ? true : false}
-            >
-              <Controller
-                control={control}
-                name="template_repo"
-                render={({ field }) => {
-                  return (
-                    <RepoSelector
-                      templateReposOnly
-                      name={field.name}
-                      value={field.value ? field.value : ""}
-                      onBlur={field.onBlur}
-                      onChange={(val) => {
-                        field.onChange(val);
-                      }}
-                    />
-                  );
-                }}
-              />
-            </Field>
-          </Fieldset.Content>
-          <Fieldset.Content>
-            <Field
               label={`Release Date (${course.classes.time_zone})`}
               helperText="Date that students can see the assignment"
               errorText={errors.release_date?.message?.toString()}
@@ -500,7 +473,7 @@ export default function AssignmentForm({
               </Checkbox.Root>
             </Field>
           </Fieldset.Content>
-          <Fieldset.Content>
+          {/* <Fieldset.Content>
             <Field
               label="Description URL"
               helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"
@@ -523,7 +496,7 @@ export default function AssignmentForm({
                 })}
               />
             </Field>
-          </Fieldset.Content>
+          </Fieldset.Content> */}
           <GroupConfigurationSubform form={form} timezone={timezone} />
           <SelfEvaluationSubform form={form} />
           <Fieldset.Content>

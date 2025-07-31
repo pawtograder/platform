@@ -19,6 +19,7 @@ import { formatInTimeZone } from "date-fns-tz";
 
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 export default async function StudentDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase
@@ -48,8 +49,10 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     .order("created_at", { ascending: true });
 
   return (
-    <VStack spaceY={8} align="stretch" p={8}>
+    <VStack spaceY={0} align="stretch" p={2}>
       <Heading size="xl">Course Dashboard</Heading>
+      <ResendOrgInvitation />
+
       <StudentLabSection />
       <Box>
         <Heading size="lg" mb={4}>

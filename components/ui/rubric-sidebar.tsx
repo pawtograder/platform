@@ -956,7 +956,13 @@ export function RubricCheckGlobal({
               </VStack>
             )}
             {!hasOptions && format == "checkbox" && (
-              <VStack align="flex-start" w="100%">
+              <VStack
+                align="flex-start"
+                w="100%"
+                borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+                borderWidth={gradingIsRequired ? "1px" : "0px"}
+                borderRadius="md"
+              >
                 <HStack justify="space-between" w="100%">
                   <Checkbox
                     disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
@@ -1008,7 +1014,13 @@ export function RubricCheckGlobal({
               </VStack>
             )}
             {!hasOptions && format == "radio" && (
-              <VStack align="flex-start" w="100%">
+              <VStack
+                align="flex-start"
+                w="100%"
+                borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+                borderWidth={gradingIsRequired ? "1px" : "0px"}
+                borderRadius="md"
+              >
                 <HStack justify="space-between" w="100%">
                   <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
                     <Field.Label>
@@ -1169,13 +1181,11 @@ function SubmissionCommentForm({
             ...artifactInfo
           };
           onSuccess();
-          console.log("Creating comment", values);
           if (check.is_annotation) {
             throw new Error("Not implemented");
           } else {
             await submissionController.submission_comments.create(values);
           }
-          console.log("Comment created");
         }}
         defaultSingleLine={true}
         allowEmptyMessage={!check.is_comment_required}
