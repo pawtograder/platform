@@ -9,6 +9,7 @@ import "katex/dist/katex.min.css";
 import { MDEditorProps } from "@uiw/react-md-editor";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
+import { isTextFile, getLanguageFromFile } from "@/lib/utils";
 // https://github.com/uiwjs/react-md-editor/issues/83
 
 /**
@@ -21,6 +22,12 @@ type ExtendedMdEditorProps = MDEditorProps & {
    * @default "discussion"
    */
   uploadFolder?: string;
+  /**
+   * Maximum number of lines for code files to be pasted as content.
+   * Files exceeding this limit will be uploaded as attachments instead.
+   * @default 300
+   */
+  maxCodeLines?: number;
 };
 
 const insertToTextArea = (intsertString: string) => {
@@ -46,218 +53,12 @@ const insertToTextArea = (intsertString: string) => {
 };
 
 const MdEditor = (props: ExtendedMdEditorProps) => {
-  const { uploadFolder = "discussion", onChange, ...mdEditorProps } = props;
+  const { uploadFolder = "discussion", maxCodeLines = 300, onChange, ...mdEditorProps } = props;
   if (!onChange) {
     throw new Error("onChange is required");
   }
   const supabase = createClient();
   const { course_id } = useParams();
-
-  /**
-   * Helper function to detect if a file is a text/code file
-   */
-  const isTextFile = useCallback((file: File): boolean => {
-    // Check MIME type first
-    if (file.type.startsWith("text/")) {
-      return true;
-    }
-
-    // Common code file extensions that might not have proper MIME types
-    const textExtensions = [
-      // Programming languages
-      ".js",
-      ".jsx",
-      ".ts",
-      ".tsx",
-      ".py",
-      ".java",
-      ".cpp",
-      ".c",
-      ".h",
-      ".cs",
-      ".php",
-      ".rb",
-      ".go",
-      ".rs",
-      ".kt",
-      ".swift",
-      ".scala",
-      ".clj",
-      ".hs",
-      ".ml",
-      ".fs",
-      ".elm",
-      ".dart",
-      ".lua",
-      ".perl",
-      ".pl",
-      ".r",
-      ".m",
-      ".vb",
-      ".pas",
-      ".ada",
-      ".asm",
-      ".s",
-      ".sh",
-      ".bat",
-      ".ps1",
-      ".fish",
-      ".zsh",
-      ".bash",
-      // Web technologies
-      ".html",
-      ".htm",
-      ".css",
-      ".scss",
-      ".sass",
-      ".less",
-      ".xml",
-      ".xhtml",
-      ".svg",
-      ".vue",
-      ".svelte",
-      // Data formats
-      ".json",
-      ".yaml",
-      ".yml",
-      ".toml",
-      ".ini",
-      ".cfg",
-      ".conf",
-      ".properties",
-      ".env",
-      // Documentation
-      ".md",
-      ".txt",
-      ".rst",
-      ".adoc",
-      ".tex",
-      ".rtf",
-      // Configuration files
-      ".gitignore",
-      ".gitattributes",
-      ".editorconfig",
-      ".prettierrc",
-      ".eslintrc",
-      ".babelrc",
-      ".tsconfig",
-      ".jsconfig",
-      ".dockerfile",
-      ".dockerignore",
-      ".makefile",
-      ".cmake",
-      ".gradle",
-      ".maven",
-      ".ant",
-      // Database
-      ".sql",
-      ".mongodb",
-      ".cql",
-      ".cypher",
-      // Other
-      ".log",
-      ".diff",
-      ".patch",
-      ".lock"
-    ];
-
-    const extension = "." + file.name.split(".").pop()?.toLowerCase();
-    return textExtensions.includes(extension);
-  }, []);
-
-  /**
-   * Helper function to get language identifier for syntax highlighting
-   */
-  const getLanguageFromFile = useCallback((fileName: string): string => {
-    const extension = fileName.split(".").pop()?.toLowerCase();
-
-    const languageMap: Record<string, string> = {
-      // JavaScript/TypeScript family
-      js: "javascript",
-      jsx: "javascript",
-      ts: "typescript",
-      tsx: "typescript",
-      // Web technologies
-      html: "html",
-      htm: "html",
-      css: "css",
-      scss: "scss",
-      sass: "sass",
-      less: "less",
-      xml: "xml",
-      svg: "xml",
-      vue: "vue",
-      svelte: "svelte",
-      // Programming languages
-      py: "python",
-      java: "java",
-      cpp: "cpp",
-      c: "c",
-      h: "c",
-      cs: "csharp",
-      php: "php",
-      rb: "ruby",
-      go: "go",
-      rs: "rust",
-      kt: "kotlin",
-      swift: "swift",
-      scala: "scala",
-      clj: "clojure",
-      hs: "haskell",
-      ml: "ocaml",
-      fs: "fsharp",
-      elm: "elm",
-      dart: "dart",
-      lua: "lua",
-      perl: "perl",
-      pl: "perl",
-      r: "r",
-      m: "matlab",
-      vb: "vbnet",
-      pas: "pascal",
-      ada: "ada",
-      asm: "assembly",
-      s: "assembly",
-      // Shell scripts
-      sh: "bash",
-      bash: "bash",
-      zsh: "bash",
-      fish: "bash",
-      bat: "batch",
-      ps1: "powershell",
-      // Data formats
-      json: "json",
-      yaml: "yaml",
-      yml: "yaml",
-      toml: "toml",
-      ini: "ini",
-      cfg: "ini",
-      conf: "ini",
-      properties: "properties",
-      env: "bash",
-      // Documentation
-      md: "markdown",
-      rst: "rst",
-      tex: "latex",
-      // Database
-      sql: "sql",
-      mongodb: "javascript",
-      cql: "sql",
-      cypher: "cypher",
-      // Configuration
-      dockerfile: "dockerfile",
-      makefile: "makefile",
-      cmake: "cmake",
-      gradle: "gradle",
-      // Other
-      diff: "diff",
-      patch: "diff",
-      log: "text",
-      txt: "text"
-    };
-
-    return languageMap[extension || ""] || "text";
-  }, []);
 
   const onImagePasted = useCallback(
     async (dataTransfer: DataTransfer) => {
@@ -289,13 +90,26 @@ const MdEditor = (props: ExtendedMdEditorProps) => {
         if (isTextFile(file)) {
           try {
             const content = await file.text();
-            const language = getLanguageFromFile(file.name);
-            const codeBlock = `**${file.name}**\n\n\`\`\`${language}\n${content}\n\`\`\``;
+            const lineCount = content.split("\n").length;
 
-            // Insert the code block into the textarea
-            const insertedContent = insertToTextArea(codeBlock);
-            if (insertedContent) {
-              onChange(insertedContent);
+            // If file has too many lines, upload as file instead of pasting content
+            if (lineCount > maxCodeLines) {
+              const url = await fileUpload(file);
+              const insertedMarkdown = `[${file.name}](${url})`;
+              const insertedContent = insertToTextArea(insertedMarkdown);
+              if (insertedContent) {
+                onChange(insertedContent);
+              }
+            } else {
+              // File is small enough, paste as code block
+              const language = getLanguageFromFile(file.name);
+              const codeBlock = `**${file.name}**\n\n\`\`\`${language}\n${content}\n\`\`\``;
+
+              // Insert the code block into the textarea
+              const insertedContent = insertToTextArea(codeBlock);
+              if (insertedContent) {
+                onChange(insertedContent);
+              }
             }
           } catch {
             // Fall back to regular file upload if reading fails
@@ -318,7 +132,7 @@ const MdEditor = (props: ExtendedMdEditorProps) => {
         }
       }
     },
-    [supabase, onChange, course_id, uploadFolder, isTextFile, getLanguageFromFile]
+    [supabase, onChange, course_id, uploadFolder, maxCodeLines]
   );
 
   return (
