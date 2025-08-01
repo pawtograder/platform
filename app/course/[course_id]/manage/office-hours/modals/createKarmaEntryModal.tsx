@@ -80,7 +80,7 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
         created_by_id: user.id,
         last_activity_at: now
       });
-      
+
       toaster.success({
         title: "Success",
         description: "Student karma entry created successfully"

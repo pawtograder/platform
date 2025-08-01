@@ -83,7 +83,9 @@ export class OfficeHoursRealTimeController {
    * Initialize global channels (help_queues and class staff channel)
    */
   private async _initializeGlobalChannels() {
-    console.log(`Initializing global channels for class ${this._classId} with profile ${this._profileId} (Staff: ${this._isStaff})`);
+    console.log(
+      `Initializing global channels for class ${this._classId} with profile ${this._profileId} (Staff: ${this._isStaff})`
+    );
     const accessToken = await this._client.auth.getSession();
     await this._client.realtime.setAuth(accessToken.data.session?.access_token);
 

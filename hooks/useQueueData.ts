@@ -1,5 +1,10 @@
 import { useMemo } from "react";
-import { useHelpQueues, useHelpRequests, useHelpRequestStudents, useConnectionStatus } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpQueues,
+  useHelpRequests,
+  useHelpRequestStudents,
+  useConnectionStatus
+} from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 interface UseQueueDataParams {
@@ -18,7 +23,7 @@ export function useQueueData({ courseId, queueId }: UseQueueDataParams) {
 
   // Find the specific help queue by ID
   const helpQueue = useMemo(() => {
-    return allHelpQueues?.find(queue => queue.id === queueId) || null;
+    return allHelpQueues?.find((queue) => queue.id === queueId) || null;
   }, [allHelpQueues, queueId]);
 
   // Loading state - true if any required data is missing
@@ -28,9 +33,8 @@ export function useQueueData({ courseId, queueId }: UseQueueDataParams) {
   const queueRequests = useMemo(() => {
     if (!allHelpRequests) return [];
     return allHelpRequests
-      .filter((request) =>
-        request.help_queue === queueId &&
-        (request.status === "open" || request.status === "in_progress")
+      .filter(
+        (request) => request.help_queue === queueId && (request.status === "open" || request.status === "in_progress")
       )
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [allHelpRequests, queueId]);

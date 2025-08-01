@@ -76,9 +76,7 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
 
   // Get student data using individual hooks
   const allHelpRequestStudents = useHelpRequestStudents();
-  const helpRequestStudentData = allHelpRequestStudents.filter(
-    (student) => student.help_request_id === request.id
-  );
+  const helpRequestStudentData = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -632,9 +630,7 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
                   </Text>
                   <Stack spaceY={2}>
                     {referencedFiles.data.map((file) => {
-                      const fileRef = currentFileReferences?.find(
-                        (ref) => ref.submission_file_id === file.id
-                      );
+                      const fileRef = currentFileReferences?.find((ref) => ref.submission_file_id === file.id);
                       return (
                         <HStack key={fileRef?.id}>
                           <Icon as={BsFileEarmark} color="fg.muted" />
@@ -688,9 +684,7 @@ const HelpRequestStudents = ({
 
   // Get student associations for activity logging
   const allHelpRequestStudents = useHelpRequestStudents();
-  const helpRequestStudentData = allHelpRequestStudents.filter(
-    (student) => student.help_request_id === request.id
-  );
+  const helpRequestStudentData = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
@@ -854,9 +848,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
   // Get data using individual hooks
   const allHelpRequestStudents = useHelpRequestStudents();
-  const helpRequestStudentData = allHelpRequestStudents.filter(
-    (student) => student.help_request_id === request.id
-  );
+  const helpRequestStudentData = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
   const helpRequestMessages = useHelpRequestMessages(request.id);
 
   // Get table controllers from office hours controller

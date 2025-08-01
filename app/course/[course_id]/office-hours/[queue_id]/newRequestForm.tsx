@@ -93,7 +93,7 @@ export default function HelpRequestForm() {
             description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
           });
         }
-      },
+      }
     }
   });
 
@@ -105,7 +105,7 @@ export default function HelpRequestForm() {
 
   // Get available help queues using individual hook
   const allHelpQueues = useHelpQueues();
-  const helpQueues = allHelpQueues.filter(queue => queue.available);
+  const helpQueues = allHelpQueues.filter((queue) => queue.available);
   const isLoadingQueues = false; // Individual hooks don't expose loading state
   const connectionError = null; // Will be handled by connection status if needed
 
@@ -313,22 +313,20 @@ export default function HelpRequestForm() {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { _intended_privacy, file_references, ...helpRequestData } = values;
 
-        // Store the intended privacy setting for later use
-        const intendedPrivacy = selectedSubmissionId ? true : values.is_private || false;
         // Add required fields that may not be set in the form
         const finalData = {
           ...helpRequestData,
           assignee: null,
           class_id: Number.parseInt(course_id as string),
+          created_by: private_profile_id, // Set the created_by field
           // Ensure these fields have proper defaults
           status: "open" as const,
           is_video_live: false,
-          // WORKAROUND: Always create as public first to avoid RLS issues
-          is_private: false
+          is_private: values.is_private || false
         };
 
         try {
-          const createdHelpRequest = await helpRequests.create(finalData as HelpRequest);
+          const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
           // Get current selected students from ref to avoid closure issues
           const currentSelectedStudents = selectedStudentsRef.current;
 
@@ -377,28 +375,6 @@ export default function HelpRequestForm() {
               description: "No students selected for help request"
             });
             throw new Error("No students selected for help request");
-          }
-
-          // Check if we need to update the help request to private
-          if (intendedPrivacy) {
-            try {
-              await helpRequests.update(createdHelpRequest.id, { is_private: true });
-              toaster.success({
-                title: "Success",
-                description: "Private help request successfully created."
-              });
-            } catch {
-              try {
-                await helpRequests.delete(createdHelpRequest.id);
-              } catch {
-                throw new Error("Failed to update help request to private");
-              }
-              toaster.error({
-                title: "Error",
-                description:
-                  "Failed to update help request to private, please manually delete the request to avoid leaking private information."
-              });
-            }
           }
 
           // Create file references if any
@@ -473,7 +449,6 @@ export default function HelpRequestForm() {
       userActiveRequests,
       getValues,
       selectedStudents,
-      selectedSubmissionId,
       helpQueues,
       helpRequestFileReferences,
       helpRequests,
@@ -482,7 +457,7 @@ export default function HelpRequestForm() {
       router,
       reset,
       submissions?.data,
-      studentHelpActivity,
+      studentHelpActivity
     ]
   );
 
@@ -515,11 +490,11 @@ export default function HelpRequestForm() {
   const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
   const wouldConflict = Boolean(
     selectedHelpQueue &&
-    isCreatingSoloRequest &&
-    userActiveRequests.some(
-      (request) =>
-        request.help_queue === selectedHelpQueue && request.student_count === 1 && request.is_private === is_private
-    )
+      isCreatingSoloRequest &&
+      userActiveRequests.some(
+        (request) =>
+          request.help_queue === selectedHelpQueue && request.student_count === 1 && request.is_private === is_private
+      )
   );
 
   return (
@@ -564,9 +539,9 @@ export default function HelpRequestForm() {
                   value={
                     field.value
                       ? ({
-                        label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
-                        value: field.value.toString()
-                      } as SelectOption)
+                          label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
+                          value: field.value.toString()
+                        } as SelectOption)
                       : null
                   }
                   onChange={(option: SelectOption | null) => {
@@ -610,9 +585,9 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                          label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
-                          value: field.value.toString()
-                        } as SelectOption)
+                            label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
+                            value: field.value.toString()
+                          } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {
@@ -680,9 +655,9 @@ export default function HelpRequestForm() {
               value={
                 selectedAssignmentId
                   ? ({
-                    label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
-                    value: selectedAssignmentId.toString()
-                  } as SelectOption)
+                      label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
+                      value: selectedAssignmentId.toString()
+                    } as SelectOption)
                   : null
               }
               onChange={(option: SelectOption | null) => {
@@ -722,10 +697,10 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                          label:
-                            submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
-                          value: field.value.toString()
-                        } as SelectOption)
+                            label:
+                              submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
+                            value: field.value.toString()
+                          } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {
@@ -898,9 +873,9 @@ export default function HelpRequestForm() {
                   value={
                     field.value
                       ? {
-                        label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
-                        value: field.value
-                      }
+                          label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
+                          value: field.value
+                        }
                       : null
                   }
                   onChange={(option: { label: string; value: string } | null) => {
@@ -933,11 +908,11 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                          label:
-                            userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
-                            "..." || "",
-                          value: field.value.toString()
-                        } as SelectOption)
+                            label:
+                              userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
+                                "..." || "",
+                            value: field.value.toString()
+                          } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {

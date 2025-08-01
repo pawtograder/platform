@@ -19,7 +19,6 @@ import EditHelpQueueModal from "./modals/editHelpQueueModal";
  * Uses real-time updates to show changes made by other instructors.
  */
 export default function HelpQueueManagement() {
-
   // Modal management
   const createModal = useModalManager();
   const editModal = useModalManager<HelpQueue>();

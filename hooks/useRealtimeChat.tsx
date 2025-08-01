@@ -4,11 +4,7 @@ import { useCallback, useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { 
-  useOfficeHoursController, 
-  useHelpRequestMessages, 
-  useHelpRequestReadReceipts 
-} from "./useOfficeHoursRealtime";
+import { useOfficeHoursController, useHelpRequestMessages, useHelpRequestReadReceipts } from "./useOfficeHoursRealtime";
 import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
 
 export interface UseRealtimeChatOptions {
@@ -21,16 +17,16 @@ export interface UseRealtimeChatReturn {
   // Chat functionality
   sendMessage: (content: string, replyToMessageId?: number | null) => Promise<void>;
   markMessageAsRead: (messageId: number, messageAuthorId?: string) => Promise<void>;
-  
+
   // Connection status
   isConnected: boolean;
   isValidating: boolean;
   isAuthorized: boolean;
   connectionError: string | null;
-  
+
   // Read receipts (excluding current user)
   readReceipts: HelpRequestMessageReadReceipt[];
-  
+
   // Loading state
   isLoading: boolean;
 }
@@ -38,7 +34,7 @@ export interface UseRealtimeChatReturn {
 /**
  * Hook for real-time chat functionality in help requests.
  * Provides message sending, read receipt management, and connection status.
- * 
+ *
  * This hook replaces the chat-specific functionality from useOfficeHoursRealtime.
  */
 export function useRealtimeChat({
@@ -49,24 +45,19 @@ export function useRealtimeChat({
   const controller = useOfficeHoursController();
   const { user } = useAuthState();
   const { private_profile_id } = useClassProfiles();
-  
+
   // Get messages and read receipts using individual hooks
   const messages = useHelpRequestMessages(helpRequestId);
   const allReadReceipts = useHelpRequestReadReceipts();
-  
+
   // Filter read receipts for this help request and exclude current user
   const readReceipts = useMemo(() => {
-    const messageIds = messages
-      .filter(msg => msg.help_request_id === helpRequestId)
-      .map(msg => msg.id);
-    
-    return allReadReceipts.filter(receipt => 
-      messageIds.includes(receipt.message_id) && 
-      receipt.viewer_id !== private_profile_id
+    const messageIds = messages.filter((msg) => msg.help_request_id === helpRequestId).map((msg) => msg.id);
+
+    return allReadReceipts.filter(
+      (receipt) => messageIds.includes(receipt.message_id) && receipt.viewer_id !== private_profile_id
     );
   }, [allReadReceipts, messages, helpRequestId, private_profile_id]);
-
-
 
   const { helpRequestMessages, helpRequestReadReceipts } = controller;
 
@@ -143,8 +134,9 @@ export function useRealtimeChat({
         await helpRequestReadReceipts.create({
           message_id: messageId,
           viewer_id: private_profile_id,
-          class_id: classId
-        });
+          class_id: classId,
+          help_request_id: helpRequestId
+        } as unknown as HelpRequestMessageReadReceipt);
         console.log(`Successfully created read receipt for message ${messageId}`);
       } catch (error) {
         console.error(`Failed to create read receipt for message ${messageId}:`, error);
@@ -158,7 +150,11 @@ export function useRealtimeChat({
   );
 
   return {
-    sendMessage: enableChat ? sendMessage : async () => { throw new Error("Chat not enabled"); },
+    sendMessage: enableChat
+      ? sendMessage
+      : async () => {
+          throw new Error("Chat not enabled");
+        },
     markMessageAsRead: enableChat ? markMessageAsRead : async () => {},
     isConnected,
     isValidating,

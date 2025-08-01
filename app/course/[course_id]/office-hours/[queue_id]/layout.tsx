@@ -16,11 +16,12 @@ export default function QueueLayout({ children }: LayoutProps) {
   const pathname = usePathname();
   const helpQueue = useHelpQueue(Number(queue_id));
 
-  const { queueRequests, userRequests, similarQuestions, resolvedRequests, isLoading, connectionStatus } =
-    useQueueData({
+  const { queueRequests, userRequests, similarQuestions, resolvedRequests, isLoading, connectionStatus } = useQueueData(
+    {
       courseId: Number(course_id),
       queueId: Number(queue_id)
-    });
+    }
+  );
 
   if (isLoading) {
     return <div>Loading...</div>;
@@ -38,7 +39,8 @@ export default function QueueLayout({ children }: LayoutProps) {
 
   // Get user's active requests in this specific queue
   const activeUserRequests = userRequests.filter(
-    (request) => request.help_queue === Number(queue_id) && (request.status === "open" || request.status === "in_progress")
+    (request) =>
+      request.help_queue === Number(queue_id) && (request.status === "open" || request.status === "in_progress")
   );
 
   // Create navigation items for user's requests with queue positions

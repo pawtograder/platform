@@ -30,10 +30,10 @@ export default function OfficeHoursPage() {
   const { connectionStatus, connectionError, isLoading } = useConnectionStatus();
 
   // Filter data based on requirements
-  const helpQueues = allHelpQueues.filter(queue => queue.available);
-  const helpQueueAssignments = allHelpQueueAssignments.filter(assignment => assignment.is_active);
-  const activeHelpRequests = allHelpRequests.filter(request =>
-    request.status === "open" || request.status === "in_progress"
+  const helpQueues = allHelpQueues.filter((queue) => queue.available);
+  const helpQueueAssignments = allHelpQueueAssignments.filter((assignment) => assignment.is_active);
+  const activeHelpRequests = allHelpRequests.filter(
+    (request) => request.status === "open" || request.status === "in_progress"
   );
 
   // Memoize computation-heavy operations with proper dependencies

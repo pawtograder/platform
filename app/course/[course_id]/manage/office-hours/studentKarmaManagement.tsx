@@ -40,11 +40,7 @@ export default function StudentKarmaManagement() {
   const { mutate: deleteKarmaEntry } = useDelete();
 
   // Set up real-time connection status monitoring
-  const {
-    isConnected,
-    connectionStatus,
-    isLoading: realtimeLoading
-  } = useConnectionStatus();
+  const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
 
   // Get all student profiles from the class
   const studentProfiles = useStudentRoster();

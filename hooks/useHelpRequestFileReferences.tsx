@@ -7,7 +7,7 @@ import type { HelpRequestFileReference } from "@/utils/supabase/DatabaseTypes";
 export interface UseHelpRequestFileReferencesReturn {
   // File references data
   fileReferences: HelpRequestFileReference[];
-  
+
   // Loading state
   isLoading: boolean;
 }
@@ -15,7 +15,7 @@ export interface UseHelpRequestFileReferencesReturn {
 /**
  * Hook for accessing help request file references with real-time updates.
  * Can be used to get all file references or filter by help request ID.
- * 
+ *
  * This hook replaces the file reference functionality from useOfficeHoursRealtime.
  */
 export function useHelpRequestFileReferences(helpRequestId?: number): UseHelpRequestFileReferencesReturn {
@@ -35,7 +35,7 @@ export function useHelpRequestFileReferences(helpRequestId?: number): UseHelpReq
     if (!helpRequestId) {
       return allFileReferences;
     }
-    return allFileReferences.filter(ref => ref.help_request_id === helpRequestId);
+    return allFileReferences.filter((ref) => ref.help_request_id === helpRequestId);
   }, [allFileReferences, helpRequestId]);
 
   return {

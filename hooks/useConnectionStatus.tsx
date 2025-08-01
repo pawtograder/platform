@@ -7,13 +7,13 @@ import type { OfficeHoursConnectionStatus } from "@/utils/supabase/DatabaseTypes
 export interface UseConnectionStatusReturn {
   // Connection states
   isConnected: boolean;
-  isValidating: boolean; 
+  isValidating: boolean;
   isAuthorized: boolean;
   connectionError: string | null;
-  
+
   // Detailed status
   connectionStatus: OfficeHoursConnectionStatus | null;
-  
+
   // Loading state
   isLoading: boolean;
 }
@@ -21,7 +21,7 @@ export interface UseConnectionStatusReturn {
 /**
  * Hook for monitoring real-time connection status in office hours functionality.
  * Provides simplified connection state booleans and detailed status information.
- * 
+ *
  * This hook replaces the connection status functionality from useOfficeHoursRealtime.
  */
 export function useConnectionStatus(): UseConnectionStatusReturn {

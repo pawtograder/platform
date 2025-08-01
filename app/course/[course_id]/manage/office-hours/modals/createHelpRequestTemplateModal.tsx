@@ -80,7 +80,7 @@ export default function CreateHelpRequestTemplateModal({
         created_by_id: user.id,
         usage_count: 0
       });
-      
+
       toaster.success({
         title: "Success",
         description: "Help request template created successfully"

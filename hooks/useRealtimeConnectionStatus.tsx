@@ -204,13 +204,12 @@ export function useAutomaticRealtimeConnectionStatus(): CombinedConnectionStatus
 
   // Combine class and office hours connection status manually
   const combinedStatus: CombinedConnectionStatus = {
-    overall: classConnectionStatus?.overall === "connected" &&
-             officeHoursConnectionStatus?.overall === "connected"
-             ? "connected"
-             : classConnectionStatus?.overall === "disconnected" ||
-               officeHoursConnectionStatus?.overall === "disconnected"
-             ? "disconnected"
-             : "partial",
+    overall:
+      classConnectionStatus?.overall === "connected" && officeHoursConnectionStatus?.overall === "connected"
+        ? "connected"
+        : classConnectionStatus?.overall === "disconnected" || officeHoursConnectionStatus?.overall === "disconnected"
+          ? "disconnected"
+          : "partial",
     channels: [
       ...(classConnectionStatus?.channels || []),
       // Add a synthetic office hours channel status

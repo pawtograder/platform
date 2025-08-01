@@ -125,19 +125,12 @@ export const RealtimeChat = ({
   });
 
   // Use the new realtime chat hook for chat functionality
-  const {
-    sendMessage,
-    markMessageAsRead,
-    isConnected,
-    isValidating,
-    isAuthorized,
-    connectionError,
-    readReceipts
-  } = useRealtimeChat({
-    helpRequestId: helpRequest.id,
-    classId: helpRequest.class_id,
-    enableChat: true
-  });
+  const { sendMessage, markMessageAsRead, isConnected, isValidating, isAuthorized, connectionError, readReceipts } =
+    useRealtimeChat({
+      helpRequestId: helpRequest.id,
+      classId: helpRequest.class_id,
+      enableChat: true
+    });
 
   // Helper function to get timestamp from either message type
   const getMessageTimestamp = (msg: UnifiedMessage): string => {

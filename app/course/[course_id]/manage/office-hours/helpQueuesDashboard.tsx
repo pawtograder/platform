@@ -80,7 +80,7 @@ export default function HelpQueuesDashboard() {
         ended_at: null,
         max_concurrent_students: 1
       });
-      
+
       toaster.success({
         title: "Success",
         description: "Started working on queue"
@@ -99,7 +99,7 @@ export default function HelpQueuesDashboard() {
         is_active: false,
         ended_at: new Date().toISOString()
       });
-      
+
       toaster.success({
         title: "Success",
         description: "Stopped working on queue"

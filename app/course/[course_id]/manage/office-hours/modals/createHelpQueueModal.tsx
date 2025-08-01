@@ -73,7 +73,7 @@ export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: Cre
         closing_at: data.closing_at || null,
         depth: 0 // Initialize with 0 depth
       });
-      
+
       toaster.success({
         title: "Success",
         description: "Help queue created successfully"

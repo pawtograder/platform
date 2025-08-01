@@ -110,7 +110,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
         is_permanent: data.action_type === "permanent_ban",
         expires_at
       });
-      
+
       toaster.success({
         title: "Success",
         description: "Moderation action created successfully"
