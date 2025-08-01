@@ -10,7 +10,7 @@ import useModalManager from "@/hooks/useModalManager";
 import useTags from "@/hooks/useTags";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Checkbox,
@@ -30,7 +30,7 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { type ColumnDef, flexRender } from "@tanstack/react-table";
 import { useCustomTable } from "@/hooks/useCustomTable";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
@@ -63,11 +63,14 @@ function EnrollmentsTable() {
   const [invalidationTrigger, setInvalidationTrigger] = useState(0);
   const supabase = createClient();
 
-  const deleteUserRole = async (userRoleId: string) => {
-    const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
-    if (error) throw error;
-    setInvalidationTrigger((prev) => prev + 1);
-  };
+  const deleteUserRole = useCallback(
+    async (userRoleId: string) => {
+      const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
+      if (error) throw error;
+      setInvalidationTrigger((prev) => prev + 1);
+    },
+    [supabase, setInvalidationTrigger]
+  );
 
   const [isDeletingUserRole, setIsDeletingUserRole] = useState(false);
   // full list of tags with profiles and courses
@@ -188,7 +191,7 @@ function EnrollmentsTable() {
         header: "Class ID",
         enableColumnFilter: true,
         enableHiding: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           return String(row.original.class_id) === String(filterValue);
         }
       },
@@ -204,7 +207,7 @@ function EnrollmentsTable() {
           }
           return "N/A";
         },
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const name = row.original.profiles?.name;
           if (!name) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -216,7 +219,7 @@ function EnrollmentsTable() {
         accessorKey: "users.email",
         header: "Email",
         enableColumnFilter: true,
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const email = row.original.users?.email;
           if (!email) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -227,7 +230,7 @@ function EnrollmentsTable() {
         id: "role",
         header: "Role",
         accessorKey: "role",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const role = row.original.role;
           if (!role) return false;
           const filterString = String(filterValue).toLowerCase();
@@ -238,7 +241,7 @@ function EnrollmentsTable() {
         id: "github_username",
         header: "Github Username",
         accessorKey: "users.github_username",
-        filterFn: (row, id, filterValue) => {
+        filterFn: (row, columnId: string, filterValue) => {
           const username = row.original.users?.github_username;
           if (!username) return false;
           const filterString = String(filterValue).toLowerCase();

@@ -7,11 +7,10 @@ import { redirect } from "next/navigation";
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.verifyOtp({
+  const { error } = await supabase.auth.verifyOtp({
     token_hash: token_hash as string,
     type: "email"
   });
-  console.log(data);
   if (error) {
     return encodedRedirect("error", "/auth/confirm", error.message);
   }
@@ -94,7 +93,7 @@ export const signInOrSignUpWithEmailAction = async (data: FormData) => {
 export const resetPasswordAction = async (email: string) => {
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/reset-password`
+    redirectTo: `${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ? "https://" + process.env["VERCEL_PROJECT_PRODUCTION_URL"] : process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/reset-password`
   });
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message, { email });
@@ -117,7 +116,7 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
     email,
     password,
     options: {
-      emailRedirectTo: `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/`
+      emailRedirectTo: `${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ? "https://" + process.env["VERCEL_PROJECT_PRODUCTION_URL"] : process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/`
     }
   });
   if (error) {
@@ -137,7 +136,7 @@ export const signUpWithEmailAction = async (email: string, password: string) => 
 export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
-  const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
+  const redirectTo = `${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ? "https://" + process.env["VERCEL_PROJECT_PRODUCTION_URL"] : process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/auth/callback`;
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
     options: { scopes: "email", redirectTo }
@@ -147,6 +146,7 @@ export const signInWithMicrosoftAction = async () => {
     return encodedRedirect("error", "/sign-in", error.message);
   }
   if (data.url) {
+    // eslint-disable-next-line no-console
     console.log(`Redirecting to ${data.url}`);
     return redirect(data.url);
   }
@@ -167,10 +167,14 @@ export const linkGitHubAction = async () => {
   if (!session) {
     return redirect("/sign-in");
   }
+  // eslint-disable-next-line no-console
   console.log("Linking GitHub");
+  // eslint-disable-next-line no-console
   console.log(session);
   const { data, error } = await supabase.auth.linkIdentity({ provider: "github" });
+  // eslint-disable-next-line no-console
   console.log(data);
+  // eslint-disable-next-line no-console
   console.log(error);
   if (data.url) return redirect(data.url);
 };

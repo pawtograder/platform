@@ -20,10 +20,11 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import Link from "next/link";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { getPrivateProfileId } from "@/lib/ssrUtils";
+import { toaster } from "@/components/ui/toaster";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -99,7 +100,12 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .limit(10);
 
   if (assignmentsError) {
-    console.error(assignmentsError);
+    toaster.error({
+      title: "Error",
+      description:
+        "Failed to fetch assignments. Error: " +
+        (assignmentsError instanceof Error ? assignmentsError.message : "Unknown error")
+    });
   }
 
   // Get upcoming assignments for comparison

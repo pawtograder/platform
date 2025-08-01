@@ -6,7 +6,7 @@ import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import useTags from "@/hooks/useTags";
-import { RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
+import type { RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
@@ -23,13 +23,18 @@ import {
 import { TZDate } from "@date-fns/tz";
 import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
 import { createClient } from "@/utils/supabase/client";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa";
-import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
+import { type AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
-import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import type {
+  DraftReviewAssignment,
+  RubricWithParts,
+  SubmissionWithGrading,
+  UserRoleWithConflictsAndName
+} from "../page";
 
 // Main Page Component
 export default function ReassignGradingPage() {
@@ -148,7 +153,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
     }
     return shuffled;
   }
@@ -359,7 +364,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     const groups = splitIntoGroups(users, selectedRubric?.rubric_parts.length);
     const returnResult = [];
     for (let x = 0; x < groups.length; x += 1) {
-      const result = new TAAssignmentSolver(groups[x], submissionsToDo, historicalWorkload).solve();
+      const result = new TAAssignmentSolver(groups[x]!, submissionsToDo, historicalWorkload).solve();
       if (result.error) {
         toaster.error({ title: "Error drafting reviews", description: result.error });
       }
@@ -399,7 +404,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     const returnResult = [];
 
     for (let x = 0; x < groups.length && x < selectedParts.length; x += 1) {
-      const result = new TAAssignmentSolver(groups[x], submissionsToDo, historicalWorkload).solve();
+      const result = new TAAssignmentSolver(groups[x]!, submissionsToDo, historicalWorkload).solve();
       if (result.error) {
         toaster.error({ title: "Error drafting reviews", description: result.error });
       }
@@ -701,7 +706,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
     async (review: DraftReviewAssignment) => {
       let submissionReviewId: number;
       if (review.submission.submission_reviews.length > 0) {
-        submissionReviewId = review.submission.submission_reviews[0].id;
+        submissionReviewId = review.submission.submission_reviews[0]!.id;
       } else {
         const { data: rev } = await mutateAsync({
           resource: "submission_reviews",
@@ -972,16 +977,16 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                   if (value) {
                     // Treat inputted date as course timezone regardless of user location
                     const [date, time] = value.split("T");
-                    const [year, month, day] = date.split("-");
-                    const [hour, minute] = time.split(":");
+                    const [year, month, day] = date!.split("-");
+                    const [hour, minute] = time!.split(":");
 
                     // Create TZDate with these exact values in course timezone
                     const tzDate = new TZDate(
-                      parseInt(year),
-                      parseInt(month) - 1,
-                      parseInt(day),
-                      parseInt(hour),
-                      parseInt(minute),
+                      parseInt(year!),
+                      parseInt(month!) - 1,
+                      parseInt(day!),
+                      parseInt(hour!),
+                      parseInt(minute!),
                       0,
                       0,
                       course.classes.time_zone ?? "America/New_York"

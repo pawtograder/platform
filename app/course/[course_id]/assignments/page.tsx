@@ -9,12 +9,12 @@ import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
-import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Container, EmptyState, Heading, Icon, Spinner, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
-import { UserIdentity } from "@supabase/supabase-js";
+import type { UserIdentity } from "@supabase/supabase-js";
 import { addHours, differenceInHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
@@ -148,7 +148,8 @@ export default function StudentPage() {
       let repo = assignment.repository || "-";
       if (group && group.assignment_groups) {
         if (group.assignment_groups.repositories.length) {
-          repo = group.assignment_groups.repositories[0].repository;
+          // Same reasoning as above – safe after length check.
+          repo = group.assignment_groups.repositories[0]!.repository;
         } else {
           repo = "-";
         }
@@ -318,7 +319,7 @@ export default function StudentPage() {
               Due Date
               <br />
               <Text fontSize="sm" color="fg.muted">
-                ({course?.time_zone})
+                ({course?.["time_zone"]})
               </Text>
             </Table.ColumnHeader>
             <Table.ColumnHeader>Name</Table.ColumnHeader>

@@ -1,7 +1,7 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { ChangeEvent, FormEvent } from "react";
+import React, { type ChangeEvent, type FormEvent } from "react";
 import { Flex, Input, Heading, FormField, PrimaryButton } from "amazon-chime-sdk-component-library-react";
 
 type SIPMeetingFormProps = {

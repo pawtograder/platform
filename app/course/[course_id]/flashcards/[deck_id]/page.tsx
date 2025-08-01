@@ -6,7 +6,7 @@ import Link from "@/components/ui/link";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Card, Container, Heading, HStack, Progress, Spinner, Text, VStack } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
 import { useParams } from "next/navigation";
@@ -31,7 +31,8 @@ const shuffleCards = (cards: FlashcardRow[]): FlashcardRow[] => {
   const shuffled = [...cards];
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    // Using non-null assertions (!) because indexes are guaranteed to be in-bounds inside the loop.
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
   }
   return shuffled;
 };
@@ -46,8 +47,8 @@ export default function FlashcardsDeckPage() {
   const { user } = useAuthState();
   const supabase = createClient();
 
-  const courseId = params.course_id as string;
-  const deckId = params.deck_id as string;
+  const courseId = params["course_id"] as string;
+  const deckId = params["deck_id"] as string;
 
   // Convert to numbers for database operations
   const courseIdNum = Number(courseId);
@@ -402,7 +403,8 @@ export default function FlashcardsDeckPage() {
 
     // Move current card to the back of the queue and display the next card
     const newQueue = [...cardQueue];
-    const movedCard = newQueue.splice(currentCardIndex, 1)[0];
+    // `splice` always returns one element here (length > 1 check above), assert non-null.
+    const movedCard = newQueue.splice(currentCardIndex, 1)[0]!;
     newQueue.push(movedCard);
     setCardQueue(newQueue);
 

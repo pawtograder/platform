@@ -14,9 +14,9 @@ import {
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
-import Editor, { Monaco } from "@monaco-editor/react";
+import Editor, { type Monaco } from "@monaco-editor/react";
 import { useCreate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
@@ -106,7 +106,7 @@ function validateYamlCards(cards: YamlCard[]): void {
  */
 export default function CreateDeckModal({ isOpen, onClose, onSuccess }: CreateDeckModalProps) {
   const params = useParams();
-  const course_id = params.course_id as string;
+  const course_id = params["course_id"] as string;
   const { colorMode } = useColorMode();
   const [yamlValue, setYamlValue] = useState("");
   const { user } = useAuthState();

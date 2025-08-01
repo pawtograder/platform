@@ -1,8 +1,9 @@
 "use client";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { createClient } from "@/utils/supabase/client";
-import { Assignment } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
+import { toaster } from "@/components/ui/toaster";
 
 /**
  * Renders a button that allows the user to finalize their assignment submission early, updating the due date to the current time for themselves and any group members.
@@ -44,7 +45,10 @@ export default function FinalizeSubmissionEarly({
       });
 
       if (error) {
-        console.error("Error finalizing submission:", error);
+        toaster.error({
+          title: "Error finalizing submission",
+          description: error instanceof Error ? error.message : "Unknown error"
+        });
         // You might want to show a toast notification here
         return;
       }
@@ -52,12 +56,18 @@ export default function FinalizeSubmissionEarly({
       const result = data as { success: boolean; error?: string; message?: string };
 
       if (result && !result.success) {
-        console.error("Failed to finalize submission:", result.error);
+        toaster.error({
+          title: "Failed to finalize submission",
+          description: result.error
+        });
         // You might want to show a toast notification here
         return;
       }
     } catch (err) {
-      console.error("Unexpected error finalizing submission:", err);
+      toaster.error({
+        title: "Unexpected error finalizing submission",
+        description: err instanceof Error ? err.message : "Unknown error"
+      });
     } finally {
       setLoading(false);
     }

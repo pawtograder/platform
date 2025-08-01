@@ -1,8 +1,13 @@
 "use client";
 import NotFound from "@/components/ui/not-found";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CourseWithFeatures, UserProfile, UserRole, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
-import { CrudFilter, useList } from "@refinedev/core";
+import type {
+  CourseWithFeatures,
+  UserProfile,
+  UserRole,
+  UserRoleWithCourseAndUser
+} from "@/utils/supabase/DatabaseTypes";
+import { type CrudFilter, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useMemo } from "react";
 import useAuthState from "./useAuthState";

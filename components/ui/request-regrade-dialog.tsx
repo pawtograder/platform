@@ -11,7 +11,11 @@ import {
 import { useRubricCheck, useRubricCriteria } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController } from "@/hooks/useSubmission";
-import { SubmissionArtifactComment, SubmissionComments, SubmissionFileComment } from "@/utils/supabase/DatabaseTypes";
+import type {
+  SubmissionArtifactComment,
+  SubmissionComments,
+  SubmissionFileComment
+} from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Text, VStack } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { useCallback, useState } from "react";

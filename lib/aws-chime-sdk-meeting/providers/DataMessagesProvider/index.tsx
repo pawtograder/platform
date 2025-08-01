@@ -5,9 +5,9 @@ import React, {
   useReducer,
   createContext,
   useContext,
-  FC,
+  type FC,
   useCallback,
-  PropsWithChildren,
+  type PropsWithChildren,
   useMemo
 } from "react";
 import { DATA_MESSAGE_LIFETIME_MS, DATA_MESSAGE_TOPIC } from "../../constants";
