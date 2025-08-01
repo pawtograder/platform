@@ -1572,6 +1572,7 @@ async function insertGraderConflicts(
 interface SeedingOptions {
   numStudents: number;
   numGraders: number;
+  numInstructors: number;
   numAssignments: number;
   firstAssignmentDate: Date;
   lastAssignmentDate: Date;
@@ -1603,6 +1604,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
   const {
     numStudents,
     numGraders,
+    numInstructors,
     numAssignments,
     firstAssignmentDate,
     lastAssignmentDate,
@@ -1654,6 +1656,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
   console.log(`📊 Configuration:`);
   console.log(`   Students: ${numStudents}`);
   console.log(`   Graders: ${numGraders}`);
+  console.log(`   Instructors: ${numInstructors}`);
   console.log(`   Assignments: ${numAssignments}`);
   console.log(`   Lab Assignments: ${effectiveLabAssignmentConfig.numLabAssignments}`);
   console.log(`   Group Assignments: ${effectiveGroupAssignmentConfig.numGroupAssignments}`);
@@ -1691,6 +1694,13 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       graderItems.map(async () => limiter.schedule(() => createUserInClass({ role: "grader", class_id })))
     );
     console.log(`✓ Created ${graders.length} graders`);
+
+    console.log(`  Creating ${numInstructors} instructors`);
+    const instructorItems = Array.from({ length: numInstructors }, (_, i) => ({ index: i }));
+    const instructors = await Promise.all(
+      instructorItems.map(async () => limiter.schedule(() => createUserInClass({ role: "instructor", class_id })))
+    );
+    console.log(`✓ Created ${instructors.length} instructors`);
 
     console.log(`  Creating ${numStudents} students`);
     const studentItems = Array.from({ length: numStudents }, (_, i) => ({ index: i }));
@@ -2094,6 +2104,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       name: "Average Assignments",
       description: "Average of all assignments",
       slug: "average-assignments",
+      score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
       max_score: 100,
       sort_order: 2
     });
@@ -2106,6 +2117,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       name: "Average Lab Assignments",
       description: "Average of all lab assignments",
       slug: "average-lab-assignments",
+      score_expression: "mean(gradebook_columns('assignment-lab-*'))",
       max_score: 100,
       sort_order: 3
     });
@@ -2118,6 +2130,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       name: "Final Grade",
       description: "Calculated final grade",
       slug: "final-grade",
+      score_expression:
+        "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
       max_score: 100,
       sort_order: 999
     });
@@ -2126,47 +2140,6 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     // Now update the columns with score expressions one by one
     console.log("📊 Adding score expressions to gradebook columns...");
-
-    // Update average assignments column with expression
-    const { error: avgAssignError } = await supabase
-      .from("gradebook_columns")
-      .update({ score_expression: "mean(gradebook_columns('assignment-assignment-*'))" })
-      .eq("id", averageAssignmentsColumn.id);
-
-    if (avgAssignError) {
-      console.warn(`Failed to update average assignments expression: ${avgAssignError.message}`);
-    }
-
-    // Wait for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Update average lab assignments column with expression
-    const { error: avgLabError } = await supabase
-      .from("gradebook_columns")
-      .update({ score_expression: "mean(gradebook_columns('assignment-lab-*'))" })
-      .eq("id", averageLabAssignmentsColumn.id);
-
-    if (avgLabError) {
-      console.warn(`Failed to update average lab assignments expression: ${avgLabError.message}`);
-    }
-
-    // Wait for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Update final grade column with complex expression
-    const { error: finalGradeError } = await supabase
-      .from("gradebook_columns")
-      .update({
-        score_expression:
-          "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1"
-      })
-      .eq("id", finalGradeColumn.id);
-
-    if (finalGradeError) {
-      console.warn(`Failed to update final grade expression: ${finalGradeError.message}`);
-    }
-
-    console.log(`✓ Updated gradebook columns with score expressions`);
 
     // Set scores for the participation column using normal distribution
     console.log("\n📊 Setting scores for gradebook columns...");
@@ -2192,6 +2165,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`   Lab Group Assignments: ${labGroupAssignments.length}`);
     console.log(`   Students: ${students.length}`);
     console.log(`   Graders: ${graders.length}`);
+    console.log(`   Instructors: ${instructors.length}`);
     console.log(`   Class Sections: ${classSections.length}`);
     console.log(`   Lab Sections: ${labSections.length}`);
     console.log(`   Student Tag Types: ${studentTagTypes.length}`);
@@ -2230,8 +2204,9 @@ export async function runLargeScale() {
   const now = new Date();
 
   await seedInstructorDashboardData({
-    numStudents: 500,
-    numGraders: 50,
+    numStudents: 900,
+    numGraders: 80,
+    numInstructors: 10,
     numAssignments: 20,
     firstAssignmentDate: subDays(now, 60), // 60 days in the past
     lastAssignmentDate: addDays(now, 50), // 50 days in the future
@@ -2267,6 +2242,7 @@ async function runSmallScale() {
   await seedInstructorDashboardData({
     numStudents: 50,
     numGraders: 5,
+    numInstructors: 5,
     numAssignments: 20,
     firstAssignmentDate: subDays(now, 5), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
@@ -2298,9 +2274,9 @@ async function runSmallScale() {
 // Run the large-scale example by default
 // To run small-scale instead, change this to: runSmallScale()
 async function main() {
-  // await runLargeScale();
+  await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  await runSmallScale();
+  // await runSmallScale();
 }
 
 main();
