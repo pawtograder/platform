@@ -17,20 +17,22 @@ export type PossiblyTentativeResult<T> = T & {
 };
 
 //TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
-export type BroadcastMessage = {
-  type: "table_change" | "channel_created" | "system";
-  operation?: "INSERT" | "UPDATE" | "DELETE";
-  table?: TablesThatHaveAnIDField;
-  row_id?: number | string;
-  data?: Record<string, unknown>;
-  submission_id?: number;
-  help_request_id?: number;
-  help_queue_id?: number;
-  class_id: number;
-  student_profile_id?: number;
-  target_audience?: "user" | "staff";
-  timestamp: string;
-} | OfficeHoursBroadcastMessage;
+export type BroadcastMessage =
+  | {
+      type: "table_change" | "channel_created" | "system";
+      operation?: "INSERT" | "UPDATE" | "DELETE";
+      table?: TablesThatHaveAnIDField;
+      row_id?: number | string;
+      data?: Record<string, unknown>;
+      submission_id?: number;
+      help_request_id?: number;
+      help_queue_id?: number;
+      class_id: number;
+      student_profile_id?: number;
+      target_audience?: "user" | "staff";
+      timestamp: string;
+    }
+  | OfficeHoursBroadcastMessage;
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
   Query extends string = "*",

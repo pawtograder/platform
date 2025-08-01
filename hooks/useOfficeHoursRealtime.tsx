@@ -308,14 +308,17 @@ export function OfficeHoursControllerProvider({
 }) {
   const controller = useRef<OfficeHoursController | null>(null);
   const client = createClient();
-  const [officeHoursRealTimeController, setOfficeHoursRealTimeController] = useState<OfficeHoursRealTimeController | null>(null);
+  const [officeHoursRealTimeController, setOfficeHoursRealTimeController] =
+    useState<OfficeHoursRealTimeController | null>(null);
   useEffect(() => {
-    setOfficeHoursRealTimeController(new OfficeHoursRealTimeController({
-      client,
-      classId,
-      profileId,
-      isStaff: role === "instructor" || role === "grader"
-    }));
+    setOfficeHoursRealTimeController(
+      new OfficeHoursRealTimeController({
+        client,
+        classId,
+        profileId,
+        isStaff: role === "instructor" || role === "grader"
+      })
+    );
   }, [client, classId, profileId, role]);
 
   // Initialize controller with required dependencies
