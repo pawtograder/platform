@@ -1,34 +1,25 @@
 "use client";
 import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { Alert } from "@/components/ui/alert";
-import { AssignmentDueDate, SelfReviewDueDate } from "@/components/ui/assignment-due-date";
+import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
 import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
 import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
-import { dueDateAdvice } from "@/lib/utils";
 import { createClient } from "@/utils/supabase/client";
-import type {
-  Assignment,
-  AssignmentDueDateException,
-  AssignmentGroup,
-  AssignmentGroupMember,
-  Repo,
-  Repository,
-  ReviewAssignments,
-  SelfReviewSettings,
-  SubmissionReview,
-  SubmissionWithGraderResults
-} from "@/utils/supabase/DatabaseTypes";
-import { Card, Container, Flex, Heading, Spinner, Table, Text } from "@chakra-ui/react";
+import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Container, EmptyState, Heading, Icon, Spinner, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useInvalidate, useList } from "@refinedev/core";
-import type { UserIdentity } from "@supabase/supabase-js";
-import { addHours, addMinutes, differenceInHours } from "date-fns";
+import { UserIdentity } from "@supabase/supabase-js";
+import { addHours, differenceInHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
-import type { UUID } from "node:crypto";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { FaCheckCircle } from "react-icons/fa";
 
 // Define the type for the groups query result
 type AssignmentGroupMemberWithGroupAndRepo = AssignmentGroupMember & {
@@ -39,7 +30,7 @@ type AssignmentUnit = {
   key: string;
   name: string;
   type: "assignment" | "self review";
-  due_date: TZDate;
+  due_date: TZDate | undefined;
   due_date_component: JSX.Element;
   due_date_link?: string;
   repo: string;
@@ -49,30 +40,20 @@ type AssignmentUnit = {
   group: string;
 };
 
-type ReviewAssignmentsWithSubmissions = ReviewAssignments & {
-  submission_reviews: SubmissionReview[] & {
-    completed_at: Date;
-  };
-};
-
-type ReposWithUserIds = Repository & {
-  user_roles: UUID;
-};
-
-type AssignmentWithALot = Assignment & {
-  submissions: SubmissionWithGraderResults[];
-  repositories: ReposWithUserIds[];
-  assignment_self_review_settings: SelfReviewSettings;
-  review_assignments: ReviewAssignmentsWithSubmissions[];
-  assignment_due_date_exceptions: AssignmentDueDateException[];
+export type AssignmentsForStudentDashboard = Omit<
+  Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"],
+  "id"
+> & {
+  id: number;
 };
 
 export default function StudentPage() {
   const { identities } = useIdentity();
   const { course_id } = useParams();
   const { user } = useAuthState();
+  const { role } = useClassProfiles();
   const supabase = createClient();
-  const { data: courseData } = useList({
+  const { data: courseData } = useList<{ time_zone: string }>({
     resource: "classes",
     meta: {
       select: "time_zone",
@@ -84,22 +65,8 @@ export default function StudentPage() {
     }
   });
   const course = courseData && courseData.data.length > 0 ? courseData.data[0] : null;
-  const { data: private_profile_id_data } = useList({
-    resource: "user_roles",
-    meta: {
-      select: "private_profile_id",
-      limit: 1
-    },
-    filters: [
-      { field: "user_id", operator: "eq", value: user?.id },
-      { field: "class_id", operator: "eq", value: Number(course_id) }
-    ],
-    queryOptions: {
-      enabled: !!course_id && !!user
-    }
-  });
-  // Safely extract the student's private profile ID if it exists.
-  const private_profile_id: string | null = private_profile_id_data?.data?.[0]?.["private_profile_id"] ?? null;
+
+  const private_profile_id = role.private_profile_id;
   const invalidate = useInvalidate();
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
@@ -116,23 +83,12 @@ export default function StudentPage() {
   });
   const groups: AssignmentGroupMemberWithGroupAndRepo[] | null = groupsData?.data ?? null;
 
-  const { data: assignmentsData } = useList<AssignmentWithALot>({
-    resource: "assignments",
-    meta: {
-      select: `
-            *, 
-            submissions(*, grader_results(*)), 
-            repositories(*, user_roles(user_id)), 
-            assignment_self_review_settings!assignments_self_review_setting_fkey(*), 
-            review_assignments(*, submission_reviews(completed_at)),
-            assignment_due_date_exceptions!assignment_late_exception_assignment_id_fkey(*)
-  `
-    },
+  const { data: assignmentsData } = useList<AssignmentsForStudentDashboard>({
+    resource: "assignments_for_student_dashboard",
     filters: [
       { field: "class_id", operator: "eq", value: course_id },
-      { field: "repositories.user_roles.user_id", operator: "eq", value: user?.id },
-      { field: "review_assignments.assignee_profile_id", operator: "eq", value: private_profile_id },
-      { field: "assignment_due_date_exceptions.student_id", operator: "eq", value: private_profile_id }
+      { field: "student_user_id", operator: "eq", value: user?.id },
+      { field: "student_profile_id", operator: "eq", value: private_profile_id }
     ],
     pagination: {
       pageSize: 1000
@@ -146,34 +102,24 @@ export default function StudentPage() {
 
   const githubIdentity: UserIdentity | null = identities?.find((identity) => identity.provider === "github") ?? null;
 
-  const assignmentsWithoutRepos = githubIdentity
-    ? assignments?.filter((assignment) => {
-        if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
-          return false;
-        }
-        const hasIndividualRepo = assignment.repositories.length > 0;
-        const assignmentGroup = groups?.find((group) => group.assignment_id === assignment.id);
-        const hasGroupRepo = assignmentGroup?.assignment_groups?.repositories.length || 0 > 0;
-        if (assignmentGroup) {
-          return !hasGroupRepo;
-        }
-        //Don't try to create a repo for a group assignment if we don't have a group
-        if (assignment.group_config === "groups") {
-          return false;
-        }
-        return !hasIndividualRepo;
-      })
-    : null;
+  const assignmentsWithoutRepos = useMemo(
+    () =>
+      githubIdentity
+        ? assignments?.filter((assignment) => {
+            if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
+              return false;
+            }
+            return assignment.repository === null;
+          })
+        : null,
+    [assignments, githubIdentity]
+  );
 
   const actions = !githubIdentity ? (
     <LinkAccount />
   ) : assignmentsWithoutRepos?.length ? (
     <>
-      <Alert status="info">
-        GitHub repos created for you. You have been *invited* to join them. You will need to accept the invitation
-        within the next 7 days. You will find the invitation in your email (whichever you use for GitHub), and also in
-        your <Link href="https://github.com/notifications">GitHub notifications</Link>.
-      </Alert>
+      <Alert status="info">GitHub repos created for you. You may need to refresh this page to see them.</Alert>
     </>
   ) : (
     <></>
@@ -195,23 +141,11 @@ export default function StudentPage() {
     }
   }, [hasGitHubIdentity, supabase, invalidate]);
 
-  const getLatestSubmission = (assignment: AssignmentWithALot) => {
-    return assignment.submissions.sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )[0];
-  };
-
-  const allAssignedWork = () => {
+  const allAssignedWork = useMemo(() => {
     const result: AssignmentUnit[] = [];
     assignments?.forEach(async (assignment) => {
-      const mostRecentSubmission = getLatestSubmission(assignment);
       const group = groups?.find((group) => group.assignment_id === assignment.id);
-      let repo = "-";
-      if (assignment.repositories.length) {
-        // With `noUncheckedIndexedAccess`, direct index access returns possibly undefined
-        // but our length check guarantees at least one element. Assert non-null.
-        repo = assignment.repositories[0]!.repository;
-      }
+      let repo = assignment.repository || "-";
       if (group && group.assignment_groups) {
         if (group.assignment_groups.repositories.length) {
           // Same reasoning as above – safe after length check.
@@ -220,101 +154,163 @@ export default function StudentPage() {
           repo = "-";
         }
       }
-      const hoursExtended = assignment.assignment_due_date_exceptions.reduce((acc, curr) => acc + curr.hours, 0);
-      const minutesExtended = assignment.assignment_due_date_exceptions.reduce((acc, curr) => acc + curr.minutes, 0);
-      const originalDueDate = new TZDate(assignment.due_date);
-      const modifiedDueDate = new TZDate(
-        addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended),
-        course?.["time_zone"] ?? "America/New_York"
-      );
+
+      // The view already provides the effective due date with all calculations
+      const modifiedDueDate = assignment.due_date
+        ? new TZDate(assignment.due_date, course?.time_zone ?? "America/New_York")
+        : undefined;
       result.push({
         key: assignment.id.toString(),
-        name: assignment.title,
+        name: assignment.title!,
         type: "assignment",
-        due_date: new TZDate(modifiedDueDate),
-        due_date_component: <AssignmentDueDate assignment={assignment} />,
+        due_date: modifiedDueDate,
+        due_date_component: (
+          <>
+            {modifiedDueDate &&
+              formatInTimeZone(modifiedDueDate, course?.time_zone || "America/New_York", "MMM d h:mm aaa")}
+          </>
+        ),
         due_date_link: `/course/${course_id}/assignments/${assignment.id}`,
         repo: repo,
         name_link: `/course/${course_id}/assignments/${assignment.id}`,
-        submission_text: !mostRecentSubmission
+        submission_text: !assignment.submission_id
           ? "Have not submitted yet"
-          : `#${mostRecentSubmission.ordinal} (${mostRecentSubmission.grader_results?.score || 0}/${mostRecentSubmission.grader_results?.max_score || 0})`,
-        submission_link: mostRecentSubmission
-          ? `/course/${course_id}/assignments/${assignment.id}/submissions/${mostRecentSubmission?.id}`
+          : `#${assignment.submission_ordinal} (${assignment.grader_result_score || 0}/${assignment.grader_result_max_score || 0})`,
+        submission_link: assignment.submission_id
+          ? `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.submission_id}`
           : undefined,
         group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
       });
 
-      if (assignment.assignment_self_review_settings.enabled && assignment.review_assignments.length > 0) {
-        const evalDueDate = addHours(modifiedDueDate, assignment.assignment_self_review_settings.deadline_offset ?? 0);
+      if (assignment.self_review_setting_id && assignment.review_assignment_id) {
+        const evalDueDate = assignment.due_date
+          ? addHours(new Date(assignment.due_date), assignment.self_review_deadline_offset ?? 0)
+          : undefined;
         result.push({
           key: assignment.id.toString() + "selfReview",
           name: "Self Review for " + assignment.title,
           type: "self review",
-          due_date: new TZDate(evalDueDate),
+          due_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
           due_date_component: <SelfReviewDueDate assignment={assignment} />,
           repo: repo,
-          name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_assignments[0]!.submission_id}/files?review_assignment_id=${assignment.review_assignments[0]!.id}`,
-          submission_text: assignment.review_assignments[0]!.submission_reviews?.completed_at
-            ? "Submitted"
-            : "Not Submitted",
+          name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_submission_id}/files?review_assignment_id=${assignment.review_assignment_id}`,
+          submission_text: assignment.submission_review_completed_at ? "Submitted" : "Not Submitted",
           group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
         });
       }
     });
+    // Sort by effective due date (includes lab-based scheduling and extensions)
     return result.sort((a, b) => {
-      const dateA = new TZDate(a.due_date);
-      const dateB = new TZDate(b.due_date);
+      const dateA = a.due_date ? new TZDate(a.due_date) : new TZDate(new Date());
+      const dateB = b.due_date ? new TZDate(b.due_date) : new TZDate(new Date());
       return dateB.getTime() - dateA.getTime();
     });
-  };
+  }, [assignments, groups, course, course_id]);
 
+  const workInFuture = useMemo(() => {
+    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+    return allAssignedWork.filter((work) => {
+      return work.due_date && work.due_date > curTimeInCourseTimezone;
+    });
+  }, [allAssignedWork, course?.time_zone]);
+  workInFuture.sort((a, b) => {
+    return (a.due_date?.getTime() ?? 0) - (b.due_date?.getTime() ?? 0);
+  });
+  const workInPast = useMemo(() => {
+    const curTimeInCourseTimezone = new TZDate(new Date(), course?.time_zone ?? "America/New_York");
+    return allAssignedWork.filter((work) => {
+      return work.due_date && work.due_date < curTimeInCourseTimezone;
+    });
+  }, [allAssignedWork, course?.time_zone]);
+  workInPast.sort((a, b) => {
+    return (b.due_date?.getTime() ?? 0) - (a.due_date?.getTime() ?? 0);
+  });
   return (
     <Container>
       {actions}
-      <Flex mb="4" gap="4" flexDir={"column"}>
-        <Heading size="lg">Upcoming Deadlines</Heading>
-        <Flex>
-          {allAssignedWork()
-            .filter((work) => {
-              return work.due_date > new TZDate(new Date(), course?.["time_zone"] ?? "America/New_York");
-            })
-            .map((work) => {
-              return (
-                <Card.Root width={"sm"} key={work.key}>
-                  <Card.Header>
-                    <Heading size="md">
-                      <Link prefetch={true} href={work.name_link}>
-                        {work.name}
-                      </Link>
-                    </Heading>
-                  </Card.Header>
-                  <Card.Body fontSize="sm">
-                    <Text>
-                      <strong>Type:</strong> {work.type}
-                    </Text>
-                    <Text>
-                      <strong>Due:</strong>{" "}
-                      {formatInTimeZone(work.due_date, course?.["time_zone"] || "America/New_York", "MMM d h:mm aaa")}{" "}
-                      {differenceInHours(
-                        new TZDate(work.due_date),
-                        TZDate.tz(course?.["time_zone"] || "America/New_York")
-                      ) <= 48
-                        ? dueDateAdvice(work.due_date.toString(), course?.["time_zone"] ?? undefined)
-                        : ""}
-                    </Text>
-                    <Text>
-                      <strong>Status:</strong> {work.type == "assignment" ? "using submission " : ""}
-                      {work.submission_text}
-                    </Text>
-                  </Card.Body>
-                </Card.Root>
-              );
-            })}
-        </Flex>
-      </Flex>
+      <ResendOrgInvitation />
       <Heading size="lg" mb={4}>
-        Assignments
+        Upcoming Assignments
+      </Heading>
+      <Table.Root>
+        <Table.Header>
+          <Table.Row>
+            <Table.ColumnHeader>
+              Due Date
+              <br />
+              <Text fontSize="sm" color="fg.muted">
+                ({course?.time_zone})
+              </Text>
+            </Table.ColumnHeader>
+            <Table.ColumnHeader>Name</Table.ColumnHeader>
+            <Table.ColumnHeader>Latest Submission</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>GitHub Repository</Table.ColumnHeader>
+            <Table.ColumnHeader display={{ base: "none", sm: "table-cell" }}>Group</Table.ColumnHeader>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {workInFuture.length === 0 && (
+            <Table.Row>
+              <Table.Cell colSpan={5}>
+                <EmptyState.Root size="md">
+                  <EmptyState.Content>
+                    <EmptyState.Indicator>
+                      <Icon as={FaCheckCircle} />
+                    </EmptyState.Indicator>
+                    <EmptyState.Title>No upcoming deadlines available</EmptyState.Title>
+                    <EmptyState.Description>
+                      Your instructor may not have released any upcoming assignments yet.
+                    </EmptyState.Description>
+                  </EmptyState.Content>
+                </EmptyState.Root>
+              </Table.Cell>
+            </Table.Row>
+          )}
+          {workInFuture.map((work) => {
+            const isCloseDeadline = work.due_date && differenceInHours(work.due_date, new Date()) < 24;
+            return (
+              <Table.Row
+                key={work.key}
+                border={isCloseDeadline ? "2px solid" : "none"}
+                borderColor={isCloseDeadline ? "border.info" : undefined}
+                bg={isCloseDeadline ? "bg.info" : undefined}
+              >
+                <Table.Cell>
+                  <Link prefetch={true} href={work.due_date_link ?? ""}>
+                    {work.due_date_component}
+                  </Link>
+                </Table.Cell>
+                <Table.Cell>
+                  <Link prefetch={true} href={work.name_link}>
+                    {work.name}
+                  </Link>
+                </Table.Cell>
+                <Table.Cell>
+                  {work.submission_link ? (
+                    <Link prefetch={true} href={work.submission_link}>
+                      {work.submission_text}
+                    </Link>
+                  ) : (
+                    <Text>{work.submission_text}</Text>
+                  )}
+                </Table.Cell>
+                <Table.Cell display={{ base: "none", sm: "table-cell" }}>
+                  {loading && !work.repo ? (
+                    <Spinner />
+                  ) : (
+                    <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                      {work.repo}
+                    </Link>
+                  )}
+                </Table.Cell>
+                <Table.Cell display={{ base: "none", sm: "table-cell" }}>{work.group}</Table.Cell>
+              </Table.Row>
+            );
+          })}
+        </Table.Body>
+      </Table.Root>
+      <Heading size="lg" mb={4}>
+        Past Assignments
       </Heading>
       <Table.Root>
         <Table.Header>
@@ -333,7 +329,21 @@ export default function StudentPage() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {allAssignedWork().map((work) => {
+          {workInPast.length === 0 && (
+            <Table.Row>
+              <Table.Cell colSpan={5}>
+                <EmptyState.Root size="md">
+                  <EmptyState.Content>
+                    <EmptyState.Indicator>
+                      <Icon as={FaCheckCircle} />
+                    </EmptyState.Indicator>
+                    <EmptyState.Title>No due dates have passed</EmptyState.Title>
+                  </EmptyState.Content>
+                </EmptyState.Root>
+              </Table.Cell>
+            </Table.Row>
+          )}
+          {workInPast.map((work) => {
             return (
               <Table.Row key={work.key}>
                 <Table.Cell>

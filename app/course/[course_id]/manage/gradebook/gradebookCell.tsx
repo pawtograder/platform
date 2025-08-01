@@ -132,7 +132,7 @@ export function OverrideScoreForm({
               <Heading size="sm" color="fg.warning">
                 This column is automatically calculated{" "}
                 {linkToAssignment && (
-                  <Link href={linkToAssignment} target="_blank" color="fg.info">
+                  <Link href={linkToAssignment} target="_blank" color="fg.info" tabIndex={-1}>
                     (View Submission)
                   </Link>
                 )}

@@ -5,6 +5,19 @@ import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button } from "@chakra-ui/react";
 import { toaster } from "@/components/ui/toaster";
 
+/**
+ * Renders a button that allows the user to finalize their assignment submission early, updating the due date to the current time for themselves and any group members.
+ *
+ * Displays a confirmation dialog before executing the finalization. The button is disabled if not enabled or while loading. Upon confirmation, triggers a backend procedure to finalize the submission and updates the loading state accordingly.
+ *
+ * @param assignment - The assignment to be finalized early.
+ * @param private_profile_id - The user's profile identifier.
+ * @param enabled - Whether the finalize button is enabled.
+ * @param setLoading - Callback to update the loading state.
+ * @param loading - Indicates if the finalize action is in progress.
+ *
+ * @returns A React component rendering the finalize submission button with confirmation dialog.
+ */
 export default function FinalizeSubmissionEarly({
   assignment,
   private_profile_id,
@@ -26,7 +39,6 @@ export default function FinalizeSubmissionEarly({
   const finalizeSubmission = async () => {
     try {
       setLoading(true);
-      // @ts-expect-error - Function not yet in types
       const { data, error } = await supabase.rpc("finalize_submission_early", {
         this_assignment_id: assignment.id,
         this_profile_id: private_profile_id

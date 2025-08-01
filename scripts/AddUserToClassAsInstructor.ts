@@ -1,25 +1,23 @@
 import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-dotenv.config({ path: ".env.local.staging.priv" });
+dotenv.config({ path: ".env.local.prod" });
 
 const courseIDArg = process.argv[2];
 const userEmail = process.argv[3];
+console.log(process.argv);
 
-if (!courseIDArg || !userEmail) {
-  // eslint-disable-next-line no-console
-  console.error("Usage: ts-node AddUserToClassAsInstructor.ts <courseID> <userEmail>");
-  process.exit(1);
-}
-
-const courseID = parseInt(courseIDArg);
-
-const supabase = createClient<Database>(
-  process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
-  process.env["SUPABASE_SERVICE_ROLE_KEY"]!
-);
+const supabase = createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 async function main() {
-  const { data: user } = await supabase.from("users").select("*").eq("email", userEmail!).single();
+  if (!userEmail) {
+    console.error("No user email provided");
+    return;
+  }
+  if (!courseID) {
+    console.error("No course ID provided");
+    return;
+  }
+  const { data: user } = await supabase.from("users").select("*").eq("email", userEmail).single();
   if (!user) {
     // eslint-disable-next-line no-console
     console.error("User not found");

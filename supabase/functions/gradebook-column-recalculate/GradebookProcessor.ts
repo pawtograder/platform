@@ -1,4 +1,4 @@
-import { SupabaseClient } from "@supabase/supabase-js";
+import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { all, ConstantNode, create, EvalFunction, FunctionNode, MathNode } from "mathjs";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
@@ -37,6 +37,9 @@ export async function processGradebookCellCalculation(
   cells: GradebookCellRequest[],
   adminSupabase: SupabaseClient<Database>
 ) {
+  if (cells.length === 0) {
+    return;
+  }
   const allColumns = await adminSupabase
     .from("gradebook_columns")
     .select("*, gradebooks!gradebook_columns_gradebook_id_fkey(expression_prefix)")
@@ -76,10 +79,11 @@ export async function processGradebookCellCalculation(
   }
 
   const keysToRetrieve = cells.map((s) => CellRequestToKeyRequests(s));
+
   // Create a custom mathjs instance
   const math = create(all, {});
 
-  await addDependencySourceFunctions({ math, keys: keysToRetrieve.flat(), class_id: 1, supabase: adminSupabase });
+  await addDependencySourceFunctions({ math, keys: keysToRetrieve.flat(), supabase: adminSupabase });
 
   const gradebookColumnToScoreExpression = new Map<number, EvalFunction>();
   const functionNameToDependencySource = new Map<string, DependencySource>();
@@ -140,7 +144,7 @@ export async function processGradebookCellCalculation(
     const column = allColumns.data?.find((c) => c.id === cell.gradebook_column_id);
     if (column) {
       if (column.score_expression?.startsWith("importCSV")) {
-        cell.onComplete();
+        await cell.onComplete();
         continue;
       }
       const context: ExpressionContext = {

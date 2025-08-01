@@ -36,7 +36,7 @@ import {
 } from "react-icons/fi";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "../UserMenu";
-import { MdOutlineMail } from "react-icons/md";
+import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -71,6 +71,7 @@ const LinkItems = (courseID: number) => [
     target: `/course/${courseID}/manage/course/`,
     submenu: [
       { name: "Enrollments", icon: FiUsers, target: `/course/${courseID}/manage/course/enrollments` },
+      { name: "Lab Sections", icon: MdOutlineScience, target: `/course/${courseID}/manage/course/lab-sections` },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },

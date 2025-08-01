@@ -68,12 +68,10 @@ import {
 import { useUpdate } from "@refinedev/core";
 import { chakraComponents, Select, type SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
-import JSZip from "jszip";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
-import zipToHTMLBlobs from "./zipToHTMLBlobs";
 
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
@@ -417,6 +415,11 @@ function ArtifactComments({
   );
 }
 
+/**
+ * Renders a form for posting new comments on a submission artifact.
+ *
+ * Allows users to enter and submit a comment, with graders and instructors able to control whether the comment becomes visible to students upon submission release. Throws an error if the submission lacks a grading review ID.
+ */
 function ArtifactCommentsForm({
   submission,
   artifact,
@@ -450,7 +453,8 @@ function ArtifactCommentsForm({
         released: reviewContext ? reviewContext.released : true,
         eventually_visible: eventuallyVisible,
         rubric_check_id: null,
-        points: null
+        points: null,
+        regrade_request_id: null
       });
     },
     [submissionController, submission, artifact, reviewContext, eventuallyVisible, reviewAssignmentId]
@@ -479,6 +483,11 @@ function ArtifactCommentsForm({
   );
 }
 
+/**
+ * Displays a popover UI for annotating an artifact with a rubric check and optional comment.
+ *
+ * Allows graders or instructors to select a rubric check, optionally choose a sub-option, set visibility to students, and add a comment annotation to the artifact. Only rubric checks configured for artifact annotation are available. Throws an error if the grading review ID is missing.
+ */
 function ArtifactCheckPopover({
   artifact,
   reviewAssignmentId
@@ -557,7 +566,7 @@ function ArtifactCheckPopover({
   if (!criteriaOptions || criteriaOptions.length === 0) {
     return (
       <Text fontSize="sm" color="fg.muted">
-        No rubric checks available for artifact annotation.
+        No rubric checks available for this artifact.
       </Text>
     );
   }
@@ -673,7 +682,8 @@ function ArtifactCheckPopover({
                       released: reviewContext ? reviewContext.released : true,
                       points: points ?? null,
                       submission_review_id: finalReviewAssignmentId ?? null,
-                      eventually_visible: eventuallyVisible
+                      eventually_visible: eventuallyVisible,
+                      regrade_request_id: null
                     };
                     await submissionController.submission_artifact_comments.create(values);
                     setIsOpen(false);
@@ -699,9 +709,6 @@ function ArtifactWithComments({
       <Heading size="lg" mb={2}>
         {artifact.name}
       </Heading>
-      <Text fontSize="sm" color="fg.muted" mb={2}>
-        Type: {artifact.data?.format}, Display: {artifact.data?.display}
-      </Text>
 
       <ArtifactCheckPopover artifact={artifact} reviewAssignmentId={reviewAssignmentId} />
 
@@ -716,10 +723,20 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
   const [siteUrl, setSiteUrl] = useState<string | null>(null);
   const artifactKey = `classes/${artifact.class_id}/profiles/${artifact.profile_id ? artifact.profile_id : artifact.assignment_group_id}/submissions/${artifact.submission_id}/${artifact.id}`;
   useEffect(() => {
-    let cleanup: (() => void) | undefined = undefined;
     let isMounted = true;
 
     async function loadArtifact() {
+      if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
+        const client = createClient();
+        const data = await client.functions.invoke("submission-serve-artifact", {
+          body: JSON.stringify({
+            classId: artifact.class_id,
+            submissionId: artifact.submission_id,
+            artifactId: artifact.id
+          })
+        });
+        setSiteUrl(data.data.url);
+      }
       const client = createClient();
       const data = await client.storage.from("submission-artifacts").download(artifactKey);
 
@@ -727,91 +744,6 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
 
       if (data.data) {
         setArtifactData(data.data);
-        if (artifact.data.format === "zip" && artifact.data.display === "html_site") {
-          try {
-            // TODO this will NEVER work in safari, we need to just unzip it on a server and serve the files
-            const zip = await JSZip.loadAsync(data.data);
-
-            if (!isMounted) return; // Component unmounted during zip processing
-
-            const { rewrittenHTMLFiles, topLevelDir } = await zipToHTMLBlobs(data.data);
-
-            if (!isMounted) return; // Component unmounted during blob processing
-
-            const listener = async (event: MessageEvent) => {
-              // Check if we're still mounted and the event is from our iframe
-              if (!isMounted || event.data.type !== "REQUEST_FILE_CONTENTS") {
-                return;
-              }
-
-              try {
-                // Create a map of file contents
-                const fileContents: Record<string, string | Uint8Array> = {};
-                // Find the top level directory
-                // Process all files in parallel
-                await Promise.all(
-                  Object.entries(zip.files).map(async ([path, file]) => {
-                    if (!isMounted) return; // Exit early if unmounted
-
-                    const pathRelativeToTopLevelDir = path.replace(topLevelDir, "");
-                    if (!file.dir) {
-                      // Get the content based on file type
-                      if (pathRelativeToTopLevelDir.endsWith(".html")) {
-                        fileContents[pathRelativeToTopLevelDir] = rewrittenHTMLFiles.get(pathRelativeToTopLevelDir)!;
-                      } else if (
-                        pathRelativeToTopLevelDir.endsWith(".css") ||
-                        pathRelativeToTopLevelDir.endsWith(".js") ||
-                        pathRelativeToTopLevelDir.endsWith(".json")
-                      ) {
-                        fileContents[pathRelativeToTopLevelDir] = await file.async("text");
-                      } else {
-                        fileContents[pathRelativeToTopLevelDir] = await file.async("uint8array");
-                      }
-                    }
-                  })
-                );
-
-                // Only send message if still mounted and event source exists
-                if (isMounted && event.source) {
-                  event.source.postMessage(
-                    {
-                      type: "FILE_CONTENTS_RESPONSE",
-                      fileContents
-                    },
-                    { targetOrigin: "*" }
-                  );
-                }
-              } catch (error) {
-                toaster.create({
-                  title: "Error processing file contents request",
-                  description: error instanceof Error ? error.message : "Unknown error",
-                  type: "warning"
-                });
-              }
-            };
-
-            window.addEventListener("message", listener);
-            cleanup = () => {
-              window.removeEventListener("message", listener);
-            };
-
-            if (rewrittenHTMLFiles.get("/index.html")) {
-              const url = URL.createObjectURL(
-                new Blob([rewrittenHTMLFiles.get("/index.html")!], { type: "text/html" })
-              );
-              if (isMounted) {
-                setSiteUrl(url);
-              }
-            }
-          } catch (error) {
-            if (isMounted) {
-              toaster.error({
-                title: "Error processing ZIP file: " + error,
-                description: "Please try again."
-              });
-            }
-          }
-        }
       }
       if (data.error && isMounted) {
         toaster.error({
@@ -825,9 +757,6 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
 
     return () => {
       isMounted = false;
-      if (cleanup) {
-        cleanup();
-      }
     };
   }, [artifactKey, artifact.data?.display, artifact.data?.format]);
 
@@ -843,14 +772,32 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
         return (
           <Box>
             <ClientOnly>
-              <Box borderWidth="1px" borderColor="border.emphasized" borderRadius="md" overflow="hidden">
+              <div
+                style={{
+                  border: "1px solid var(--chakra-colors-border-emphasized)",
+                  borderRadius: "0.375rem",
+                  overflow: "auto",
+                  resize: "both",
+                  height: "400px",
+                  minHeight: "300px",
+                  minWidth: "300px",
+                  width: "100%",
+                  maxWidth: "100%"
+                }}
+              >
                 <iframe
                   src={siteUrl}
-                  className="w-full h-full border-none min-h-[500px]"
+                  className="border-none"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    display: "block",
+                    border: "none"
+                  }}
                   title={artifact.name}
                   sandbox="allow-scripts"
                 />
-              </Box>
+              </div>
             </ClientOnly>
           </Box>
         );

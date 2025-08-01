@@ -23,6 +23,7 @@ import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
+import { PopulatedReviewAssignment } from "./ReviewsTable";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];
@@ -45,13 +46,6 @@ type PopulatedSubmission = SubmissionRow & {
   submission_reviews?: SubmissionReviewRow[];
 };
 
-type PopulatedReviewAssignment = ReviewAssignmentRow & {
-  profiles?: ProfileRow;
-  submissions?: PopulatedSubmission;
-  rubrics?: RubricRow;
-  review_assignment_rubric_parts?: { rubric_part_id: number }[];
-};
-
 type ReviewAssignmentFormData = {
   assignee_profile_id: string;
   submission_id: number;
@@ -68,7 +62,7 @@ type AssignReviewModalProps = {
   courseId: number;
   assignmentId: number;
   onSuccess: () => void;
-  initialData?: PopulatedReviewAssignment | null;
+  initialData?: PopulatedReviewAssignment | null | undefined;
   isEditing?: boolean;
 };
 
@@ -95,7 +89,7 @@ export default function AssignReviewModal({
             submission_id: initialData.submission_id,
             rubric_id: initialData.rubric_id,
             due_date: initialData.due_date ? format(new TZDate(initialData.due_date), "yyyy-MM-dd'T'HH:mm") : "",
-            rubric_part_ids: initialData.review_assignment_rubric_parts?.map((p) => p.rubric_part_id) || [],
+            rubric_part_ids: initialData.review_assignment_rubric_parts?.map((p) => p.rubric_parts.id) || [],
             release_date: initialData.release_date
               ? format(new Date(initialData.release_date), "yyyy-MM-dd'T'HH:mm")
               : undefined,
@@ -397,7 +391,7 @@ export default function AssignReviewModal({
             submission_id: initialData.submission_id,
             rubric_id: initialData.rubric_id,
             due_date: initialData.due_date ? format(new TZDate(initialData.due_date), "yyyy-MM-dd'T'HH:mm") : "",
-            rubric_part_ids: initialData.review_assignment_rubric_parts?.map((p) => p.rubric_part_id) || [],
+            rubric_part_ids: initialData.review_assignment_rubric_parts?.map((p) => p.rubric_parts.id) || [],
             release_date: initialData.release_date
               ? format(new TZDate(initialData.release_date), "yyyy-MM-dd'T'HH:mm")
               : undefined,

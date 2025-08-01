@@ -23,7 +23,7 @@ if (email) {
     .then((data) => {
       // eslint-disable-next-line no-console
       console.log(
-        `${process.env["NEXT_PUBLIC_PAWTOGRADER_WEB_URL"]}/auth/callback?token_hash=${data.properties?.hashed_token}`
+        `${process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/magic-link?token_hash=${data.properties?.hashed_token}`
       );
     })
     .catch((error) => {

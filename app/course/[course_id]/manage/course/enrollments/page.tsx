@@ -30,9 +30,8 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useCreate, useDelete, useInvalidate, useList } from "@refinedev/core";
-import { useTable } from "@refinedev/react-table";
-import { type ColumnDef, flexRender } from "@tanstack/react-table";
+import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { useCustomTable } from "@/hooks/useCustomTable";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import Link from "next/link";
@@ -61,8 +60,16 @@ type RemoveStudentModalData = {
 function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
-  const invalidate = useInvalidate();
-  const { mutate: deleteUserRole, isLoading: isDeletingUserRole } = useDelete();
+  const [invalidationTrigger, setInvalidationTrigger] = useState(0);
+  const supabase = createClient();
+
+  const deleteUserRole = async (userRoleId: string) => {
+    const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
+    if (error) throw error;
+    setInvalidationTrigger((prev) => prev + 1);
+  };
+
+  const [isDeletingUserRole, setIsDeletingUserRole] = useState(false);
   // full list of tags with profiles and courses
   // unique list of tags with just name + color
   const [checkedBoxes, setCheckedBoxes] = useState<Set<UserRoleWithPrivateProfileAndUser>>(
@@ -101,34 +108,28 @@ function EnrollmentsTable() {
   const [pageCount, setPageCount] = useState(0);
 
   const handleConfirmRemoveStudent = useCallback(
-    (userRoleIdToRemove: string) => {
-      deleteUserRole(
-        {
-          resource: "user_roles",
-          id: userRoleIdToRemove
-        },
-        {
-          onSuccess: () => {
-            toaster.create({
-              title: "User Removed",
-              description: `${removingStudentData?.userName || "User"} has been removed from the course.`,
-              type: "success"
-            });
-            invalidate({ resource: "user_roles", invalidates: ["list"] });
-            closeRemoveStudentModal();
-          },
-          onError: (error) => {
-            toaster.create({
-              title: "Error Removing User",
-              description: `Failed to remove user: ${error.message}`,
-              type: "error"
-            });
-            closeRemoveStudentModal();
-          }
-        }
-      );
+    async (userRoleIdToRemove: string) => {
+      setIsDeletingUserRole(true);
+      try {
+        await deleteUserRole(userRoleIdToRemove);
+        toaster.create({
+          title: "User Removed",
+          description: `${removingStudentData?.userName || "User"} has been removed from the course.`,
+          type: "success"
+        });
+        closeRemoveStudentModal();
+      } catch (error) {
+        toaster.create({
+          title: "Error Removing User",
+          description: `Failed to remove user: ${error instanceof Error ? error.message : "Unknown error"}`,
+          type: "error"
+        });
+        closeRemoveStudentModal();
+      } finally {
+        setIsDeletingUserRole(false);
+      }
     },
-    [deleteUserRole, invalidate, removingStudentData?.userName, closeRemoveStudentModal]
+    [deleteUserRole, removingStudentData?.userName, closeRemoveStudentModal]
   );
   const handleSingleCheckboxChange = useCallback((user: UserRoleWithPrivateProfileAndUser, checked: boolean) => {
     if (checked === true) {
@@ -145,14 +146,12 @@ function EnrollmentsTable() {
   };
 
   const checkedBoxesRef = useRef(new Set<UserRoleWithPrivateProfileAndUser>());
-  const { mutateAsync: addTag } = useCreate<Tag>({
-    resource: "tags",
-    mutationOptions: {
-      onSuccess: () => {
-        invalidate({ resource: "tags", invalidates: ["list"] });
-      }
-    }
-  });
+
+  const addTag = async (values: Omit<Tag, "id" | "created_at">) => {
+    const { error } = await supabase.from("tags").insert(values);
+    if (error) throw error;
+    setInvalidationTrigger((prev) => prev + 1);
+  };
 
   useEffect(() => {
     if (checkedBoxes.size === 0) {
@@ -374,6 +373,30 @@ function EnrollmentsTable() {
     ]
   );
 
+  // Memoize server filters to prevent unnecessary API calls
+  const serverFilters = useMemo(
+    () => [
+      {
+        field: "class_id",
+        operator: "eq" as const,
+        value: course_id as string
+      }
+    ],
+    [course_id]
+  );
+
+  // Memoize initial state to prevent table re-initialization
+  const initialState = useMemo(
+    () => ({
+      pagination: {
+        pageIndex: 0,
+        pageSize: 50
+      }
+    }),
+    []
+  );
+
+  //TODO: Refactor so that invalidate works, via TableController
   const {
     getHeaderGroups,
     getRowModel,
@@ -385,37 +408,19 @@ function EnrollmentsTable() {
     nextPage,
     previousPage,
     setPageSize,
-    getPrePaginationRowModel
-  } = useTable({
+    getPrePaginationRowModel,
+    refetch
+  } = useCustomTable<UserRoleWithPrivateProfileAndUser>({
     columns,
-    initialState: {
-      columnFilters: [{ id: "class_id", value: course_id as string }],
-      pagination: {
-        pageIndex: 0,
-        pageSize: 50
-      }
-    },
-    refineCoreProps: {
-      resource: "user_roles",
-      filters: {
-        mode: "off"
-      },
-      sorters: {
-        mode: "off"
-      },
-      pagination: {
-        mode: "off"
-      },
-      meta: {
-        select: "*,profiles!private_profile_id(*), users(*)"
-      }
-    },
-    manualPagination: false,
-    manualFiltering: false,
-    manualSorting: false,
-    pageCount,
-    filterFromLeafRows: true
+    resource: "user_roles",
+    serverFilters,
+    select: "*,profiles!private_profile_id(*), users(*)",
+    initialState
   });
+
+  useEffect(() => {
+    refetch();
+  }, [invalidationTrigger, refetch]);
 
   const nRows = getRowCount();
   const pageSize = getState().pagination.pageSize;
@@ -423,7 +428,13 @@ function EnrollmentsTable() {
     setPageCount(Math.ceil(nRows / pageSize));
   }, [nRows, pageSize]);
   const [strategy, setStrategy] = useState<"add" | "remove" | "none">("none");
-  const { mutate: deleteMutation } = useDelete();
+
+  const deleteMutation = async (params: { resource: string; id: string }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from(params.resource).delete().eq("id", params.id);
+    if (error) throw error;
+    setInvalidationTrigger((prev) => prev + 1);
+  };
 
   return (
     <VStack align="start" w="100%">
@@ -575,13 +586,12 @@ function EnrollmentsTable() {
                     addTag={async (name: string, color?: string) => {
                       checkedBoxes.forEach(async (profile) => {
                         await addTag({
-                          values: {
-                            name: name.startsWith("~") ? name.slice(1) : name,
-                            color: color || "gray",
-                            visible: !name.startsWith("~"),
-                            profile_id: profile.private_profile_id,
-                            class_id: course_id as string
-                          }
+                          name: name.startsWith("~") ? name.slice(1) : name,
+                          color: color || "gray",
+                          visible: !name.startsWith("~"),
+                          profile_id: profile.private_profile_id,
+                          class_id: parseInt(course_id as string),
+                          creator_id: currentUser?.id || ""
                         });
                       });
                       setStrategy("none");
@@ -791,11 +801,19 @@ function EnrollmentsTable() {
 export default function EnrollmentsPage() {
   const { course_id } = useParams();
   const [isSyncing, setIsSyncing] = useState(false);
-  const invalidate = useInvalidate();
-  const { data: sections } = useList<ClassSection>({
-    resource: "class_sections",
-    filters: [{ field: "class_id", operator: "eq", value: course_id as string }]
-  });
+  const [sections, setSections] = useState<ClassSection[]>([]);
+  const supabase = createClient();
+
+  useEffect(() => {
+    const fetchSections = async () => {
+      const { data } = await supabase
+        .from("class_sections")
+        .select("*")
+        .eq("class_id", parseInt(course_id as string));
+      setSections(data || []);
+    };
+    fetchSections();
+  }, [course_id, supabase]);
   return (
     <Container>
       <Heading my="4">Enrollments</Heading>
@@ -807,7 +825,7 @@ export default function EnrollmentsPage() {
           Enrollments in this course are linked to the following Canvas sections:
         </Text>
         <List.Root as="ul" pl="4" mb={3}>
-          {sections?.data?.map((section) => (
+          {sections?.map((section: ClassSection) => (
             <List.Item key={section.id} as="li" fontSize="sm">
               <Link href={`https://canvas.instructure.com/courses/${section.canvas_course_id}`}>{section.name}</Link>
             </List.Item>
@@ -829,8 +847,6 @@ export default function EnrollmentsPage() {
                 description: "Canvas enrollments have been synced",
                 type: "success"
               });
-
-              invalidate({ resource: "user_roles", invalidates: ["all"] });
             } catch (error) {
               toaster.create({
                 title: "Error syncing Canvas Enrollments",

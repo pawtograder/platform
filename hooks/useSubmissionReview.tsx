@@ -4,6 +4,7 @@ import { useAssignmentController, useMyReviewAssignments, useReviewAssignment, u
 import {
   useAllCommentsForReview,
   useSubmission,
+  useSubmissionReview,
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "./useSubmission";
@@ -17,6 +18,8 @@ export type SubmissionReviewContextType = {
   setActiveRubricId: (id: number | undefined) => void;
   scrollToRubricId: number | undefined;
   setScrollToRubricId: (id: number | undefined) => void;
+  ignoreAssignedReview: number | undefined;
+  setIgnoreAssignedReview: (ignore: number | undefined) => void;
 };
 
 const SubmissionReviewContext = createContext<SubmissionReviewContextType | undefined>(undefined);
@@ -33,6 +36,7 @@ export function useActiveRubricId() {
 }
 
 export function SubmissionReviewProvider({ children }: { children: React.ReactNode }) {
+  const [ignoreAssignedReview, setIgnoreAssignedReview] = useState<number | undefined>(undefined);
   const [activeReviewAssignmentId, setActiveReviewAssignmentId] = useState<number | undefined>(undefined);
   const [activeRubricId, setActiveRubricId] = useState<number | undefined>(undefined);
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
@@ -53,7 +57,13 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       : undefined;
     const assignedSubmissionReview = writableReviews?.find((wr) => wr.id === reviewAssignment?.submission_review_id);
     //If the review assignment has been completed, don't set it as active
-    if (reviewAssignment && assignedSubmissionReview && !assignedSubmissionReview?.completed_at) {
+    if (
+      !ignoreAssignedReview &&
+      reviewAssignment &&
+      assignedSubmissionReview &&
+      !assignedSubmissionReview?.completed_at &&
+      !reviewAssignment.completed_at
+    ) {
       setActiveReviewAssignmentId(reviewAssignment.id);
       setActiveSubmissionReviewId(reviewAssignment.submission_review_id);
       setActiveRubricId(reviewAssignment.rubric_id);
@@ -61,19 +71,26 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
       //Default to a grading review if it is writable
       const gradingReview = writableReviews.find((wr) => wr.id === submission.grading_review_id);
       if (gradingReview) {
-        setActiveReviewAssignmentId(myAssignedReviews.find((ra) => ra.submission_review_id === gradingReview.id)?.id);
+        if (ignoreAssignedReview) {
+          setActiveReviewAssignmentId(undefined);
+        } else {
+          setActiveReviewAssignmentId(
+            myAssignedReviews.find((ra) => ra.submission_review_id === gradingReview.id && !ra.completed_at)?.id
+          );
+        }
         //Only set submission review id if it is writable!
         setActiveSubmissionReviewId(writableReviews.find((wr) => wr.id === gradingReview.id)?.id ?? undefined);
         setActiveRubricId(gradingReview.rubric_id);
       } else {
-        const firstWritableReview = writableReviews[0];
-        if (firstWritableReview) {
+        if (ignoreAssignedReview) {
+          setActiveReviewAssignmentId(undefined);
+        } else {
           setActiveReviewAssignmentId(
-            myAssignedReviews.find((ra) => ra.submission_review_id === firstWritableReview.id)?.id
+            myAssignedReviews.find((ra) => ra.submission_review_id === writableReviews[0].id && !ra.completed_at)?.id
           );
-          setActiveSubmissionReviewId(firstWritableReview.id);
-          setActiveRubricId(firstWritableReview.rubric_id);
         }
+        setActiveSubmissionReviewId(writableReviews[0].id);
+        setActiveRubricId(writableReviews[0].rubric_id);
       }
     } else {
       //Default to grading review
@@ -88,7 +105,8 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     writableReviews,
     submission,
     assignmentController,
-    setActiveSubmissionReviewId
+    setActiveSubmissionReviewId,
+    ignoreAssignedReview
   ]);
 
   const value = {
@@ -99,7 +117,9 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
     activeRubricId,
     setActiveRubricId,
     scrollToRubricId,
-    setScrollToRubricId
+    setScrollToRubricId,
+    ignoreAssignedReview,
+    setIgnoreAssignedReview
   };
 
   return <SubmissionReviewContext.Provider value={value}>{children}</SubmissionReviewContext.Provider>;
@@ -182,4 +202,16 @@ export function useSetActiveSubmissionReviewId() {
   const ctx = useContext(SubmissionReviewContext);
   if (!ctx) throw new Error("useSetActiveSubmissionReviewId must be used within a SubmissionReviewProvider");
   return ctx.setActiveSubmissionReviewId;
+}
+
+export function useIgnoreAssignedReview() {
+  const ctx = useContext(SubmissionReviewContext);
+  if (!ctx) throw new Error("useIgnoreAssignedReview must be used within a SubmissionReviewProvider");
+  return ctx.ignoreAssignedReview;
+}
+
+export function useSetIgnoreAssignedReview() {
+  const ctx = useContext(SubmissionReviewContext);
+  if (!ctx) throw new Error("useSetIgnoreAssignedReview must be used within a SubmissionReviewProvider");
+  return ctx.setIgnoreAssignedReview;
 }

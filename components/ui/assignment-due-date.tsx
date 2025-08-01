@@ -13,12 +13,13 @@ import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { toaster, Toaster } from "./toaster";
+import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
-  const dueDate = useAssignmentDueDate(assignment);
+  const { private_profile_id, role } = useClassProfiles();
+  const dueDate = useAssignmentDueDate(assignment, { studentPrivateProfileId: private_profile_id });
   const lateTokens = useLateTokens();
   const [open, setOpen] = useState(false);
-  const { private_profile_id, role } = useClassProfiles();
   const course = role.classes;
   const { data: assignmentGroup } = useList<AssignmentGroup>({
     resource: "assignment_groups",
@@ -88,13 +89,13 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
       </Text>
     );
   }
-  //Make sure that our own due date is still in the future
-  const extensionsInHours = lateTokens
-    .filter((e) => e.assignment_id === assignment.id)
-    .map((e) => e.hours)
-    .reduce((a, b) => a + b, 0);
-  const ourDueDate = addHours(new TZDate(assignment.due_date), extensionsInHours);
-  if (isAfter(new TZDate(new Date()), ourDueDate)) {
+
+  // Use the calculated due date from the hook (which considers lab-based scheduling and extensions)
+  if (!dueDate.dueDate) {
+    return <Skeleton height="20px" width="80px" />;
+  }
+
+  if (isAfter(new TZDate(new Date()), dueDate.dueDate)) {
     return <Text>(Firm date: You have passed the due date)</Text>;
   }
   return (
@@ -195,7 +196,10 @@ export function AssignmentDueDate({
   showTimeZone?: boolean;
   showDue?: boolean;
 }) {
-  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment);
+  const { private_profile_id } = useClassProfiles();
+  const { dueDate, originalDueDate, hoursExtended, lateTokensConsumed, time_zone } = useAssignmentDueDate(assignment, {
+    studentPrivateProfileId: private_profile_id
+  });
   if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
@@ -203,9 +207,7 @@ export function AssignmentDueDate({
     <Flex gap={1} wrap="wrap" maxWidth="100%">
       <Flex alignItems={"center"} gap={1} wrap="wrap" minWidth={0}>
         {showDue && <Text flexShrink={0}>Due: </Text>}
-        <Text minWidth={0}>
-          {formatInTimeZone(new TZDate(dueDate), time_zone || "America/New_York", "MMM d h:mm aaa")}
-        </Text>
+        <Text minWidth={0}>{formatInTimeZone(new TZDate(dueDate, time_zone), time_zone, "MMM d h:mm aaa")}</Text>
         {showTimeZone && (
           <Text fontSize="sm" flexShrink={0}>
             ({time_zone})
@@ -226,32 +228,21 @@ export function SelfReviewDueDate({
   assignment,
   showTimeZone = false
 }: {
-  assignment: Assignment;
+  assignment: AssignmentsForStudentDashboard;
   showTimeZone?: boolean;
 }) {
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment);
-  const { data: reviewAssignment } = useList<{ deadline_offset: number }>({
-    resource: "assignment_self_review_settings",
-    meta: {
-      select: "deadline_offset"
-    },
-    filters: [
-      {
-        field: "id",
-        operator: "eq",
-        value: assignment.self_review_setting_id
-      }
-    ]
+  const { private_profile_id } = useClassProfiles();
+  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, {
+    studentPrivateProfileId: private_profile_id
   });
-
-  if (!dueDate || !originalDueDate || !reviewAssignment?.data[0]) {
+  if (!dueDate || !originalDueDate) {
     return <Skeleton height="20px" width="80px" />;
   }
   return (
     <HStack gap={1}>
       <Text>
         {formatInTimeZone(
-          new TZDate(addHours(dueDate, reviewAssignment.data[0].deadline_offset)),
+          new TZDate(addHours(dueDate, assignment.self_review_deadline_offset ?? 0)),
           time_zone || "America/New_York",
           "MMM d h:mm aaa"
         )}

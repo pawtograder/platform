@@ -13,7 +13,7 @@ export default function LinkAccount() {
   );
 
   return (
-    <Alert width="lg" mt="5" mb="5" status="error" maxWidth="100%">
+    <Alert width="100%" mt="5" mb="5" status="error">
       <VStack>
         In order to use this application, you need to link your GitHub account.
         <Button

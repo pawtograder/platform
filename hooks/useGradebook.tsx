@@ -137,15 +137,11 @@ export function useReferencedContent(
                 key={`assignment-${assignment.assignment_id}`}
                 href={`/course/${column?.class_id}/assignments/${assignment.assignment_id}/submissions/${assignment.activesubmissionid}`}
               >
-                Assignment {assignment.assignment_slug}
+                View Submission
               </Link>
             );
           } else {
-            links.push(
-              <Text key={`assignment-${assignment.assignment_id}`}>
-                Assignment {assignment.assignment_slug} (Not submitted)
-              </Text>
-            );
+            links.push(<Text key={`assignment-${assignment.assignment_id}`}>Assignment not submitted</Text>);
           }
         }
       }

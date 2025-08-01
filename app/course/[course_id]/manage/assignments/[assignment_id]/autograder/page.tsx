@@ -3,12 +3,20 @@
 import AutograderConfiguration from "@/components/ui/autograder-configuration";
 import { Field } from "@/components/ui/field";
 import { Radio } from "@/components/ui/radio";
-import RepoSelector from "@/components/ui/repo-selector";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { githubRepoConfigureWebhook } from "@/lib/edgeFunctions";
 import type { Assignment, AutograderWithAssignment } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
-import { Button, Fieldset, Heading, Input, NativeSelectField, NativeSelectRoot, RadioGroup } from "@chakra-ui/react";
+import {
+  Button,
+  Fieldset,
+  Heading,
+  Input,
+  Link,
+  NativeSelectField,
+  NativeSelectRoot,
+  RadioGroup
+} from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -152,26 +160,8 @@ export default function AutograderPage() {
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
-            <Field
-              label="Solution Repository"
-              helperText="The repository that contains the solution code for this assignment. This repository must contain a `pawtograder.yml` file at its root."
-            >
-              <Controller
-                name="grader_repo"
-                control={control}
-                render={({ field }) => {
-                  return (
-                    <RepoSelector
-                      name={field.name}
-                      value={field.value || ""}
-                      onBlur={field.onBlur}
-                      onChange={(repo) => {
-                        field.onChange(repo);
-                      }}
-                    />
-                  );
-                }}
-              />
+            <Field label="Solution Repository">
+              <Link href={`https://github.com/${currentGraderRepo}`}>{currentGraderRepo}</Link>
             </Field>
           </Fieldset.Content>
         </Fieldset.Root>

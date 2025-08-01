@@ -1,5 +1,6 @@
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { Skeleton } from "@/components/ui/skeleton";
+import StudentLabSection from "@/components/ui/student-lab-section";
 import { createClient } from "@/utils/supabase/server";
 import {
   Box,
@@ -18,12 +19,12 @@ import { formatInTimeZone } from "date-fns-tz";
 
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
-
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 export default async function StudentDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase
-    .from("assignments")
-    .select("*, submissions(*, grader_results(*)), classes(time_zone)")
+    .from("assignments_with_effective_due_dates")
+    .select("*, submissions!submissio_assignment_id_fkey(*, grader_results(*)), classes(time_zone)")
     .eq("class_id", course_id)
     .gte("due_date", new Date().toISOString())
     .order("due_date", { ascending: false })
@@ -48,8 +49,11 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     .order("created_at", { ascending: true });
 
   return (
-    <VStack spaceY={8} align="stretch" p={8}>
+    <VStack spaceY={0} align="stretch" p={2}>
       <Heading size="xl">Course Dashboard</Heading>
+      <ResendOrgInvitation />
+
+      <StudentLabSection />
       <Box>
         <Heading size="lg" mb={4}>
           Upcoming Assignments
@@ -74,7 +78,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
                         {assignment.due_date
                           ? formatInTimeZone(
                               new TZDate(assignment.due_date),
-                              assignment.classes.time_zone || "America/New_York",
+                              assignment.classes?.time_zone || "America/New_York",
                               "Pp"
                             )
                           : "No due date"}

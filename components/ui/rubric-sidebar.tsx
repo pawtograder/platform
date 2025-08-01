@@ -74,6 +74,8 @@ import { FaCheckCircle, FaLink, FaTimes, FaTimesCircle } from "react-icons/fa";
 import { isRubricCheckDataWithOptions, type RubricCheckSubOption } from "./code-file";
 import PersonName from "./person-name";
 import { Tooltip } from "./tooltip";
+import RegradeRequestWrapper from "./regrade-request-wrapper";
+import RequestRegradeDialog from "./request-regrade-dialog";
 
 interface CheckOptionType extends OptionBase {
   value: number;
@@ -422,6 +424,7 @@ export function RubricCheckComment({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const submission = useSubmissionMaybe();
 
+  const isGraderOrInstructor = useIsGraderOrInstructor();
   const pathname = usePathname();
 
   const handleEditComment = useCallback(
@@ -464,72 +467,81 @@ export function RubricCheckComment({
       );
     }
   }
+  const hasPoints = comment.points !== null;
+  // Check if student can create a regrade request
+  const canCreateRegradeRequest = !isGraderOrInstructor && hasPoints && !comment.regrade_request_id && comment.released;
+
   return (
-    <Box
-      border="1px solid"
-      borderColor={criteria ? "border.info" : "border.muted"}
-      borderRadius="md"
-      p={0}
-      w="100%"
-      fontSize="sm"
-    >
-      <Box bg={criteria ? "bg.info" : "bg.muted"} pl={1} borderTopRadius="md">
-        <HStack justify="space-between">
-          {comment.__db_pending && <Spinner size="sm" />}
-          <Text fontSize="sm" color="fg.muted">
-            {author?.name} {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
-          </Text>
-          <CommentActions comment={comment} setIsEditing={setIsEditing} />
-        </HStack>
-      </Box>
-      <Box pl={1} pr={1} color="fg.muted">
-        <HStack gap={1}>
-          <Box flexShrink={0}>{pointsText}</Box>{" "}
-          {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
-          {isArtifactComment(comment) && <SubmissionArtifactCommentLink comment={comment} />}
-          {!isLineComment(comment) && !isArtifactComment(comment) && linkedFileId && submission && check?.file && (
-            <Box flexShrink={1}>
-              <Link
-                href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
-              >
-                <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                  {check.file}
-                </Text>
-              </Link>
-            </Box>
-          )}
-          {!isLineComment(comment) &&
-            !isArtifactComment(comment) &&
-            linkedArtifactId &&
-            submission &&
-            check?.artifact && (
-              <Box flexShrink={1}>
-                <Link
-                  href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedArtifactId.toString() }).toString()}`}
-                >
-                  <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
-                    {check.artifact}
-                  </Text>
-                </Link>
-              </Box>
+    <Box role="region" aria-label={`Grading check ${check?.name}`}>
+      <RegradeRequestWrapper regradeRequestId={comment.regrade_request_id}>
+        <Box
+          border="1px solid"
+          borderColor={criteria ? "border.info" : "border.muted"}
+          borderRadius="md"
+          p={0}
+          w="100%"
+          fontSize="sm"
+        >
+          <Box bg={criteria ? "bg.info" : "bg.muted"} pl={1} borderTopRadius="md">
+            <HStack justify="space-between">
+              {comment.__db_pending && <Spinner size="sm" />}
+              <Text fontSize="sm" color="fg.muted">
+                {author?.name} {criteria ? "applied" : "commented"} {formatRelative(comment.created_at, new Date())}
+              </Text>
+              <CommentActions comment={comment} setIsEditing={setIsEditing} />
+            </HStack>
+          </Box>
+          <Box pl={1} pr={1} color="fg.muted">
+            <HStack gap={1}>
+              <Box flexShrink={0}>{pointsText}</Box>{" "}
+              {isLineComment(comment) && <SubmissionFileCommentLink comment={comment} />}{" "}
+              {isArtifactComment(comment) && <SubmissionArtifactCommentLink comment={comment} />}
+              {!isLineComment(comment) && !isArtifactComment(comment) && linkedFileId && submission && check?.file && (
+                <Box flexShrink={1}>
+                  <Link
+                    href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ file_id: linkedFileId.toString() }).toString()}`}
+                  >
+                    <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                      {check.file}
+                    </Text>
+                  </Link>
+                </Box>
+              )}
+              {!isLineComment(comment) &&
+                !isArtifactComment(comment) &&
+                linkedArtifactId &&
+                submission &&
+                check?.artifact && (
+                  <Box flexShrink={1}>
+                    <Link
+                      href={`${linkToSubPage(pathname, "files")}?${new URLSearchParams({ artifact_id: linkedArtifactId.toString() }).toString()}`}
+                    >
+                      <Text as="span" fontSize="xs" color="fg.muted" wordWrap={"break-word"} wordBreak={"break-all"}>
+                        {check.artifact}
+                      </Text>
+                    </Link>
+                  </Box>
+                )}
+            </HStack>
+            {isEditing ? (
+              <MessageInput
+                textAreaRef={messageInputRef}
+                defaultSingleLine={true}
+                value={comment.comment}
+                closeButtonText="Cancel"
+                onClose={() => {
+                  setIsEditing(false);
+                }}
+                sendButtonText="Save"
+                sendMessage={handleEditComment}
+              />
+            ) : (
+              <Markdown>{comment.comment}</Markdown>
             )}
-        </HStack>
-        {isEditing ? (
-          <MessageInput
-            textAreaRef={messageInputRef}
-            defaultSingleLine={true}
-            value={comment.comment}
-            closeButtonText="Cancel"
-            onClose={() => {
-              setIsEditing(false);
-            }}
-            sendButtonText="Save"
-            sendMessage={handleEditComment}
-          />
-        ) : (
-          <Markdown>{comment.comment}</Markdown>
-        )}
-      </Box>
+          </Box>
+          {canCreateRegradeRequest && <RequestRegradeDialog comment={comment} />}
+        </Box>
+      </RegradeRequestWrapper>
     </Box>
   );
 }
@@ -944,7 +956,13 @@ export function RubricCheckGlobal({
               </VStack>
             )}
             {!hasOptions && format == "checkbox" && (
-              <VStack align="flex-start" w="100%">
+              <VStack
+                align="flex-start"
+                w="100%"
+                borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+                borderWidth={gradingIsRequired ? "1px" : "0px"}
+                borderRadius="md"
+              >
                 <HStack justify="space-between" w="100%">
                   <Checkbox
                     disabled={rubricCheckComments.length > 0 || !reviewForThisRubric || !gradingIsPermitted}
@@ -996,7 +1014,13 @@ export function RubricCheckGlobal({
               </VStack>
             )}
             {!hasOptions && format == "radio" && (
-              <VStack align="flex-start" w="100%">
+              <VStack
+                align="flex-start"
+                w="100%"
+                borderColor={gradingIsRequired ? "border.error" : "border.emphasized"}
+                borderWidth={gradingIsRequired ? "1px" : "0px"}
+                borderRadius="md"
+              >
                 <HStack justify="space-between" w="100%">
                   <Radio value={check.id.toString()} disabled={rubricCheckComments.length > 0 || !reviewForThisRubric}>
                     <Field.Label>
@@ -1072,6 +1096,19 @@ export function RubricCheckGlobal({
   );
 }
 
+/**
+ * Renders a form for adding a comment to a rubric check within a submission review.
+ *
+ * Focuses the input on mount and constructs the comment text, optionally including the selected option label.
+ * Creates a new submission comment when submitted, linking to an artifact if applicable.
+ * Invokes the `onSuccess` callback after initiating comment creation.
+ *
+ * @param check - The rubric check to comment on.
+ * @param submissionReview - The current submission review context, if any.
+ * @param selectedOptionIndex - Index of the selected option for option-based checks.
+ * @param linkedArtifactId - ID of the artifact to link the comment to, if applicable.
+ * @param onSuccess - Callback invoked after the comment creation process is initiated.
+ */
 function SubmissionCommentForm({
   check,
   submissionReview,
@@ -1140,6 +1177,7 @@ function SubmissionCommentForm({
             released: submissionReview?.released ?? true,
             submission_review_id: submissionReview?.id ?? null,
             eventually_visible: true,
+            regrade_request_id: null,
             ...artifactInfo
           };
           onSuccess();

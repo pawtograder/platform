@@ -7,7 +7,8 @@ import type {
   Course,
   Submission,
   Tag,
-  UserRole
+  UserRole,
+  LabSectionWithLeader
 } from "@/utils/supabase/DatabaseTypes";
 import { Button, Field, Fieldset, Heading, Input, Box, Flex, Text, Checkbox } from "@chakra-ui/react";
 import { useList, useOne } from "@refinedev/core";
@@ -24,6 +25,7 @@ import { addHours, addMinutes } from "date-fns";
 import HistoryPage from "./historyList";
 import { formatInTimeZone } from "date-fns-tz";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import { LuCheck } from "react-icons/lu";
 import MdEditor from "@/components/ui/md-editor";
 /* types */
@@ -57,7 +59,13 @@ type SubmissionWithUser = Submission & {
     }[];
   } | null;
 };
-export type UserRoleWithUserDetails = UserRole & { users: { email: string; user_id: string } };
+
+export type UserRoleWithUserDetails = UserRole & {
+  users: {
+    email: string;
+    user_id: string;
+  };
+};
 
 function EmailsInnerPage() {
   const { course_id } = useParams();
@@ -70,6 +78,7 @@ function EmailsInnerPage() {
   const tags = useTags();
   const { role: enrollment } = useClassProfiles();
   const [classSectionIds, setClassSectionIds] = useState<number[]>([]);
+  const [labSectionIds, setLabSectionIds] = useState<number[]>([]);
   const [ccList, setCcList] = useState<{ email: string; user_id: string }[]>([]);
   const [replyEmail, setReplyEmail] = useState<string>();
   const [ccSelf, setCcSelf] = useState<boolean>(false);
@@ -99,12 +108,12 @@ function EmailsInnerPage() {
 
   /* Template variables to reference in subject/body that will be resolved with actual values */
   const audienceTemplateVariables: Record<Audience, string[]> = {
-    [Audience.All]: ["course_name", "class_section"],
-    [Audience.CourseStaff]: ["course_name", "class_section"],
-    [Audience.Graders]: ["course_name", "class_section"],
-    [Audience.Students]: ["course_name", "class_section"],
-    [Audience.Instructors]: ["course_name", "class_section"],
-    [Audience.Tag]: ["tag_name", "course_name", "class_section"],
+    [Audience.All]: ["course_name", "class_section", "lab_section"],
+    [Audience.CourseStaff]: ["course_name", "class_section", "lab_section"],
+    [Audience.Graders]: ["course_name", "class_section", "lab_section"],
+    [Audience.Students]: ["course_name", "class_section", "lab_section"],
+    [Audience.Instructors]: ["course_name", "class_section", "lab_section"],
+    [Audience.Tag]: ["tag_name", "course_name", "class_section", "lab_section"],
     [Audience.Submitted]: [
       "assignment_name",
       "assignment_slug",
@@ -112,7 +121,8 @@ function EmailsInnerPage() {
       "assignment_url",
       "assignment_group_name",
       "course_name",
-      "class_section"
+      "class_section",
+      "lab_section"
     ],
     [Audience.NotSubmitted]: [
       "assignment_name",
@@ -121,7 +131,8 @@ function EmailsInnerPage() {
       "assignment_url",
       "assignment_group_name",
       "course_name",
-      "class_section"
+      "class_section",
+      "lab_section"
     ]
   };
 
@@ -140,6 +151,7 @@ function EmailsInnerPage() {
       setAssignment(undefined);
       setReplyEmail(undefined);
       setClassSectionIds([]);
+      setLabSectionIds([]);
     }
     prevEmailsToCreateLength.current = emailsToCreate.length;
   }, [emailsToCreate]);
@@ -214,6 +226,17 @@ function EmailsInnerPage() {
     }
   });
 
+  const { data: labSectionsData } = useList<LabSectionWithLeader>({
+    resource: "lab_sections",
+    meta: {
+      select: "*, profiles!lab_sections_lab_leader_id_fkey(*)"
+    },
+    filters: [{ field: "class_id", operator: "eq", value: course_id }],
+    queryOptions: {
+      enabled: !!course_id
+    }
+  });
+
   const { data: course } = useOne<Course>({
     resource: "classes",
     id: course_id as string,
@@ -240,6 +263,8 @@ function EmailsInnerPage() {
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: assignment?.id }]
   });
+
+  const courseController = useCourseController();
 
   /**
    * Adds all mail to the "preview" section based on the current values in form.
@@ -289,6 +314,9 @@ function EmailsInnerPage() {
     const class_section = classSectionsData?.data.find(
       (section) => userRolesData?.data.find((user) => user.user_id === user_id)?.class_section_id === section.id
     );
+    const lab_section = labSectionsData?.data.find(
+      (section) => userRolesData?.data.find((user) => user.user_id === user_id)?.lab_section_id === section.id
+    );
     let inserted_text = text;
     if (course_name) {
       inserted_text = inserted_text.replace(/{course_name}/g, course_name);
@@ -321,11 +349,14 @@ function EmailsInnerPage() {
     if (class_section) {
       inserted_text = inserted_text.replace(/{class_section}/g, class_section.name);
     }
+    if (lab_section) {
+      inserted_text = inserted_text.replace(/{lab_section}/g, lab_section.name);
+    }
     return inserted_text;
   };
 
   /**
-   * Determines user's due date for assignment in useState based on their exceptions
+   * Determines user's due date for assignment considering both lab-based scheduling and due date exceptions
    * @param profile_id user's private profile id
    * @param group_id user's group (if they're in one)
    * @returns due date in timezone OR null if no assignment
@@ -334,6 +365,20 @@ function EmailsInnerPage() {
     if (!assignment || !dueDateExceptions || !userRolesData) {
       return null;
     }
+
+    let effectiveDueDate: Date;
+
+    // Calculate the lab-aware effective due date if CourseController is loaded
+    if (courseController.isLoaded) {
+      effectiveDueDate = courseController.calculateEffectiveDueDate(assignment, {
+        studentPrivateProfileId: profile_id
+      });
+    } else {
+      // Fallback to original due date if CourseController not loaded
+      effectiveDueDate = new Date(assignment.due_date);
+    }
+
+    // Apply due date exceptions on top of the lab-aware due date
     const myExceptionsForAssignment = dueDateExceptions.data.filter((exception) => {
       return (
         (exception.student_id === profile_id || exception.assignment_group_id === group_id) &&
@@ -342,9 +387,9 @@ function EmailsInnerPage() {
     });
     const hoursExtended = myExceptionsForAssignment.reduce((acc, curr) => acc + curr.hours, 0);
     const minutesExtended = myExceptionsForAssignment.reduce((acc, curr) => acc + curr.minutes, 0);
-    const originalDueDate = new TZDate(assignment.due_date);
-    const dueDate = addMinutes(addHours(originalDueDate, hoursExtended), minutesExtended);
-    return dueDate;
+
+    const finalDueDate = addMinutes(addHours(effectiveDueDate, hoursExtended), minutesExtended);
+    return new TZDate(finalDueDate);
   };
 
   /**
@@ -522,14 +567,32 @@ function EmailsInnerPage() {
     if (includeInstructors) {
       roles.push("instructor");
     }
+    const labSectionLeaders = labSectionsData?.data
+      .filter((section) => labSectionIds.includes(section.id))
+      .map((section) => section.lab_leader_id);
     return (
       userRolesData?.data
         .filter((userRole) => {
-          return (
-            roles.includes(userRole.role) &&
-            (userRole.class_section_id ||
-              (userRole.class_section_id && classSectionIds.includes(userRole.class_section_id)))
-          );
+          // Filter by role
+          if (!roles.includes(userRole.role)) {
+            return false;
+          }
+
+          // Filter by class section if any are selected
+          if (classSectionIds.length > 0 && !classSectionIds.includes(userRole.class_section_id || 0)) {
+            return false;
+          }
+
+          // Filter by lab section if any are selected
+          if (
+            labSectionIds.length > 0 &&
+            !labSectionIds.includes(userRole.lab_section_id || 0) &&
+            !labSectionLeaders?.includes(userRole.private_profile_id)
+          ) {
+            return false;
+          }
+
+          return true;
         })
         .map((userRole) => {
           return userRole.users;
@@ -538,200 +601,247 @@ function EmailsInnerPage() {
   };
 
   return (
-    <Flex flexDirection={"column"} gap="10">
-      <Flex gap="10" width="100%" wrap={{ base: "wrap", lg: "nowrap" }}>
-        <Toaster />
-        <Box width={{ base: "100%" }}>
-          <Heading size="lg" mt="5" mb="5">
-            Draft email
-          </Heading>
-          <Fieldset.Root>
-            <Fieldset.Content>
-              <Field.Root>
-                <Field.Label>Select audience</Field.Label>
-                <Select
-                  onChange={(e) => {
-                    if (e) {
-                      setChoice(e);
-                    }
-                  }}
-                  value={choice}
-                  options={options}
-                />
-              </Field.Root>
-              {choice && (choice.value === Audience.NotSubmitted || choice.value == Audience.Submitted) && (
-                <Field.Root>
-                  <Field.Label>Choose assignment</Field.Label>
-                  <Select
-                    onChange={(e) => (e ? setAssignment(e.value) : null)}
-                    options={assignmentsData?.data.map((a: Assignment) => ({ label: a.title, value: a }))}
-                  />
-                </Field.Root>
-              )}
-              {choice && choice.value === Audience.Tag && (
-                <Field.Root>
-                  <Field.Label>Select Tag</Field.Label>
-                  <Select
-                    getOptionValue={(option) => option.value.id}
-                    onChange={(e) => {
-                      setTag(e?.value);
-                    }}
-                    options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
-                    components={{
-                      Option: ({ data, ...props }) => (
-                        <Box
-                          key={data.value.id}
-                          {...props.innerProps}
-                          p="4px 8px"
-                          cursor="pointer"
-                          _hover={{ bg: "gray.100" }}
-                        >
-                          {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
-                        </Box>
-                      )
-                    }}
-                  />
-                </Field.Root>
-              )}
-              {choice?.value &&
-                [
-                  Audience.All,
-                  Audience.CourseStaff,
-                  Audience.Graders,
-                  Audience.Instructors,
-                  Audience.Students
-                ].includes(choice.value) && (
-                  <Field.Root>
-                    <Field.Label>Select Class Section(s)</Field.Label>
-                    <Select
-                      isMulti={true}
-                      onChange={(e) => {
-                        setClassSectionIds(
-                          e.map((section) => {
-                            return section.value;
-                          })
-                        );
-                      }}
-                      options={classSectionsData?.data.map((section) => {
-                        return { label: section.name, value: section.id };
-                      })}
-                    />
-                  </Field.Root>
-                )}
-              <Field.Root>
-                <Field.Label>Cc emails</Field.Label>
-                <Checkbox.Root
-                  gap="4"
-                  alignItems="flex-start"
-                  checked={ccSelf}
-                  onCheckedChange={(e) => {
-                    if (e.checked && myEmail) {
-                      setCcSelf(true);
-                      setCcList([...ccList, { email: myEmail, user_id: enrollment.user_id }]);
-                    } else {
-                      setCcSelf(false);
-                      setCcList(ccList.filter((cc) => cc.email !== myEmail));
-                    }
-                  }}
-                >
-                  <Checkbox.HiddenInput />
-                  <Checkbox.Control>
-                    <LuCheck />
-                  </Checkbox.Control>
-                  <Text fontSize="sm">Cc my email</Text>
-                </Checkbox.Root>
-                <CreatableSelect
-                  value={ccList.map((cc) => ({ label: cc.email, value: cc.user_id }))}
-                  onChange={(e) => {
-                    if (
-                      myEmail &&
-                      Array.from(e)
-                        .map((item) => item.label)
-                        .includes(myEmail)
-                    ) {
-                      setCcSelf(true);
-                    } else {
-                      setCcSelf(false);
-                    }
-                    setCcList(Array.from(e).map((elem) => ({ email: elem.label, user_id: elem.value })));
-                  }}
-                  isMulti={true}
-                  options={users?.map((a) => ({ label: a.email, value: a.user_id }))}
-                  placeholder="Select or type email addresses..."
-                />
-              </Field.Root>
-              <Field.Root>
-                <Flex gap="2">
-                  <Field.Label>Reply-to</Field.Label>
-                </Flex>
-                <Input
-                  value={replyEmail || ""}
-                  placeholder="Enter your email"
-                  onChange={(e) => {
-                    setReplyEmail(e.target.value);
-                  }}
-                />
-                <Field.HelperText>
-                  Replies will be redirected to this email. If none specified, replies will be sent to the email
-                  associated with your Pawtograder account, {myEmail}
-                </Field.HelperText>
-              </Field.Root>
-              <Field.Root>
-                <Field.Label>Subject</Field.Label>
-                <Input value={subjectLine} onChange={(e) => setSubjectLine(e.target.value)} />
-              </Field.Root>
-              <Field.Root>
-                <Field.Label>Body</Field.Label>
-                <MdEditor
-                  style={{ minWidth: "100%", width: "100%" }}
-                  onChange={(e) => {
-                    if (e) {
-                      setBody(e);
-                    }
-                  }}
-                  value={body}
-                />
-              </Field.Root>
-              <Field.Root>
-                <Field.Label>Template variables:</Field.Label>
-                <Text fontSize="sm">
-                  {choice?.value
-                    ? audienceTemplateVariables[choice.value].map((val) => {
-                        return `{${val}} `;
-                      })
-                    : "No template variales available"}
+    <Box>
+      <Heading size="lg">Create and Send Emails</Heading>
+      <Text fontSize="sm" color="gray.600" mb="2">
+        Send emails to the entire class or to a subset. After preparing your message, you will be able to preview it
+        before sending it.
+      </Text>
+      <Fieldset.Root size="lg" maxW="md">
+        <Fieldset.Content>
+          {/* Existing form fields... */}
+          {choice?.value && (
+            <Field.Root>
+              <Field.Label>Template Variables</Field.Label>
+              <Box p="3" borderWidth="1px" borderRadius="md" bg="gray.50">
+                <Text fontSize="sm" color="gray.600" mb="2">
+                  Available variables for the selected audience:
                 </Text>
-                <Field.HelperText>
-                  These variables can be referenced in brackets {"{}"} in the email subject or body, and will be filled
-                  in with the proper values when available
-                </Field.HelperText>
-              </Field.Root>
-              <Field.Root>
-                <Flex gap="2" alignItems="center">
-                  <Button
-                    onClick={() => {
-                      prepareMail();
-                    }}
-                  >
-                    Prepare mail
-                  </Button>
-                  <Field.HelperText>You&apos;ll be able to review the email before it is sent</Field.HelperText>
+                <Flex wrap="wrap" gap="2">
+                  {choice?.value &&
+                    audienceTemplateVariables[choice.value].map((variable) => (
+                      <Box key={variable} fontSize="xs" bg="blue.100" px="2" py="1" borderRadius="sm">
+                        {`{${variable}}`}
+                      </Box>
+                    ))}
                 </Flex>
-              </Field.Root>
-            </Fieldset.Content>
-          </Fieldset.Root>
-        </Box>
-        <EmailPreviewAndSend userRoles={userRolesData?.data} />
-      </Flex>
-      <HistoryPage userRoles={userRolesData?.data} course={course?.data} />
-    </Flex>
+              </Box>
+            </Field.Root>
+          )}
+
+          <Field.Root>
+            <Field.Label>Email To</Field.Label>
+            <Select
+              value={choice}
+              onChange={(e) => {
+                setChoice(e || undefined);
+                setAssignment(undefined);
+                setTag(undefined);
+              }}
+              options={options}
+            />
+          </Field.Root>
+
+          {/* Existing conditional fields for assignment and tag... */}
+          {choice && (choice.value === Audience.Submitted || choice.value === Audience.NotSubmitted) && (
+            <Field.Root>
+              <Field.Label>Assignment</Field.Label>
+              <Select
+                onChange={(e) => {
+                  setAssignment(e?.value);
+                }}
+                options={assignmentsData?.data.map((assignment) => ({ label: assignment.title, value: assignment }))}
+              />
+            </Field.Root>
+          )}
+
+          {choice && choice.value === Audience.Tag && (
+            <Field.Root>
+              <Field.Label>Select Tag</Field.Label>
+              <Select
+                getOptionValue={(option) => option.value.id}
+                onChange={(e) => {
+                  setTag(e?.value);
+                }}
+                options={uniqueTags.map((tag) => ({ label: tag.name, value: tag }))}
+                components={{
+                  Option: ({ data, ...props }) => (
+                    <Box
+                      key={data.value.id}
+                      {...props.innerProps}
+                      p="4px 8px"
+                      cursor="pointer"
+                      _hover={{ bg: "gray.100" }}
+                    >
+                      {data.value ? <TagDisplay tag={data.value} /> : <div>{data.label}</div>}
+                    </Box>
+                  )
+                }}
+              />
+            </Field.Root>
+          )}
+
+          {choice?.value &&
+            [Audience.All, Audience.CourseStaff, Audience.Graders, Audience.Instructors, Audience.Students].includes(
+              choice.value
+            ) && (
+              <>
+                <Field.Root>
+                  <Field.Label>Select class section(s)</Field.Label>
+                  <Select
+                    aria-label="Select class section(s)"
+                    isMulti={true}
+                    onChange={(e) => {
+                      setClassSectionIds(
+                        e.map((section) => {
+                          return section.value;
+                        })
+                      );
+                    }}
+                    options={classSectionsData?.data.map((section) => {
+                      return { label: section.name, value: section.id };
+                    })}
+                    placeholder="Select class sections (optional)"
+                  />
+                </Field.Root>
+
+                <Field.Root>
+                  <Field.Label>Select lab section(s)</Field.Label>
+                  <Select
+                    isMulti={true}
+                    aria-label="Select lab section(s)"
+                    onChange={(e) => {
+                      setLabSectionIds(
+                        e.map((section) => {
+                          return section.value;
+                        })
+                      );
+                    }}
+                    options={labSectionsData?.data.map((section) => {
+                      return {
+                        label: `${section.name} (${section.profiles?.name || "No leader"})`,
+                        value: section.id
+                      };
+                    })}
+                    placeholder="Select lab sections (optional)"
+                  />
+                </Field.Root>
+              </>
+            )}
+
+          {/* Existing cc email fields... */}
+          <Field.Root>
+            <Field.Label>Cc emails</Field.Label>
+            <Checkbox.Root
+              gap="4"
+              alignItems="flex-start"
+              checked={ccSelf}
+              onCheckedChange={(e) => {
+                if (e.checked && myEmail) {
+                  setCcSelf(true);
+                  setCcList([...ccList, { email: myEmail, user_id: enrollment.user_id }]);
+                } else {
+                  setCcSelf(false);
+                  setCcList(ccList.filter((cc) => cc.email !== myEmail));
+                }
+              }}
+            >
+              <Checkbox.HiddenInput />
+              <Checkbox.Control>
+                <LuCheck />
+              </Checkbox.Control>
+              <Text fontSize="sm">Cc my email</Text>
+            </Checkbox.Root>
+            <CreatableSelect
+              value={ccList.map((cc) => ({ label: cc.email, value: cc.user_id }))}
+              aria-label="Select cc email addresses"
+              onChange={(e) => {
+                if (
+                  myEmail &&
+                  Array.from(e)
+                    .map((item) => item.label)
+                    .includes(myEmail)
+                ) {
+                  setCcSelf(true);
+                } else {
+                  setCcSelf(false);
+                }
+                setCcList(Array.from(e).map((elem) => ({ email: elem.label, user_id: elem.value })));
+              }}
+              isMulti={true}
+              options={users?.map((a) => ({ label: a.email, value: a.user_id }))}
+              placeholder="Select or type email addresses..."
+            />
+          </Field.Root>
+
+          {/* Rest of existing form fields... */}
+          <Field.Root>
+            <Field.Label>Reply-to email</Field.Label>
+            <Input
+              value={replyEmail ?? ""}
+              onChange={(e) => {
+                setReplyEmail(e.target.value);
+              }}
+              placeholder={myEmail ?? ""}
+            />
+          </Field.Root>
+
+          <Field.Root>
+            <Field.Label>Subject</Field.Label>
+            <Input
+              value={subjectLine}
+              onChange={(e) => {
+                setSubjectLine(e.target.value);
+              }}
+            />
+          </Field.Root>
+
+          <Field.Root>
+            <Field.Label>Body</Field.Label>
+            <MdEditor
+              textareaProps={{
+                "aria-label": "Email body"
+              }}
+              value={body}
+              onChange={(value) => {
+                setBody(value ?? "");
+              }}
+              style={{ height: "200px" }}
+            />
+          </Field.Root>
+
+          <Field.Root>
+            <Button
+              type="button"
+              onClick={prepareMail}
+              disabled={
+                !choice ||
+                !choice.value ||
+                !subjectLine ||
+                !body ||
+                (choice.value === Audience.Tag && !tag) ||
+                ((choice.value === Audience.Submitted || choice.value === Audience.NotSubmitted) && !assignment)
+              }
+            >
+              Add to Preview
+            </Button>
+          </Field.Root>
+        </Fieldset.Content>
+      </Fieldset.Root>
+
+      <EmailPreviewAndSend userRoles={userRolesData?.data} />
+    </Box>
   );
 }
 
 export default function EmailsPage() {
   return (
-    <EmailManagementProvider>
-      <EmailsInnerPage />
-    </EmailManagementProvider>
+    <Box p={4}>
+      <EmailManagementProvider>
+        <EmailsInnerPage />
+        <HistoryPage />
+        <Toaster />
+      </EmailManagementProvider>
+    </Box>
   );
 }

@@ -10,7 +10,7 @@ export type QueueMessage<T> = {
   enqueued_at: string;
   message: T;
 };
-const startTime = Date.now();
+
 export async function runHandler() {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -18,8 +18,8 @@ export async function runHandler() {
   );
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_column_recalculate",
-    sleep_seconds: 5,
-    n: 30
+    sleep_seconds: 20,
+    n: 100
   });
   if (result.error) {
     console.error(result.error);
@@ -37,16 +37,17 @@ export async function runHandler() {
       student_id: s.message.student_id,
       gradebook_column_student_id: s.message.gradebook_column_student_id,
       is_private: s.message.is_private,
-      onComplete: () => {
-        adminSupabase
+      onComplete: async () => {
+        await adminSupabase
           .schema("pgmq_public")
-          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id })
-          .then((res) => {
-            console.log(`Archived message ${s.msg_id} after ${Date.now() - startTime}ms`);
-          });
+          .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
       }
     }));
-    await processGradebookCellCalculation(studentColumns, adminSupabase);
+    try {
+      await processGradebookCellCalculation(studentColumns, adminSupabase);
+    } catch (e) {
+      console.error(e);
+    }
   }
 }
 
