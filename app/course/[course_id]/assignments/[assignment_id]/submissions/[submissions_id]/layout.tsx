@@ -16,7 +16,7 @@ import PersonName from "@/components/ui/person-name";
 import { ListOfRubricsInSidebar, RubricCheckComment } from "@/components/ui/rubric-sidebar";
 import SubmissionReviewToolbar, { CompleteReviewButton } from "@/components/ui/submission-review-toolbar";
 import { Toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useCourse } from "@/hooks/useCourseController";
 import {
   SubmissionProvider,
@@ -38,7 +38,7 @@ import { CrudFilter, useInvalidate, useList } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import NextLink from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ElementType as ReactElementType, useRef, useState } from "react";
+import { ElementType as ReactElementType, useMemo, useRef, useState } from "react";
 import { BsFileEarmarkCodeFill, BsThreeDots } from "react-icons/bs";
 import { FaBell, FaCheckCircle, FaFile, FaHistory, FaInfo, FaQuestionCircle, FaTimesCircle } from "react-icons/fa";
 import { FiDownloadCloud, FiRepeat, FiSend } from "react-icons/fi";
@@ -231,6 +231,8 @@ function SubmissionHistory({ submission }: { submission: SubmissionWithFilesGrad
                       <Table.Cell>
                         {historical_submission.is_active ? (
                           <>This submission is active</>
+                        ) : historical_submission.is_not_graded ? (
+                          <>Not for grading</>
                         ) : (
                           <Button
                             variant="outline"
@@ -359,6 +361,7 @@ function ReviewActions() {
   const { private_profile_id } = useClassProfiles();
   const submissionController = useSubmissionController();
   const [updatingReview, setUpdatingReview] = useState(false);
+  const isInstructor = useIsInstructor();
   if (!review) {
     return <Skeleton height="20px" />;
   }
@@ -366,59 +369,64 @@ function ReviewActions() {
     <VStack>
       <Toaster />
       <ReviewStats />
-      <HStack>
-        {!review.completed_at && <CompleteReviewButton />}
-        {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
-          <Button
-            variant="surface"
-            loading={updatingReview}
-            onClick={async () => {
-              try {
-                setUpdatingReview(true);
-                await submissionController.submission_reviews.update(review.id, {
-                  checked_at: new Date().toISOString(),
-                  checked_by: private_profile_id
-                });
-              } finally {
-                setUpdatingReview(false);
-              }
-            }}
-          >
-            Mark as Checked
-          </Button>
-        )}
-        {review.released ? (
-          <Button
-            loading={updatingReview}
-            variant="surface"
-            onClick={async () => {
-              try {
-                setUpdatingReview(true);
-                await submissionController.submission_reviews.update(review.id, { released: false });
-              } finally {
-                setUpdatingReview(false);
-              }
-            }}
-          >
-            Unrelease
-          </Button>
-        ) : (
-          <Button
-            variant="surface"
-            loading={updatingReview}
-            onClick={async () => {
-              try {
-                setUpdatingReview(true);
-                await submissionController.submission_reviews.update(review.id, { released: true });
-              } finally {
-                setUpdatingReview(false);
-              }
-            }}
-          >
-            Release To Student
-          </Button>
-        )}
-      </HStack>
+      {isInstructor && (
+        <VStack>
+          <Heading size="md">Submission Review Actions</Heading>
+          <HStack w="100%" justify="space-between">
+            {!review.completed_at && <CompleteReviewButton />}
+            {review.completed_at && !review.checked_at && private_profile_id !== review.completed_by && (
+              <Button
+                variant="surface"
+                loading={updatingReview}
+                onClick={async () => {
+                  try {
+                    setUpdatingReview(true);
+                    await submissionController.submission_reviews.update(review.id, {
+                      checked_at: new Date().toISOString(),
+                      checked_by: private_profile_id
+                    });
+                  } finally {
+                    setUpdatingReview(false);
+                  }
+                }}
+              >
+                Mark as Checked
+              </Button>
+            )}
+            {review.released ? (
+              <Button
+                loading={updatingReview}
+                variant="surface"
+                onClick={async () => {
+                  try {
+                    setUpdatingReview(true);
+                    await submissionController.submission_reviews.update(review.id, { released: false });
+                  } finally {
+                    setUpdatingReview(false);
+                  }
+                }}
+              >
+                Unrelease
+              </Button>
+            ) : (
+              <Button
+                variant="surface"
+                loading={updatingReview}
+                onClick={async () => {
+                  try {
+                    setUpdatingReview(true);
+                    await submissionController.submission_reviews.update(review.id, { released: true });
+                  } finally {
+                    setUpdatingReview(false);
+                  }
+                }}
+              >
+                Release To Student
+              </Button>
+            )}
+          </HStack>
+        </VStack>
+      )}
     </VStack>
   );
 }
@@ -475,6 +483,11 @@ function RubricView() {
     isLoading: isLoadingReviewAssignment,
     error: reviewAssignmentError
   } = useReviewAssignment(activeReviewAssignmentId);
+  const rubricPartsAdvice = useMemo(() => {
+    return reviewAssignment?.review_assignment_rubric_parts
+      ?.map((part) => reviewAssignment?.rubrics?.rubric_parts?.find((p) => p.id === part.rubric_part_id)?.name)
+      .join(", ");
+  }, [reviewAssignment?.review_assignment_rubric_parts, reviewAssignment?.rubrics?.rubric_parts]);
 
   const reviewId = submission.grading_review_id;
   if (!reviewId) {
@@ -505,6 +518,7 @@ function RubricView() {
             <Heading size="md">
               Review Task: {reviewAssignment.rubrics?.name} ({reviewAssignment.rubrics?.review_round})
             </Heading>
+            {rubricPartsAdvice && <Text fontSize="sm">Only grading rubric part(s): {rubricPartsAdvice}</Text>}
             <Text fontSize="sm">Assigned to: {reviewAssignment.profiles?.name || "N/A"}</Text>
             <Text fontSize="sm">
               Due:{" "}
@@ -569,6 +583,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
   const submitter = useUserProfile(submission.profile_id);
   return (
     <Flex direction="column" minW="0px">
+      <SubmissionReviewToolbar />
       <Flex px={4} py={2} gap="2" alignItems="center" justify="space-between" align="center" wrap="wrap">
         <Box>
           <VStack align="flex-start">
@@ -597,7 +612,16 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
             </HStack>
           </VStack>
         </Box>
-        {!submission.is_active && (
+        {submission.is_not_graded && (
+          <Box flexShrink={1} maxW="lg" rounded="sm" bg="fg.warning" color="fg.inverted" p={2} textAlign="center" m={0}>
+            <Heading size="md">Viewing a not-for-grading submission.</Heading>
+            <Text fontSize="xs">
+              This submission was created with #NOT-GRADED in the commit message and cannot ever become active. It will
+              not be graded. You can still see autograder feedback.
+            </Text>
+          </Box>
+        )}
+        {!submission.is_active && !submission.is_not_graded && (
           <Box rounded="sm" bg="red.fg" color="fg.inverted" px={6} py={2} textAlign="center" m={0}>
             <Heading size="md">Viewing a previous submission.</Heading>
             <Text fontSize="xs">
@@ -611,7 +635,7 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
           <SubmissionHistory submission={submission} />
         </HStack>
       </Flex>
-      <SubmissionReviewToolbar />
+
       <Box
         p={0}
         m={0}

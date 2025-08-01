@@ -22,9 +22,11 @@ import {
 } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
 import {
+  ClassSection,
   GradebookColumn,
   GradebookColumnExternalData,
   GradebookColumnStudent,
+  LabSection,
   UserProfile
 } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -52,7 +54,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
+import { useCreate, useInvalidate, useUpdate, useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import {
   Column,
@@ -92,6 +94,7 @@ import ImportGradebookColumn from "./importGradebookColumn";
 import { FaLock } from "react-icons/fa";
 import { FaLockOpen } from "react-icons/fa6";
 import { Select } from "chakra-react-select";
+import { useParams } from "next/navigation";
 const MemoizedGradebookCell = React.memo(GradebookCell);
 
 function RenderExprDocs() {
@@ -161,10 +164,6 @@ function AddColumnDialog() {
   }, [isOpen, reset]);
 
   const onSubmit = async (data: FieldValues) => {
-    const loadingToast = toaster.loading({
-      title: "Saving...",
-      description: "This may take a few seconds to recalculate..."
-    });
     setIsLoading(true);
     try {
       const dependencies = gradebookController.extractAndValidateDependencies(data.scoreExpression ?? "", -1);
@@ -188,10 +187,13 @@ function AddColumnDialog() {
         invalidates: ["all"]
       });
       setIsLoading(false);
-      toaster.dismiss(loadingToast);
+      toaster.create({
+        title: "Success",
+        description: "Column created successfully",
+        type: "success"
+      });
       setIsOpen(false);
     } catch (e) {
-      toaster.dismiss(loadingToast);
       setIsLoading(false);
       let message = "An unknown error occurred";
       if (e && typeof e === "object" && "message" in e && typeof (e as { message?: string }).message === "string") {
@@ -382,7 +384,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   const scoreExpression = watch("scoreExpression");
 
   const onSubmit = async (data: FieldValues) => {
-    const loadingToast = toaster.loading({
+    const loadingToast = toaster.create({
       title: "Saving...",
       description: "This may take a few seconds to recalculate..."
     });
@@ -823,6 +825,113 @@ function GradebookColumnFilter({
   );
 }
 
+// Section filter component with enhanced select functionality
+function SectionFilter({
+  columnName,
+  columnModel,
+  isOpen,
+  onClose,
+  triggerRef,
+  sections,
+  type
+}: {
+  columnName: string;
+  columnModel: Column<UserProfile, unknown>;
+  isOpen: boolean;
+  onClose: () => void;
+  triggerRef: React.RefObject<HTMLElement>;
+  sections: ClassSection[] | LabSection[];
+  type: "class" | "lab";
+}) {
+  const selectOptions = useMemo(() => {
+    return sections.map((section) => ({
+      label: type === "class" ? section.name : `${section.name}`,
+      value: String(section.id)
+    }));
+  }, [sections, type]);
+
+  const currentValue = columnModel.getFilterValue() as string | string[];
+  const selectedOptions = Array.isArray(currentValue)
+    ? currentValue.map((val) => {
+        const section = sections.find((s) => String(s.id) === val);
+        return {
+          label: section ? (type === "class" ? section.name : `${section.name}`) : val,
+          value: val
+        };
+      })
+    : currentValue
+      ? [
+          {
+            label: sections.find((s) => String(s.id) === currentValue)?.name || currentValue,
+            value: currentValue
+          }
+        ]
+      : [];
+
+  return (
+    <PopoverRoot open={isOpen} onOpenChange={(details) => !details.open && onClose()}>
+      <PopoverTrigger asChild>
+        <Box ref={triggerRef} />
+      </PopoverTrigger>
+      <PopoverContent
+        bg="bg.surface"
+        border="1px solid"
+        borderColor="border.muted"
+        borderRadius="md"
+        boxShadow="lg"
+        minW="300px"
+        maxW="400px"
+        zIndex={1000}
+      >
+        <PopoverBody p={3}>
+          <HStack justifyContent="space-between" mb={3}>
+            <Text fontWeight="semibold" fontSize="sm">
+              Filter {columnName}
+            </Text>
+            <IconButton size="xs" variant="ghost" onClick={onClose} aria-label="Close filter">
+              <Icon as={LuX} boxSize={4} />
+            </IconButton>
+          </HStack>
+
+          <Select
+            size="sm"
+            placeholder={`Filter ${columnName}...`}
+            value={selectedOptions}
+            onChange={(options) => {
+              const values = Array.isArray(options) ? options.map((opt) => opt.value) : [];
+              columnModel.setFilterValue(values.length > 0 ? values : "");
+            }}
+            options={selectOptions}
+            isClearable
+            isSearchable
+            isMulti
+            chakraStyles={{
+              control: (provided) => ({
+                ...provided,
+                bg: "bg.surface",
+                borderColor: "border.muted",
+                _focus: { borderColor: "border.primary" }
+              }),
+              menu: (provided) => ({
+                ...provided,
+                bg: "bg.surface",
+                border: "1px solid",
+                borderColor: "border.muted"
+              }),
+              option: (provided, state) => ({
+                ...provided,
+                bg: state.isSelected ? "bg.primary" : state.isFocused ? "bg.subtle" : "bg.surface",
+                color: state.isSelected ? "fg.inverse" : "fg.default",
+                _hover: { bg: state.isSelected ? "bg.primary" : "bg.subtle" }
+              })
+            }}
+          />
+        </PopoverBody>
+      </PopoverContent>
+    </PopoverRoot>
+  );
+}
+
 function GenericColumnFilter({
   columnName,
   columnModel,
@@ -896,7 +1005,9 @@ function GenericGradebookColumnHeader({
   clearSorting,
   columnModel,
   header,
-  rowModel
+  rowModel,
+  classSections,
+  labSections
 }: {
   columnName: string;
   isSorted: "asc" | "desc" | false;
@@ -905,9 +1016,17 @@ function GenericGradebookColumnHeader({
   columnModel: Column<UserProfile, unknown>;
   header: Header<UserProfile, unknown>;
   rowModel: RowModel<UserProfile>;
+  classSections?: ClassSection[];
+  labSections?: LabSection[];
 }) {
   const [showFilter, setShowFilter] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Determine if this is a section column
+  const isClassSection = columnName === "class_section";
+  const isLabSection = columnName === "lab_section";
+  const isSectionColumn = isClassSection || isLabSection;
+
   return (
     <VStack gap={0} alignItems="stretch" w="100%" minH="48px">
       {/* Main header content */}
@@ -960,7 +1079,18 @@ function GenericGradebookColumnHeader({
         <Text fontWeight="semibold" fontSize="sm" color="fg.default" style={{ userSelect: "none" }} lineHeight="tight">
           {flexRender(header.column.columnDef.header, header.getContext())}
         </Text>
-        {showFilter && (
+        {showFilter && isSectionColumn && (
+          <SectionFilter
+            columnName={columnName}
+            columnModel={columnModel}
+            isOpen={showFilter}
+            onClose={() => setShowFilter(false)}
+            triggerRef={ref}
+            sections={isClassSection ? classSections || [] : labSections || []}
+            type={isClassSection ? "class" : "lab"}
+          />
+        )}
+        {showFilter && !isSectionColumn && (
           <GenericColumnFilter
             columnName={columnName}
             columnModel={columnModel}
@@ -1382,6 +1512,7 @@ function StudentDetailDialog() {
   );
 }
 export default function GradebookTable() {
+  const { course_id } = useParams();
   const students = useStudentRoster();
   const courseController = useCourseController();
   const gradebookController = useGradebookController();
@@ -1393,16 +1524,48 @@ export default function GradebookTable() {
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // Map profile id to section id
-  const profileIdToSectionId = useMemo(() => {
-    const map: Record<string, number | null> = {};
+  // Fetch class sections
+  const { data: classSections } = useList<ClassSection>({
+    resource: "class_sections",
+    filters: [{ field: "class_id", operator: "eq", value: course_id as string }],
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    }
+  });
+
+  // Get lab sections from course controller
+  const { data: labSections } = courseController.listLabSections();
+
+  // Map profile id to section ids and names
+  const profileIdToSectionData = useMemo(() => {
+    const map: Record<
+      string,
+      {
+        classSection: { id: number | null; name: string };
+        labSection: { id: number | null; name: string };
+      }
+    > = {};
+
     allVisibleRoles.forEach((role) => {
       if (role.role === "student") {
-        map[role.private_profile_id] = role.class_section_id ?? null;
+        const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
+        const labSection = labSections?.find((s) => s.id === role.lab_section_id);
+
+        map[role.private_profile_id] = {
+          classSection: {
+            id: role.class_section_id ?? null,
+            name: classSection?.name ?? "No Section"
+          },
+          labSection: {
+            id: role.lab_section_id ?? null,
+            name: labSection?.name ?? "No Lab Section"
+          }
+        };
       }
     });
     return map;
-  }, [allVisibleRoles]);
+  }, [allVisibleRoles, classSections?.data, labSections]);
 
   const columnsForGrouping = gradebookColumns.map((col) => ({
     id: col.id,
@@ -1546,16 +1709,52 @@ export default function GradebookTable() {
         enableColumnFilter: true,
         filterFn: filterFns.includesString,
         enableSorting: true
-      },
-      {
-        id: "student_section",
-        header: "Section",
-        accessorFn: (row) => profileIdToSectionId[row.id] ?? "",
-        enableColumnFilter: true,
-        filterFn: filterFns.includesString,
-        enableSorting: true
       }
     ];
+
+    // Only add class section column if there are class sections
+    if (classSections?.data && classSections.data.length > 0) {
+      cols.push({
+        id: "class_section",
+        header: "Class Section",
+        accessorFn: (row) => profileIdToSectionData[row.id]?.classSection?.name ?? "No Section",
+        cell: ({ row }) => (
+          <Text fontSize="sm">{profileIdToSectionData[row.original.id]?.classSection?.name ?? "No Section"}</Text>
+        ),
+        enableColumnFilter: true,
+        filterFn: (row, columnId, filterValue) => {
+          const sectionData = profileIdToSectionData[row.original.id]?.classSection;
+          if (!sectionData || !filterValue) return true;
+          if (Array.isArray(filterValue)) {
+            return filterValue.includes(String(sectionData.id));
+          }
+          return String(sectionData.id) === filterValue;
+        },
+        enableSorting: true
+      });
+    }
+
+    // Only add lab section column if there are lab sections
+    if (labSections && labSections.length > 0) {
+      cols.push({
+        id: "lab_section",
+        header: "Lab Section",
+        accessorFn: (row) => profileIdToSectionData[row.id]?.labSection?.name ?? "No Lab Section",
+        cell: ({ row }) => (
+          <Text fontSize="sm">{profileIdToSectionData[row.original.id]?.labSection?.name ?? "No Lab Section"}</Text>
+        ),
+        enableColumnFilter: true,
+        filterFn: (row, columnId, filterValue) => {
+          const sectionData = profileIdToSectionData[row.original.id]?.labSection;
+          if (!sectionData || !filterValue) return true;
+          if (Array.isArray(filterValue)) {
+            return filterValue.includes(String(sectionData.id));
+          }
+          return String(sectionData.id) === filterValue;
+        },
+        enableSorting: true
+      });
+    }
 
     // Add grouped gradebook columns
     Object.entries(groupedColumns).forEach(([groupKey, group]) => {
@@ -1616,7 +1815,15 @@ export default function GradebookTable() {
     });
 
     return cols;
-  }, [profileIdToSectionId, gradebookController, groupedColumns, collapsedGroups, findBestColumnToShow]);
+  }, [
+    profileIdToSectionData,
+    gradebookController,
+    groupedColumns,
+    collapsedGroups,
+    findBestColumnToShow,
+    classSections?.data,
+    labSections
+  ]);
 
   // Table instance
   const table = useReactTable({
@@ -1906,6 +2113,8 @@ export default function GradebookTable() {
                         columnModel={header.column}
                         header={header}
                         rowModel={rowModel}
+                        classSections={classSections?.data}
+                        labSections={labSections}
                       />
                     )}
                   </Table.ColumnHeader>

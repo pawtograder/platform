@@ -19,6 +19,7 @@ import { format } from "date-fns";
 import { useParams } from "next/navigation";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
+import { NotGradedSubmissionIcon } from "@/components/ui/not-graded-submission-icon";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -166,7 +167,7 @@ export default function AssignmentPage() {
         assignment_group_id={assignment_group_id}
         profile_id={enrollment?.private_profile_id}
       />
-      <Table.Root maxW="xl">
+      <Table.Root maxW="2xl">
         <Table.Header>
           <Table.Row>
             <Table.ColumnHeader>Submission #</Table.ColumnHeader>
@@ -178,10 +179,11 @@ export default function AssignmentPage() {
         </Table.Header>
         <Table.Body>
           {submissions?.map((submission) => (
-            <Table.Row key={submission.id}>
+            <Table.Row key={submission.id} bg={submission.is_not_graded ? "bg.warning" : ""}>
               <Table.Cell>
                 <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission.id}`}>
                   {submission.is_active ? <ActiveSubmissionIcon /> : ""}
+                  {submission.is_not_graded ? <NotGradedSubmissionIcon /> : ""}
                   {!assignment_group_id || submission.assignment_group_id
                     ? submission.ordinal
                     : `(Old #${submission.ordinal})`}
@@ -210,7 +212,9 @@ export default function AssignmentPage() {
                     ? `${submission.submission_reviews?.total_score}/${assignment.total_points}`
                     : submission.is_active
                       ? "Pending"
-                      : ""}
+                      : submission.is_not_graded
+                        ? "Not for grading"
+                        : ""}
                 </Link>
               </Table.Cell>
             </Table.Row>

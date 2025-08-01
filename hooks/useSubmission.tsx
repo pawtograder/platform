@@ -17,6 +17,7 @@ import {
   HydratedRubricCheck,
   HydratedRubricCriteria,
   HydratedRubricPart,
+  RegradeRequestComment,
   RubricChecks,
   RubricCriteriaWithRubricChecks,
   SubmissionArtifact,
@@ -44,8 +45,9 @@ class SubmissionController {
   readonly submission_file_comments: TableController<"submission_file_comments">;
   readonly submission_artifact_comments: TableController<"submission_artifact_comments">;
   readonly submission_reviews: TableController<"submission_reviews">;
+  readonly submission_regrade_request_comments: TableController<"submission_regrade_request_comments">;
 
-  readonly readyPromise: Promise<[void, void, void, void]>;
+  readonly readyPromise: Promise<[void, void, void, void, void]>;
 
   constructor(
     client: SupabaseClient<Database>,
@@ -81,11 +83,19 @@ class SubmissionController {
       classRealTimeController,
       submissionId: submission_id
     });
+    this.submission_regrade_request_comments = new TableController({
+      client,
+      table: "submission_regrade_request_comments",
+      query: client.from("submission_regrade_request_comments").select("*").eq("submission_id", submission_id),
+      classRealTimeController,
+      submissionId: submission_id
+    });
     this.readyPromise = Promise.all([
       this.submission_comments.readyPromise,
       this.submission_file_comments.readyPromise,
       this.submission_artifact_comments.readyPromise,
-      this.submission_reviews.readyPromise
+      this.submission_reviews.readyPromise,
+      this.submission_regrade_request_comments.readyPromise
     ]);
   }
 
@@ -94,6 +104,7 @@ class SubmissionController {
     this.submission_file_comments.close();
     this.submission_artifact_comments.close();
     this.submission_reviews.close();
+    this.submission_regrade_request_comments.close();
   }
 
   get isReady() {
@@ -292,6 +303,15 @@ export function useSubmissionComments({
   return comments;
 }
 
+/**
+ * Provides a live-updating list of artifact comments for the current submission, excluding deleted comments.
+ *
+ * Invokes optional callbacks when comments are added or removed.
+ *
+ * @param onEnter - Called with newly entered artifact comments.
+ * @param onLeave - Called with artifact comments that have been removed.
+ * @returns An array of current, non-deleted artifact comments for the submission.
+ */
 export function useSubmissionArtifactComments({
   onEnter,
   onLeave
@@ -330,6 +350,93 @@ export function useSubmissionArtifactComments({
   }
   return comments;
 }
+/**
+ * Subscribes to and returns regrade request comments for the current submission, optionally filtered by a specific regrade request ID.
+ *
+ * Invokes optional callbacks when comments are added or removed from the filtered set.
+ *
+ * @param submission_regrade_request_id - If provided, filters comments to those matching this regrade request ID.
+ * @param onEnter - Optional callback invoked with comments that have entered the filtered set.
+ * @param onLeave - Optional callback invoked with comments that have left the filtered set.
+ * @returns An array of regrade request comments matching the filter.
+ */
+export function useSubmissionRegradeRequestComments({
+  submission_regrade_request_id,
+  onEnter,
+  onLeave
+}: {
+  submission_regrade_request_id?: number;
+  onEnter?: (comment: RegradeRequestComment[]) => void;
+  onLeave?: (comment: RegradeRequestComment[]) => void;
+}) {
+  const [comments, setComments] = useState<RegradeRequestComment[]>([]);
+  const ctx = useContext(SubmissionContext);
+  const submissionController = ctx?.submissionController;
+
+  useEffect(() => {
+    if (!submissionController) {
+      setComments([]);
+      return;
+    }
+    const { unsubscribe, data } = submissionController.submission_regrade_request_comments.list(
+      (data, { entered, left }) => {
+        const filteredData = data.filter(
+          (comment) =>
+            submission_regrade_request_id === undefined ||
+            comment.submission_regrade_request_id === submission_regrade_request_id
+        );
+        setComments(filteredData);
+        if (onEnter) {
+          onEnter(
+            entered.filter(
+              (comment) =>
+                submission_regrade_request_id === undefined ||
+                comment.submission_regrade_request_id === submission_regrade_request_id
+            )
+          );
+        }
+        if (onLeave) {
+          onLeave(
+            left.filter(
+              (comment) =>
+                submission_regrade_request_id === undefined ||
+                comment.submission_regrade_request_id === submission_regrade_request_id
+            )
+          );
+        }
+      }
+    );
+    setComments(
+      data.filter(
+        (comment) =>
+          submission_regrade_request_id === undefined ||
+          comment.submission_regrade_request_id === submission_regrade_request_id
+      )
+    );
+    if (onEnter) {
+      onEnter(
+        data.filter(
+          (comment) =>
+            submission_regrade_request_id === undefined ||
+            comment.submission_regrade_request_id === submission_regrade_request_id
+        )
+      );
+    }
+    return () => unsubscribe();
+  }, [submissionController, submission_regrade_request_id, onEnter, onLeave]);
+
+  if (!submissionController) {
+    return [];
+  }
+  return comments;
+}
+
+/**
+ * Returns a reactive submission file comment by its ID, updating as the comment changes in real time.
+ *
+ * @param comment_id - The ID of the submission file comment to subscribe to
+ * @returns The submission file comment object, or undefined if not found
+ */
 export function useSubmissionFileComment(comment_id: number) {
   const submissionController = useSubmissionController();
   const [comment, setComment] = useState<SubmissionFileComment | undefined>(
@@ -971,12 +1078,15 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
         ...rubrics.filter((r) => r.review_round === "self-review" || assignments.some((a) => a.rubric_id === r.id))
       );
     }
-    return submissionReviews?.filter(
+    const ret = submissionReviews?.filter(
       (sr) =>
         writableRubrics.some((r) => r.id === sr.rubric_id) &&
         (rubric_id === undefined || sr.rubric_id === rubric_id) &&
         (role.role === "instructor" || role.role == "grader" || !sr.completed_at)
     );
+    //Make sure no duplicates by review id
+    const uniqueReviews = ret?.filter((sr, index, self) => index === self.findIndex((t) => t.id === sr.id));
+    return uniqueReviews;
   }, [role, rubrics, submissionReviews, assignments, rubric_id]);
   return memoizedReviews;
 }
