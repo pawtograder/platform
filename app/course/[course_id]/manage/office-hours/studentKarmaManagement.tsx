@@ -1,21 +1,20 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge, VStack, Input } from "@chakra-ui/react";
-import { Button } from "@/components/ui/button";
-import { useParams } from "next/navigation";
-import { BsStar, BsStarFill, BsPerson, BsPlus, BsPencil, BsSearch, BsTrash } from "react-icons/bs";
-import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useDelete } from "@refinedev/core";
+import { useStudentRoster } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
+import { useConnectionStatus, useStudentKarmaNotes } from "@/hooks/useOfficeHoursRealtime";
+import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { Badge, Box, Flex, Heading, HStack, Icon, Input, Stack, Text, VStack } from "@chakra-ui/react";
+import { useDelete } from "@refinedev/core";
+import { formatDistanceToNow } from "date-fns";
+import { useMemo, useState } from "react";
+import { BsPencil, BsPerson, BsPlus, BsSearch, BsStar, BsStarFill, BsTrash } from "react-icons/bs";
 import CreateKarmaEntryModal from "./modals/createKarmaEntryModal";
 import EditKarmaEntryModal from "./modals/editKarmaEntryModal";
-import { useOfficeHoursRealtime, useStudentKarmaNotes } from "@/hooks/useOfficeHoursRealtime";
-import { useStudentRoster } from "@/hooks/useClassProfiles";
-import { useState, useMemo } from "react";
-import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type KarmaEntryWithDetails = StudentKarmaNotes & {
   student_profile?: UserProfile;
@@ -28,7 +27,6 @@ type KarmaEntryWithDetails = StudentKarmaNotes & {
  * Uses real-time updates to show karma changes immediately across all staff.
  */
 export default function StudentKarmaManagement() {
-  const { course_id } = useParams();
   const [searchTerm, setSearchTerm] = useState("");
 
   // Modal management
@@ -46,11 +44,7 @@ export default function StudentKarmaManagement() {
     isConnected,
     connectionStatus,
     isLoading: realtimeLoading
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: false, // Not needed for karma
-    enableStaffData: true // Enable staff data subscriptions
-  });
+  } = useConnectionStatus();
 
   // Get all student profiles from the class
   const studentProfiles = useStudentRoster();

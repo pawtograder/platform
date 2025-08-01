@@ -262,6 +262,9 @@ export default class TableController<
 
   private _nonExistantKeys: Set<IDType> = new Set();
   private _maybeRefetchKey(id: IDType) {
+    if(!this._ready) {
+      return;
+    }
     if (this._nonExistantKeys.has(id)) {
       return;
     }

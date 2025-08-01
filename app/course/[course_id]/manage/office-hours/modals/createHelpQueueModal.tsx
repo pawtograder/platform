@@ -2,12 +2,11 @@
 
 import { Box, Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useCreate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
+import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
-import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 
 type HelpQueueFormData = {
   name: string;
@@ -51,7 +50,9 @@ export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: Cre
     }
   });
 
-  const { mutateAsync: createQueue } = useCreate<HelpQueue>();
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpQueues } = controller;
 
   const handleClose = () => {
     reset();
@@ -60,28 +61,22 @@ export default function CreateHelpQueueModal({ isOpen, onClose, onSuccess }: Cre
 
   const onSubmit = async (data: HelpQueueFormData) => {
     try {
-      await createQueue({
-        resource: "help_queues",
-        values: {
-          class_id: Number(course_id),
-          name: data.name,
-          description: data.description,
-          queue_type: data.queue_type,
-          available: data.available,
-          is_active: data.is_active,
-          max_concurrent_requests: data.max_concurrent_requests || null,
-          color: data.color || null,
-          closing_at: data.closing_at || null,
-          depth: 0 // Initialize with 0 depth
-        },
-        successNotification: {
-          message: "Help queue created successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to create help queue",
-          type: "error"
-        }
+      await helpQueues.create({
+        class_id: Number(course_id),
+        name: data.name,
+        description: data.description,
+        queue_type: data.queue_type,
+        available: data.available,
+        is_active: data.is_active,
+        max_concurrent_requests: data.max_concurrent_requests || null,
+        color: data.color || null,
+        closing_at: data.closing_at || null,
+        depth: 0 // Initialize with 0 depth
+      });
+      
+      toaster.success({
+        title: "Success",
+        description: "Help queue created successfully"
       });
       handleClose();
       onSuccess();

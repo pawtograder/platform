@@ -3,13 +3,14 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
-import { toaster } from "@/components/ui/toaster";
+import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useHelpRequests,
   useHelpRequestStudents,
   useHelpRequestTemplates,
-  useOfficeHoursRealtime
+  useHelpQueues,
+  useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import {
   Assignment,
@@ -22,7 +23,7 @@ import {
   SubmissionFile
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Fieldset, Heading, IconButton, Input, Stack, Text, Textarea } from "@chakra-ui/react";
-import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
+import { useList } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
 import { X } from "lucide-react";
@@ -61,8 +62,7 @@ export default function HelpRequestForm() {
     watch,
     reset,
     formState: { errors, isSubmitting },
-    handleSubmit,
-    refineCore: { onFinish }
+    handleSubmit
   } = useForm<HelpRequest & { file_references?: HelpRequestFormFileReference[] }>({
     defaultValues: async () => {
       return {
@@ -94,194 +94,20 @@ export default function HelpRequestForm() {
           });
         }
       },
-      onMutationSuccess: async (data) => {
-        try {
-          // Get current selected students from ref to avoid closure issues
-          const currentSelectedStudents = selectedStudentsRef.current;
-
-          if (!data?.data?.id) {
-            throw new Error("Help request ID not found in response data");
-          }
-
-          // Add all selected students to help_request_students
-          if (currentSelectedStudents.length > 0) {
-            for (const studentId of currentSelectedStudents) {
-              try {
-                await createStudentAssociation({
-                  values: {
-                    help_request_id: data.data.id,
-                    profile_id: studentId,
-                    class_id: Number.parseInt(course_id as string)
-                  }
-                });
-              } catch (error) {
-                toaster.error({
-                  title: "Error",
-                  description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
-                });
-                throw new Error(
-                  `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
-                );
-              }
-            }
-
-            // Log activity for all students in the help request
-            for (const studentId of currentSelectedStudents) {
-              try {
-                await createStudentActivity({
-                  values: {
-                    student_profile_id: studentId,
-                    class_id: Number.parseInt(course_id as string),
-                    help_request_id: data.data.id,
-                    activity_type: "request_created",
-                    activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === data.data.help_queue)?.name || "Unknown"}`
-                  }
-                });
-              } catch (error) {
-                console.error(`Failed to log activity for student:`, error);
-                // Don't throw here - activity logging shouldn't block request creation
-              }
-            }
-          } else {
-            toaster.error({
-              title: "Error",
-              description: "No students selected for help request"
-            });
-            throw new Error("No students selected for help request");
-          }
-
-          // Check if we need to update the help request to private
-          const intendedPrivacy = getValues("_intended_privacy");
-          if (intendedPrivacy) {
-            try {
-              await updateHelpRequest({
-                id: data.data.id,
-                values: { is_private: true }
-              });
-              toaster.success({
-                title: "Success",
-                description: "Private help request successfully created."
-              });
-            } catch {
-              try {
-                await deleteHelpRequest({
-                  id: data.data.id,
-                  resource: "help_requests"
-                });
-              } catch {
-                throw new Error("Failed to update help request to private");
-              }
-              toaster.error({
-                title: "Error",
-                description:
-                  "Failed to update help request to private, please manually delete the request to avoid leaking private information."
-              });
-            }
-          }
-
-          // Create file references if any
-          const fileReferences = getValues("file_references") || [];
-          if (fileReferences.length > 0) {
-            // Get assignment_id from the selected submission
-            const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
-            if (!selectedSubmission?.assignment_id) {
-              throw new Error("Assignment ID not found for the selected submission");
-            }
-
-            for (const ref of fileReferences) {
-              try {
-                await createFileReference({
-                  values: {
-                    help_request_id: data.data.id,
-                    class_id: Number.parseInt(course_id as string),
-                    assignment_id: selectedSubmission.assignment_id,
-                    submission_file_id: ref.submission_file_id,
-                    submission_id: getValues("referenced_submission_id"),
-                    line_number: ref.line_number
-                  }
-                });
-              } catch (error) {
-                toaster.error({
-                  title: "Error",
-                  description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                });
-                throw new Error(
-                  `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                );
-              }
-            }
-          }
-
-          toaster.success({
-            title: "Success",
-            description: "Help request successfully created. Redirecting to queue view..."
-          });
-
-          // Reset form state after successful submission
-          reset({
-            help_queue: Number.parseInt(queue_id as string),
-            file_references: [],
-            location_type: "remote" as HelpRequestLocationType,
-            request: "",
-            is_private: false,
-            template_id: undefined,
-            referenced_submission_id: undefined,
-            followup_to: undefined
-          });
-
-          // Reset local state variables
-          setSelectedStudents(private_profile_id ? [private_profile_id] : []);
-          setSelectedAssignmentId(null);
-          setSelectedSubmissionId(null);
-
-          // Navigate to queue view
-          router.push(`/course/${course_id}/office-hours/${queue_id}/${data.data.id}`);
-        } catch (error) {
-          toaster.error({
-            title: "Error",
-            description: error instanceof Error ? error.message : "Failed to complete help request creation"
-          });
-        }
-      }
     }
   });
 
   const { private_profile_id } = useClassProfiles();
 
-  // Refine mutation hooks for creating related data
-  const { mutateAsync: createStudentAssociation } = useCreate({
-    resource: "help_request_students"
-  });
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity } = controller;
 
-  const { mutateAsync: updateHelpRequest } = useUpdate({
-    resource: "help_requests"
-  });
-
-  const { mutateAsync: deleteHelpRequest } = useDelete();
-
-  const { mutateAsync: createFileReference } = useCreate({
-    resource: "help_request_file_references"
-  });
-
-  // Hook for logging student activity
-  const { mutateAsync: createStudentActivity } = useCreate({
-    resource: "student_help_activity"
-  });
-
-  // Use realtime hook to get available help queues with proper error handling
-  const {
-    data: realtimeData,
-    isLoading: isLoadingQueues,
-    connectionError
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true,
-    onlyAvailableQueues: true,
-    enableActiveRequests: false,
-    enableStaffData: false
-  });
-
-  const { helpQueues } = realtimeData;
+  // Get available help queues using individual hook
+  const allHelpQueues = useHelpQueues();
+  const helpQueues = allHelpQueues.filter(queue => queue.available);
+  const isLoadingQueues = false; // Individual hooks don't expose loading state
+  const connectionError = null; // Will be handled by connection status if needed
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -482,7 +308,7 @@ export default function HelpRequestForm() {
       // Group requests are always allowed - no validation needed
 
       // Create a custom onFinish function that excludes file_references and adds required fields
-      const customOnFinish = (values: Record<string, unknown>) => {
+      const customOnFinish = async (values: Record<string, unknown>) => {
         // Exclude file_references from the submission data since it's not a column in help_requests table
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { _intended_privacy, file_references, ...helpRequestData } = values;
@@ -501,23 +327,162 @@ export default function HelpRequestForm() {
           is_private: false
         };
 
-        // Store intended privacy separately (not in database data)
-        setValue("_intended_privacy", intendedPrivacy);
-        return onFinish(finalData);
+        try {
+          const createdHelpRequest = await helpRequests.create(finalData as HelpRequest);
+          // Get current selected students from ref to avoid closure issues
+          const currentSelectedStudents = selectedStudentsRef.current;
+
+          if (!createdHelpRequest.id) {
+            throw new Error("Help request ID not found in response data");
+          }
+
+          // Add all selected students to help_request_students
+          if (currentSelectedStudents.length > 0) {
+            for (const studentId of currentSelectedStudents) {
+              try {
+                await helpRequestStudents.create({
+                  help_request_id: createdHelpRequest.id,
+                  profile_id: studentId,
+                  class_id: Number.parseInt(course_id as string)
+                });
+              } catch (error) {
+                toaster.error({
+                  title: "Error",
+                  description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
+                });
+                throw new Error(
+                  `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
+                );
+              }
+            }
+
+            // Log activity for all students in the help request
+            for (const studentId of currentSelectedStudents) {
+              try {
+                await studentHelpActivity.create({
+                  student_profile_id: studentId,
+                  class_id: Number.parseInt(course_id as string),
+                  help_request_id: createdHelpRequest.id,
+                  activity_type: "request_created",
+                  activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown"}`
+                });
+              } catch (error) {
+                console.error(`Failed to log activity for student:`, error);
+                // Don't throw here - activity logging shouldn't block request creation
+              }
+            }
+          } else {
+            toaster.error({
+              title: "Error",
+              description: "No students selected for help request"
+            });
+            throw new Error("No students selected for help request");
+          }
+
+          // Check if we need to update the help request to private
+          if (intendedPrivacy) {
+            try {
+              await helpRequests.update(createdHelpRequest.id, { is_private: true });
+              toaster.success({
+                title: "Success",
+                description: "Private help request successfully created."
+              });
+            } catch {
+              try {
+                await helpRequests.delete(createdHelpRequest.id);
+              } catch {
+                throw new Error("Failed to update help request to private");
+              }
+              toaster.error({
+                title: "Error",
+                description:
+                  "Failed to update help request to private, please manually delete the request to avoid leaking private information."
+              });
+            }
+          }
+
+          // Create file references if any
+          const fileReferences = getValues("file_references") || [];
+          if (fileReferences.length > 0) {
+            // Get assignment_id from the selected submission
+            const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
+            if (!selectedSubmission?.assignment_id) {
+              throw new Error("Assignment ID not found for the selected submission");
+            }
+
+            for (const ref of fileReferences) {
+              try {
+                await helpRequestFileReferences.create({
+                  help_request_id: createdHelpRequest.id,
+                  class_id: Number.parseInt(course_id as string),
+                  assignment_id: selectedSubmission.assignment_id,
+                  submission_file_id: ref.submission_file_id,
+                  submission_id: getValues("referenced_submission_id"),
+                  line_number: ref.line_number
+                });
+              } catch (error) {
+                toaster.error({
+                  title: "Error",
+                  description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                });
+                throw new Error(
+                  `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                );
+              }
+            }
+          }
+
+          toaster.success({
+            title: "Success",
+            description: "Help request successfully created. Redirecting to queue view..."
+          });
+
+          // Reset form state after successful submission
+          reset({
+            help_queue: Number.parseInt(queue_id as string),
+            file_references: [],
+            location_type: "remote" as HelpRequestLocationType,
+            request: "",
+            is_private: false,
+            template_id: undefined,
+            referenced_submission_id: undefined,
+            followup_to: undefined
+          });
+
+          // Reset local state variables
+          setSelectedStudents(private_profile_id ? [private_profile_id] : []);
+          setSelectedAssignmentId(null);
+          setSelectedSubmissionId(null);
+
+          // Navigate to queue view
+          router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
+        } catch (error) {
+          toaster.error({
+            title: "Error",
+            description: error instanceof Error ? error.message : "Failed to complete help request creation"
+          });
+        }
       };
 
       handleSubmit(customOnFinish)();
     },
     [
       handleSubmit,
-      onFinish,
       private_profile_id,
       course_id,
       userActiveRequests,
       getValues,
       selectedStudents,
-      setValue,
-      selectedSubmissionId
+      selectedSubmissionId,
+      helpQueues,
+      helpRequestFileReferences,
+      helpRequests,
+      helpRequestStudents,
+      queue_id,
+      router,
+      reset,
+      submissions?.data,
+      studentHelpActivity,
     ]
   );
 
@@ -550,15 +515,16 @@ export default function HelpRequestForm() {
   const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
   const wouldConflict = Boolean(
     selectedHelpQueue &&
-      isCreatingSoloRequest &&
-      userActiveRequests.some(
-        (request) =>
-          request.help_queue === selectedHelpQueue && request.student_count === 1 && request.is_private === is_private
-      )
+    isCreatingSoloRequest &&
+    userActiveRequests.some(
+      (request) =>
+        request.help_queue === selectedHelpQueue && request.student_count === 1 && request.is_private === is_private
+    )
   );
 
   return (
     <form onSubmit={onSubmit} aria-label="New Help Request Form">
+      <Toaster />
       <Heading>Request Live Help</Heading>
       <Text>Submit a request to get help synchronously from a TA via text or video chat.</Text>
 
@@ -598,9 +564,9 @@ export default function HelpRequestForm() {
                   value={
                     field.value
                       ? ({
-                          label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
-                          value: field.value.toString()
-                        } as SelectOption)
+                        label: helpQueues?.find((q) => q.id === field.value)?.name || "Unknown",
+                        value: field.value.toString()
+                      } as SelectOption)
                       : null
                   }
                   onChange={(option: SelectOption | null) => {
@@ -644,9 +610,9 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                            label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
-                            value: field.value.toString()
-                          } as SelectOption)
+                          label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
+                          value: field.value.toString()
+                        } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {
@@ -714,9 +680,9 @@ export default function HelpRequestForm() {
               value={
                 selectedAssignmentId
                   ? ({
-                      label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
-                      value: selectedAssignmentId.toString()
-                    } as SelectOption)
+                    label: assignments?.data?.find((a) => a.id === selectedAssignmentId)?.title || "Unknown",
+                    value: selectedAssignmentId.toString()
+                  } as SelectOption)
                   : null
               }
               onChange={(option: SelectOption | null) => {
@@ -756,10 +722,10 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                            label:
-                              submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
-                            value: field.value.toString()
-                          } as SelectOption)
+                          label:
+                            submissions?.data?.find((s: Submission) => s.id === field.value)?.repository || "Unknown",
+                          value: field.value.toString()
+                        } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {
@@ -932,9 +898,9 @@ export default function HelpRequestForm() {
                   value={
                     field.value
                       ? {
-                          label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
-                          value: field.value
-                        }
+                        label: field.value.charAt(0).toUpperCase() + field.value.slice(1).replace("_", " "),
+                        value: field.value
+                      }
                       : null
                   }
                   onChange={(option: { label: string; value: string } | null) => {
@@ -967,11 +933,11 @@ export default function HelpRequestForm() {
                     value={
                       field.value
                         ? ({
-                            label:
-                              userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
-                                "..." || "",
-                            value: field.value.toString()
-                          } as SelectOption)
+                          label:
+                            userPreviousRequests.find((r) => r.id === field.value)?.request.substring(0, 60) +
+                            "..." || "",
+                          value: field.value.toString()
+                        } as SelectOption)
                         : null
                     }
                     onChange={(option: SelectOption | null) => {

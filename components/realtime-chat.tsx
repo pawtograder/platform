@@ -7,7 +7,7 @@ import { useChatScroll } from "@/hooks/use-chat-scroll";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
-import { useOfficeHoursController, useOfficeHoursRealtime, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
+import { useOfficeHoursController, useRealtimeChat, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
@@ -124,9 +124,8 @@ export const RealtimeChat = ({
     resource: "student_help_activity"
   });
 
-  // Use the enhanced office hours realtime hook with chat functionality enabled
+  // Use the new realtime chat hook for chat functionality
   const {
-    data,
     sendMessage,
     markMessageAsRead,
     isConnected,
@@ -134,9 +133,9 @@ export const RealtimeChat = ({
     isAuthorized,
     connectionError,
     readReceipts
-  } = useOfficeHoursRealtime({
-    classId: helpRequest.class_id,
+  } = useRealtimeChat({
     helpRequestId: helpRequest.id,
+    classId: helpRequest.class_id,
     enableChat: true
   });
 
@@ -151,66 +150,19 @@ export const RealtimeChat = ({
     return new Date().toISOString();
   };
 
-  // Smart message prioritization based on data freshness and completeness
+  // Use database messages if provided, otherwise empty array (chat hook will handle real-time messages)
   const allMessages = useMemo(() => {
-    const hookMessages = data?.helpRequestMessages || [];
-    const propMessages = databaseMessages || [];
-
-    // If we have no data from either source, return empty array
-    if (hookMessages.length === 0 && propMessages.length === 0) {
+    if (!databaseMessages || databaseMessages.length === 0) {
       return [];
     }
 
-    // If we only have data from one source, use that
-    if (hookMessages.length === 0) {
-      return propMessages.sort((a, b) => {
-        const aTime = getMessageTimestamp(a);
-        const bTime = getMessageTimestamp(b);
-        return new Date(aTime).getTime() - new Date(bTime).getTime();
-      });
-    }
-
-    if (propMessages.length === 0) {
-      return hookMessages.sort((a, b) => {
-        const aTime = getMessageTimestamp(a);
-        const bTime = getMessageTimestamp(b);
-        return new Date(aTime).getTime() - new Date(bTime).getTime();
-      });
-    }
-
-    // If we have data from both sources, determine which is fresher
-    // Compare the latest message timestamp from each source
-    const latestHookMessage = hookMessages.reduce((latest, msg) => {
-      const msgTime = new Date(getMessageTimestamp(msg)).getTime();
-      const latestTime = new Date(getMessageTimestamp(latest)).getTime();
-      return msgTime > latestTime ? msg : latest;
-    });
-
-    const latestPropMessage = propMessages.reduce((latest, msg) => {
-      const msgTime = new Date(getMessageTimestamp(msg)).getTime();
-      const latestTime = new Date(getMessageTimestamp(latest)).getTime();
-      return msgTime > latestTime ? msg : latest;
-    });
-
-    const hookLatestTime = new Date(getMessageTimestamp(latestHookMessage)).getTime();
-    const propLatestTime = new Date(getMessageTimestamp(latestPropMessage)).getTime();
-
-    // Use the source with the more recent latest message
-    // Also consider the total count - if one source has significantly more messages
-    // and the timestamps are close (within 5 seconds), prefer the larger dataset
-    const timeDifference = Math.abs(hookLatestTime - propLatestTime);
-    const shouldUseHookData =
-      hookLatestTime > propLatestTime || (timeDifference < 5000 && hookMessages.length >= propMessages.length);
-
-    const selectedMessages = shouldUseHookData ? hookMessages : propMessages;
-
     // Sort messages by creation time to ensure proper order
-    return selectedMessages.sort((a, b) => {
+    return databaseMessages.sort((a, b) => {
       const aTime = getMessageTimestamp(a);
       const bTime = getMessageTimestamp(b);
       return new Date(aTime).getTime() - new Date(bTime).getTime();
     });
-  }, [data?.helpRequestMessages, databaseMessages]);
+  }, [databaseMessages]);
 
   // Notify parent component when messages change
   useEffect(() => {

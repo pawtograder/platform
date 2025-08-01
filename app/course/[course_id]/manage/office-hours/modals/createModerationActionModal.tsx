@@ -2,15 +2,14 @@
 
 import { Box, Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useCreate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
-import { useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
-import type { HelpRequestModeration, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type ModerationActionFormData = {
   student_profile_id: string;
@@ -72,7 +71,9 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
       .slice(0, 100); // Limit to 100 most recent
   }, [allHelpRequests, course_id]);
 
-  const { mutateAsync: createModerationAction } = useCreate<HelpRequestModeration>();
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpRequestModeration } = controller;
 
   const handleClose = () => {
     reset();
@@ -97,28 +98,22 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
         expires_at = expirationDate.toISOString();
       }
 
-      await createModerationAction({
-        resource: "help_request_moderation",
-        values: {
-          class_id: Number(course_id),
-          student_profile_id: data.student_profile_id,
-          moderator_profile_id: private_profile_id,
-          action_type: data.action_type,
-          reason: data.reason || null,
-          duration_minutes: data.duration_minutes || null,
-          help_request_id: data.help_request_id,
-          message_id: data.message_id || null,
-          is_permanent: data.action_type === "permanent_ban",
-          expires_at
-        },
-        successNotification: {
-          message: "Moderation action created successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to create moderation action",
-          type: "error"
-        }
+      await helpRequestModeration.create({
+        class_id: Number(course_id),
+        student_profile_id: data.student_profile_id,
+        moderator_profile_id: private_profile_id,
+        action_type: data.action_type as "warning" | "temporary_ban" | "permanent_ban",
+        reason: data.reason || null,
+        duration_minutes: data.duration_minutes || null,
+        help_request_id: data.help_request_id,
+        message_id: data.message_id || null,
+        is_permanent: data.action_type === "permanent_ban",
+        expires_at
+      });
+      
+      toaster.success({
+        title: "Success",
+        description: "Moderation action created successfully"
       });
       handleClose();
       onSuccess();

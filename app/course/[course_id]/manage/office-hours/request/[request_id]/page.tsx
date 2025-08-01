@@ -6,7 +6,7 @@ import { BsClipboardCheck, BsClipboardCheckFill, BsCheckCircle, BsXCircle } from
 import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/react";
 import { Alert } from "@/components/ui/alert";
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequest, useConnectionStatus } from "@/hooks/useOfficeHoursRealtime";
 
 /**
  * Component for displaying status-specific visual indicators and information
@@ -77,26 +77,15 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
  * @returns JSX element for the help request page
  */
 export default function HelpRequestPage() {
-  const { request_id, course_id } = useParams();
+  const { request_id } = useParams();
 
-  // Set up real-time subscriptions for this help request
-  const {
-    data: realtimeData,
-    isConnected,
-    connectionStatus,
-    isLoading: realtimeLoading
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    helpRequestId: Number(request_id),
-    enableStaffData: true,
-    enableGlobalQueues: false // Not needed for individual request view
-  });
+  // Get help request data and connection status using individual hooks
+  const request = useHelpRequest(Number(request_id));
+  const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
 
-  if (realtimeLoading || !realtimeData.helpRequest) {
+  if (realtimeLoading || !request) {
     return <Skeleton />;
   }
-
-  const request = realtimeData.helpRequest;
 
   return (
     <Box>

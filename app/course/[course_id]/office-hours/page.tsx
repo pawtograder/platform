@@ -9,24 +9,32 @@ import PersonAvatar from "@/components/ui/person-avatar";
 import { useMemo, useCallback } from "react";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { ClassProfileProvider } from "@/hooks/useClassProfiles";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpQueues,
+  useHelpQueueAssignments,
+  useHelpRequests,
+  useHelpRequestStudents,
+  useConnectionStatus
+} from "@/hooks/useOfficeHoursRealtime";
 import type { HelpRequest, HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 
 export default function OfficeHoursPage() {
   const { course_id } = useParams();
   const classId = Number(course_id);
 
-  // Use the enhanced office hours realtime hook
-  const { data, isLoading, connectionStatus, connectionError } = useOfficeHoursRealtime({
-    classId,
-    enableGlobalQueues: true,
-    onlyAvailableQueues: true,
-    onlyActiveAssignments: true,
-    enableActiveRequests: true,
-    enableStaffData: false // Page doesn't need staff data
-  });
+  // Use individual hooks for office hours data
+  const allHelpQueues = useHelpQueues();
+  const allHelpQueueAssignments = useHelpQueueAssignments();
+  const allHelpRequests = useHelpRequests();
+  const helpRequestStudents = useHelpRequestStudents();
+  const { connectionStatus, connectionError, isLoading } = useConnectionStatus();
 
-  const { helpQueues, helpQueueAssignments, activeHelpRequests, helpRequestStudents } = data;
+  // Filter data based on requirements
+  const helpQueues = allHelpQueues.filter(queue => queue.available);
+  const helpQueueAssignments = allHelpQueueAssignments.filter(assignment => assignment.is_active);
+  const activeHelpRequests = allHelpRequests.filter(request =>
+    request.status === "open" || request.status === "in_progress"
+  );
 
   // Memoize computation-heavy operations with proper dependencies
   const activeRequestsByQueue = useMemo(() => {

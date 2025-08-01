@@ -1,31 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, createContext, useContext } from "react";
-import { useCreate } from "@refinedev/core";
-import { createClient } from "@/utils/supabase/client";
 import { OfficeHoursRealTimeController } from "@/lib/OfficeHoursRealTimeController";
-import TableController, { BroadcastMessage } from "@/lib/TableController";
+import TableController from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
-import useAuthState from "./useAuthState";
-import { useClassProfiles } from "./useClassProfiles";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import {
-  HelpRequest,
-  HelpRequestMessage,
-  HelpRequestMessageWithoutId,
-  HelpRequestMessageReadReceipt,
-  HelpRequestStudent,
-  HelpRequestFileReference,
-  HelpRequestModeration,
-  HelpRequestTemplate,
-  HelpRequestFeedback,
   HelpQueue,
   HelpQueueAssignment,
-  StudentKarmaNotes,
-  VideoMeetingSession,
+  HelpRequest,
+  HelpRequestFeedback,
+  HelpRequestMessage,
+  HelpRequestMessageReadReceipt,
+  HelpRequestMessageWithoutId,
+  HelpRequestModeration,
+  HelpRequestStudent,
+  HelpRequestTemplate,
   StudentHelpActivity,
-  OfficeHoursBroadcastMessage,
-  OfficeHoursConnectionStatus
+  StudentKarmaNotes
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
@@ -360,16 +353,22 @@ export function useOfficeHoursController() {
 }
 
 // Hook functions following the pattern from useCourseController
-export function useHelpRequestMessages() {
+export function useHelpRequestMessages(help_request_id: number | undefined) {
   const controller = useOfficeHoursController();
   const [messages, setMessages] = useState<HelpRequestMessage[]>([]);
   useEffect(() => {
+    if (!help_request_id) {
+      setMessages([]);
+      return;
+    }
     const { data, unsubscribe } = controller.helpRequestMessages.list((data) => {
-      setMessages(data);
+      const filteredData = data.filter((msg) => msg.help_request_id === help_request_id);
+      setMessages(filteredData);
     });
-    setMessages(data);
+    const filteredData = data.filter((msg) => msg.help_request_id === help_request_id);
+    setMessages(filteredData);
     return unsubscribe;
-  }, [controller]);
+  }, [controller, help_request_id]);
   return messages;
 }
 
@@ -415,6 +414,21 @@ export function useHelpRequest(id: number | undefined) {
   return request;
 }
 
+export function useHelpQueue(id: number | undefined) {
+  const controller = useOfficeHoursController();
+  const [queue, setQueue] = useState<HelpQueue | undefined>(id ? controller.helpQueues.getById(id)?.data : undefined);
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+    const { data, unsubscribe } = controller.helpQueues.getById(id, (data) => {
+      setQueue(data);
+    });
+    setQueue(data);
+    return unsubscribe;
+  }, [controller, id]);
+  return queue;
+}
 export function useHelpQueues() {
   const controller = useOfficeHoursController();
   const [queues, setQueues] = useState<HelpQueue[]>([]);
@@ -518,559 +532,7 @@ export function useHelpRequestFeedback() {
   }, [controller]);
   return feedback;
 }
+export { useConnectionStatus } from "./useConnectionStatus";
+export { useHelpRequestFileReferences } from "./useHelpRequestFileReferences";
+export { useRealtimeChat } from "./useRealtimeChat";
 
-/**
- * Props for configuring the office hours realtime hook
- */
-export interface UseOfficeHoursRealtimeOptions {
-  classId: number;
-  profileId?: string;
-  isStaff?: boolean;
-  /**
-   * Specific help request ID to subscribe to (optional)
-   */
-  helpRequestId?: number;
-  /**
-   * Specific help queue ID to subscribe to (optional)
-   */
-  helpQueueId?: number;
-  /**
-   * Whether to enable staff data subscriptions (moderation/karma)
-   */
-  enableStaffData?: boolean;
-  /**
-   * Whether to enable global help queues subscription
-   */
-  enableGlobalQueues?: boolean;
-  /**
-   * Whether to fetch only available help queues (available = true)
-   */
-  onlyAvailableQueues?: boolean;
-  /**
-   * Whether to fetch only active queue assignments (is_active = true)
-   */
-  onlyActiveAssignments?: boolean;
-  /**
-   * Whether to fetch active help requests for the class (status = 'open' or 'in_progress')
-   */
-  enableActiveRequests?: boolean;
-  /**
-   * Whether to enable chat functionality (sendMessage, markMessageAsRead)
-   */
-  enableChat?: boolean;
-}
-
-/**
- * Data structure containing all office hours related data
- */
-export interface OfficeHoursData {
-  // Help Request Data
-  helpRequest?: HelpRequest;
-  helpRequestMessages: HelpRequestMessage[];
-  helpRequestReadReceipts: HelpRequestMessageReadReceipt[];
-  helpRequestStudents: HelpRequestStudent[];
-  helpRequestFileReferences: HelpRequestFileReference[];
-  helpRequestTemplates: HelpRequestTemplate[];
-  helpRequestFeedback: HelpRequestFeedback[];
-
-  // Staff Data (only accessible by staff or current user's own data)
-  helpRequestModeration: HelpRequestModeration[];
-  studentKarmaNotes: StudentKarmaNotes[];
-
-  // Video/Activity Data
-  videoMeetingSessions: VideoMeetingSession[];
-  studentHelpActivity: StudentHelpActivity[];
-
-  // Help Queue Data
-  helpQueue?: HelpQueue;
-  helpQueues: HelpQueue[];
-  helpQueueAssignments: HelpQueueAssignment[];
-
-  // Active Help Requests Data (for overview pages)
-  activeHelpRequests: HelpRequest[];
-}
-
-/**
- * Hook return type with all available functionality
- */
-export interface UseOfficeHoursRealtimeReturn {
-  // Data
-  data: OfficeHoursData;
-
-  // Connection status
-  connectionStatus: OfficeHoursConnectionStatus | null;
-  isConnected: boolean;
-  isValidating: boolean;
-  isAuthorized: boolean;
-  connectionError: string | null;
-
-  // Controller access
-  controller: OfficeHoursRealTimeController | null;
-
-  // Subscription helpers
-  subscribeToHelpRequest: (
-    helpRequestId: number,
-    callback: (message: OfficeHoursBroadcastMessage) => void
-  ) => () => void;
-  subscribeToHelpRequestStaff: (
-    helpRequestId: number,
-    callback: (message: OfficeHoursBroadcastMessage) => void
-  ) => () => void;
-  subscribeToHelpQueue: (helpQueueId: number, callback: (message: OfficeHoursBroadcastMessage) => void) => () => void;
-  subscribeToAllHelpQueues: (callback: (message: OfficeHoursBroadcastMessage) => void) => () => void;
-  subscribeToTable: (tableName: string, callback: (message: OfficeHoursBroadcastMessage) => void) => () => void;
-
-  // Chat functionality (only available when enableChat is true and helpRequestId is provided)
-  sendMessage?: (content: string, replyToMessageId?: number | null) => Promise<void>;
-  markMessageAsRead?: (messageId: number, messageAuthorId?: string) => Promise<void>;
-  readReceipts: HelpRequestMessageReadReceipt[]; // Optimistic read receipts excluding current user
-
-  // Loading states
-  isLoading: boolean;
-}
-
-/**
- * Legacy hook for backwards compatibility. Prefer using individual hooks and OfficeHoursControllerProvider.
- * New pattern: Use OfficeHoursControllerProvider + individual hooks like useHelpRequestMessages, useHelpQueues, etc.
- * When helpRequestId/helpQueueId are provided, explicitly subscribe to those channels
- * to ensure they exist and are connected. The main controller subscription will still handle
- * the actual message processing, but these subscriptions ensure the channels are active.
- */
-export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): UseOfficeHoursRealtimeReturn {
-  const controller = useOfficeHoursController();
-
-  // Ensure help request channel subscription when helpRequestId is provided.
-  // The OfficeHoursController subscribes to all messages with an empty filter {}, but this
-  // doesn't trigger channel creation. The database broadcasts read receipts to specific
-  // help_request:ID channels, so we must ensure that channel exists and is subscribed to.
-  useEffect(() => {
-    if (options.helpRequestId) {
-      console.log(`[ReadReceiptFix] Subscribing to help request channel for ID: ${options.helpRequestId}`);
-      const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(
-        options.helpRequestId,
-        (message) => {
-          console.log(`[ReadReceiptFix] Received help request broadcast for ${options.helpRequestId}:`, message);
-          // The message will still be handled by the main controller subscription
-          // This subscription just ensures the channel exists and is connected
-        }
-      );
-
-      return unsubscribe;
-    }
-  }, [controller, options.helpRequestId]);
-
-  // Also ensure help queue channel subscription when helpQueueId is provided
-  useEffect(() => {
-    if (options.helpQueueId) {
-      console.log(`[ReadReceiptFix] Subscribing to help queue channel for ID: ${options.helpQueueId}`);
-      const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpQueue(
-        options.helpQueueId,
-        (message) => {
-          console.log(`[ReadReceiptFix] Received help queue broadcast for ${options.helpQueueId}:`, message);
-        }
-      );
-
-      return unsubscribe;
-    }
-  }, [controller, options.helpQueueId]);
-
-  const messages = useHelpRequestMessages();
-  const readReceipts = useHelpRequestReadReceipts();
-  const students = useHelpRequestStudents();
-  const requests = useHelpRequests();
-  const queues = useHelpQueues();
-  const assignments = useHelpQueueAssignments();
-  const karmaNotes = useStudentKarmaNotes();
-  const templates = useHelpRequestTemplates();
-  const activity = useStudentHelpActivity();
-  const moderation = useHelpRequestModeration();
-  const feedback = useHelpRequestFeedback();
-
-  const helpRequest = useHelpRequest(options.helpRequestId);
-  const validHelpRequest = options.helpRequestId ? helpRequest : undefined;
-
-  // Get real connection status from controller
-  const [connectionStatus, setConnectionStatus] = useState<OfficeHoursConnectionStatus | null>(null);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const updateStatus = () => {
-      try {
-        const status = controller.getConnectionStatus() as OfficeHoursConnectionStatus;
-        setConnectionStatus(status);
-        setConnectionError(null);
-      } catch (error) {
-        console.error("Failed to get connection status:", error);
-        setConnectionError(error instanceof Error ? error.message : "Unknown connection error");
-      }
-    };
-
-    updateStatus();
-
-    // Subscribe to status changes if available
-    let unsubscribe: (() => void) | undefined;
-    try {
-      unsubscribe = controller.officeHoursRealTimeController?.subscribeToStatus?.(updateStatus);
-    } catch (error) {
-      console.warn("Could not subscribe to status changes:", error);
-    }
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [controller]);
-
-  // Calculate connection states
-  const isConnected = connectionStatus?.overall === "connected";
-  const isValidating = connectionStatus?.overall === "connecting";
-  const isAuthorized = connectionStatus?.overall !== "disconnected" || connectionError === null;
-
-  // Filter data based on options
-  const filteredMessages = useMemo(() => {
-    if (!options.helpRequestId) return messages;
-    return messages.filter((msg) => msg.help_request_id === options.helpRequestId);
-  }, [messages, options.helpRequestId]);
-
-  const filteredReadReceipts = useMemo(() => {
-    if (!options.helpRequestId) return readReceipts;
-    const messageIds = filteredMessages.map((msg) => msg.id);
-    return readReceipts.filter((receipt) => messageIds.includes(receipt.message_id));
-  }, [readReceipts, filteredMessages, options.helpRequestId]);
-
-  const filteredStudents = useMemo(() => {
-    if (!options.helpRequestId) return students;
-    return students.filter((student) => student.help_request_id === options.helpRequestId);
-  }, [students, options.helpRequestId]);
-
-  const filteredFeedback = useMemo(() => {
-    if (!options.helpRequestId) return feedback;
-    return feedback.filter((fb) => fb.help_request_id === options.helpRequestId);
-  }, [feedback, options.helpRequestId]);
-
-  const filteredQueues = useMemo(() => {
-    if (options.helpQueueId) {
-      return queues.filter((queue) => queue.id === options.helpQueueId);
-    }
-    if (options.onlyAvailableQueues) {
-      return queues.filter((queue) => queue.available);
-    }
-    return queues;
-  }, [queues, options.helpQueueId, options.onlyAvailableQueues]);
-
-  const filteredAssignments = useMemo(() => {
-    if (options.helpQueueId) {
-      return assignments.filter((assignment) => assignment.help_queue_id === options.helpQueueId);
-    }
-    if (options.onlyActiveAssignments) {
-      return assignments.filter((assignment) => assignment.is_active);
-    }
-    return assignments;
-  }, [assignments, options.helpQueueId, options.onlyActiveAssignments]);
-
-  const activeHelpRequests = useMemo(() => {
-    if (!options.enableActiveRequests) return [];
-    return requests.filter((request) => request.status === "open" || request.status === "in_progress");
-  }, [requests, options.enableActiveRequests]);
-
-  const data: OfficeHoursData = useMemo(
-    () => ({
-      helpRequest: validHelpRequest,
-      helpRequestMessages: filteredMessages,
-      helpRequestReadReceipts: filteredReadReceipts,
-      helpRequestStudents: filteredStudents,
-      helpRequestFileReferences: [],
-      helpRequestTemplates: templates,
-      helpRequestFeedback: filteredFeedback,
-      helpRequestModeration: moderation,
-      studentKarmaNotes: karmaNotes,
-      videoMeetingSessions: [],
-      studentHelpActivity: activity,
-      helpQueue: options.helpQueueId ? filteredQueues[0] : undefined,
-      helpQueues: filteredQueues,
-      helpQueueAssignments: filteredAssignments,
-      activeHelpRequests
-    }),
-    [
-      validHelpRequest,
-      filteredMessages,
-      filteredReadReceipts,
-      filteredStudents,
-      templates,
-      filteredFeedback,
-      karmaNotes,
-      activity,
-      filteredQueues,
-      filteredAssignments,
-      activeHelpRequests,
-      options.helpQueueId,
-      moderation
-    ]
-  );
-
-  // Chat functionality using Refine hooks
-  const { mutateAsync: createMessage } = useCreate({
-    resource: "help_request_messages"
-  });
-
-  const { mutateAsync: createReadReceipt } = useCreate({
-    resource: "help_request_message_read_receipts"
-  });
-
-  const { user } = useAuthState();
-  const { private_profile_id } = useClassProfiles();
-
-  const sendMessage = useCallback(
-    async (content: string, replyToMessageId?: number | null) => {
-      if (!options.enableChat) {
-        throw new Error("Chat functionality not enabled");
-      }
-
-      if (!user || !private_profile_id || !options.helpRequestId) {
-        throw new Error("User authentication and help request ID required");
-      }
-
-      if (!content.trim()) {
-        throw new Error("Message content cannot be empty");
-      }
-
-      await createMessage({
-        values: {
-          message: content,
-          help_request_id: options.helpRequestId,
-          author: private_profile_id,
-          class_id: options.classId,
-          instructors_only: false,
-          reply_to_message_id: replyToMessageId || null
-        }
-      });
-    },
-    [options.enableChat, options.helpRequestId, options.classId, user, private_profile_id, createMessage]
-  );
-
-  const markMessageAsRead = useCallback(
-    async (messageId: number, messageAuthorId?: string) => {
-      if (!options.enableChat || !user || !private_profile_id) {
-        return;
-      }
-
-      // Skip if current user is message author
-      if (messageAuthorId && (messageAuthorId === user.id || messageAuthorId === private_profile_id)) {
-        return;
-      }
-
-      // Use controller's persistent tracking to prevent duplicate API calls
-      if (!controller.markMessageAsRead(messageId)) {
-        console.log(`Message ${messageId} already marked as read, skipping API call`);
-        return;
-      }
-
-      // Check if read receipt already exists in current data
-      const existingReceipt = readReceipts.find(
-        (receipt) => receipt.message_id === messageId && receipt.viewer_id === private_profile_id
-      );
-
-      if (existingReceipt) {
-        console.log(`Read receipt already exists for message ${messageId}, skipping API call`);
-        return;
-      }
-
-      try {
-        await createReadReceipt({
-          values: {
-            message_id: messageId,
-            viewer_id: private_profile_id,
-            class_id: options.classId
-          }
-        });
-        console.log(`Successfully created read receipt for message ${messageId}`);
-      } catch (error) {
-        console.error(`Failed to create read receipt for message ${messageId}:`, error);
-        // Remove from marked set on failure to allow retry
-        controller.clearMarkedAsReadState();
-        controller.markMessageAsRead(messageId); // Re-mark since we cleared all
-
-        // Optionally, you could implement a retry mechanism here
-        // or show a user-friendly error message
-      }
-    },
-    [options.enableChat, options.classId, user, private_profile_id, readReceipts, createReadReceipt, controller]
-  );
-
-  // Subscription helpers using controller
-  const subscribeToHelpRequest = useCallback(
-    (helpRequestId: number, callback: (message: OfficeHoursBroadcastMessage) => void) => {
-      const adaptedCallback = (message: BroadcastMessage) => {
-        callback(message as OfficeHoursBroadcastMessage);
-      };
-      return controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, adaptedCallback);
-    },
-    [controller]
-  );
-
-  const subscribeToHelpRequestStaff = useCallback(
-    (helpRequestId: number, callback: (message: OfficeHoursBroadcastMessage) => void) => {
-      const adaptedCallback = (message: BroadcastMessage) => {
-        callback(message as OfficeHoursBroadcastMessage);
-      };
-      return controller.officeHoursRealTimeController.subscribeToHelpRequestStaffData(helpRequestId, adaptedCallback);
-    },
-    [controller]
-  );
-
-  const subscribeToHelpQueue = useCallback(
-    (helpQueueId: number, callback: (message: OfficeHoursBroadcastMessage) => void) => {
-      const adaptedCallback = (message: BroadcastMessage) => {
-        callback(message as OfficeHoursBroadcastMessage);
-      };
-      return controller.officeHoursRealTimeController.subscribeToHelpQueue(helpQueueId, adaptedCallback);
-    },
-    [controller]
-  );
-
-  const subscribeToAllHelpQueues = useCallback(
-    (callback: (message: OfficeHoursBroadcastMessage) => void) => {
-      const adaptedCallback = (message: BroadcastMessage) => {
-        callback(message as OfficeHoursBroadcastMessage);
-      };
-      return controller.officeHoursRealTimeController.subscribeToAllHelpQueues(adaptedCallback);
-    },
-    [controller]
-  );
-
-  const subscribeToTable = useCallback(
-    (tableName: string, callback: (message: OfficeHoursBroadcastMessage) => void) => {
-      const adaptedCallback = (message: BroadcastMessage) => {
-        callback(message as OfficeHoursBroadcastMessage);
-      };
-      return controller.officeHoursRealTimeController.subscribeToTable(tableName, adaptedCallback);
-    },
-    [controller]
-  );
-
-  return {
-    data,
-    connectionStatus,
-    isConnected,
-    isValidating,
-    isAuthorized,
-    connectionError,
-    controller: controller.officeHoursRealTimeController,
-    subscribeToHelpRequest,
-    subscribeToHelpRequestStaff,
-    subscribeToHelpQueue,
-    subscribeToAllHelpQueues,
-    subscribeToTable,
-    sendMessage: options.enableChat ? sendMessage : undefined,
-    markMessageAsRead: options.enableChat ? markMessageAsRead : undefined,
-    readReceipts: filteredReadReceipts.filter((receipt) => receipt.viewer_id !== private_profile_id),
-    isLoading: !controller.isReady
-  };
-}
-
-/**
- * USAGE EXAMPLES:
- *
- * 1. Subscribe to all help request data for a specific request:
- * ```tsx
- * const { data, isConnected, subscribeToHelpRequest } = useOfficeHoursRealtime({
- *   classId: 123,
- *   helpRequestId: 456,
- *   enableStaffData: true // Only if user is staff
- * });
- *
- * // Access all data
- * const {
- *   helpRequest,
- *   helpRequestMessages,
- *   helpRequestReadReceipts,
- *   helpRequestStudents,
- *   helpRequestFileReferences,
- *   helpRequestModeration, // Staff data
- *   studentKarmaNotes, // Staff data
- *   videoMeetingSessions,
- *   studentHelpActivity
- * } = data;
- * ```
- *
- * 2. Subscribe to help queue status and all help requests in that queue:
- * ```tsx
- * const { data, subscribeToHelpQueue } = useOfficeHoursRealtime({
- *   classId: 123,
- *   helpQueueId: 789
- * });
- *
- * // Access queue data
- * const { helpQueue, helpQueueAssignments } = data;
- * ```
- *
- * 3. Subscribe to all help queues in a class:
- * ```tsx
- * const { data, subscribeToAllHelpQueues } = useOfficeHoursRealtime({
- *   classId: 123,
- *   enableGlobalQueues: true
- * });
- *
- * // Access all queues and assignments
- * const { helpQueues, helpQueueAssignments } = data;
- * ```
- *
- * 4. Staff-only: Subscribe to moderation and karma data:
- * ```tsx
- * const { data, subscribeToHelpRequestStaff } = useOfficeHoursRealtime({
- *   classId: 123,
- *   helpRequestId: 456,
- *   isStaff: true,
- *   enableStaffData: true
- * });
- *
- * // Staff can see all moderation data, students only see their own
- * const { helpRequestModeration, studentKarmaNotes } = data;
- * ```
- *
- * 5. Custom realtime subscriptions:
- * ```tsx
- * const { subscribeToTable } = useOfficeHoursRealtime({ classId: 123 });
- *
- * useEffect(() => {
- *   // Subscribe to specific table changes
- *   const unsubscribe = subscribeToTable('help_request_messages', (message) => {
- *     console.log('Message change:', message);
- *     if (message.operation === 'INSERT') {
- *       // Handle new message
- *     }
- *   });
- *
- *   return unsubscribe;
- * }, []);
- * ```
- *
- * 6. Monitor connection status:
- * ```tsx
- * const { connectionStatus, isConnected } = useOfficeHoursRealtime({ classId: 123 });
- *
- * if (!isConnected) {
- *   return <div>Connecting to realtime...</div>;
- * }
- *
- * return (
- *   <div>
- *     Status: {connectionStatus?.overall}
- *     Active channels: {connectionStatus?.channels.length}
- *   </div>
- * );
- * ```
- *
- * CHANNEL TYPES SUPPORTED:
- * - help_request:<id> - All data associated with a help request
- * - help_request:<id>:staff - Moderation and karma data (staff/own data only)
- * - help_queue:<id> - Status of a single help queue
- * - help_queues - All help queues with assignments
- *
- * MESSAGE TYPES:
- * - table_change: Changes to help request related tables
- * - staff_data_change: Changes to moderation/karma data
- * - queue_change: Changes to help queue related data
- * - channel_created/system: System messages (usually ignored)
- */

@@ -2,15 +2,21 @@
 
 import { Box, Flex, HStack, Stack, Text, VStack } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useCreate, useUpdate } from "@refinedev/core";
 import type { HelpQueueAssignment } from "@/utils/supabase/DatabaseTypes";
 import { useParams } from "next/navigation";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import PersonAvatar from "@/components/ui/person-avatar";
 import { BsPersonBadge } from "react-icons/bs";
 import { useMemo } from "react";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpQueues,
+  useHelpQueueAssignments,
+  useHelpRequests,
+  useConnectionStatus,
+  useOfficeHoursController
+} from "@/hooks/useOfficeHoursRealtime";
 import { Alert } from "@/components/ui/alert";
+import { toaster } from "@/components/ui/toaster";
 
 /**
  * Dashboard component for instructors/TAs to manage their office-hour queues.
@@ -26,18 +32,11 @@ export default function HelpQueuesDashboard() {
 
   const { private_profile_id: taProfileId } = useClassProfiles();
 
-  // Set up real-time subscriptions for all office hours data
-  const { data, isConnected, connectionStatus, isLoading } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true,
-    enableActiveRequests: true,
-    enableStaffData: false // Not needed for dashboard
-  });
-
-  // Extract data from realtime hook
-  const queues = data.helpQueues;
-  const allQueueAssignments = data.helpQueueAssignments;
-  const allHelpRequests = data.activeHelpRequests;
+  // Get data using individual hooks
+  const queues = useHelpQueues();
+  const allQueueAssignments = useHelpQueueAssignments();
+  const allHelpRequests = useHelpRequests();
+  const { isConnected, connectionStatus, isLoading } = useConnectionStatus();
 
   // Filter assignments for current TA
   const activeAssignments = useMemo(() => {
@@ -66,39 +65,51 @@ export default function HelpQueuesDashboard() {
     );
   }, [allQueueAssignments]);
 
-  const { mutate: createAssignment } = useCreate();
-  const { mutate: updateAssignment } = useUpdate();
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpQueueAssignments } = controller;
 
-  const handleStartWorking = (queueId: number) => {
-    createAssignment({
-      resource: "help_queue_assignments",
-      values: {
+  const handleStartWorking = async (queueId: number) => {
+    try {
+      await helpQueueAssignments.create({
         class_id: Number(course_id),
         help_queue_id: queueId,
         ta_profile_id: taProfileId,
         is_active: true,
-        started_at: new Date().toISOString()
-      },
-      successNotification: {
-        message: "Started working on queue",
-        type: "success"
-      }
-    });
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        max_concurrent_students: 1
+      });
+      
+      toaster.success({
+        title: "Success",
+        description: "Started working on queue"
+      });
+    } catch (error) {
+      toaster.error({
+        title: "Error",
+        description: `Failed to start working on queue: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
   };
 
-  const handleStopWorking = (assignmentId: number) => {
-    updateAssignment({
-      resource: "help_queue_assignments",
-      id: assignmentId,
-      values: {
+  const handleStopWorking = async (assignmentId: number) => {
+    try {
+      await helpQueueAssignments.update(assignmentId, {
         is_active: false,
         ended_at: new Date().toISOString()
-      },
-      successNotification: {
-        message: "Stopped working on queue",
-        type: "success"
-      }
-    });
+      });
+      
+      toaster.success({
+        title: "Success",
+        description: "Stopped working on queue"
+      });
+    } catch (error) {
+      toaster.error({
+        title: "Error",
+        description: `Failed to stop working on queue: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
   };
 
   if (isLoading) {

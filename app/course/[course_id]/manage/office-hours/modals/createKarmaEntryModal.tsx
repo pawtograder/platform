@@ -2,15 +2,14 @@
 
 import { Box, Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Text, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useCreate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useConnectionStatus, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { useStudentRoster } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
-import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type KarmaEntryFormData = {
   student_profile_id: string;
@@ -33,12 +32,8 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
   const { course_id } = useParams();
   const { user } = useAuthState();
 
-  // Set up real-time subscriptions to get updated student data
-  const { isConnected, connectionStatus } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: false, // Not needed for karma management
-    enableStaffData: true // Get staff data updates including karma changes
-  });
+  // Monitor connection status for real-time updates
+  const { isConnected, connectionStatus } = useConnectionStatus();
 
   const {
     register,
@@ -56,7 +51,9 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
   // Get students from the cached roster
   const students = useStudentRoster();
 
-  const { mutateAsync: createKarmaEntry } = useCreate<StudentKarmaNotes>();
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { studentKarmaNotes } = controller;
 
   const handleClose = () => {
     reset();
@@ -75,25 +72,18 @@ export default function CreateKarmaEntryModal({ isOpen, onClose, onSuccess }: Cr
     try {
       const now = new Date().toISOString();
 
-      await createKarmaEntry({
-        resource: "student_karma_notes",
-        values: {
-          class_id: Number(course_id),
-          student_profile_id: data.student_profile_id,
-          karma_score: data.karma_score,
-          internal_notes: data.internal_notes || null,
-          created_by_id: user.id,
-          updated_at: now,
-          last_activity_at: now
-        },
-        successNotification: {
-          message: "Student karma entry created successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to create karma entry",
-          type: "error"
-        }
+      await studentKarmaNotes.create({
+        class_id: Number(course_id),
+        student_profile_id: data.student_profile_id,
+        karma_score: data.karma_score,
+        internal_notes: data.internal_notes || null,
+        created_by_id: user.id,
+        last_activity_at: now
+      });
+      
+      toaster.success({
+        title: "Success",
+        description: "Student karma entry created successfully"
       });
       handleClose();
       onSuccess();

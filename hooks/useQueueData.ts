@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useOfficeHoursRealtime, useHelpRequests, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueues, useHelpRequests, useHelpRequestStudents, useConnectionStatus } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 interface UseQueueDataParams {
@@ -10,27 +10,30 @@ interface UseQueueDataParams {
 export function useQueueData({ courseId, queueId }: UseQueueDataParams) {
   const { private_profile_id } = useClassProfiles();
 
-  // Use the enhanced office hours realtime hook for this specific queue
-  const { data, isLoading, connectionStatus } = useOfficeHoursRealtime({
-    classId: courseId,
-    helpQueueId: queueId,
-    enableActiveRequests: true,
-    enableGlobalQueues: false,
-    enableStaffData: false
-  });
-
-  const { helpQueue, activeHelpRequests } = data;
-
-  // Get all help requests and students data from realtime
+  // Use individual hooks for better performance and maintainability
+  const allHelpQueues = useHelpQueues();
   const allHelpRequests = useHelpRequests();
   const allHelpRequestStudents = useHelpRequestStudents();
+  const { connectionStatus } = useConnectionStatus();
+
+  // Find the specific help queue by ID
+  const helpQueue = useMemo(() => {
+    return allHelpQueues?.find(queue => queue.id === queueId) || null;
+  }, [allHelpQueues, queueId]);
+
+  // Loading state - true if any required data is missing
+  const isLoading = !allHelpQueues || !allHelpRequests || !allHelpRequestStudents;
 
   // Get active requests in this specific queue
   const queueRequests = useMemo(() => {
-    return (activeHelpRequests || [])
-      .filter((request) => request.help_queue === queueId)
+    if (!allHelpRequests) return [];
+    return allHelpRequests
+      .filter((request) =>
+        request.help_queue === queueId &&
+        (request.status === "open" || request.status === "in_progress")
+      )
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-  }, [activeHelpRequests, queueId]);
+  }, [allHelpRequests, queueId]);
 
   // Get user's help request associations from realtime data
   const userRequestStudents = useMemo(() => {

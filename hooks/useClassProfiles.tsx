@@ -32,10 +32,7 @@ export function useGradersAndInstructors() {
 export function useStudentRoster() {
   const profiles = useClassProfiles();
   const studentRoster = useMemo(() => {
-    console.log("profiles.allVisibleRoles", profiles.allVisibleRoles);
-    console.log("profiles.profiles", profiles.profiles);
     const students = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
-    console.log("students", students);
     return profiles.profiles.filter((p) => students.includes(p.id));
   }, [profiles.allVisibleRoles, profiles.profiles]);
   return studentRoster;

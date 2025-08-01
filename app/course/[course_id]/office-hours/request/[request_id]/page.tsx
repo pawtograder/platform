@@ -1,16 +1,16 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { BsClipboardCheck, BsClipboardCheckFill, BsCheckCircle, BsXCircle } from "react-icons/bs";
-import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/react";
-import { Alert } from "@/components/ui/alert";
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
-import { useOfficeHoursRealtime, OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
+import { Alert } from "@/components/ui/alert";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
-import { useEffect, useState } from "react";
+import { OfficeHoursControllerProvider, useConnectionStatus, useHelpRequest } from "@/hooks/useOfficeHoursRealtime";
 import { createClient } from "@/utils/supabase/client";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
+import { Badge, Box, HStack, Icon, Skeleton, Text, VStack } from "@chakra-ui/react";
+import { useParams, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { BsCheckCircle, BsClipboardCheck, BsClipboardCheckFill, BsXCircle } from "react-icons/bs";
 
 /**
  * Component for displaying status-specific visual indicators and information
@@ -80,26 +80,15 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
  * Uses real-time updates for help request data, messages, and staff actions
  */
 function StudentHelpRequestPageInner() {
-  const { request_id, course_id } = useParams();
+  const { request_id } = useParams();
 
-  // Set up real-time subscriptions for this help request
-  const {
-    data: realtimeData,
-    isConnected,
-    connectionStatus,
-    isLoading: realtimeLoading
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    helpRequestId: Number(request_id),
-    enableStaffData: false, // Students don't need staff-specific data
-    enableGlobalQueues: false // Not needed for individual request view
-  });
+  // Get help request data and connection status using individual hooks
+  const request = useHelpRequest(Number(request_id));
+  const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
 
-  if (realtimeLoading || !realtimeData.helpRequest) {
+  if (realtimeLoading || !request) {
     return <Skeleton />;
   }
-
-  const request = realtimeData.helpRequest;
   const isRequestInactive = request.status === "resolved" || request.status === "closed";
 
   return (

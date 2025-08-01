@@ -9,7 +9,7 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useMemo } from "react";
 import { BsClipboardCheckFill, BsCheckCircle, BsXCircle, BsChatText } from "react-icons/bs";
-import { useOfficeHoursRealtime, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 
 /**
  * Enhanced help request with queue information and multiple students
@@ -29,15 +29,10 @@ export default function HelpRequestList() {
   // Get ALL help requests directly from the controller
   const allHelpRequestsFromController = useHelpRequests();
 
-  // Use the consolidated office hours realtime hook for additional data
-  const { data: officeHoursData, isLoading: officeHoursLoading } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true, // Need queues data
-    enableActiveRequests: false // We don't need the filtered activeHelpRequests
-  });
-
-  // Extract data from the consolidated hook
-  const { helpQueues, helpRequestStudents: realtimeHelpRequestStudents } = officeHoursData;
+  // Use individual hooks for additional data
+  const helpQueues = useHelpQueues();
+  const realtimeHelpRequestStudents = useHelpRequestStudents();
+  const officeHoursLoading = false; // Individual hooks don't expose loading state
 
   // Create a mapping of help request ID to student profile IDs
   const requestStudentsMap = useMemo(() => {

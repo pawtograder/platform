@@ -5,6 +5,7 @@ import { useParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import ModerationBanNotice from "@/components/ui/moderation-ban-notice";
 import { useQueueData } from "@/hooks/useQueueData";
+import { useHelpQueue } from "@/hooks/useOfficeHoursRealtime";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -13,8 +14,9 @@ interface LayoutProps {
 export default function QueueLayout({ children }: LayoutProps) {
   const { queue_id, course_id } = useParams();
   const pathname = usePathname();
+  const helpQueue = useHelpQueue(Number(queue_id));
 
-  const { helpQueue, queueRequests, currentRequest, similarQuestions, resolvedRequests, isLoading, connectionStatus } =
+  const { queueRequests, userRequests, similarQuestions, resolvedRequests, isLoading, connectionStatus } =
     useQueueData({
       courseId: Number(course_id),
       queueId: Number(queue_id)
@@ -34,21 +36,28 @@ export default function QueueLayout({ children }: LayoutProps) {
 
   const basePath = `/course/${course_id}/office-hours/${queue_id}`;
 
+  // Get user's active requests in this specific queue
+  const activeUserRequests = userRequests.filter(
+    (request) => request.help_queue === Number(queue_id) && (request.status === "open" || request.status === "in_progress")
+  );
+
+  // Create navigation items for user's requests with queue positions
+  const userRequestItems = activeUserRequests.map((request) => {
+    const position = queueRequests.findIndex((queueRequest) => queueRequest.id === request.id) + 1;
+    return {
+      href: `${basePath}/${request.id}`,
+      label: `My Request (Now #${position})`,
+      isActive: pathname === `${basePath}/${request.id}`
+    };
+  });
+
   const navigationItems = [
     {
       href: basePath,
       label: `Queue Status (${queueRequests.length})`,
       isActive: pathname === basePath
     },
-    ...(currentRequest
-      ? [
-          {
-            href: `${basePath}/${currentRequest.id}`,
-            label: "My Request",
-            isActive: pathname === `${basePath}/${currentRequest.id}`
-          }
-        ]
-      : []),
+    ...userRequestItems,
     {
       href: `${basePath}/new`,
       label: "Submit Request",
