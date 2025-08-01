@@ -1,4 +1,4 @@
-import { createEventHandler, WebhookPayload } from "https://esm.sh/@octokit/webhooks?dts";
+import { createEventHandler } from "https://esm.sh/@octokit/webhooks?dts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parse } from "jsr:@std/yaml";
@@ -24,7 +24,7 @@ type GitHubCommit = {
 };
 async function handlePushToStudentRepo(
   adminSupabase: SupabaseClient<Database>,
-  payload: WebhookPayload,
+  payload: any,
   studentRepo: Database["public"]["Tables"]["repositories"]["Row"]
 ) {
   //Get the repo name from the payload
@@ -69,7 +69,7 @@ async function handlePushToStudentRepo(
 const PAWTOGRADER_YML_PATH = "pawtograder.yml";
 async function handlePushToGraderSolution(
   adminSupabase: SupabaseClient<Database>,
-  payload: WebhookPayload,
+  payload: any,
   autograders: Database["public"]["Tables"]["autograder"]["Row"][]
 ) {
   const ref = payload.ref;
@@ -164,7 +164,7 @@ async function handlePushToGraderSolution(
 
 async function handlePushToTemplateRepo(
   adminSupabase: SupabaseClient<Database>,
-  payload: WebhookPayload,
+  payload: any,
   assignments: Database["public"]["Tables"]["assignments"]["Row"][]
 ) {
   //Only process on the main branch
@@ -232,7 +232,7 @@ async function handlePushToTemplateRepo(
   }
 }
 
-eventHandler.on("push", async ({ id, name, payload }) => {
+eventHandler.on("push", async ({ id: _id, name: _name, payload }) => {
   if (name === "push") {
     const repoName = payload.repository.full_name;
     console.log(`Received push event for ${repoName}`);
@@ -282,7 +282,7 @@ eventHandler.on("push", async ({ id, name, payload }) => {
     console.log(payload.repository.full_name);
   }
 });
-eventHandler.on("check_run", async ({ id, name, payload }) => {
+eventHandler.on("check_run", async ({ id: _id, name: _name, payload }) => {
   console.log(
     `Received check_run event for ${payload.repository.full_name}, action: ${payload.action}, check_run_id: ${payload.check_run.id}`
   );
@@ -329,6 +329,202 @@ eventHandler.on("check_run", async ({ id, name, payload }) => {
     }
   }
 });
+// Handle team membership changes (when users are added to GitHub teams)
+eventHandler.on("membership", async ({ id: _id, name: _name, payload }) => {
+  console.log(
+    `Received membership event: ${payload.action} for team: ${(payload as any).team?.slug}, member: ${payload.member?.login}`
+  );
+
+  try {
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // Only process when a member is added to a team
+    if (payload.action !== "added") {
+      console.log(`Skipping membership action: ${payload.action}`);
+      return;
+    }
+
+    // Extract team information - cast to any to access team property
+    const teamSlug = (payload as any).team?.slug;
+    const memberGithubUsername = payload.member?.login;
+
+    if (!teamSlug || !memberGithubUsername) {
+      console.log("Missing team slug or member login, skipping");
+      return;
+    }
+
+    // Parse team slug to determine course and team type
+    // Team naming convention: {courseSlug}-staff or {courseSlug}-students
+    let courseSlug: string;
+    let teamType: "staff" | "student";
+
+    if (teamSlug.endsWith("-staff")) {
+      courseSlug = teamSlug.slice(0, -6); // Remove '-staff'
+      teamType = "staff";
+    } else if (teamSlug.endsWith("-students")) {
+      courseSlug = teamSlug.slice(0, -9); // Remove '-students'
+      teamType = "student";
+    } else {
+      console.log(`Team slug ${teamSlug} doesn't match expected pattern, skipping`);
+      return;
+    }
+
+    console.log(`Parsed team: courseSlug=${courseSlug}, teamType=${teamType}`);
+
+    // Find the class by slug
+    const { data: classData, error: classError } = await adminSupabase
+      .from("classes")
+      .select("id")
+      .eq("slug", courseSlug)
+      .single();
+
+    if (classError || !classData) {
+      console.log(`Class not found for slug ${courseSlug}:`, classError);
+      return;
+    }
+
+    const classId = classData.id;
+
+    // Find the user by GitHub username
+    const { data: userData, error: userError } = await adminSupabase
+      .from("users")
+      .select("user_id")
+      .eq("github_username", memberGithubUsername)
+      .single();
+
+    if (userError || !userData) {
+      console.log(`User not found for GitHub username ${memberGithubUsername}:`, userError);
+      return;
+    }
+
+    const userId = userData.user_id;
+
+    // Find the user's role in this class
+    const { data: userRoleData, error: userRoleError } = await adminSupabase
+      .from("user_roles")
+      .select("id, role")
+      .eq("user_id", userId)
+      .eq("class_id", classId)
+      .single();
+
+    if (userRoleError || !userRoleData) {
+      console.log(`User role not found for user ${userId} in class ${classId}:`, userRoleError);
+      return;
+    }
+
+    // Check if the team type matches the user's role
+    const userRole = userRoleData.role;
+    const isCorrectTeam =
+      (teamType === "staff" && (userRole === "instructor" || userRole === "grader")) ||
+      (teamType === "student" && userRole === "student");
+
+    if (isCorrectTeam) {
+      // Update github_org_confirmed to true
+      const { error: updateError } = await adminSupabase
+        .from("user_roles")
+        .update({ github_org_confirmed: true })
+        .eq("id", userRoleData.id);
+
+      if (updateError) {
+        console.error(`Failed to update github_org_confirmed for user role ${userRoleData.id}:`, updateError);
+      } else {
+        console.log(
+          `Successfully confirmed GitHub team membership for user ${memberGithubUsername} (${userRole}) in team ${teamSlug}`
+        );
+      }
+    } else {
+      console.log(`Team type ${teamType} does not match user role ${userRole}, not updating confirmation`);
+    }
+  } catch (error) {
+    console.error("Error processing membership event:", error);
+  }
+});
+
+// Handle organization invitation events
+eventHandler.on("organization", async ({ id: _id, name: _name, payload }) => {
+  const payloadAny = payload as any;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+  console.log(
+    `Received organization event: ${payload.action} for user: ${payloadAny.invitation?.login || payloadAny.membership?.user?.login}`
+  );
+
+  try {
+    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // Only process member invitation events
+    if (payload.action !== "member_invited") {
+      console.log(`Skipping organization action: ${payload.action}`);
+      return;
+    }
+
+    // Extract invitation information
+    const invitedUserLogin = payloadAny.invitation?.login;
+
+    if (!invitedUserLogin) {
+      console.log("Missing invitation login, skipping");
+      return;
+    }
+
+    // Extract organization from the payload
+    const organizationName = payloadAny.organization?.login;
+
+    if (!organizationName) {
+      console.log("Missing organization name, skipping");
+      return;
+    }
+
+    console.log(`Processing organization invitation for login: ${invitedUserLogin} in org: ${organizationName}`);
+
+    // Find the user by GitHub username
+    const result = await adminSupabase.from("users").select("user_id").eq("github_username", invitedUserLogin).single();
+
+    const userData = result.data;
+    const userError = result.error;
+
+    if (userError || !userData) {
+      console.log(`User not found for GitHub username ${invitedUserLogin}:`, userError);
+      return;
+    }
+
+    const userId = userData.user_id;
+
+    // First, find classes that match this GitHub organization
+    const { data: classesData, error: classesError } = await adminSupabase
+      .from("classes")
+      .select("id")
+      .eq("github_org", organizationName);
+
+    if (classesError) {
+      console.error(`Error finding classes for organization ${organizationName}:`, classesError);
+      return;
+    }
+
+    if (!classesData || classesData.length === 0) {
+      console.log(`No classes found for GitHub organization: ${organizationName}`);
+      return;
+    }
+
+    const classIds = classesData.map((c) => c.id);
+    console.log(`Found ${classIds.length} classes for organization ${organizationName}: ${classIds.join(", ")}`);
+
+    // Update user_roles only for classes that match this GitHub organization
+    const { error: updateError, count } = await adminSupabase
+      .from("user_roles")
+      .update({ invitation_date: new Date().toISOString() })
+      .eq("user_id", userId)
+      .in("class_id", classIds);
+
+    if (updateError) {
+      console.error(`Failed to update invitation_date for user ${userId}:`, updateError);
+    } else {
+      console.log(
+        `Successfully updated invitation_date for ${count} user roles for user ${userId} (${invitedUserLogin}) in organization ${organizationName}`
+      );
+    }
+  } catch (error) {
+    console.error("Error processing organization invitation event:", error);
+  }
+});
 
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
@@ -351,7 +547,9 @@ Deno.serve(async (req) => {
       }
     );
   }
+  console.log("Received webhook");
   const body = await req.json();
+  console.log(JSON.stringify(body, null, 2));
   const eventName = body["detail-type"];
   const id = body.id;
   const adminSupabase = createClient<Database>(

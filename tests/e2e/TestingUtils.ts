@@ -198,6 +198,7 @@ export async function createUserInClass({
   };
 }
 
+let repoCounter = 0;
 export async function insertPreBakedSubmission({
   student_profile_id,
   assignment_group_id,
@@ -215,7 +216,8 @@ export async function insertPreBakedSubmission({
   repository_name: string;
 }> {
   const test_run_prefix = repositorySuffix ?? getTestRunPrefix();
-  const repository = `not-actually/repository-${test_run_prefix}`;
+  const repository = `not-actually/repository-${test_run_prefix}-${repoCounter}`;
+  repoCounter++;
   const { data: repositoryData, error: repositoryError } = await supabase
     .from("repositories")
     .insert({

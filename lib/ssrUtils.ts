@@ -32,6 +32,24 @@ async function getRolesForCourse(course_id: number): Promise<UserRoleJwt["role"]
     return [];
   }
 }
+export async function getPrivateProfileId(course_id: number) {
+  const client = await createClient();
+  const token = (await client.auth.getSession()).data.session?.access_token;
+  if (!token) {
+    return null;
+  }
+  try {
+    const decoded = jwtDecode<DecodedToken>(token);
+    const private_profile_id = decoded.user_roles.find((role) => role.class_id === course_id)?.private_profile_id;
+    if (!private_profile_id) {
+      return null;
+    }
+    return private_profile_id;
+  } catch (error) {
+    console.error("Failed to decode JWT:", error);
+    return null;
+  }
+}
 export async function getCourse(course_id: number) {
   const client = await createClient();
   const course = await client.from("classes").select("*").eq("id", course_id).single();

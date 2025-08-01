@@ -190,6 +190,20 @@ export function useDiscussionThreadTeaser(id: number, watchFields?: DiscussionTh
   }, [controller, id]);
   return teaser;
 }
+
+export function useLabSections() {
+  const controller = useCourseController();
+  const [labSections, setLabSections] = useState<LabSection[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listLabSections((data) => {
+      setLabSections(data);
+    });
+    setLabSections(data);
+    return unsubscribe;
+  }, [controller]);
+  return labSections;
+}
+
 export type UpdateCallback<T> = (data: T) => void;
 export type Unsubscribe = () => void;
 export type UserProfileWithPrivateProfile = UserProfile & {

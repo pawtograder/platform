@@ -1,5 +1,6 @@
 import { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
 import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
 import { Database } from "./SupabaseTypes.d.ts";
 
@@ -257,5 +258,74 @@ export class NotFoundError extends Error {
   constructor(details: string) {
     super("Not Found");
     this.details = details;
+  }
+}
+
+type FetchAllPagesResult<T> = { data: NonNullable<T[]>; error: null } | { data: null; error: NonNullable<unknown> };
+
+/**
+ * Helper function to fetch all pages of a Supabase query result.
+ * Handles pagination automatically and returns all results combined.
+ *
+ * Invariant: If error is null, data is guaranteed to be a valid T[] array (never null)
+ *
+ * @param queryBuilder - Function that returns a Supabase query (without limit/offset)
+ * @param pageSize - Number of records to fetch per page (default: 1000)
+ * @returns Promise<FetchAllPagesResult<T>> - All results or error
+ *
+ * @example
+ * ```typescript
+ * const { data: allStudents, error } = await fetchAllPages(() =>
+ *   supabase
+ *     .from("user_roles")
+ *     .select("users(github_username)")
+ *     .eq("class_id", course_id)
+ *     .or("role.eq.student")
+ * );
+ * if (error) {
+ *   console.error(error);
+ *   return;
+ * }
+ * // allStudents is guaranteed to be T[] here (never null)
+ * ```
+ */
+export async function fetchAllPages<T>(
+  query: PostgrestFilterBuilder<Database, T[], T>,
+  pageSize: number = 1000
+): Promise<FetchAllPagesResult<T>> {
+  try {
+    const allResults: T[] = [];
+    let offset = 0;
+    let hasMoreData = true;
+
+    while (hasMoreData) {
+      const { data, error } = await query.range(offset, offset + pageSize - 1);
+
+      if (error || !data) {
+        return { data: null, error: error as NonNullable<unknown> };
+      }
+
+      // Handle the case where data is null but no error occurred
+      if (data === null) {
+        // This shouldn't happen with Supabase, but handle it defensively
+        hasMoreData = false;
+      } else if (data.length > 0) {
+        allResults.push(...data);
+
+        // If we got less than the page size, we've reached the end
+        if (data.length < pageSize) {
+          hasMoreData = false;
+        } else {
+          offset += pageSize;
+        }
+      } else {
+        // data is an empty array, no more pages
+        hasMoreData = false;
+      }
+    }
+
+    return { data: allResults, error: null };
+  } catch (error) {
+    return { data: null, error: error as NonNullable<unknown> };
   }
 }
