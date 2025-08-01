@@ -1,18 +1,6 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-
-type BroadcastMessage = {
-  type: "table_change" | "staff_data_change" | "queue_change" | "channel_created" | "system";
-  operation?: "INSERT" | "UPDATE" | "DELETE";
-  table?: string;
-  row_id?: number | string;
-  data?: Record<string, unknown>;
-  help_request_id?: number;
-  help_queue_id?: number;
-  class_id: number;
-  student_profile_id?: string;
-  timestamp: string;
-};
+import { BroadcastMessage } from "./TableController";
 
 type MessageFilter = {
   type?: BroadcastMessage["type"];

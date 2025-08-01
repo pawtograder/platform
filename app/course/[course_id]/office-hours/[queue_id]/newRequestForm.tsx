@@ -1,34 +1,34 @@
 "use client";
 
-import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useForm } from "@refinedev/react-hook-form";
-import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
-import { Fieldset, Button, Heading, Text, Box, Stack, Input, IconButton, Textarea } from "@chakra-ui/react";
-import {
-  HelpRequest,
-  HelpRequestTemplate,
-  Submission,
-  SubmissionFile,
-  HelpRequestLocationType,
-  HelpRequestFormFileReference,
-  HelpRequestWithStudentCount,
-  Assignment
-} from "@/utils/supabase/DatabaseTypes";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
-import { Controller } from "react-hook-form";
+import StudentGroupPicker from "@/components/ui/student-group-picker";
+import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
-  useOfficeHoursRealtime,
   useHelpRequests,
   useHelpRequestStudents,
-  useHelpRequestTemplates
+  useHelpRequestTemplates,
+  useOfficeHoursRealtime
 } from "@/hooks/useOfficeHoursRealtime";
-import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Assignment,
+  HelpRequest,
+  HelpRequestFormFileReference,
+  HelpRequestLocationType,
+  HelpRequestTemplate,
+  HelpRequestWithStudentCount,
+  Submission,
+  SubmissionFile
+} from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Fieldset, Heading, IconButton, Input, Stack, Text, Textarea } from "@chakra-ui/react";
+import { useCreate, useDelete, useList, useUpdate } from "@refinedev/core";
+import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
-import { toaster } from "@/components/ui/toaster";
-import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { X } from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Controller } from "react-hook-form";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
@@ -54,7 +54,7 @@ export default function HelpRequestForm() {
   }, [selectedStudents]);
 
   const {
-    refineCore: { formLoading, query },
+    refineCore: { query },
     setValue,
     control,
     getValues,
@@ -235,7 +235,7 @@ export default function HelpRequestForm() {
           setSelectedSubmissionId(null);
 
           // Navigate to queue view
-          router.push(`/course/${course_id}/office-hours/${queue_id}?tab=queue`);
+          router.push(`/course/${course_id}/office-hours/${queue_id}/${data.data.id}`);
         } catch (error) {
           toaster.error({
             title: "Error",
@@ -297,15 +297,10 @@ export default function HelpRequestForm() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<number | null>(null);
 
-  const currentDate = useMemo(() => new Date().toISOString(), []);
-
   // Fetch assignments for the class
   const { data: assignments } = useList<Assignment>({
     resource: "assignments",
-    filters: [
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "release_date", operator: "lte", value: currentDate }
-    ],
+    filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }],
     sorters: [{ field: "due_date", order: "desc" }],
     pagination: { pageSize: 1000 }
   });
@@ -467,11 +462,12 @@ export default function HelpRequestForm() {
       // Check for conflicts based on solo vs group request rules
       const selectedQueueId = getValues("help_queue");
       const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
-
+      const is_private = getValues("is_private");
       if (isCreatingSoloRequest) {
         // For solo requests, check if user already has a solo request in this queue
         const hasSoloRequestInQueue = userActiveRequests.some(
-          (request) => request.help_queue === selectedQueueId && request.student_count === 1
+          (request) =>
+            request.help_queue === selectedQueueId && request.student_count === 1 && request.is_private === is_private
         );
 
         if (hasSoloRequestInQueue) {
@@ -489,7 +485,9 @@ export default function HelpRequestForm() {
       const customOnFinish = (values: Record<string, unknown>) => {
         // Exclude file_references from the submission data since it's not a column in help_requests table
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { file_references, ...helpRequestData } = values;
+        const { _intended_privacy, file_references, ...helpRequestData } = values;
+
+        // Store the intended privacy setting for later use
         const intendedPrivacy = selectedSubmissionId ? true : values.is_private || false;
         // Add required fields that may not be set in the form
         const finalData = {
@@ -527,7 +525,7 @@ export default function HelpRequestForm() {
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;
   }
-  if (!query || formLoading || isLoadingQueues) {
+  if (!query || isLoadingQueues) {
     return (
       <Box textAlign="center" py={8}>
         <Text>Loading form data...</Text>
@@ -546,17 +544,21 @@ export default function HelpRequestForm() {
       </Box>
     );
   }
+  const is_private = watch("is_private");
 
   // Check if the selected queue would conflict with current requests
   const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
   const wouldConflict = Boolean(
     selectedHelpQueue &&
       isCreatingSoloRequest &&
-      userActiveRequests.some((request) => request.help_queue === selectedHelpQueue && request.student_count === 1)
+      userActiveRequests.some(
+        (request) =>
+          request.help_queue === selectedHelpQueue && request.student_count === 1 && request.is_private === is_private
+      )
   );
 
   return (
-    <form onSubmit={onSubmit}>
+    <form onSubmit={onSubmit} aria-label="New Help Request Form">
       <Heading>Request Live Help</Heading>
       <Text>Submit a request to get help synchronously from a TA via text or video chat.</Text>
 

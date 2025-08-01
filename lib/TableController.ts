@@ -2,6 +2,8 @@ import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
 import { ClassRealTimeController } from "./ClassRealTimeController";
+import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
+import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -14,17 +16,21 @@ export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };
 
-type BroadcastMessage = {
+//TODO: One day we can make this a union type of all the possible tables (without optional fields, type property will refine the type)
+export type BroadcastMessage = {
   type: "table_change" | "channel_created" | "system";
   operation?: "INSERT" | "UPDATE" | "DELETE";
   table?: TablesThatHaveAnIDField;
   row_id?: number | string;
   data?: Record<string, unknown>;
   submission_id?: number;
+  help_request_id?: number;
+  help_queue_id?: number;
   class_id: number;
+  student_profile_id?: number;
   target_audience?: "user" | "staff";
   timestamp: string;
-};
+} | OfficeHoursBroadcastMessage;
 export default class TableController<
   RelationName extends TablesThatHaveAnIDField,
   Query extends string = "*",
@@ -51,6 +57,7 @@ export default class TableController<
   private _table: RelationName;
   private _temporaryIdCounter: number = -1;
   private _classRealTimeController: ClassRealTimeController | null = null;
+  private _officeHoursRealTimeController: OfficeHoursRealTimeController | null = null;
   private _realtimeUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
 
@@ -80,7 +87,8 @@ export default class TableController<
     client,
     table,
     classRealTimeController,
-    submissionId
+    submissionId,
+    officeHoursRealTimeController
   }: {
     query: PostgrestFilterBuilder<
       Database["public"],
@@ -92,6 +100,7 @@ export default class TableController<
     client: SupabaseClient<Database>;
     table: RelationName;
     classRealTimeController?: ClassRealTimeController;
+    officeHoursRealTimeController?: OfficeHoursRealTimeController;
     submissionId?: number;
   }) {
     this._rows = [];
@@ -99,6 +108,7 @@ export default class TableController<
     this._query = query;
     this._table = table;
     this._classRealTimeController = classRealTimeController || null;
+    this._officeHoursRealTimeController = officeHoursRealTimeController || null;
     this._submissionId = submissionId || null;
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
@@ -106,27 +116,26 @@ export default class TableController<
         const pageSize = 1000;
         let nRows: number | undefined;
 
+        const messageHandler = (message: BroadcastMessage) => {
+          // Filter by table name
+          if (message.table !== table) {
+            return;
+          }
+          // Handle different message types
+          switch (message.operation) {
+            case "INSERT":
+              this._handleInsert(message);
+              break;
+            case "UPDATE":
+              this._handleUpdate(message);
+              break;
+            case "DELETE":
+              this._handleDelete(message);
+              break;
+          }
+        };
         // Set up realtime subscription if controller is provided
         if (this._classRealTimeController) {
-          const messageHandler = (message: BroadcastMessage) => {
-            // Filter by table name
-            if (message.table !== table) {
-              return;
-            }
-            // Handle different message types
-            switch (message.operation) {
-              case "INSERT":
-                this._handleInsert(message);
-                break;
-              case "UPDATE":
-                this._handleUpdate(message);
-                break;
-              case "DELETE":
-                this._handleDelete(message);
-                break;
-            }
-          };
-
           // Subscribe to messages for this table, optionally filtered by submission
           if (this._submissionId) {
             this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
@@ -137,6 +146,9 @@ export default class TableController<
           } else {
             this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTable(table, messageHandler);
           }
+        }
+        if (this._officeHoursRealTimeController) {
+          this._realtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(table, messageHandler);
         }
         //Load initial data, do all of the pages.
         while (page * pageSize < (nRows ?? 1000)) {
@@ -267,6 +279,9 @@ export default class TableController<
       });
   }
   getById(id: IDType, listener?: (data: PossiblyTentativeResult<ResultOne> | undefined) => void) {
+    if (id === 0) {
+      throw new Error("0 is not a valid ID, ever.");
+    }
     const data = this._rows.find(
       (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
     ) as PossiblyTentativeResult<ResultOne>;

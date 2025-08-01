@@ -1,19 +1,19 @@
 "use client";
 
-import { useChatScroll } from "@/hooks/use-chat-scroll";
-import { useOfficeHoursRealtime, useOfficeHoursController, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
-import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Stack, Icon, Text, Button, HStack } from "@chakra-ui/react";
-import { X } from "lucide-react";
-import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationStatus";
+import MessageInput from "@/components/ui/message-input";
+import { toaster } from "@/components/ui/toaster";
+import { useChatScroll } from "@/hooks/use-chat-scroll";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
+import { useOfficeHoursController, useOfficeHoursRealtime, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
-import { toaster } from "@/components/ui/toaster";
+import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
-import MessageInput from "@/components/ui/message-input";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
