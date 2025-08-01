@@ -1,4 +1,5 @@
-import { SubmissionWithGrading, UserRoleWithConflictsAndName } from "./page";
+import { toaster } from "@/components/ui/toaster";
+import type { SubmissionWithGrading, UserRoleWithConflictsAndName } from "./page";
 
 interface FlowEdge {
   to: string;
@@ -438,9 +439,10 @@ export class TAAssignmentSolver {
       const maxExpected = expectedCapacity;
 
       if (count < minExpected || count > maxExpected) {
-        console.warn(
-          `TA ${ta.private_profile_id} has ${count} assignments (expected ${minExpected}-${maxExpected}, capacity: ${expectedCapacity})`
-        );
+        toaster.error({
+          title: "Assignment imbalance",
+          description: `TA ${ta.private_profile_id} has ${count} assignments (expected ${minExpected}-${maxExpected}, capacity: ${expectedCapacity})`
+        });
         return false;
       }
     }

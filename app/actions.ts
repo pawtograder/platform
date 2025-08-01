@@ -7,11 +7,10 @@ import { redirect } from "next/navigation";
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.verifyOtp({
+  const { error } = await supabase.auth.verifyOtp({
     token_hash: token_hash as string,
     type: "email"
   });
-  console.log(data);
   if (error) {
     return encodedRedirect("error", "/auth/confirm", error.message);
   }

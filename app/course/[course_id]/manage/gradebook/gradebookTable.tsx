@@ -21,7 +21,7 @@ import {
   useAreAllDependenciesReleased
 } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   ClassSection,
   GradebookColumn,
   GradebookColumnExternalData,

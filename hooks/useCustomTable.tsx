@@ -1,13 +1,13 @@
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
-  ColumnDef,
+  type ColumnDef,
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
-  TableOptions
+  type TableOptions
 } from "@tanstack/react-table";
 import { useCallback, useEffect, useState } from "react";
 

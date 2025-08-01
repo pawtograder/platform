@@ -1,4 +1,4 @@
-import React, { Dispatch, SetStateAction, useState } from "react";
+import React, { type Dispatch, type SetStateAction, useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -6,16 +6,16 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  DragEndEvent,
-  DragStartEvent,
+  type DragEndEvent,
+  type DragStartEvent,
   DragOverlay,
   useDraggable,
   useDroppable,
-  UniqueIdentifier
+  type UniqueIdentifier
 } from "@dnd-kit/core";
 import { Box, VStack, HStack, Text, Badge, Card, Flex, SimpleGrid } from "@chakra-ui/react";
 import { CSS } from "@dnd-kit/utilities";
-import { DraftReviewAssignment, UserRoleWithConflictsAndName } from "./page";
+import type { DraftReviewAssignment, UserRoleWithConflictsAndName } from "./page";
 import StudentInfoCard from "@/components/ui/student-info-card";
 
 function getDraggableId(item: DraftReviewAssignment): string {

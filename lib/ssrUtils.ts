@@ -1,3 +1,4 @@
+import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/server";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { jwtDecode } from "jwt-decode";
@@ -48,7 +49,10 @@ export async function getPrivateProfileId(course_id: number) {
     }
     return private_profile_id;
   } catch (error) {
-    console.error("Failed to decode JWT:", error);
+    toaster.error({
+      title: "Error",
+      description: "Failed to decode JWT. Error: " + (error instanceof Error ? error.message : "Unknown error")
+    });
     return null;
   }
 }

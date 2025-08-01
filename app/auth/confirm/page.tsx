@@ -1,5 +1,5 @@
 import { confirmEmailAction } from "@/app/actions";
-import { FormMessage, Message } from "@/components/form-message";
+import { FormMessage, type Message } from "@/components/form-message";
 import { Button } from "@/components/ui/button";
 import Logo from "@/components/ui/logo";
 import { createClient } from "@/utils/supabase/server";

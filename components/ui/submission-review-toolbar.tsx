@@ -250,10 +250,11 @@ function CompleteReviewAssignmentDialog({
                     description: "Your review assignment has been marked as complete."
                   });
                 } catch (error) {
-                  console.error("Error marking review assignment as complete", error);
                   toaster.error({
                     title: "Error marking review assignment as complete",
-                    description: "An error occurred while marking the review assignment as complete."
+                    description:
+                      "An error occurred while marking the review assignment as complete: " +
+                      (error instanceof Error ? error.message : "Unknown error")
                   });
                 } finally {
                   setIsLoading(false);

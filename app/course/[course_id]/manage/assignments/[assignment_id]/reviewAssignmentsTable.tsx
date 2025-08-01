@@ -1,14 +1,14 @@
 "use client";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import { useMemo } from "react";
-import { ColumnDef, Row } from "@tanstack/react-table";
+import type { ColumnDef, Row } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Table, Spinner, Text } from "@chakra-ui/react";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useParams, useRouter } from "next/navigation";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import PersonName from "@/components/ui/person-name";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 

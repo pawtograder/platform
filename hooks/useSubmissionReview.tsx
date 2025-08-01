@@ -4,7 +4,6 @@ import { useAssignmentController, useMyReviewAssignments, useReviewAssignment, u
 import {
   useAllCommentsForReview,
   useSubmission,
-  useSubmissionReview,
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "./useSubmission";
@@ -82,15 +81,16 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
         setActiveSubmissionReviewId(writableReviews.find((wr) => wr.id === gradingReview.id)?.id ?? undefined);
         setActiveRubricId(gradingReview.rubric_id);
       } else {
+        const firstWritableReview = writableReviews[0];
         if (ignoreAssignedReview) {
           setActiveReviewAssignmentId(undefined);
         } else {
           setActiveReviewAssignmentId(
-            myAssignedReviews.find((ra) => ra.submission_review_id === writableReviews[0].id && !ra.completed_at)?.id
+            myAssignedReviews.find((ra) => ra.submission_review_id === firstWritableReview?.id && !ra.completed_at)?.id
           );
         }
-        setActiveSubmissionReviewId(writableReviews[0].id);
-        setActiveRubricId(writableReviews[0].rubric_id);
+        setActiveSubmissionReviewId(firstWritableReview?.id);
+        setActiveRubricId(firstWritableReview?.rubric_id);
       }
     } else {
       //Default to grading review

@@ -5,15 +5,15 @@ import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, HStack, Icon, Input, Table, Tag, Text, VStack } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { useCustomTable } from "@/hooks/useCustomTable";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { type ColumnDef, flexRender } from "@tanstack/react-table";
 import { formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { AlertCircle, ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaCheck, FaTimes } from "react-icons/fa";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import { type UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { type Database } from "@/utils/supabase/SupabaseTypes";
 import { useAssignmentController, useRubricCheck } from "@/hooks/useAssignment";
 import useUserProfiles, { getUserProfile } from "@/hooks/useUserProfiles";
 
@@ -364,7 +364,7 @@ export default function RegradeRequestsTable() {
         }
       }
     ],
-    []
+    [assignmentController.rubricCheckById]
   );
 
   const {

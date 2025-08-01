@@ -16,7 +16,7 @@ import type {
 
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { type LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
@@ -24,7 +24,8 @@ import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import type { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
+import { toaster } from "@/components/ui/toaster";
 
 export function useUpdateThreadTeaser() {
   const controller = useCourseController();
@@ -851,7 +852,6 @@ export class CourseController {
     // Get student's lab section
     const labSectionId = labSectionIdOverride || this.getStudentLabSectionId(studentPrivateProfileId);
     if (!labSectionId) {
-      console.log("Student not in a lab section, falling back to original due date");
       // Student not in a lab section, fall back to original due date
       return new Date(assignment.due_date);
     }
@@ -877,7 +877,7 @@ export class CourseController {
     }
 
     // Calculate lab-based due date
-    const mostRecentLabMeeting = relevantMeetings[0];
+    const mostRecentLabMeeting = relevantMeetings[0]!;
     const labMeetingDate = new TZDate(
       mostRecentLabMeeting.meeting_date + "T" + labSection.end_time,
       this.course.time_zone ?? "America/New_York"
@@ -1309,7 +1309,7 @@ export function useAssignmentDueDate(
 
           if (relevantMeetings.length > 0 && assignment.minutes_due_after_lab !== null) {
             // Calculate lab-based due date
-            const mostRecentLabMeeting = relevantMeetings[0];
+            const mostRecentLabMeeting = relevantMeetings[0]!;
             const nonTZDate = new Date(mostRecentLabMeeting.meeting_date + "T" + labSection.end_time);
 
             const labMeetingDate = new TZDate(

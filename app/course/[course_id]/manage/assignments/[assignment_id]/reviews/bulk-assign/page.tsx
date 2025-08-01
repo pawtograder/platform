@@ -6,7 +6,7 @@ import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import useTags from "@/hooks/useTags";
-import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
 import {
   Box,
@@ -23,13 +23,18 @@ import {
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useCreate, useInvalidate, useList } from "@refinedev/core";
-import { MultiValue, Select } from "chakra-react-select";
+import { type MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FaArrowLeft } from "react-icons/fa";
-import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
+import { type AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
-import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import type {
+  DraftReviewAssignment,
+  RubricWithParts,
+  SubmissionWithGrading,
+  UserRoleWithConflictsAndName
+} from "../page";
 import { useAssignmentController, useRubrics } from "@/hooks/useAssignment";
 import { useLabSections } from "@/hooks/useCourseController";
 import { Alert } from "@/components/ui/alert";
@@ -210,7 +215,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
     }
     return shuffled;
   }
@@ -341,17 +346,17 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     }
 
     referenceReviewAssignments.data.forEach((reviewAssignment) => {
-      const submission = reviewAssignment.submissions;
+      const submission = reviewAssignment["submissions"];
       if (submission) {
         // Handle individual submissions
         if (submission.profile_id) {
-          preferenceMap.set(submission.profile_id, reviewAssignment.assignee_profile_id);
+          preferenceMap.set(submission.profile_id, reviewAssignment["assignee_profile_id"]);
         }
 
         // Handle group submissions
         if (submission.assignment_groups?.assignment_groups_members) {
           submission.assignment_groups.assignment_groups_members.forEach((member: { profile_id: string }) => {
-            preferenceMap.set(member.profile_id, reviewAssignment.assignee_profile_id);
+            preferenceMap.set(member.profile_id, reviewAssignment["assignee_profile_id"]);
           });
         }
       }
@@ -560,7 +565,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     const returnResult = [];
     for (let x = 0; x < groups.length && x < selectedParts.length; x += 1) {
       const result = new TAAssignmentSolver(
-        groups[x],
+        groups[x]!,
         submissionsToDo,
         historicalWorkload,
         graderPreferences,
@@ -794,7 +799,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
     async (review: DraftReviewAssignment) => {
       let submissionReviewId: number;
       if (review.submission.submission_reviews.length > 0) {
-        submissionReviewId = review.submission.submission_reviews[0].id;
+        submissionReviewId = review.submission.submission_reviews[0]!.id;
       } else {
         const { data: rev } = await mutateAsync({
           resource: "submission_reviews",
@@ -1308,8 +1313,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                   if (value) {
                     // Treat inputted date as course timezone regardless of user location
                     const [date, time] = value.split("T");
+                    if (!date || !time) return;
                     const [year, month, day] = date.split("-");
                     const [hour, minute] = time.split(":");
+                    if (!year || !month || !day || !hour || !minute) return;
 
                     // Create TZDate with these exact values in course timezone
                     const tzDate = new TZDate(

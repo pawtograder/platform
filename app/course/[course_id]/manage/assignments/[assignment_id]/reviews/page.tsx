@@ -14,7 +14,7 @@ import {
 import Link from "@/components/ui/link";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import useModalManager from "@/hooks/useModalManager";
-import {
+import type {
   ReviewAssignmentParts,
   ReviewAssignments,
   Rubric,
@@ -23,14 +23,14 @@ import {
   SubmissionReview,
   UserRole
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Container, Field, Heading, HStack, List, Separator, Text, VStack } from "@chakra-ui/react";
 import { useDelete, useInvalidate, useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { MdClear } from "react-icons/md";
-import { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
+import type { GradingConflictWithPopulatedProfiles } from "../../../course/grading-conflicts/gradingConflictsTable";
 import AssignReviewModal from "./assignReviewModal";
 import ReviewsTable, { type PopulatedReviewAssignment } from "./ReviewsTable";
 

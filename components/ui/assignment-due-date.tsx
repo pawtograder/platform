@@ -13,7 +13,7 @@ import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { toaster, Toaster } from "./toaster";
-import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
+import type { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();

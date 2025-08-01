@@ -6,7 +6,7 @@ import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCourse } from "@/hooks/useAuthState";
 import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate } from "@/hooks/useCourseController";
-import {
+import type {
   Assignment,
   AssignmentDueDateException,
   AssignmentGroup,
@@ -163,8 +163,8 @@ function AdjustDueDateDialog({
                   </Field>
                   <Field
                     label="Minutes Extended"
-                    errorText={errors.minutes?.message?.toString()}
-                    invalid={errors.minutes ? true : false}
+                    errorText={errors["minutes"]?.message?.toString()}
+                    invalid={errors["minutes"] ? true : false}
                     helperText="Additional minutes to extend the due date."
                   >
                     <Input type="number" {...register("minutes", { min: 0, max: 59 })} defaultValue={0} />

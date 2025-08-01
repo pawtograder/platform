@@ -280,11 +280,11 @@ export default function RegradeRequestWrapper({
         type: "success"
       });
     } catch (error) {
-      console.error("Error creating comment:", error);
-      toaster.create({
+      toaster.error({
         title: "Error",
-        description: "Failed to add comment. Please try again.",
-        type: "error"
+        description:
+          "Failed to add comment. Please try again. Error: " +
+          (error instanceof Error ? error.message : "Unknown error")
       });
     } finally {
       setIsSubmittingComment(false);
@@ -307,17 +307,16 @@ export default function RegradeRequestWrapper({
         id: regradeRequest.id,
         invalidates: ["all"]
       });
-      toaster.create({
+      toaster.success({
         title: "Request Resolved",
-        description: "The regrade request has been resolved.",
-        type: "success"
+        description: "The regrade request has been resolved."
       });
     } catch (error) {
-      console.error("Error resolving request:", error);
-      toaster.create({
+      toaster.error({
         title: "Error",
-        description: "Failed to resolve request. Please try again.",
-        type: "error"
+        description:
+          "Failed to resolve request. Please try again. Error: " +
+          (error instanceof Error ? error.message : "Unknown error")
       });
     } finally {
       setIsUpdatingStatus(false);
@@ -340,17 +339,16 @@ export default function RegradeRequestWrapper({
         invalidates: ["all"]
       });
       setIsEscalateDialogOpen(false);
-      toaster.create({
+      toaster.success({
         title: "Request Escalated",
-        description: "Your regrade request has been escalated to an instructor.",
-        type: "success"
+        description: "Your regrade request has been escalated to an instructor."
       });
     } catch (error) {
-      console.error("Error escalating request:", error);
-      toaster.create({
+      toaster.error({
         title: "Error",
-        description: "Failed to escalate request. Please try again.",
-        type: "error"
+        description:
+          "Failed to escalate request. Please try again. Error: " +
+          (error instanceof Error ? error.message : "Unknown error")
       });
     } finally {
       setIsUpdatingStatus(false);
@@ -373,17 +371,16 @@ export default function RegradeRequestWrapper({
         id: regradeRequest.id,
         invalidates: ["all"]
       });
-      toaster.create({
+      toaster.success({
         title: "Request Closed",
-        description: "The regrade request has been closed.",
-        type: "success"
+        description: "The regrade request has been closed."
       });
     } catch (error) {
-      console.error("Error closing request:", error);
-      toaster.create({
+      toaster.error({
         title: "Error",
-        description: "Failed to close request. Please try again.",
-        type: "error"
+        description:
+          "Failed to close request. Please try again. Error: " +
+          (error instanceof Error ? error.message : "Unknown error")
       });
     } finally {
       setIsUpdatingStatus(false);

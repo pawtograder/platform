@@ -13,7 +13,7 @@ import type {
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";

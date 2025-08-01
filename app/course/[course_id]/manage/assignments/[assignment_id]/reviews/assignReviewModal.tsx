@@ -23,7 +23,7 @@ import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { TZDate } from "@date-fns/tz";
-import { PopulatedReviewAssignment } from "./ReviewsTable";
+import type { PopulatedReviewAssignment } from "./ReviewsTable";
 
 // Type definitions
 type ReviewAssignmentRow = Database["public"]["Tables"]["review_assignments"]["Row"];

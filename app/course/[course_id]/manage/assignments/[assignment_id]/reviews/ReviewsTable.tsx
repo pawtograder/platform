@@ -10,13 +10,13 @@ import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { EmptyState, HStack, IconButton, Input, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { useDelete } from "@refinedev/core";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
-import { MultiValue, Select } from "chakra-react-select";
+import type { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { type ColumnDef, flexRender, type Row } from "@tanstack/react-table";
+import { type MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
 import { useCallback, useMemo } from "react";
 import { FaEdit, FaTrash, FaDownload } from "react-icons/fa";
@@ -346,7 +346,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     } catch {
       toaster.error({ title: "Error exporting CSV", description: "An unexpected error occurred" });
     }
-  }, [assignmentId, supabase, selfReviewRubric, getReviewStatus, course.classes.time_zone]);
+  }, [assignmentId, supabase, selfReviewRubric, getReviewStatus, course.classes.time_zone, course.classes.id]);
 
   // Helper function to create filter options from unique values
   const createFilterOptions = useCallback(

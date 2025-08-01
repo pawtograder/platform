@@ -12,6 +12,7 @@ import {
   supabase,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
+import type { Database } from "../utils/supabase/SupabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
@@ -30,7 +31,7 @@ let repoCounter = 0;
 function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = new Date().toISOString().split("T")[0] + "#" + suffix;
-  const workerIndex = process.env.TEST_WORKER_INDEX || "";
+  const workerIndex = process.env["TEST_WORKER_INDEX"] || "";
   return `e2e-${test_run_batch}-${workerIndex}`;
 }
 
@@ -129,12 +130,12 @@ async function batchCreateSubmissions(
             profile_id: item.student?.private_profile_id,
             assignment_group_id: item.group?.id,
             sha: "none",
-            repository: repositoryInserts[index].repository,
+            repository: repositoryInserts[index]!.repository,
             run_attempt: 1,
             run_number: 1,
             class_id: class_id,
-            repository_check_run_id: checkRunData[index].id,
-            repository_id: repositoryData[index].id
+            repository_check_run_id: checkRunData[index]!.id,
+            repository_id: repositoryData[index]!.id
           }));
 
           // Batch insert submissions for this chunk
@@ -181,8 +182,8 @@ public class Entrypoint {
             contents: sampleJavaCode,
             class_id: class_id,
             submission_id: submission.id,
-            profile_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id
+            profile_id: chunk[index]!.student?.private_profile_id,
+            assignment_group_id: chunk[index]!.group?.id
           }));
 
           // Batch insert submission files for this chunk
@@ -199,8 +200,8 @@ public class Entrypoint {
             submission_id: submission.id,
             score: 5,
             class_id: class_id,
-            profile_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
+            profile_id: chunk[index]!.student?.private_profile_id,
+            assignment_group_id: chunk[index]!.group?.id,
             lint_passed: true,
             lint_output: "no lint output",
             lint_output_format: "markdown",
@@ -229,8 +230,8 @@ public class Entrypoint {
               output: "here is a bunch of output\n**wow**",
               output_format: "markdown",
               class_id: class_id,
-              student_id: chunk[index].student?.private_profile_id,
-              assignment_group_id: chunk[index].group?.id,
+              student_id: chunk[index]!.student?.private_profile_id,
+              assignment_group_id: chunk[index]!.group?.id,
               grader_result_id: graderResult.id,
               is_released: true
             },
@@ -242,8 +243,8 @@ public class Entrypoint {
               output: "here is a bunch of output\n**wow**",
               output_format: "markdown",
               class_id: class_id,
-              student_id: chunk[index].student?.private_profile_id,
-              assignment_group_id: chunk[index].group?.id,
+              student_id: chunk[index]!.student?.private_profile_id,
+              assignment_group_id: chunk[index]!.group?.id,
               grader_result_id: graderResult.id,
               is_released: true
             }
@@ -265,10 +266,10 @@ public class Entrypoint {
           // Return the results from this chunk
           return submissionData.map((submission, index) => ({
             submission_id: submission.id,
-            assignment: chunk[index].assignment,
-            student: chunk[index].student,
-            group: chunk[index].group,
-            isRecentlyDue: chunk[index].isRecentlyDue
+            assignment: chunk[index]!.assignment,
+            student: chunk[index]!.student,
+            group: chunk[index]!.group,
+            isRecentlyDue: chunk[index]!.isRecentlyDue
           }));
         }),
       { concurrency: 10 }
@@ -361,7 +362,7 @@ async function batchGradeSubmissions(
 
   rubricCheckResults.forEach((result, index) => {
     const rubricId = Array.from(reviewsByRubric.keys())[index];
-    if (result.data) {
+    if (rubricId && result.data) {
       rubricChecksMap.set(rubricId, result.data);
     }
   });
@@ -437,8 +438,8 @@ async function batchGradeSubmissions(
 
             submissionFileComments.push({
               submission_id: review.submission_id,
-              submission_file_id: file.id,
-              author: grader.private_profile_id,
+              submission_file_id: file!.id,
+              author: grader!.private_profile_id,
               comment: `${check.name}: Grading comment for this check`,
               points: pointsAwarded,
               line: lineNumber,
@@ -451,7 +452,7 @@ async function batchGradeSubmissions(
             // Create submission comment (general comment)
             submissionComments.push({
               submission_id: review.submission_id,
-              author: grader.private_profile_id,
+              author: grader!.private_profile_id,
               comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
               points: pointsAwarded,
               class_id: review.class_id,
@@ -469,10 +470,10 @@ async function batchGradeSubmissions(
     const totalAutogradeScore = Math.floor(Math.random() * 100);
 
     reviewUpdates.set(review.id, {
-      grader: grader.private_profile_id,
+      grader: grader!.private_profile_id,
       total_score: totalScore,
       released: isCompleted,
-      completed_by: isCompleted ? grader.private_profile_id : null,
+      completed_by: isCompleted ? grader!.private_profile_id : null,
       completed_at: isCompleted ? new Date().toISOString() : null,
       total_autograde_score: totalAutogradeScore
     });
@@ -540,7 +541,7 @@ function extractDependenciesFromExpression(
 ): { assignments?: number[]; gradebook_columns?: number[] } | null {
   if (!expr) return null;
 
-  const math = create(all);
+  const math = create(all!);
   const dependencies: Record<string, Set<number>> = {};
   const errors: string[] = [];
 
@@ -556,9 +557,9 @@ function extractDependenciesFromExpression(
         const functionName = (node as FunctionNode).fn.name;
         if (functionName in availableDependencies) {
           const args = (node as FunctionNode).args;
-          const argType = args[0].type;
+          const argType = args[0]!.type;
           if (argType === "ConstantNode") {
-            const argName = (args[0] as ConstantNode).value;
+            const argName = (args[0]! as ConstantNode).value;
             if (typeof argName === "string") {
               const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
                 minimatch(d.slug!, argName)
@@ -567,7 +568,7 @@ function extractDependenciesFromExpression(
                 if (!(functionName in dependencies)) {
                   dependencies[functionName] = new Set();
                 }
-                matching.forEach((d) => dependencies[functionName].add(d.id));
+                matching.forEach((d) => dependencies[functionName]!.add(d.id));
               } else {
                 errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
               }
@@ -1161,15 +1162,15 @@ async function insertEnhancedAssignment({
       const { data: criteriaData, error: criteriaError } = await supabase
         .from("rubric_criteria")
         .insert({
-          class_id: class_id,
           name: criteriaTemplate.name,
           description: criteriaTemplate.description,
-          ordinal: criteriaTemplate.ordinal,
+          ordinal: criteriaTemplate.ordinal ?? 0,
           total_points: criteriaTemplate.total_points,
           is_additive: true,
           rubric_part_id: partData.id,
-          rubric_id: rubricId || 0
-        })
+          rubric_id: rubricId ?? 0,
+          class_id: class_id
+        } as Database["public"]["Tables"]["rubric_criteria"]["Insert"])
         .select("id")
         .single();
 
@@ -1182,16 +1183,16 @@ async function insertEnhancedAssignment({
         const { data: checkData, error: checkError } = await supabase
           .from("rubric_checks")
           .insert({
-            rubric_criteria_id: criteriaData.id,
+            rubric_criteria_id: criteriaData!.id,
             name: checkTemplate.name,
             description: `${checkTemplate.name} evaluation`,
-            ordinal: checkTemplate.ordinal,
+            ordinal: checkTemplate.ordinal ?? 0,
             points: checkTemplate.points,
             is_annotation: checkTemplate.is_annotation,
             is_comment_required: checkTemplate.is_comment_required,
             class_id: class_id,
             is_required: checkTemplate.is_required
-          })
+          } as Database["public"]["Tables"]["rubric_checks"]["Insert"])
           .select("*")
           .single();
 
@@ -1242,16 +1243,16 @@ async function createLabSections(class_id: number, numSections: number, instruct
     const dayIndex = i % daysOfWeek.length;
     const timeIndex = Math.floor(i / daysOfWeek.length) % times.length;
     const startTime = times[timeIndex];
-    const endTime = `${String(parseInt(startTime.split(":")[0]) + 1).padStart(2, "0")}:${startTime.split(":")[1]}`;
+    const endTime = `${String(parseInt(startTime!.split(":")[0]!) + 1).padStart(2, "0")}:${startTime!.split(":")[1]!}`;
 
     return {
       class_id: class_id,
       name: `Lab ${String.fromCharCode(65 + i)}`, // Lab A, Lab B, etc.
-      day_of_week: daysOfWeek[dayIndex],
-      start_time: startTime,
+      day_of_week: daysOfWeek[dayIndex]!,
+      start_time: startTime!,
       end_time: endTime,
       lab_leader_id: instructorId,
-      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime}`
+      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]!} ${startTime!}-${endTime}`
     };
   });
 
@@ -1287,7 +1288,7 @@ function defineTagTypes(prefix: string, numTagTypes: number) {
     const colorIndex = (i - 1) % colors.length;
     tagTypes.push({
       name: `${prefix} ${String(i).padStart(2, "0")}`,
-      color: colors[colorIndex]
+      color: colors[colorIndex]!
     });
   }
 
@@ -1363,7 +1364,7 @@ async function createAssignmentGroups(
 
     groupStudents.forEach((student) => {
       membersData.push({
-        assignment_group_id: groups[i].id,
+        assignment_group_id: groups[i]!.id,
         profile_id: student.private_profile_id,
         assignment_id: assignment_id,
         class_id: class_id,
@@ -1423,7 +1424,7 @@ async function assignUsersToSectionsAndTags(
       const { error: updateError } = await supabase
         .from("user_roles")
         .update({
-          class_section_id: classSection.id,
+          class_section_id: classSection!.id,
           lab_section_id: labSection?.id || null
         })
         .eq("class_id", class_id)
@@ -1462,7 +1463,7 @@ async function assignUsersToSectionsAndTags(
 
       return {
         user: user.email,
-        classSection: classSection.name,
+        classSection: classSection!.name,
         labSection: labSection?.name || null,
         tags: userTags.map((t) => t.name)
       };
@@ -1496,7 +1497,7 @@ async function insertGraderConflicts(
   function extractUserNumber(user: TestingUser): number | null {
     // Extract from private_profile_name which follows pattern: "Student #1Test", "Grader #2Test", etc.
     const match = user.private_profile_name.match(/#(\d+)/);
-    return match ? parseInt(match[1], 10) : null;
+    return match ? parseInt(match[1]!, 10) : null;
   }
 
   // For each conflict pattern (grader numbers 2, 3, 5)
@@ -1933,7 +1934,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const numStudentsForExtensions = Math.floor(students.length * 0.1); // 10% of students get extensions
     const shuffledStudents = [...students].sort(() => Math.random() - 0.5);
     for (let i = 0; i < Math.min(numStudentsForExtensions, shuffledStudents.length); i++) {
-      studentsWithExtensions.add(shuffledStudents[i].private_profile_id);
+      studentsWithExtensions.add(shuffledStudents[i]!.private_profile_id);
     }
     console.log(`✓ Selected ${studentsWithExtensions.size} students for extensions`);
 
@@ -1946,14 +1947,14 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     }> = [];
 
     assignments.forEach((assignment) => {
-      const isRecentlyDue = new Date(assignment.due_date as string) < now;
-      if (assignment.group_config !== "individual") {
+      const isRecentlyDue = new Date(assignment["due_date"] as string) < now;
+      if (assignment["group_config"] !== "individual") {
         // 75% chance to create a group submission
         if (Math.random() < 0.75) {
           assignment.groups.forEach((group) => {
             // Create a group submission
             submissionsToCreate.push({
-              assignment: { ...assignment, due_date: assignment.due_date as string },
+              assignment: { ...assignment, due_date: assignment["due_date"] as string },
               group,
               isRecentlyDue
             });
@@ -1964,7 +1965,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
           // 95% chance student submitted
           if (Math.random() < 0.95) {
             submissionsToCreate.push({
-              assignment: { ...assignment, due_date: assignment.due_date as string },
+              assignment: { ...assignment, due_date: assignment["due_date"] as string },
               student,
               isRecentlyDue
             });
@@ -1994,7 +1995,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       ({ isRecentlyDue, student, group }) =>
         isRecentlyDue &&
         (!student || !studentsWithExtensions.has(student.private_profile_id)) &&
-        (!group || !studentsWithExtensions.has(group.members[0]))
+        (!group || !studentsWithExtensions.has(group.members[0]!))
     );
 
     if (submissionsToGrade.length > 0) {
@@ -2048,9 +2049,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       .slice(0, numRegradeRequests);
 
     const regradePromises = shuffledSubmissions.map(({ submission_id, assignment, student, group }) => {
-      const status = statuses[Math.floor(Math.random() * statuses.length)];
+      const status = statuses[Math.floor(Math.random() * statuses.length)]!;
       const grader = graders[Math.floor(Math.random() * graders.length)];
-      const rubric_check_id = assignment.rubricChecks[Math.random() < 0.5 ? 2 : 3].id;
+      const rubric_check_id = assignment.rubricChecks[Math.random() < 0.5 ? 2 : 3]!.id;
       if (!student && !group) {
         console.log("No student or group found for submission", submission_id);
         return;
@@ -2059,8 +2060,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         createRegradeRequest(
           submission_id,
           assignment.id,
-          student ? student.private_profile_id : group ? group.members[0] : "",
-          grader.private_profile_id,
+          student ? student.private_profile_id : group ? group.members[0]! : "",
+          grader!.private_profile_id,
           rubric_check_id,
           class_id,
           status

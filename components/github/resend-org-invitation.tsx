@@ -65,8 +65,12 @@ export default function ResendOrgInvitation() {
                   if (error instanceof EdgeFunctionError) {
                     toaster.error({ title: "Error", description: error.message + " " + error.details });
                   } else {
-                    console.error(error);
-                    toaster.error({ title: "Error", description: "Failed to resend invitation." });
+                    toaster.error({
+                      title: "Error",
+                      description:
+                        "Failed to resend invitation. Error: " +
+                        (error instanceof Error ? error.message : "Unknown error")
+                    });
                   }
                 }
               }}

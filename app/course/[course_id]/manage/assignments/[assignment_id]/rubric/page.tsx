@@ -4,7 +4,7 @@ import { useColorMode } from "@/components/ui/color-mode";
 import { RubricSidebar } from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useRubric } from "@/hooks/useAssignment";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,

@@ -3,11 +3,14 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local.prod" });
 
-const courseIDArg = process.argv[2];
+const courseID = parseInt(process.argv[2] || "0");
 const userEmail = process.argv[3];
 console.log(process.argv);
 
-const supabase = createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+const supabase = createClient<Database>(
+  process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
+  process.env["SUPABASE_SERVICE_ROLE_KEY"]!
+);
 async function main() {
   if (!userEmail) {
     console.error("No user email provided");
