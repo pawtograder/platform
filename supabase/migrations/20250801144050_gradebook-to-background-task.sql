@@ -125,6 +125,7 @@ BEGIN
             messages := messages
         );
         
+
         -- Update all gradebook_column_students to set is_recalculating=true in a single operation
         UPDATE public.gradebook_column_students
         SET is_recalculating = true
@@ -207,3 +208,34 @@ END;
 $function$;
 select
 cron.schedule('invoke-gradebook-recalculation-background-task-every-minute', '* * * * *', 'SELECT invoke_gradebook_recalculation_background_task();');
+
+DROP TRIGGER IF EXISTS trigger_handle_gradebook_column_sort_order ON public.gradebook_columns;
+
+-- Simple replacement that just assigns sort_order without shifting existing columns
+CREATE OR REPLACE FUNCTION public.handle_gradebook_column_sort_order()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $function$
+DECLARE
+    max_sort_order integer;
+BEGIN
+    -- Only assign sort_order if it's NULL, don't shift existing columns
+    IF NEW.sort_order IS NULL THEN
+        SELECT COALESCE(MAX(sort_order), -1) + 1
+        INTO max_sort_order
+        FROM public.gradebook_columns
+        WHERE gradebook_id = NEW.gradebook_id;
+        
+        NEW.sort_order := max_sort_order;
+    END IF;
+    
+    RETURN NEW;
+END;
+$function$;
+
+-- Create a simpler trigger that doesn't cause race conditions
+CREATE TRIGGER trigger_handle_gradebook_column_sort_order
+BEFORE INSERT ON public.gradebook_columns
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_gradebook_column_sort_order();
