@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
 import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
@@ -297,12 +297,14 @@ export default function HelpRequestForm() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<number | null>(null);
 
+  const currentDate = useMemo(() => new Date().toISOString(), []);
+
   // Fetch assignments for the class
   const { data: assignments } = useList<Assignment>({
     resource: "assignments",
     filters: [
       { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "release_date", operator: "lte", value: new Date().toISOString() }
+      { field: "release_date", operator: "lte", value: currentDate }
     ],
     sorters: [{ field: "due_date", order: "desc" }],
     pagination: { pageSize: 1000 }
