@@ -2699,13 +2699,6 @@ export type Database = {
             foreignKeyName: "help_request_file_references_assignment_id_fkey";
             columns: ["assignment_id"];
             isOneToOne: false;
-            referencedRelation: "submissions_with_grades_for_assignment";
-            referencedColumns: ["assignment_id"];
-          },
-          {
-            foreignKeyName: "help_request_file_references_assignment_id_fkey";
-            columns: ["assignment_id"];
-            isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
           },

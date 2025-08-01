@@ -346,7 +346,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     } catch {
       toaster.error({ title: "Error exporting CSV", description: "An unexpected error occurred" });
     }
-  }, [assignmentId, supabase, selfReviewRubric, getReviewStatus, course.classes.time_zone]);
+  }, [assignmentId, supabase, selfReviewRubric, getReviewStatus, course.classes.time_zone, course.classes.id]);
 
   // Helper function to create filter options from unique values
   const createFilterOptions = useCallback(
