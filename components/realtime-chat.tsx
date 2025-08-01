@@ -5,19 +5,22 @@ import { useOfficeHoursRealtime, useOfficeHoursController, type ChatMessage } fr
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Stack, Input, Icon, Text, Button, HStack } from "@chakra-ui/react";
-import { Send, X } from "lucide-react";
+import { Box, Flex, Stack, Icon, Text, Button, HStack } from "@chakra-ui/react";
+import { X } from "lucide-react";
 import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationStatus";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCreate } from "@refinedev/core";
 import { toaster } from "@/components/ui/toaster";
+import Markdown from "react-markdown";
+import MessageInput from "@/components/ui/message-input";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
   messages?: ChatMessage[];
   helpRequest: HelpRequest;
   helpRequestStudentIds?: string[];
+  readOnly?: boolean;
 }
 
 /**
@@ -72,7 +75,7 @@ const ReplyPreview = ({
           <Text fontWeight="medium" fontSize="xs" color="fg.default" mb={1}>
             Replying to {getMessageAuthor(fullMessage)}
           </Text>
-          <Text
+          <Box
             color="fg.muted"
             overflow="hidden"
             textOverflow="ellipsis"
@@ -82,8 +85,8 @@ const ReplyPreview = ({
               WebkitBoxOrient: "vertical"
             }}
           >
-            {getMessageContent(fullMessage)}
-          </Text>
+            <Markdown>{getMessageContent(fullMessage)}</Markdown>
+          </Box>
         </Box>
         <Button size="sm" variant="ghost" onClick={onCancel} color="fg" minW="auto" p={1}>
           <Icon as={X} boxSize={4} />
@@ -100,7 +103,8 @@ export const RealtimeChat = ({
   onMessage,
   messages: databaseMessages = [],
   helpRequest,
-  helpRequestStudentIds = []
+  helpRequestStudentIds = [],
+  readOnly = false
 }: RealtimeChatProps) => {
   const { containerRef, scrollToBottom } = useChatScroll();
   const moderationStatus = useModerationStatus(helpRequest.class_id);
@@ -111,7 +115,6 @@ export const RealtimeChat = ({
 
   // Reply state
   const [replyToMessage, setReplyToMessage] = useState<UnifiedMessage | null>(null);
-  const [newMessage, setNewMessage] = useState("");
 
   // Refs for intersection observer
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -259,15 +262,15 @@ export const RealtimeChat = ({
   }, [allMessages, markMessageAsRead, officeHoursController]);
 
   const handleSendMessage = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!newMessage.trim() || !sendMessage || !isConnected || moderationStatus.isBanned) return;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async (message: string, profile_id: string, close?: boolean) => {
+      if (!message.trim() || !sendMessage || !isConnected || moderationStatus.isBanned) return;
 
       const replyToId =
         replyToMessage && "id" in replyToMessage && typeof replyToMessage.id === "number" ? replyToMessage.id : null;
 
       try {
-        await sendMessage(newMessage, replyToId);
+        await sendMessage(message, replyToId);
 
         // Log activity for the current user who sent the message
         if (private_profile_id) {
@@ -281,13 +284,12 @@ export const RealtimeChat = ({
                 activity_description: `Student sent a message in help request chat${replyToId ? " (reply)" : ""}`
               }
             });
-          } catch (error) {
-            console.error(`Failed to log message_sent activity:`, error);
+          } catch {
             // Don't throw - activity logging shouldn't block message sending
+            // Error is silently handled as it's not critical to the user experience
           }
         }
 
-        setNewMessage("");
         setReplyToMessage(null);
       } catch (error) {
         toaster.error({
@@ -297,7 +299,6 @@ export const RealtimeChat = ({
       }
     },
     [
-      newMessage,
       sendMessage,
       isConnected,
       moderationStatus.isBanned,
@@ -463,7 +464,13 @@ export const RealtimeChat = ({
         )}
       </Box>
 
-      {moderationStatus.isBanned ? (
+      {readOnly ? (
+        <Box p={4} borderTop="1px" borderColor="border.emphasized" bg="bg.muted">
+          <Text fontSize="sm" color="fg.muted" textAlign="center">
+            This is a historical chat view. New messages cannot be sent.
+          </Text>
+        </Box>
+      ) : moderationStatus.isBanned ? (
         <Box p={4} borderTop="1px" borderColor="border.emphasized" bg="bg.error">
           <Text fontSize="sm" color="red.fg" textAlign="center">
             {moderationStatus.isPermanentBan
@@ -481,35 +488,18 @@ export const RealtimeChat = ({
           )}
 
           {/* Message Input */}
-          <Box as="form" onSubmit={handleSendMessage} p={4}>
-            <Flex gap={2} width="100%" align="center">
-              <Input
-                borderRadius="full"
-                bg="bg.subtle"
-                fontSize="sm"
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                placeholder={replyToMessage ? "Reply to message..." : "Type a message..."}
-                disabled={!isConnected || !sendMessage}
-                transition="all 0.3s"
-                flex="1"
-              />
-              {isConnected && newMessage.trim() && sendMessage && (
-                <Button
-                  type="submit"
-                  size="sm"
-                  borderRadius="full"
-                  aspectRatio="1"
-                  disabled={!isConnected || !sendMessage}
-                  style={{
-                    animation: "slideInFromRight 0.3s ease-out"
-                  }}
-                  aria-label="Send message"
-                >
-                  <Icon as={Send} boxSize={4} />
-                </Button>
-              )}
-            </Flex>
+          <Box p={4}>
+            <MessageInput
+              sendMessage={handleSendMessage}
+              enableFilePicker={true}
+              enableEmojiPicker={true}
+              enableGiphyPicker={true}
+              placeholder={replyToMessage ? "Reply to message..." : "Type a message..."}
+              sendButtonText="Send"
+              uploadFolder="office-hours"
+              ariaLabel="Type your message"
+              defaultSingleLine={true}
+            />
           </Box>
         </Box>
       )}

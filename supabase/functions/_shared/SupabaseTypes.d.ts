@@ -2646,6 +2646,65 @@ export type Database = {
           }
         ];
       };
+      help_request_feedback: {
+        Row: {
+          class_id: number;
+          comment: string | null;
+          created_at: string;
+          help_request_id: number;
+          id: number;
+          student_profile_id: string;
+          thumbs_up: boolean;
+        };
+        Insert: {
+          class_id: number;
+          comment?: string | null;
+          created_at?: string;
+          help_request_id: number;
+          id?: number;
+          student_profile_id: string;
+          thumbs_up: boolean;
+        };
+        Update: {
+          class_id?: number;
+          comment?: string | null;
+          created_at?: string;
+          help_request_id?: number;
+          id?: number;
+          student_profile_id?: string;
+          thumbs_up?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_feedback_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_feedback_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_feedback_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_feedback_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       help_request_file_references: {
         Row: {
           assignment_id: number;
@@ -3096,6 +3155,55 @@ export type Database = {
           {
             foreignKeyName: "help_request_templates_created_by_id_fkey";
             columns: ["created_by_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      help_request_watchers: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          enabled: boolean;
+          help_request_id: number;
+          id: number;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          enabled: boolean;
+          help_request_id: number;
+          id?: number;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          enabled?: boolean;
+          help_request_id?: number;
+          id?: number;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_watchers_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_watchers_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_watchers_user_id_fkey";
+            columns: ["user_id"];
             isOneToOne: false;
             referencedRelation: "users";
             referencedColumns: ["user_id"];

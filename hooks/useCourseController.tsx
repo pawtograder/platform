@@ -6,6 +6,7 @@ import {
   DiscussionThread,
   DiscussionThreadReadStatus,
   DiscussionThreadWatcher,
+  HelpRequestWatcher,
   LabSection,
   LabSectionMeeting,
   Notification,
@@ -1041,6 +1042,36 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
       controller.setGeneric("discussion_thread_watchers", threadWatches.data);
     }
   }, [controller, threadWatches?.data]);
+
+  // Fetch help request watchers for the current user
+  const { data: helpRequestWatches } = useList<HelpRequestWatcher>({
+    resource: "help_request_watchers",
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    filters: [
+      {
+        field: "user_id",
+        operator: "eq",
+        value: user?.id
+      }
+    ],
+    pagination: {
+      pageSize: 1000
+    },
+    liveMode: "manual",
+    onLiveEvent: (event) => {
+      controller.handleGenericDataEvent("help_request_watchers", event);
+    }
+  });
+  useEffect(() => {
+    controller.registerGenericDataType("help_request_watchers", (item: HelpRequestWatcher) => item.help_request_id);
+    if (helpRequestWatches?.data) {
+      controller.setGeneric("help_request_watchers", helpRequestWatches.data);
+    }
+  }, [controller, helpRequestWatches?.data]);
+
   const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
     queryOptions: {

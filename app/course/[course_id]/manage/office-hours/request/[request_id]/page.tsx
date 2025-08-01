@@ -97,7 +97,6 @@ export default function HelpRequestPage() {
   }
 
   const request = realtimeData.helpRequest;
-  const isRequestInactive = request.status === "resolved" || request.status === "closed";
 
   return (
     <Box>
@@ -108,7 +107,7 @@ export default function HelpRequestPage() {
         </Alert>
       )}
 
-      <Box opacity={isRequestInactive ? 0.7 : 1} transition="opacity 0.2s ease-in-out">
+      <Box transition="opacity 0.2s ease-in-out">
         <VStack gap={4} align="stretch" mb={4}>
           <HStack justify="space-between" align="center">
             <HelpRequestStatusIndicator status={request.status} />

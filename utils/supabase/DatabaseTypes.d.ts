@@ -374,6 +374,14 @@ export type HelpRequestModeration = GetResult<
   "*"
 >;
 
+export type HelpRequestFeedback = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_feedback"]["Row"],
+  "help_request_feedback",
+  Database["public"]["Tables"]["help_request_feedback"]["Relationships"],
+  "*"
+>;
+
 export type StudentKarmaNotes = GetResult<
   Database["public"],
   Database["public"]["Tables"]["student_karma_notes"]["Row"],
@@ -395,6 +403,14 @@ export type StudentHelpActivity = GetResult<
   Database["public"]["Tables"]["student_help_activity"]["Row"],
   "student_help_activity",
   Database["public"]["Tables"]["student_help_activity"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestWatcher = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_watchers"]["Row"],
+  "help_request_watchers",
+  Database["public"]["Tables"]["help_request_watchers"]["Relationships"],
   "*"
 >;
 
@@ -492,6 +508,7 @@ export type HelpRequestWithStudentCount = HelpRequest & {
 export type HelpRequestHistoryProps = {
   requests: HelpRequest[];
   showPrivacyIndicator?: boolean;
+  readOnly?: boolean;
 };
 
 export type UserProfile = GetResult<
