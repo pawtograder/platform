@@ -29,7 +29,7 @@ import { useRouter, useParams, usePathname, useSearchParams } from "next/navigat
 
 import { useUpdate, useList, useCreate, useDelete } from "@refinedev/core";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
 import { RealtimeChat } from "@/components/realtime-chat";
 import PersonAvatar from "@/components/ui/person-avatar";
@@ -37,12 +37,14 @@ import VideoCallControls from "./video-call-controls";
 import useModalManager from "@/hooks/useModalManager";
 import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
 import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
+import HelpRequestFeedbackModal from "./help-request-feedback-modal";
 import { Select } from "chakra-react-select";
 
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import Link from "next/link";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useOfficeHoursRealtime, useHelpRequestFeedback } from "@/hooks/useOfficeHoursRealtime";
+import { HelpRequestWatchButton } from "./help-request-watch-button";
 
 // Type for help request students relationship
 type HelpRequestStudent = {
@@ -137,7 +139,6 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
               aria-label="Drop Assignment"
               size="sm"
               colorPalette="red"
-              opacity={isRequestInactive ? 0.5 : 1}
               disabled={isRequestInactive}
               onClick={async () => {
                 await updateRequest({ id: request.id, values: { assignee: null, status: "open" } });
@@ -169,7 +170,6 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
               variant="ghost"
               size="sm"
               colorPalette="green"
-              opacity={isRequestInactive ? 0.5 : 1}
               disabled={isRequestInactive}
               onClick={async () => {
                 await updateRequest({
@@ -473,9 +473,11 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
     return userSubmissions.data.find((s) => s.id === editingSubmissionId);
   }, [editingSubmissionId, userSubmissions?.data]);
 
+  const isInstructorOrGrader = useIsGraderOrInstructor();
+
   // Show add button when no references exist but user can edit
   if (!hasReferences && !isEditing) {
-    if (canEdit && request.status !== "resolved" && request.status !== "closed") {
+    if (canEdit && request.status !== "resolved" && request.status !== "closed" && !isInstructorOrGrader) {
       return (
         <Box m={4}>
           <Button size="sm" colorPalette="blue" onClick={handleEditClick}>
@@ -893,6 +895,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   const params = useParams();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const readOnly = request.status === "resolved" || request.status === "closed";
 
   // Check if we're in popout mode
   const isPopOut = searchParams.get("popout") === "true";
@@ -944,6 +947,16 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   const helpRequestMessages = realtimeData.helpRequestMessages;
   const helpRequestStudentData = realtimeData.helpRequestStudents;
 
+  // Get all feedback data to check if this request has feedback
+  const allFeedback = useHelpRequestFeedback();
+
+  // Check if this specific help request has feedback from the currently-logged in student
+  const hasExistingFeedback = useMemo(() => {
+    return allFeedback.some(
+      (feedback) => feedback.help_request_id === request.id && feedback.student_profile_id === private_profile_id
+    );
+  }, [allFeedback, request.id, private_profile_id]);
+
   // Get student profiles for display - memoized to prevent unnecessary recalculations
   const { studentIds, students } = useMemo(() => {
     const studentIds = helpRequestStudentData.map((student) => student.profile_id);
@@ -952,7 +965,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   }, [helpRequestStudentData, profiles]);
 
   // Check if current user is instructor or grader (not a student)
-  const isInstructorOrGrader = role.role === "instructor" || role.role === "grader";
+  const isInstructorOrGrader = useIsGraderOrInstructor();
 
   /**
    * Handle back navigation based on context
@@ -985,9 +998,10 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     return isInstructorOrGrader || studentIds.includes(private_profile_id!);
   }, [isInstructorOrGrader, studentIds, private_profile_id]);
 
-  // Modal management for moderation and karma actions
+  // Modal management for moderation, karma, and feedback actions
   const moderationModal = useModalManager();
   const karmaModal = useModalManager();
+  const feedbackModal = useModalManager<{ action: "resolve" | "close" }>();
 
   const { mutate } = useUpdate({ resource: "help_requests", id: request.id });
 
@@ -1031,7 +1045,54 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     });
   }, [karmaModal]);
 
+  /**
+   * Handle feedback submission and complete the resolve/close action
+   */
+  const handleFeedbackSuccess = useCallback(async () => {
+    const action = feedbackModal.modalData?.action;
+    if (!action) return;
+
+    try {
+      // Only update request status if it's not already resolved/closed
+      if (request.status !== "resolved" && request.status !== "closed") {
+        if (action === "resolve") {
+          await mutate({
+            id: request.id,
+            values: {
+              resolved_by: private_profile_id,
+              resolved_at: new Date().toISOString(),
+              status: "resolved"
+            }
+          });
+          await logActivityForAllStudents("request_resolved", "Request resolved by student");
+        } else if (action === "close") {
+          await mutate({
+            id: request.id,
+            values: {
+              status: "closed"
+            }
+          });
+          await logActivityForAllStudents("request_updated", "Request closed by student");
+        }
+      }
+
+      feedbackModal.closeModal();
+    } catch (error) {
+      toaster.error({
+        title: "Action Failed",
+        description: `Failed to ${action} the request: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  }, [feedbackModal, mutate, request.id, private_profile_id, logActivityForAllStudents, request.status]);
+
   const resolveRequest = useCallback(async () => {
+    // For students, show feedback modal first
+    if (role.role === "student") {
+      feedbackModal.openModal({ action: "resolve" });
+      return;
+    }
+
+    // For instructors/graders, resolve directly
     await mutate({
       id: request.id,
       values: {
@@ -1041,9 +1102,16 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       }
     });
     await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
-  }, [mutate, request.id, private_profile_id, logActivityForAllStudents]);
+  }, [mutate, request.id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
 
   const closeRequest = useCallback(async () => {
+    // For students, show feedback modal first
+    if (role.role === "student") {
+      feedbackModal.openModal({ action: "close" });
+      return;
+    }
+
+    // For instructors/graders, close directly
     await mutate({
       id: request.id,
       values: {
@@ -1051,7 +1119,14 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       }
     });
     await logActivityForAllStudents("request_updated", "Request closed by instructor");
-  }, [mutate, request.id, logActivityForAllStudents]);
+  }, [mutate, request.id, logActivityForAllStudents, role.role, feedbackModal]);
+
+  /**
+   * Open feedback modal for closed/resolved requests without existing feedback from the currently-logged in student
+   */
+  const provideFeedback = useCallback(() => {
+    feedbackModal.openModal({ action: "resolve" }); // Use resolve action as default
+  }, [feedbackModal]);
 
   /**
    * Pop out the chat into a separate window
@@ -1094,7 +1169,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       justify="space-between"
       align="center"
     >
-      <Flex width="100%" borderBottomWidth="1px" px="4" py="4">
+      <Flex width="100%" px="4" py="4">
         <HStack spaceX="4" flex="1">
           {/* Back Button - Hide in popout mode */}
           {!isPopOut && pathname.includes("/manage/office-hours/request/") && (
@@ -1109,7 +1184,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
             <HelpRequestStudents
               request={request}
               students={students}
-              currentUserCanEdit={canAccessRequestControls}
+              currentUserCanEdit={!readOnly && canAccessRequestControls}
               currentAssociations={helpRequestStudentData}
             />
           </Stack>
@@ -1125,13 +1200,16 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
               </Tooltip>
             )}
 
-            {/* Video Call Controls - Available to all users with video access */}
-            {canAccessVideoControls && (
+            {/* Help Request Watch Button - Available to all users */}
+            <HelpRequestWatchButton helpRequestId={request.id} variant="ghost" size="sm" />
+
+            {/* Video Call Controls - Available to all users with video access (disabled in read-only mode) */}
+            {!readOnly && canAccessVideoControls && (
               <VideoCallControls request={request} canStartCall={isInstructorOrGrader} size="sm" variant="full" />
             )}
 
-            {/* Request Management Controls - Available to Instructors/Graders and Students Associated with Request */}
-            {canAccessRequestControls && (
+            {/* Request Management Controls - Available to Instructors/Graders and Students Associated with Request (disabled in read-only mode) */}
+            {!readOnly && canAccessRequestControls && (
               <>
                 {/* Instructor/Grader Only Controls */}
                 {isInstructorOrGrader && (
@@ -1139,16 +1217,23 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
                     {/* Assignment Management */}
                     <HelpRequestAssignment request={request} />
                     {/* Moderation Action Button */}
-                    <Button size="sm" colorPalette="orange" onClick={() => moderationModal.openModal()}>
-                      <Icon as={BsShield} fontSize="md!" />
-                      Moderate
-                    </Button>
+                    <Tooltip content="Moderate">
+                      <Button
+                        size="sm"
+                        colorPalette="orange"
+                        variant="surface"
+                        onClick={() => moderationModal.openModal()}
+                      >
+                        <Icon as={BsShield} fontSize="md!" />
+                      </Button>
+                    </Tooltip>
 
                     {/* Karma Entry Button */}
-                    <Button size="sm" colorPalette="yellow" onClick={() => karmaModal.openModal()}>
-                      <Icon as={BsStar} fontSize="md!" />
-                      Karma
-                    </Button>
+                    <Tooltip content="Karma">
+                      <Button size="sm" colorPalette="yellow" variant="surface" onClick={() => karmaModal.openModal()}>
+                        <Icon as={BsStar} fontSize="md!" />
+                      </Button>
+                    </Tooltip>
                   </>
                 )}
 
@@ -1193,6 +1278,13 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
                 )}
               </>
             )}
+            {/* Provide Feedback Button - Available to Students Associated with Closed/Resolved Requests without Existing Feedback from the currently-logged in student */}
+            {readOnly && !hasExistingFeedback && canAccessRequestControls && !isInstructorOrGrader && (
+              <Button size="sm" onClick={provideFeedback}>
+                <Icon as={BsStar} fontSize="md" />
+                Provide Feedback
+              </Button>
+            )}
           </HStack>
         </HStack>
 
@@ -1205,8 +1297,8 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       </Flex>
 
       {/* File References Section */}
-      <Box width="100%" px="4">
-        <HelpRequestFileReferences request={request} canEdit={canAccessRequestControls} />
+      <Box width="100%" px="4" borderBottomWidth="1px">
+        <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />
       </Box>
 
       <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
@@ -1214,6 +1306,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           messages={helpRequestMessages}
           helpRequest={request}
           helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling
+          readOnly={readOnly}
         />
       </Flex>
 
@@ -1232,6 +1325,18 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
             onSuccess={handleKarmaSuccess}
           />
         </>
+      )}
+
+      {/* Feedback Modal - Student Only */}
+      {role.role === "student" && (
+        <HelpRequestFeedbackModal
+          isOpen={feedbackModal.isOpen}
+          onClose={feedbackModal.closeModal}
+          onSuccess={handleFeedbackSuccess}
+          helpRequestId={request.id}
+          classId={request.class_id}
+          studentProfileId={private_profile_id!}
+        />
       )}
     </Flex>
   );

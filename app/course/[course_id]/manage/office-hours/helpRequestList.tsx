@@ -144,7 +144,7 @@ export default function HelpRequestList() {
               enhancedRequests.filter((r) => r.status === "in_progress" && r.assignee === private_profile_id).length
             }
           >
-            <Stack spaceY="0" mx="-4" mt="4">
+            <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Working help requests">
               {enhancedRequests
                 .filter((r) => r.status === "in_progress" && r.assignee === private_profile_id)
                 .map((request) => (
@@ -172,7 +172,7 @@ export default function HelpRequestList() {
             title="Unassigned"
             count={enhancedRequests.filter((r) => r.status === "open").length}
           >
-            <Stack spaceY="0" mx="-4" mt="4">
+            <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Unassigned help requests">
               {enhancedRequests
                 .filter((r) => r.status === "open")
                 .map((request) => (
@@ -201,7 +201,7 @@ export default function HelpRequestList() {
             count={enhancedRequests.filter((r) => r.status === "resolved").length}
             defaultOpen={false}
           >
-            <Stack spaceY="0" mx="-4" mt="4">
+            <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Resolved help requests">
               {enhancedRequests
                 .filter((r) => r.status === "resolved")
                 .map((request) => (
@@ -230,7 +230,7 @@ export default function HelpRequestList() {
             count={enhancedRequests.filter((r) => r.status === "closed").length}
             defaultOpen={false}
           >
-            <Stack spaceY="0" mx="-4" mt="4">
+            <Stack spaceY="0" mx="-4" mt="4" role="list" aria-label="Closed help requests">
               {enhancedRequests
                 .filter((r) => r.status === "closed")
                 .map((request) => (

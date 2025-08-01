@@ -89,7 +89,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
     await page.getByRole("button", { name: "Complete Self Review" }).click();
-    await expect(page.getByText('When you are done, click "Complete Review".')).toBeVisible();
+    await expect(page.getByText('When you are done, click "Complete Review Assignment".')).toBeVisible();
     await page.getByText("public int doMath(int a, int").click({
       button: "right"
     });
@@ -129,7 +129,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).click();
-    await page.getByRole("button", { name: "Mark as Complete" }).click();
+    await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
     await percySnapshot(page, "Self-Review Rubric completed");
   });

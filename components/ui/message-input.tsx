@@ -17,6 +17,7 @@ import { Tooltip } from "./tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { toaster } from "./toaster";
+
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   defaultSingleLine?: boolean;
   sendMessage: (message: string, profile_id: string, close?: boolean) => Promise<void>;
@@ -32,7 +33,14 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   onClose?: () => void;
   closeButtonText?: string;
   ariaLabel?: string;
+  /**
+   * The folder name to use for file uploads within the course directory.
+   * Files will be uploaded to: {course_id}/{uploadFolder}/{uuid}/{fileName}
+   * @default "discussion"
+   */
+  uploadFolder?: string;
 };
+
 export default function MessageInput(props: MessageInputProps) {
   const {
     defaultSingleLine,
@@ -50,6 +58,7 @@ export default function MessageInput(props: MessageInputProps) {
     closeButtonText,
     value: initialValue,
     ariaLabel,
+    uploadFolder = "discussion",
     ...editorProps
   } = props;
   const { course_id } = useParams();
@@ -77,29 +86,260 @@ export default function MessageInput(props: MessageInputProps) {
 
   const toggleEmojiPicker = () => setShowEmojiPicker(!showEmojiPicker);
   const toggleAnonymousMode = () => setAnonymousMode(!anonymousMode);
+  /**
+   * Helper function to detect if a file is a text/code file
+   */
+  const isTextFile = useCallback((file: File): boolean => {
+    // Check MIME type first
+    if (file.type.startsWith("text/")) {
+      return true;
+    }
+
+    // Common code file extensions that might not have proper MIME types
+    const textExtensions = [
+      // Programming languages
+      ".js",
+      ".jsx",
+      ".ts",
+      ".tsx",
+      ".py",
+      ".java",
+      ".cpp",
+      ".c",
+      ".h",
+      ".cs",
+      ".php",
+      ".rb",
+      ".go",
+      ".rs",
+      ".kt",
+      ".swift",
+      ".scala",
+      ".clj",
+      ".hs",
+      ".ml",
+      ".fs",
+      ".elm",
+      ".dart",
+      ".lua",
+      ".perl",
+      ".pl",
+      ".r",
+      ".m",
+      ".vb",
+      ".pas",
+      ".ada",
+      ".asm",
+      ".s",
+      ".sh",
+      ".bat",
+      ".ps1",
+      ".fish",
+      ".zsh",
+      ".bash",
+      // Web technologies
+      ".html",
+      ".htm",
+      ".css",
+      ".scss",
+      ".sass",
+      ".less",
+      ".xml",
+      ".xhtml",
+      ".svg",
+      ".vue",
+      ".svelte",
+      // Data formats
+      ".json",
+      ".yaml",
+      ".yml",
+      ".toml",
+      ".ini",
+      ".cfg",
+      ".conf",
+      ".properties",
+      ".env",
+      // Documentation
+      ".md",
+      ".txt",
+      ".rst",
+      ".adoc",
+      ".tex",
+      ".rtf",
+      // Configuration files
+      ".gitignore",
+      ".gitattributes",
+      ".editorconfig",
+      ".prettierrc",
+      ".eslintrc",
+      ".babelrc",
+      ".tsconfig",
+      ".jsconfig",
+      ".dockerfile",
+      ".dockerignore",
+      ".makefile",
+      ".cmake",
+      ".gradle",
+      ".maven",
+      ".ant",
+      // Database
+      ".sql",
+      ".mongodb",
+      ".cql",
+      ".cypher",
+      // Other
+      ".log",
+      ".diff",
+      ".patch",
+      ".lock"
+    ];
+
+    const extension = "." + file.name.split(".").pop()?.toLowerCase();
+    return textExtensions.includes(extension);
+  }, []);
+
+  /**
+   * Helper function to get language identifier for syntax highlighting
+   */
+  const getLanguageFromFile = useCallback((fileName: string): string => {
+    const extension = fileName.split(".").pop()?.toLowerCase();
+
+    const languageMap: Record<string, string> = {
+      // JavaScript/TypeScript family
+      js: "javascript",
+      jsx: "javascript",
+      ts: "typescript",
+      tsx: "typescript",
+      // Web technologies
+      html: "html",
+      htm: "html",
+      css: "css",
+      scss: "scss",
+      sass: "sass",
+      less: "less",
+      xml: "xml",
+      svg: "xml",
+      vue: "vue",
+      svelte: "svelte",
+      // Programming languages
+      py: "python",
+      java: "java",
+      cpp: "cpp",
+      c: "c",
+      h: "c",
+      cs: "csharp",
+      php: "php",
+      rb: "ruby",
+      go: "go",
+      rs: "rust",
+      kt: "kotlin",
+      swift: "swift",
+      scala: "scala",
+      clj: "clojure",
+      hs: "haskell",
+      ml: "ocaml",
+      fs: "fsharp",
+      elm: "elm",
+      dart: "dart",
+      lua: "lua",
+      perl: "perl",
+      pl: "perl",
+      r: "r",
+      m: "matlab",
+      vb: "vbnet",
+      pas: "pascal",
+      ada: "ada",
+      asm: "assembly",
+      s: "assembly",
+      // Shell scripts
+      sh: "bash",
+      bash: "bash",
+      zsh: "bash",
+      fish: "bash",
+      bat: "batch",
+      ps1: "powershell",
+      // Data formats
+      json: "json",
+      yaml: "yaml",
+      yml: "yaml",
+      toml: "toml",
+      ini: "ini",
+      cfg: "ini",
+      conf: "ini",
+      properties: "properties",
+      env: "bash",
+      // Documentation
+      md: "markdown",
+      rst: "rst",
+      tex: "latex",
+      // Database
+      sql: "sql",
+      mongodb: "javascript",
+      cql: "sql",
+      cypher: "cypher",
+      // Configuration
+      dockerfile: "dockerfile",
+      makefile: "makefile",
+      cmake: "cmake",
+      gradle: "gradle",
+      // Other
+      diff: "diff",
+      patch: "diff",
+      log: "text",
+      txt: "text"
+    };
+
+    return languageMap[extension || ""] || "text";
+  }, []);
+
   const fileUpload = useCallback(
     async (file: File) => {
+      // Check if this is a text/code file
+      if (isTextFile(file)) {
+        try {
+          const content = await file.text();
+          const language = getLanguageFromFile(file.name);
+          const codeBlock = `\`\`\`${language}\n${content}\n\`\`\``;
+
+          // Send the file content as a code block message
+          await sendMessage(`**${file.name}**\n\n${codeBlock}`, profile_id, false);
+          return null; // No URL for text files
+        } catch (error) {
+          toaster.error({
+            title: "Error reading file",
+            description: `Failed to read file content: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
+          return null;
+        }
+      }
+
+      // For non-text files, upload to storage as before
       const supabase = createClient();
       const uuid = crypto.randomUUID();
       const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
 
       const { error } = await supabase.storage
         .from("uploads")
-        .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
+        .upload(`${course_id}/${uploadFolder}/${uuid}/${fileName}`, file);
       if (error) {
         toaster.error({
-          title: "Error uploading image: " + error.name,
+          title: "Error uploading file: " + error.name,
           description: error.message
         });
-        return;
+        return null;
       }
       const urlEncodedFilename = encodeURIComponent(fileName);
 
-      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
-      sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
+      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/${uploadFolder}/${uuid}/${urlEncodedFilename}`;
+
+      // Determine if it's an image for proper markdown formatting
+      const isImage = file.type.startsWith("image/");
+      const markdownLink = isImage ? `![${file.name}](${url})` : `[${file.name}](${url})`;
+
+      await sendMessage(`Attachment: ${markdownLink}`, profile_id, false);
       return url;
     },
-    [course_id, profile_id, sendMessage]
+    [course_id, uploadFolder, profile_id, sendMessage, isTextFile, getLanguageFromFile]
   );
 
   const attachFile = useCallback(
@@ -121,17 +361,13 @@ export default function MessageInput(props: MessageInputProps) {
           files.push(file);
         }
       }
-      const insertedMarkdowns = await Promise.all(
-        files.map(async (file) => {
-          const url = await fileUpload(file);
-          const isImage = file.type.startsWith("image/");
-          const insertedMarkdown = isImage ? `![](${url})` : `[${file.name}](${url})`;
-          return insertedMarkdown;
-        })
-      );
-      sendMessage("Attachment: " + insertedMarkdowns.join("\n"), profile_id, false);
+
+      // Process each file individually since text files are handled differently
+      for (const file of files) {
+        await fileUpload(file);
+      }
     },
-    [profile_id, fileUpload, sendMessage]
+    [fileUpload]
   );
   if (singleLine) {
     return (
@@ -196,7 +432,6 @@ export default function MessageInput(props: MessageInputProps) {
                   setValue("");
                 })
                 .catch((error) => {
-                  console.error("Error sending message", error);
                   toaster.create({
                     title: "Error sending message",
                     description: error instanceof Error ? error.message : "Unknown error",
@@ -345,7 +580,6 @@ export default function MessageInput(props: MessageInputProps) {
                 setIsSending(true);
                 await sendMessage(value!, profile_id, true);
               } catch (error) {
-                console.error("Error sending message", error);
                 toaster.create({
                   title: "Error sending message",
                   description: error instanceof Error ? error.message : "Unknown error",
@@ -498,12 +732,9 @@ export default function MessageInput(props: MessageInputProps) {
             }
             try {
               setIsSending(true);
-              console.log("Sending message", value, profile_id);
               await sendMessage(value!, profile_id, true);
-              console.log("Message sent", value, profile_id);
               setValue("");
             } catch (error) {
-              console.error(error);
               toaster.create({
                 title: "Error sending message",
                 description: error instanceof Error ? error.message : "Unknown error",

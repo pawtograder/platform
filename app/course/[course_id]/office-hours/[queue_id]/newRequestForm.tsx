@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "@refinedev/react-hook-form";
 import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
-import { Fieldset, Button, Heading, Text, Box, Stack, Input, IconButton } from "@chakra-ui/react";
+import { Fieldset, Button, Heading, Text, Box, Stack, Input, IconButton, Textarea } from "@chakra-ui/react";
 import {
   HelpRequest,
   HelpRequestTemplate,
@@ -17,7 +17,6 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Field } from "@/components/ui/field";
 import { Controller } from "react-hook-form";
-import MdEditor from "@/components/ui/md-editor";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useOfficeHoursRealtime,
@@ -41,6 +40,7 @@ type SelectOption = {
 export default function HelpRequestForm() {
   const { course_id, queue_id } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
@@ -59,6 +59,7 @@ export default function HelpRequestForm() {
     control,
     getValues,
     watch,
+    reset,
     formState: { errors, isSubmitting },
     handleSubmit,
     refineCore: { onFinish }
@@ -215,6 +216,23 @@ export default function HelpRequestForm() {
             title: "Success",
             description: "Help request successfully created. Redirecting to queue view..."
           });
+
+          // Reset form state after successful submission
+          reset({
+            help_queue: Number.parseInt(queue_id as string),
+            file_references: [],
+            location_type: "remote" as HelpRequestLocationType,
+            request: "",
+            is_private: false,
+            template_id: undefined,
+            referenced_submission_id: undefined,
+            followup_to: undefined
+          });
+
+          // Reset local state variables
+          setSelectedStudents(private_profile_id ? [private_profile_id] : []);
+          setSelectedAssignmentId(null);
+          setSelectedSubmissionId(null);
 
           // Navigate to queue view
           router.push(`/course/${course_id}/office-hours/${queue_id}?tab=queue`);
@@ -407,6 +425,19 @@ export default function HelpRequestForm() {
     }
   }, [selectedSubmissionId, setValue]);
 
+  // Pre-populate followup_to field from URL parameter
+  useEffect(() => {
+    const followupToParam = searchParams.get("followup_to");
+    if (followupToParam && userPreviousRequests.length > 0) {
+      const followupRequestId = Number.parseInt(followupToParam);
+      // Verify that the request ID exists in user's previous requests
+      const validRequest = userPreviousRequests.find((req) => req.id === followupRequestId);
+      if (validRequest) {
+        setValue("followup_to", followupRequestId);
+      }
+    }
+  }, [searchParams, userPreviousRequests, setValue]);
+
   // Watch the selected help queue to validate against existing requests
   const selectedHelpQueue = watch("help_queue");
 
@@ -457,10 +488,7 @@ export default function HelpRequestForm() {
         // Exclude file_references from the submission data since it's not a column in help_requests table
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { file_references, ...helpRequestData } = values;
-
-        // Store the intended privacy setting for later use
         const intendedPrivacy = selectedSubmissionId ? true : values.is_private || false;
-
         // Add required fields that may not be set in the form
         const finalData = {
           ...helpRequestData,
@@ -528,7 +556,7 @@ export default function HelpRequestForm() {
   return (
     <form onSubmit={onSubmit}>
       <Heading>Request Live Help</Heading>
-      <Text>Submit a request to get help from a live tutor via text or video chat.</Text>
+      <Text>Submit a request to get help synchronously from a TA via text or video chat.</Text>
 
       {wouldConflict && (
         <Text color="orange.500" mb={4}>
@@ -596,9 +624,46 @@ export default function HelpRequestForm() {
           />
         </Fieldset.Content>
 
+        {templates && templates.length > 0 && (
+          <Fieldset.Content>
+            <Field label="Template " optionalText="(Optional)">
+              <Controller
+                name="template_id"
+                control={control}
+                render={({ field }) => (
+                  <Select
+                    isMulti={false}
+                    placeholder="Choose a template"
+                    options={templates.map(
+                      (tmpl: HelpRequestTemplate) => ({ label: tmpl.name, value: tmpl.id.toString() }) as SelectOption
+                    )}
+                    value={
+                      field.value
+                        ? ({
+                            label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
+                            value: field.value.toString()
+                          } as SelectOption)
+                        : null
+                    }
+                    onChange={(option: SelectOption | null) => {
+                      // option can be null if cleared
+                      const val = option?.value ?? "";
+                      field.onChange(val === "" ? undefined : Number.parseInt(val));
+                      const tmpl = templates.find((t: HelpRequestTemplate) => t.id.toString() === val);
+                      if (tmpl && !getValues("request")) {
+                        setValue("request", tmpl.template_content);
+                      }
+                    }}
+                  />
+                )}
+              />
+            </Field>
+          </Fieldset.Content>
+        )}
+
         <Fieldset.Content>
           <Field
-            label="Message"
+            label="Help Request Description"
             required={true}
             errorText={errors.request?.message?.toString()}
             invalid={errors.request ? true : false}
@@ -607,7 +672,14 @@ export default function HelpRequestForm() {
               name="request"
               control={control}
               render={({ field }) => {
-                return <MdEditor style={{ width: "800px" }} onChange={field.onChange} value={field.value} />;
+                return (
+                  <Textarea
+                    {...field}
+                    placeholder="Describe your question or issue in detail..."
+                    minHeight="200px"
+                    width="800px"
+                  />
+                );
               }}
             />
           </Field>
@@ -869,43 +941,6 @@ export default function HelpRequestForm() {
             />
           </Field>
         </Fieldset.Content>
-
-        {templates && templates.length > 0 && (
-          <Fieldset.Content>
-            <Field label="Template " optionalText="(Optional)">
-              <Controller
-                name="template_id"
-                control={control}
-                render={({ field }) => (
-                  <Select
-                    isMulti={false}
-                    placeholder="Choose a template"
-                    options={templates.map(
-                      (tmpl: HelpRequestTemplate) => ({ label: tmpl.name, value: tmpl.id.toString() }) as SelectOption
-                    )}
-                    value={
-                      field.value
-                        ? ({
-                            label: templates.find((t: HelpRequestTemplate) => t.id === field.value)!.name,
-                            value: field.value.toString()
-                          } as SelectOption)
-                        : null
-                    }
-                    onChange={(option: SelectOption | null) => {
-                      // option can be null if cleared
-                      const val = option?.value ?? "";
-                      field.onChange(val === "" ? undefined : Number.parseInt(val));
-                      const tmpl = templates.find((t: HelpRequestTemplate) => t.id.toString() === val);
-                      if (tmpl && !getValues("request")) {
-                        setValue("request", tmpl.template_content);
-                      }
-                    }}
-                  />
-                )}
-              />
-            </Field>
-          </Fieldset.Content>
-        )}
 
         {userPreviousRequests.length > 0 && (
           <Fieldset.Content>

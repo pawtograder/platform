@@ -1,16 +1,13 @@
-import { Avatar, Box, HStack, Skeleton, Text, VStack, IconButton } from "@chakra-ui/react";
+import { Avatar, Box, HStack, Skeleton, VStack, IconButton } from "@chakra-ui/react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import Link from "next/link";
 import { useNotification } from "@/hooks/useNotifications";
 import { useDiscussionThreadTeaser } from "@/hooks/useCourseController";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { LucideMail, X } from "lucide-react";
 import { useState } from "react";
 import { toaster } from "../ui/toaster";
-// type NotificationTextProps = {
-//   notification: Notification;
-// } & TextProps;
+import Markdown from "../ui/markdown";
 
 export type NotificationEnvelope = { type: string };
 export type DiscussionThreadNotification = NotificationEnvelope & {
@@ -110,269 +107,136 @@ export type HelpRequestMessageNotification = NotificationEnvelope & {
 // }
 function HelpRequestNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as HelpRequestNotification;
-  const { course_id } = useParams();
 
   let message: React.ReactNode;
 
   if (body.action === "created") {
     message = (
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        <Text as="span" fontWeight="medium">
-          {body.creator_name}
-        </Text>{" "}
-        created a new help request in{" "}
-        <Text as="span" fontWeight="medium">
-          {body.help_queue_name}
-        </Text>
-        {body.is_private && (
-          <Text as="span" color="orange.500">
-            {" "}
-            (private)
-          </Text>
-        )}
-      </Text>
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${body.creator_name}** created a new help request in **${body.help_queue_name}**${body.is_private ? " *(private)*" : ""}`}
+      </Markdown>
     );
   } else if (body.action === "assigned") {
     message = (
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        <Text as="span" fontWeight="medium">
-          {body.assignee_name}
-        </Text>{" "}
-        is now working on{" "}
-        <Text as="span" fontWeight="medium">
-          {body.creator_name}
-        </Text>
-        &apos;s help request in{" "}
-        <Text as="span" fontWeight="medium">
-          {body.help_queue_name}
-        </Text>
-      </Text>
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${body.assignee_name}** is now working on **${body.creator_name}**'s help request in **${body.help_queue_name}**`}
+      </Markdown>
     );
   } else if (body.action === "status_changed") {
     message = (
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        Help request by{" "}
-        <Text as="span" fontWeight="medium">
-          {body.creator_name}
-        </Text>{" "}
-        in{" "}
-        <Text as="span" fontWeight="medium">
-          {body.help_queue_name}
-        </Text>{" "}
-        was marked as{" "}
-        <Text as="span" fontWeight="medium" color="green.500">
-          {body.status}
-        </Text>
-      </Text>
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`Help request by **${body.creator_name}** in **${body.help_queue_name}** was marked as **${body.status}**`}
+      </Markdown>
     );
   }
 
   return (
-    <Link href={`/course/${course_id}/office-hours/${body.help_queue_id}`}>
-      <VStack align="flex-start" gap="2">
-        {message}
-        {body.request_preview && (
-          <Text
-            fontSize="xs"
-            color="fg.muted"
-            lineHeight="1.3"
-            overflow="hidden"
-            css={{
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical"
-            }}
-          >
-            &quot;{body.request_preview}&quot;
-          </Text>
-        )}
-      </VStack>
-    </Link>
+    <VStack align="flex-start" gap="2">
+      {message}
+      {body.request_preview && (
+        <Markdown
+          style={{
+            fontSize: "0.75rem",
+            color: "var(--chakra-colors-fg-muted)",
+            lineHeight: "1.3",
+            overflow: "hidden",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical"
+          }}
+        >
+          {`> ${body.request_preview}`}
+        </Markdown>
+      )}
+    </VStack>
   );
 }
 
 function HelpRequestMessageNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as HelpRequestMessageNotification;
   const author = useUserProfile(body.author_profile_id);
-  const { course_id } = useParams();
 
   if (!author) {
     return <Skeleton height="40px" width="100%" />;
   }
 
   return (
-    <Link href={`/course/${course_id}/office-hours/${body.help_queue_id}`}>
-      <HStack align="flex-start" gap="3">
-        <Avatar.Root size="sm" flexShrink="0">
-          <Avatar.Image src={author.avatar_url} />
-          <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
-        </Avatar.Root>
-        <VStack align="flex-start" gap="1" flex="1">
-          <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-            <Text as="span" fontWeight="medium">
-              {author.name}
-            </Text>{" "}
-            replied to{" "}
-            <Text as="span" fontWeight="medium">
-              {body.help_request_creator_name}
-            </Text>
-            &apos;s help request in{" "}
-            <Text as="span" fontWeight="medium">
-              {body.help_queue_name}
-            </Text>
-            {body.is_private && (
-              <Text as="span" color="orange.500">
-                {" "}
-                (private)
-              </Text>
-            )}
-          </Text>
-          {body.message_preview && (
-            <Text
-              fontSize="xs"
-              color="fg.muted"
-              lineHeight="1.3"
-              overflow="hidden"
-              css={{
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical"
-              }}
-            >
-              &quot;{body.message_preview}&quot;
-            </Text>
-          )}
-        </VStack>
-      </HStack>
-    </Link>
+    <HStack align="flex-start" gap="3">
+      <Avatar.Root size="sm" flexShrink="0">
+        <Avatar.Image src={author.avatar_url} />
+        <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
+      </Avatar.Root>
+      <VStack align="flex-start" gap="1" flex="1">
+        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+          {`**${author.name}** replied to **${body.help_request_creator_name}**'s help request in **${body.help_queue_name}**${body.is_private ? " *(private)*" : ""}`}
+        </Markdown>
+        {body.message_preview && (
+          <Markdown
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--chakra-colors-fg-muted)",
+              lineHeight: "1.3",
+              overflow: "hidden",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical"
+            }}
+          >
+            {`> ${body.message_preview}`}
+          </Markdown>
+        )}
+      </VStack>
+    </HStack>
   );
 }
 
 function AssignmentGroupMemberNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupMemberNotification;
   return (
-    <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-      <Text as="span" fontWeight="medium">
-        {body.name}
-      </Text>{" "}
-      {body.action === "join" ? "joined" : "left"} your group{" "}
-      <Text as="span" fontWeight="medium">
-        {body.assignment_group_name}
-      </Text>{" "}
-      for{" "}
-      <Text as="span" fontWeight="medium">
-        {body.assignment_name}
-      </Text>
-      {body.action === "join" && (
-        <Text as="span" color="fg.muted">
-          {" "}
-          (added by {body.added_by_name})
-        </Text>
-      )}
-    </Text>
+    <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      {`**${body.name}** ${body.action === "join" ? "joined" : "left"} your group **${body.assignment_group_name}** for **${body.assignment_name}**${body.action === "join" ? ` *(added by ${body.added_by_name})*` : ""}`}
+    </Markdown>
   );
 }
 function AssignmentGroupInvitationNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupInvitationNotification;
-  const { course_id } = useParams();
   return (
-    <Link href={`/course/${course_id}/assignments/${body.assignment_id}`}>
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        <Text as="span" fontWeight="medium">
-          {body.inviter_name}
-        </Text>{" "}
-        invited you to join{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_group_name}
-        </Text>{" "}
-        for{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_name}
-        </Text>
-      </Text>
-    </Link>
+    <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+      {`**${body.inviter_name}** invited you to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
+    </Markdown>
   );
 }
 function AssignmentGroupJoinRequestNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as AssignmentGroupJoinRequestNotification;
-  const { course_id } = useParams();
 
   let message;
   if (body.status === "pending") {
     message = (
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        <Text as="span" fontWeight="medium">
-          {body.requestor_name}
-        </Text>{" "}
-        requested to join{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_group_name}
-        </Text>{" "}
-        for{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_name}
-        </Text>
-      </Text>
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${body.requestor_name}** requested to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
+      </Markdown>
     );
   } else if (body.status === "approved") {
     message = (
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        <Text as="span" fontWeight="medium">
-          {body.decision_maker_name}
-        </Text>{" "}
-        approved{" "}
-        <Text as="span" fontWeight="medium">
-          {body.requestor_name}
-        </Text>
-        &apos;s request to join{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_group_name}
-        </Text>{" "}
-        for{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_name}
-        </Text>
-      </Text>
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${body.decision_maker_name}** approved **${body.requestor_name}**'s request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
+      </Markdown>
     );
   } else if (body.status === "rejected") {
     message = (
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        <Text as="span" fontWeight="medium">
-          {body.decision_maker_name}
-        </Text>{" "}
-        rejected{" "}
-        <Text as="span" fontWeight="medium">
-          {body.requestor_name}
-        </Text>
-        &apos;s request to join{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_group_name}
-        </Text>{" "}
-        for{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_name}
-        </Text>
-      </Text>
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${body.decision_maker_name}** rejected **${body.requestor_name}**'s request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
+      </Markdown>
     );
   } else if (body.status === "withdrawn") {
     message = (
-      <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-        <Text as="span" fontWeight="medium">
-          {body.requestor_name}
-        </Text>{" "}
-        withdrew their request to join{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_group_name}
-        </Text>{" "}
-        for{" "}
-        <Text as="span" fontWeight="medium">
-          {body.assignment_name}
-        </Text>
-      </Text>
+      <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+        {`**${body.requestor_name}** withdrew their request to join **${body.assignment_group_name}** for **${body.assignment_name}**`}
+      </Markdown>
     );
   }
 
-  return <Link href={`/course/${course_id}/assignments/${body.assignment_id}`}>{message}</Link>;
+  return message;
 }
 function DiscussionThreadReplyNotificationTeaser({ notification }: { notification: Notification }) {
   const body = notification.body as DiscussionThreadNotification;
@@ -383,46 +247,33 @@ function DiscussionThreadReplyNotificationTeaser({ notification }: { notificatio
     return <Skeleton height="40px" width="100%" />;
   }
 
-  const replyIdx = body.new_comment_number ? `#post-${body.new_comment_number}` : "";
-
   return (
-    <Link href={`/course/${rootThread.class_id}/discussion/${rootThread.id}${replyIdx}`}>
-      <HStack align="flex-start" gap="3">
-        <Avatar.Root size="sm" flexShrink="0">
-          <Avatar.Image src={author.avatar_url} />
-          <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
-        </Avatar.Root>
-        <VStack align="flex-start" gap="1" flex="1">
-          <Text fontSize="sm" color="fg.default" lineHeight="1.4">
-            <Text as="span" fontWeight="medium">
-              {author.name}
-            </Text>{" "}
-            replied to thread{" "}
-            <Text as="span" fontWeight="medium">
-              #{rootThread.ordinal}
-            </Text>{" "}
-            <Text as="span" fontWeight="medium">
-              {rootThread.subject}
-            </Text>
-          </Text>
-          {body.teaser && (
-            <Text
-              fontSize="xs"
-              color="fg.muted"
-              lineHeight="1.3"
-              overflow="hidden"
-              css={{
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical"
-              }}
-            >
-              &quot;{body.teaser}&quot;
-            </Text>
-          )}
-        </VStack>
-      </HStack>
-    </Link>
+    <HStack align="flex-start" gap="3">
+      <Avatar.Root size="sm" flexShrink="0">
+        <Avatar.Image src={author.avatar_url} />
+        <Avatar.Fallback fontSize="xs">{author.name?.charAt(0)}</Avatar.Fallback>
+      </Avatar.Root>
+      <VStack align="flex-start" gap="1" flex="1">
+        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+          {`**${author.name}** replied to thread **#${rootThread.ordinal}** **${rootThread.subject}**`}
+        </Markdown>
+        {body.teaser && (
+          <Markdown
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--chakra-colors-fg-muted)",
+              lineHeight: "1.3",
+              overflow: "hidden",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical"
+            }}
+          >
+            {`> ${body.teaser}`}
+          </Markdown>
+        )}
+      </VStack>
+    </HStack>
   );
 }
 
@@ -434,15 +285,42 @@ function EmailNotificationTeaser({ notification }: { notification: Notification 
         <LucideMail size={16} />
       </Box>
       <VStack align="flex-start" gap="1" flex="1">
-        <Text fontSize="sm" color="fg.default" lineHeight="1.4" fontWeight="medium">
-          {body.subject}
-        </Text>
-        <Text fontSize="xs" color="fg.muted">
-          Check your email for details
-        </Text>
+        <Markdown style={{ fontSize: "0.875rem", color: "var(--chakra-colors-fg-default)", lineHeight: "1.4" }}>
+          {`**${body.subject}**`}
+        </Markdown>
+        <Markdown style={{ fontSize: "0.75rem", color: "var(--chakra-colors-fg-muted)" }}>
+          {`*Check your email for details*`}
+        </Markdown>
       </VStack>
     </HStack>
   );
+}
+
+/**
+ * Gets the navigation URL for a notification based on its type
+ */
+function getNotificationUrl(
+  notification: Notification,
+  course_id: string,
+  rootThread?: { class_id: number }
+): string | undefined {
+  const body = notification.body as NotificationEnvelope;
+
+  if (body.type === "help_request" || body.type === "help_request_message") {
+    const helpBody = body as HelpRequestNotification | HelpRequestMessageNotification;
+    return `/course/${course_id}/office-hours/${helpBody.help_queue_id}`;
+  } else if (body.type === "assignment_group_invitations" || body.type === "assignment_group_join_request") {
+    const assignmentBody = body as AssignmentGroupInvitationNotification | AssignmentGroupJoinRequestNotification;
+    return `/course/${course_id}/assignments/${assignmentBody.assignment_id}`;
+  } else if (body.type === "discussion_thread") {
+    const discussionBody = body as DiscussionThreadNotification;
+    const replyIdx = discussionBody.new_comment_number ? `#post-${discussionBody.new_comment_number}` : "";
+    const threadCourseId = rootThread?.class_id || course_id;
+    return `/course/${threadCourseId}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
+  }
+
+  // Email notifications and assignment group member notifications don't have specific URLs
+  return undefined;
 }
 
 export default function NotificationTeaser({
@@ -457,6 +335,12 @@ export default function NotificationTeaser({
   const notification = useNotification(notification_id);
   const [isProcessing, setIsProcessing] = useState(false);
   const body = notification?.body as NotificationEnvelope;
+  const { course_id } = useParams();
+  const router = useRouter();
+
+  // Get thread data for discussion notifications to get the correct course_id
+  const discussionBody = body?.type === "discussion_thread" ? (body as DiscussionThreadNotification) : null;
+  const rootThread = useDiscussionThreadTeaser(discussionBody?.root_thread_id || 0, ["class_id"]);
 
   if (!notification) {
     return <Skeleton height="60px" width="100%" />;
@@ -480,15 +364,52 @@ export default function NotificationTeaser({
     }
   };
 
-  const handleMarkAsRead = async () => {
-    if (notification.viewed_at || isProcessing) return;
+  const handleClick = async () => {
+    if (isProcessing) return;
 
     setIsProcessing(true);
     try {
-      await markAsRead();
+      // Mark as read if not already read
+      if (!notification.viewed_at) {
+        await markAsRead();
+      }
+
+      // Handle help request notifications with popup
+      if (body.type === "help_request" || body.type === "help_request_message") {
+        const helpBody = body as HelpRequestNotification | HelpRequestMessageNotification;
+        const popOutUrl = `/course/${course_id}/office-hours/request/${helpBody.help_request_id}?popout=true`;
+
+        // Open a new window with chat-appropriate dimensions
+        const newWindow = window.open(
+          popOutUrl,
+          `help-request-chat-${helpBody.help_request_id}`,
+          "width=800,height=600,scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no,status=no"
+        );
+
+        if (newWindow) {
+          newWindow.focus();
+
+          // Set a meaningful title for the popped-out window once it loads
+          newWindow.addEventListener("load", () => {
+            const windowTitle = `Help Request #${helpBody.help_request_id} - ${helpBody.help_queue_name}`;
+            newWindow.document.title = windowTitle;
+          });
+        } else {
+          toaster.error({
+            title: "Pop-out blocked",
+            description: "Please allow pop-ups for this site to use the pop-out feature."
+          });
+        }
+      } else {
+        // Navigate to other notification URLs normally
+        const url = getNotificationUrl(notification, course_id as string, rootThread);
+        if (url) {
+          router.push(url);
+        }
+      }
     } catch (error) {
       toaster.error({
-        title: "Failed to mark notification as read",
+        title: "Failed to process notification",
         description: "Error: " + (error as Error).message
       });
     } finally {
@@ -512,7 +433,7 @@ export default function NotificationTeaser({
   } else if (body.type === "help_request_message") {
     teaser = <HelpRequestMessageNotificationTeaser notification={notification} />;
   } else {
-    teaser = <Text>Unknown notification type: {body.type}</Text>;
+    teaser = <Markdown>{`*Unknown notification type: ${body.type}*`}</Markdown>;
   }
 
   return (
@@ -524,7 +445,7 @@ export default function NotificationTeaser({
       borderColor="border.subtle"
       _hover={{ bg: notification.viewed_at ? "bg.subtle" : "blue.muted" }}
       cursor="pointer"
-      onClick={handleMarkAsRead}
+      onClick={handleClick}
       opacity={isProcessing ? 0.6 : 1}
       pointerEvents={isProcessing ? "none" : "auto"}
       transition="all 0.2s"

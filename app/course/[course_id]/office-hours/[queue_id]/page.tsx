@@ -151,7 +151,7 @@ export default function HelpQueuePage() {
             <Tabs.Trigger value="past">My History ({resolvedRequests.length})</Tabs.Trigger>
           </Tabs.List>
           <Tabs.Content width="100%" value="queue">
-            <HelpRequestHistory requests={pendingRequests} />
+            <HelpRequestHistory requests={pendingRequests} readOnly={false} />
           </Tabs.Content>
           {currentRequest && (
             <Tabs.Content width="100%" value="current">
@@ -162,10 +162,10 @@ export default function HelpQueuePage() {
             <HelpRequestForm />
           </Tabs.Content>
           <Tabs.Content width="100%" value="similar">
-            <HelpRequestHistory requests={similarQuestions} />
+            <HelpRequestHistory requests={similarQuestions} readOnly={true} />
           </Tabs.Content>
           <Tabs.Content width="100%" value="past">
-            <HelpRequestHistory requests={resolvedRequests} showPrivacyIndicator={true} />
+            <HelpRequestHistory requests={resolvedRequests} showPrivacyIndicator={true} readOnly={true} />
           </Tabs.Content>
           <Tabs.Indicator />
         </Tabs.Root>

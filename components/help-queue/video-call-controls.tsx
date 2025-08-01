@@ -252,6 +252,7 @@ export default function VideoCallControls({
             size={size}
             onClick={startVideoCall}
             loading={isStartingCall}
+            colorPalette="blue"
             // Only graders and instructors can start video calls
             visibility={isRequestInactive && !currentUserIsInstructorOrGrader ? "hidden" : "visible"}
           >

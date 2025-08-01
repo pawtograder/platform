@@ -17,6 +17,7 @@ import {
   HelpRequestFileReference,
   HelpRequestModeration,
   HelpRequestTemplate,
+  HelpRequestFeedback,
   HelpQueue,
   HelpQueueAssignment,
   StudentKarmaNotes,
@@ -99,8 +100,6 @@ export class OfficeHoursController {
    * Handle broadcast messages from OfficeHoursRealTimeController and update data maps
    */
   private _handleBroadcastMessage(message: DatabaseBroadcastMessage) {
-    console.log("Processing broadcast message in OfficeHoursController:", message);
-
     if (message.type !== "table_change" || !message.table || !message.operation || !message.data) {
       return;
     }
@@ -134,6 +133,9 @@ export class OfficeHoursController {
         break;
       case "student_help_activity":
         this._handleStudentHelpActivityBroadcast(operation, data);
+        break;
+      case "help_request_feedback":
+        this._handleHelpRequestFeedbackBroadcast(operation, data);
         break;
     }
   }
@@ -254,6 +256,18 @@ export class OfficeHoursController {
     }
   }
 
+  private _handleHelpRequestFeedbackBroadcast(operation: string, data: Record<string, unknown>) {
+    const feedback = data as HelpRequestFeedback;
+
+    if (operation === "INSERT" || operation === "UPDATE") {
+      this.helpRequestFeedback.set(feedback.id, feedback);
+      this.helpRequestFeedbackListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestFeedback.values())));
+    } else if (operation === "DELETE") {
+      this.helpRequestFeedback.delete(feedback.id);
+      this.helpRequestFeedbackListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestFeedback.values())));
+    }
+  }
+
   /**
    * Mark a message as read to prevent duplicate API calls
    */
@@ -344,6 +358,9 @@ export class OfficeHoursController {
 
   private studentHelpActivity: Map<number, StudentHelpActivity> = new Map();
   private studentHelpActivityListSubscribers: UpdateCallback<StudentHelpActivity[]>[] = [];
+
+  private helpRequestFeedback: Map<number, HelpRequestFeedback> = new Map();
+  private helpRequestFeedbackListSubscribers: UpdateCallback<HelpRequestFeedback[]>[] = [];
 
   private helpQueues: Map<number, HelpQueue> = new Map();
   private helpQueuesListSubscribers: UpdateCallback<HelpQueue[]>[] = [];
@@ -715,6 +732,44 @@ export class OfficeHoursController {
     }
   }
 
+  // Help Request Feedback
+  setHelpRequestFeedback(data: HelpRequestFeedback[]) {
+    // Clear the existing map and replace with new data
+    this.helpRequestFeedback.clear();
+    for (const feedback of data) {
+      this.helpRequestFeedback.set(feedback.id, feedback);
+    }
+    this.helpRequestFeedbackListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestFeedback.values())));
+  }
+
+  listHelpRequestFeedback(callback?: UpdateCallback<HelpRequestFeedback[]>): {
+    unsubscribe: Unsubscribe;
+    data: HelpRequestFeedback[];
+  } {
+    if (callback) {
+      this.helpRequestFeedbackListSubscribers.push(callback);
+    }
+    return {
+      unsubscribe: () => {
+        this.helpRequestFeedbackListSubscribers = this.helpRequestFeedbackListSubscribers.filter(
+          (cb) => cb !== callback
+        );
+      },
+      data: Array.from(this.helpRequestFeedback.values())
+    };
+  }
+
+  handleHelpRequestFeedbackEvent(event: LiveEvent) {
+    const feedback = event.payload as HelpRequestFeedback;
+    if (event.type === "created" || event.type === "updated") {
+      this.helpRequestFeedback.set(feedback.id, feedback);
+      this.helpRequestFeedbackListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestFeedback.values())));
+    } else if (event.type === "deleted") {
+      this.helpRequestFeedback.delete(feedback.id);
+      this.helpRequestFeedbackListSubscribers.forEach((cb) => cb(Array.from(this.helpRequestFeedback.values())));
+    }
+  }
+
   // Help Request Moderation
   setHelpRequestModeration(data: HelpRequestModeration[]) {
     // Clear the existing map and replace with new data
@@ -961,6 +1016,26 @@ function OfficeHoursControllerProviderImpl({
     }
   }, [controller, studentHelpActivity.data]);
 
+  // Help Request Feedback
+  const helpRequestFeedback = useList<HelpRequestFeedback>({
+    resource: "help_request_feedback",
+    filters: [{ field: "class_id", operator: "eq", value: classId }],
+    pagination: { pageSize: 1000 },
+    queryOptions: {
+      staleTime: Infinity,
+      cacheTime: Infinity
+    },
+    liveMode: "auto",
+    onLiveEvent: (event) => {
+      controller.handleHelpRequestFeedbackEvent(event);
+    }
+  });
+  useEffect(() => {
+    if (helpRequestFeedback.data) {
+      controller.setHelpRequestFeedback(helpRequestFeedback.data.data);
+    }
+  }, [controller, helpRequestFeedback.data]);
+
   return <></>;
 }
 
@@ -981,12 +1056,13 @@ export function OfficeHoursControllerProvider({
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    controller.current.initializeRealTimeController(profileId, role === "instructor" || role === "grader");
+    const currentController = controller.current;
+    currentController.initializeRealTimeController(profileId, role === "instructor" || role === "grader");
     setIsInitialized(true);
 
     // Cleanup on unmount
     return () => {
-      controller.current.close();
+      currentController.close();
     };
   }, [controller, profileId, role]);
 
@@ -1158,6 +1234,19 @@ export function useStudentHelpActivity() {
   return activity;
 }
 
+export function useHelpRequestFeedback() {
+  const controller = useOfficeHoursController();
+  const [feedback, setFeedback] = useState<HelpRequestFeedback[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listHelpRequestFeedback((data) => {
+      setFeedback(data);
+    });
+    setFeedback(data);
+    return unsubscribe;
+  }, [controller]);
+  return feedback;
+}
+
 /**
  * Props for configuring the office hours realtime hook
  */
@@ -1210,6 +1299,7 @@ export interface OfficeHoursData {
   helpRequestStudents: HelpRequestStudent[];
   helpRequestFileReferences: HelpRequestFileReference[];
   helpRequestTemplates: HelpRequestTemplate[];
+  helpRequestFeedback: HelpRequestFeedback[];
 
   // Staff Data (only accessible by staff or current user's own data)
   helpRequestModeration: HelpRequestModeration[];
@@ -1322,6 +1412,7 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
   const templates = useHelpRequestTemplates();
   const activity = useStudentHelpActivity();
   const moderation = useHelpRequestModeration();
+  const feedback = useHelpRequestFeedback();
 
   const helpRequest = useHelpRequest(options.helpRequestId || 0);
   const validHelpRequest = options.helpRequestId ? helpRequest : undefined;
@@ -1381,6 +1472,11 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
     return students.filter((student) => student.help_request_id === options.helpRequestId);
   }, [students, options.helpRequestId]);
 
+  const filteredFeedback = useMemo(() => {
+    if (!options.helpRequestId) return feedback;
+    return feedback.filter((fb) => fb.help_request_id === options.helpRequestId);
+  }, [feedback, options.helpRequestId]);
+
   const filteredQueues = useMemo(() => {
     if (options.helpQueueId) {
       return queues.filter((queue) => queue.id === options.helpQueueId);
@@ -1414,6 +1510,7 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
       helpRequestStudents: filteredStudents,
       helpRequestFileReferences: [],
       helpRequestTemplates: templates,
+      helpRequestFeedback: filteredFeedback,
       helpRequestModeration: moderation,
       studentKarmaNotes: karmaNotes,
       videoMeetingSessions: [],
@@ -1429,6 +1526,7 @@ export function useOfficeHoursRealtime(options: UseOfficeHoursRealtimeOptions): 
       filteredReadReceipts,
       filteredStudents,
       templates,
+      filteredFeedback,
       karmaNotes,
       activity,
       filteredQueues,
