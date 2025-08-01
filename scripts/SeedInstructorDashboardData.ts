@@ -1894,7 +1894,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
   console.log(`   Grader Tags: ${effectiveSectionsAndTagsConfig.numGraderTags}`);
   if (helpRequestConfig) {
     console.log(`   Help Requests: ${helpRequestConfig.numHelpRequests}`);
-    console.log(`   Replies per Request: ${helpRequestConfig.minRepliesPerRequest}-${helpRequestConfig.maxRepliesPerRequest}`);
+    console.log(
+      `   Replies per Request: ${helpRequestConfig.minRepliesPerRequest}-${helpRequestConfig.maxRepliesPerRequest}`
+    );
     console.log(`   Max Members per Request: ${helpRequestConfig.maxMembersPerRequest}`);
   }
   console.log("");
@@ -2459,21 +2461,21 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`\n   Instructor:`);
     console.log(`     Email: ${instructor.email}`);
     console.log(`     Password: ${instructor.password}`);
-    
+
     console.log(`\n   Graders (${graders.length} total):`);
     if (graders.length > 0) {
-      console.log(`     Email Template: ${graders[0].email.replace(/#\d+/, '#N')}`);
+      console.log(`     Email Template: ${graders[0].email.replace(/#\d+/, "#N")}`);
       console.log(`     Password: ${graders[0].password}`);
       console.log(`     Available Numbers: 1-${graders.length} `);
     }
-    
+
     console.log(`\n   Students (${students.length} total):`);
     if (students.length > 0) {
-      console.log(`     Email Template: ${students[0].email.replace(/#\d+/, '#N')}`);
+      console.log(`     Email Template: ${students[0].email.replace(/#\d+/, "#N")}`);
       console.log(`     Password: ${students[0].password}`);
       console.log(`     Available Numbers: 1-${students.length}`);
     }
-    
+
     console.log(`\n🔗 View the instructor dashboard at: /course/${class_id}`);
   } catch (error) {
     console.error("❌ Error seeding database:", error);
