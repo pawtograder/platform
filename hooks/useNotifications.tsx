@@ -1,10 +1,14 @@
 "use client";
-import { useContext, createContext, useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Notification } from "@/utils/supabase/DatabaseTypes";
-import { useList, useUpdate, useDelete } from "@refinedev/core";
-import useAuthState from "./useAuthState";
+import { useUpdate, useDelete } from "@refinedev/core";
 import { useCourseController } from "./useCourseController";
-import { DiscussionThreadNotification } from "@/components/ui/notifications/notification-teaser";
+import {
+  DiscussionThreadNotification,
+  HelpRequestNotification,
+  HelpRequestMessageNotification
+} from "@/components/notifications/notification-teaser";
+
 export function useNotification(notification_id: number) {
   const controller = useCourseController();
   const [notification, setNotification] = useState<Notification | undefined>(undefined);
@@ -21,12 +25,18 @@ export function useNotification(notification_id: number) {
   }, [notification_id, controller]);
   return notification;
 }
+
 export function useNotifications(resource?: string, id?: number) {
   const controller = useCourseController();
   const { mutateAsync: update_notification } = useUpdate<Notification>({
     resource: "notifications"
   });
   const { mutateAsync: delete_notification } = useDelete<Notification>();
+
+  // Always declare state hooks at the top level
+  const [resourceNotifications, setResourceNotifications] = useState<Notification[]>([]);
+  const [allNotifications, setAllNotifications] = useState<Notification[]>([]);
+
   const set_read = useCallback(
     async (notification: Notification, read: boolean) => {
       notification.viewed_at = read ? new Date().toISOString() : null;
@@ -43,6 +53,7 @@ export function useNotifications(resource?: string, id?: number) {
     },
     [update_notification]
   );
+
   const dismiss = useCallback(
     async (notification: Notification) => {
       controller.handleGenericDataEvent("notifications", {
@@ -57,43 +68,73 @@ export function useNotifications(resource?: string, id?: number) {
     },
     [delete_notification, controller]
   );
-  if (resource && id) {
-    const [notifications, setNotifications] = useState<Notification[]>([]);
-    useEffect(() => {
+
+  // Handle resource-specific notifications
+  useEffect(() => {
+    if (resource && id) {
       const { unsubscribe, data } = controller.getValueWithSubscription<Notification>(
         "notifications",
         (notification) => {
           const type =
-            notification.body && typeof notification.body === "object" ? (notification.body as any).type : undefined;
+            notification.body && typeof notification.body === "object"
+              ? (notification.body as Record<string, unknown>).type
+              : undefined;
+
           if (type === "discussion_thread") {
             const envelope = notification.body as DiscussionThreadNotification;
             return envelope.root_thread_id === id;
           }
+
+          if (type === "help_request" && resource === "help_requests") {
+            const envelope = notification.body as HelpRequestNotification;
+            return envelope.help_request_id === id;
+          }
+
+          if (type === "help_request_message" && resource === "help_requests") {
+            const envelope = notification.body as HelpRequestMessageNotification;
+            return envelope.help_request_id === id;
+          }
+
+          if (type === "help_request" && resource === "help_queues") {
+            const envelope = notification.body as HelpRequestNotification;
+            return envelope.help_queue_id === id;
+          }
+
+          if (type === "help_request_message" && resource === "help_queues") {
+            const envelope = notification.body as HelpRequestMessageNotification;
+            return envelope.help_queue_id === id;
+          }
+
           return false;
         },
         (data) => {
-          setNotifications([data]);
+          setResourceNotifications([data]);
         }
       );
-      if (data) setNotifications([data]);
+      if (data) setResourceNotifications([data]);
       return () => unsubscribe();
-    }, [controller, resource, id]);
-    return { notifications, set_read, dismiss };
-  } else {
-    const [notifications, setNotifications] = useState<Notification[]>([]);
-    useEffect(() => {
+    }
+  }, [controller, resource, id]);
+
+  // Handle all notifications for the class
+  useEffect(() => {
+    if (!resource || !id) {
       const { unsubscribe, data } = controller.listGenericData<Notification>("notifications", (data) => {
         const thisClassNotifications = data.filter((notification) => {
           return notification.class_id === controller.courseId;
         });
-        setNotifications(thisClassNotifications);
+        setAllNotifications(thisClassNotifications);
       });
       const thisClassNotifications = data.filter((notification) => {
         return notification.class_id === controller.courseId;
       });
-      setNotifications(thisClassNotifications);
+      setAllNotifications(thisClassNotifications);
       return () => unsubscribe();
-    }, [controller]);
-    return { notifications, set_read, dismiss };
-  }
+    }
+  }, [controller, resource, id]);
+
+  // Return the appropriate notifications based on whether resource/id are provided
+  const notifications = resource && id ? resourceNotifications : allNotifications;
+
+  return { notifications, set_read, dismiss };
 }

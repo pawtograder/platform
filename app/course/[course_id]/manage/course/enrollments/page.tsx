@@ -63,11 +63,14 @@ function EnrollmentsTable() {
   const [invalidationTrigger, setInvalidationTrigger] = useState(0);
   const supabase = createClient();
 
-  const deleteUserRole = async (userRoleId: string) => {
-    const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
-    if (error) throw error;
-    setInvalidationTrigger((prev) => prev + 1);
-  };
+  const deleteUserRole = useCallback(
+    async (userRoleId: string) => {
+      const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
+      if (error) throw error;
+      setInvalidationTrigger((prev) => prev + 1);
+    },
+    [supabase, setInvalidationTrigger]
+  );
 
   const [isDeletingUserRole, setIsDeletingUserRole] = useState(false);
   // full list of tags with profiles and courses

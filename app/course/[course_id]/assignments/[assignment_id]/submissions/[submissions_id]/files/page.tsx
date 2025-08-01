@@ -758,7 +758,14 @@ function ArtifactView({ artifact }: { artifact: SubmissionArtifact }) {
     return () => {
       isMounted = false;
     };
-  }, [artifactKey, artifact.data?.display, artifact.data?.format]);
+  }, [
+    artifactKey,
+    artifact.data?.display,
+    artifact.data?.format,
+    artifact.class_id,
+    artifact.submission_id,
+    artifact.id
+  ]);
 
   if (artifact.data.format === "png") {
     if (artifactData) {

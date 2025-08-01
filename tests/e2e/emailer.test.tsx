@@ -1,4 +1,4 @@
-import { EmailNotification } from "@/components/ui/notifications/notification-teaser";
+import { EmailNotification } from "@/components/notifications/notification-teaser";
 import { ClassSection, Course, LabSection } from "@/utils/supabase/DatabaseTypes";
 import { expect, test, type Page } from "@playwright/test";
 import {

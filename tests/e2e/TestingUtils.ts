@@ -413,6 +413,23 @@ export async function createLabSectionWithStudents({
   return labSectionData;
 }
 
+export async function insertOfficeHoursQueue({ class_id, name }: { class_id: number; name: string }) {
+  const { data: officeHoursQueueData, error: officeHoursQueueError } = await supabase
+    .from("help_queues")
+    .insert({
+      class_id: class_id,
+      name: name,
+      description: "This is a test office hours queue for E2E testing",
+      depth: 1,
+      queue_type: "video"
+    })
+    .select("id")
+    .single();
+  if (officeHoursQueueError) {
+    throw new Error(`Failed to create office hours queue: ${officeHoursQueueError.message}`);
+  }
+  return officeHoursQueueData;
+}
 const assignmentIdx = {
   lab: 1,
   assignment: 1

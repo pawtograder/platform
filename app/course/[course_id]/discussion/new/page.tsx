@@ -15,6 +15,7 @@ import { Controller } from "react-hook-form";
 import { FaChalkboardTeacher, FaQuestion, FaRegStickyNote, FaUser, FaUserSecret } from "react-icons/fa";
 import { TbWorld } from "react-icons/tb";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+
 export default function NewDiscussionThread() {
   const { course_id } = useParams();
   const router = useRouter();

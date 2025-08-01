@@ -364,7 +364,7 @@ export default function RegradeRequestsTable() {
         }
       }
     ],
-    []
+    [assignmentController.rubricCheckById]
   );
 
   const {

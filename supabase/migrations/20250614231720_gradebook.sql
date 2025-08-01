@@ -847,7 +847,7 @@ begin
        (NEW.id, 'Readings', 'blue', 'Follow-ups and discussion of assigned and optional readings', 3),
        (NEW.id, 'Memes', 'purple', '#random', 4);
     insert into help_queues (name, description, class_id, available, depth)
-       VALUES ('office-hours','This queue is staffed by tutors', NEW.id, TRUE, 0);   
+       VALUES ('office-hours','This queue is staffed by TAs', NEW.id, TRUE, 0);   
     insert into gradebooks (name, class_id)
        VALUES ('Gradebook', NEW.id);
   UPDATE public.classes set gradebook_id=gradebooks.id from public.gradebooks where classes.id=gradebooks.class_id;
