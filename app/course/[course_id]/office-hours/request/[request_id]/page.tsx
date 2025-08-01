@@ -1,12 +1,16 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { BsClipboardCheck, BsClipboardCheckFill, BsCheckCircle, BsXCircle } from "react-icons/bs";
 import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/react";
 import { Alert } from "@/components/ui/alert";
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useOfficeHoursRealtime, OfficeHoursControllerProvider } from "@/hooks/useOfficeHoursRealtime";
+import { CourseControllerProvider } from "@/hooks/useCourseController";
+import { useEffect, useState } from "react";
+import { createClient } from "@/utils/supabase/client";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 /**
  * Component for displaying status-specific visual indicators and information
@@ -71,13 +75,11 @@ const HelpRequestStatusIndicator = ({ status }: { status: HelpRequest["status"] 
 };
 
 /**
- * Student context page component for displaying and managing a help request
+ * Inner component for displaying and managing a help request
  * Shows different visual states based on request status
  * Uses real-time updates for help request data, messages, and staff actions
- * Supports both regular viewing and popout mode
- * @returns JSX element for the help request page
  */
-export default function StudentHelpRequestPage() {
+function StudentHelpRequestPageInner() {
   const { request_id, course_id } = useParams();
 
   // Set up real-time subscriptions for this help request
@@ -119,5 +121,103 @@ export default function StudentHelpRequestPage() {
         <HelpRequestChat request={request} />
       </Box>
     </Box>
+  );
+}
+
+/**
+ * Main page component that handles both regular and popup modes
+ * In popup mode, it provides the necessary context providers
+ * @returns JSX element for the help request page
+ */
+export default function StudentHelpRequestPage() {
+  const { course_id } = useParams();
+  const searchParams = useSearchParams();
+  const isPopOut = searchParams.get("popout") === "true";
+
+  const [authData, setAuthData] = useState<{
+    profileId: string;
+    role: Database["public"]["Enums"]["app_role"];
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isPopOut) return; // Only fetch auth data in popup mode
+
+    async function fetchAuthData() {
+      setLoading(true);
+      try {
+        const supabase = createClient();
+        const {
+          data: { user }
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          throw new Error("User not authenticated");
+        }
+
+        const { data: user_role } = await supabase
+          .from("user_roles")
+          .select("private_profile_id, role")
+          .eq("user_id", user.id)
+          .eq("class_id", Number.parseInt(course_id as string))
+          .single();
+
+        if (!user_role) {
+          throw new Error("User role not found");
+        }
+
+        setAuthData({
+          profileId: user_role.private_profile_id,
+          role: user_role.role
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Authentication failed");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchAuthData();
+  }, [isPopOut, course_id]);
+
+  // Regular mode - providers already available from layout
+  if (!isPopOut) {
+    return <StudentHelpRequestPageInner />;
+  }
+
+  // Popup mode - show loading state
+  if (loading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
+        <Skeleton height="200px" width="100%" />
+      </Box>
+    );
+  }
+
+  // Popup mode - show error state
+  if (error || !authData) {
+    return (
+      <Alert status="error" title="Authentication Error">
+        {error || "Failed to load user authentication data"}
+      </Alert>
+    );
+  }
+
+  // Popup mode - wrap with providers
+  return (
+    <CourseControllerProvider
+      course_id={Number.parseInt(course_id as string)}
+      profile_id={authData.profileId}
+      role={authData.role}
+    >
+      <OfficeHoursControllerProvider
+        classId={Number.parseInt(course_id as string)}
+        profileId={authData.profileId}
+        role={authData.role}
+      >
+        <StudentHelpRequestPageInner />
+      </OfficeHoursControllerProvider>
+    </CourseControllerProvider>
   );
 }

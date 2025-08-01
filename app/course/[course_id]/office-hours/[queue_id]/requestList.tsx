@@ -4,9 +4,11 @@ import HelpRequestChat from "@/components/help-queue/help-request-chat";
 import { HelpRequest, HelpRequestHistoryProps } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Stack, Text, Card, Badge, Button, Icon } from "@chakra-ui/react";
 import { useState } from "react";
-import { BsChevronDown, BsChevronUp, BsPersonCheck, BsPersonDash } from "react-icons/bs";
+import { BsChevronDown, BsChevronUp, BsPersonCheck, BsPersonDash, BsReply } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useRouter, useParams } from "next/navigation";
+import Markdown from "@/components/ui/markdown";
 
 /**
  * Component to display assignment status for a help request
@@ -38,8 +40,14 @@ function RequestAssignmentStatus({ request }: { request: HelpRequest }) {
   }
 }
 
-export default function HelpRequestHistory({ requests, showPrivacyIndicator = false }: HelpRequestHistoryProps) {
+export default function HelpRequestHistory({
+  requests,
+  showPrivacyIndicator = false,
+  readOnly = true
+}: HelpRequestHistoryProps) {
   const [expandedRequest, setExpandedRequest] = useState<number | null>(null);
+  const router = useRouter();
+  const { course_id, queue_id } = useParams();
 
   const toggleExpanded = (e: React.MouseEvent, requestId: number) => {
     e.stopPropagation();
@@ -51,6 +59,11 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
     if (expandedRequest !== requestId) {
       setExpandedRequest(requestId);
     }
+  };
+
+  const handleCreateFollowup = (e: React.MouseEvent, requestId: number) => {
+    e.stopPropagation();
+    router.push(`/course/${course_id}/office-hours/${queue_id}?tab=new-request&followup_to=${requestId}`);
   };
 
   if (requests.length === 0) {
@@ -74,7 +87,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
             // Sort by resolved_at if available, otherwise by created_at
             const dateA = new Date(a.resolved_at || a.created_at).getTime();
             const dateB = new Date(b.resolved_at || b.created_at).getTime();
-            return dateA - dateB;
+            return dateB - dateA;
           })
           .map((request) => (
             <Card.Root
@@ -89,9 +102,7 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
               <Card.Body>
                 <HStack justify="space-between" align="start">
                   <Box flex="1">
-                    <Text fontWeight="medium" fontSize="sm" lineHeight="short">
-                      {request.request.length > 100 ? `${request.request.substring(0, 100)}...` : request.request}
-                    </Text>
+                    <Markdown>{request.request}</Markdown>
                     <HStack mt={2} gap={2} wrap="wrap">
                       <Badge
                         colorPalette={
@@ -124,10 +135,23 @@ export default function HelpRequestHistory({ requests, showPrivacyIndicator = fa
                     <Text fontSize="xs">
                       {formatDistanceToNow(new Date(request.resolved_at || request.created_at), { addSuffix: true })}
                     </Text>
-                    <Button size="xs" variant="ghost" onClick={(e) => toggleExpanded(e, request.id)}>
-                      {expandedRequest === request.id ? "Hide" : "View"} Chat
-                      <Icon as={expandedRequest === request.id ? BsChevronUp : BsChevronDown} ml={1} />
-                    </Button>
+                    <HStack gap={2}>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        colorPalette="blue"
+                        onClick={(e) => handleCreateFollowup(e, request.id)}
+                        title="Create a follow-up request"
+                        visibility={readOnly ? "visible" : "hidden"}
+                      >
+                        <Icon as={BsReply} mr={1} />
+                        Follow-up
+                      </Button>
+                      <Button size="xs" variant="ghost" onClick={(e) => toggleExpanded(e, request.id)}>
+                        {expandedRequest === request.id ? "Hide" : "View"} Chat
+                        <Icon as={expandedRequest === request.id ? BsChevronUp : BsChevronDown} ml={1} />
+                      </Button>
+                    </HStack>
                   </Stack>
                 </HStack>
 

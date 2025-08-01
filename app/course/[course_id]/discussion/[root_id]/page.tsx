@@ -19,6 +19,7 @@ import Markdown from "react-markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import MessageInput from "@/components/ui/message-input";
+
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
   return (
@@ -70,6 +71,7 @@ function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: 
     </Box>
   );
 }
+
 function ThreadActions({
   thread,
   editing,
@@ -112,6 +114,7 @@ function ThreadActions({
     </Box>
   );
 }
+
 function ThreadWatchButton({ thread }: { thread: DiscussionThreadType }) {
   const { status, setThreadWatchStatus } = useDiscussionThreadWatchStatus(thread.id);
   return (
@@ -190,6 +193,7 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
     </>
   );
 }
+
 function DiscussionThreadAnswer({ answer_id }: { answer_id: number }) {
   const answer = useDiscussionThreadChildren(answer_id);
   const userProfile = useUserProfile(answer?.author);
@@ -205,6 +209,7 @@ function DiscussionThreadAnswer({ answer_id }: { answer_id: number }) {
     </Link>
   );
 }
+
 function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number; course_id: number }) {
   const thread = useDiscussionThreadChildren(root_id);
   return (
@@ -224,6 +229,7 @@ function DiscussionPostWithChildren({ root_id, course_id }: { root_id: number; c
     </>
   );
 }
+
 export default function ThreadView() {
   const { course_id, root_id } = useParams();
   return (

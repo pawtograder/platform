@@ -1,11 +1,13 @@
 import type { ChatMessage } from "@/hooks/useOfficeHoursRealtime";
 import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Text, Icon, Stack, HStack, Badge } from "@chakra-ui/react";
+import { Box, Flex, Text, Icon, Stack, HStack, Badge, Link, Collapsible } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { Reply, Check, CheckCheck } from "lucide-react";
+import { Reply, Check, CheckCheck, ChevronDown, ChevronRight } from "lucide-react";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useTagsForProfile } from "@/hooks/useTags";
 import { Tooltip } from "@/components/ui/tooltip";
+import Markdown from "react-markdown";
+import { ImageIcon, FileText } from "lucide-react";
 
 // Broadcast message type for real-time communication
 export interface BroadcastMessage {
@@ -106,6 +108,152 @@ const getMessageId = (message: UnifiedMessage): number | null => {
 };
 
 /**
+ * Helper to extract file attachments from markdown content
+ */
+const extractFileAttachments = (content: string): Array<{ name: string; url: string; isImage: boolean }> => {
+  const attachments: Array<{ name: string; url: string; isImage: boolean }> = [];
+
+  // Match markdown image links: ![alt text](url)
+  const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  // Match markdown regular links: [text](url)
+  const linkRegex = /(?<!!)\[([^\]]+)\]\(([^)]+)\)/g;
+
+  let match;
+
+  // Find image attachments
+  while ((match = imageRegex.exec(content)) !== null) {
+    const [, name, url] = match;
+    attachments.push({ name, url, isImage: true });
+  }
+
+  // Find regular file attachments
+  while ((match = linkRegex.exec(content)) !== null) {
+    const [, name, url] = match;
+    attachments.push({ name, url, isImage: false });
+  }
+
+  return attachments;
+};
+
+/**
+ * Helper to detect if message content contains code blocks
+ */
+const hasCodeBlocks = (content: string): boolean => {
+  // Match code blocks: ```language ... ``` or ``` ... ```
+  const codeBlockRegex = /```[\s\S]*?```/g;
+  // Match inline code: `code`
+  const inlineCodeRegex = /`[^`\n]+`/g;
+
+  return codeBlockRegex.test(content) || inlineCodeRegex.test(content);
+};
+
+/**
+ * Helper to determine if a message should be wrapped in a collapsible
+ */
+const shouldUseCollapsible = (content: string): boolean => {
+  const attachments = extractFileAttachments(content);
+  const hasCode = hasCodeBlocks(content);
+
+  return attachments.length > 0 || hasCode;
+};
+
+/**
+ * Component to display file attachments with appropriate icons
+ */
+const FileAttachments = ({ attachments }: { attachments: Array<{ name: string; url: string; isImage: boolean }> }) => {
+  if (attachments.length === 0) return null;
+
+  return (
+    <Stack gap={1} mt={2}>
+      {attachments.map((attachment, index) => (
+        <HStack key={index} gap={1} align="center">
+          {attachment.isImage ? (
+            <Icon as={ImageIcon} color="fg.muted" boxSize={3} />
+          ) : (
+            <Icon as={FileText} color="fg.muted" boxSize={3} />
+          )}
+          <Link
+            href={attachment.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            fontSize="xs"
+            color="fg.muted"
+            _hover={{ color: "fg.info", textDecoration: "underline" }}
+          >
+            {attachment.name}
+          </Link>
+        </HStack>
+      ))}
+    </Stack>
+  );
+};
+
+/**
+ * Component that wraps message content in a collapsible when it contains code or attachments
+ */
+const CollapsibleMessageContent = ({ content, isOwnMessage }: { content: string; isOwnMessage: boolean }) => {
+  const shouldCollapse = shouldUseCollapsible(content);
+  const attachments = extractFileAttachments(content);
+  const hasCode = hasCodeBlocks(content);
+
+  // Determine the summary text for the collapsible trigger
+  const getSummaryText = () => {
+    const parts = [];
+    if (hasCode) parts.push("code");
+    if (attachments.length > 0) {
+      parts.push(`${attachments.length} ${attachments.length === 1 ? "attachment" : "attachments"}`);
+    }
+    return `Message with ${parts.join(" and ")}`;
+  };
+
+  if (!shouldCollapse) {
+    // For messages without code or attachments, render normally
+    return (
+      <>
+        <Markdown>{content}</Markdown>
+        <FileAttachments attachments={attachments} />
+      </>
+    );
+  }
+
+  // For messages with code or attachments, wrap in collapsible
+  return (
+    <Collapsible.Root defaultOpen={false}>
+      <Collapsible.Trigger asChild>
+        <HStack
+          cursor="pointer"
+          _hover={{ opacity: 0.8 }}
+          transition="opacity 0.2s"
+          role="button"
+          tabIndex={0}
+          justify="space-between"
+          w="100%"
+        >
+          <Text fontSize="sm" fontWeight="medium" color={isOwnMessage ? "blue.contrast" : "fg.default"}>
+            {getSummaryText()}
+          </Text>
+          <Collapsible.Context>
+            {(collapsible) => (
+              <Icon
+                as={collapsible.open ? ChevronDown : ChevronRight}
+                boxSize={4}
+                color={isOwnMessage ? "blue.contrast" : "fg.muted"}
+              />
+            )}
+          </Collapsible.Context>
+        </HStack>
+      </Collapsible.Trigger>
+      <Collapsible.Content>
+        <Box mt={2} pt={2} borderTop="1px solid" borderColor={isOwnMessage ? "blue.300" : "border.muted"}>
+          <Markdown>{content}</Markdown>
+          <FileAttachments attachments={attachments} />
+        </Box>
+      </Collapsible.Content>
+    </Collapsible.Root>
+  );
+};
+
+/**
  * Component to display role-based badges for message authors
  */
 const UserRoleBadge = ({ authorId, helpRequestStudentIds }: { authorId: string; helpRequestStudentIds?: string[] }) => {
@@ -149,9 +297,30 @@ const UserRoleBadge = ({ authorId, helpRequestStudentIds }: { authorId: string; 
 /**
  * Component to display a single user name in the tooltip
  */
-const ReadReceiptUser = ({ userId }: { userId: string }) => {
+const ReadReceiptUser = ({
+  userId,
+  readReceipts
+}: {
+  userId: string;
+  readReceipts: HelpRequestMessageReadReceipt[];
+}) => {
   const profile = useUserProfile(userId);
-  return <Text>• {profile?.name || userId}</Text>;
+  return (
+    <Text>
+      • {profile?.name || userId} on{" "}
+      {new Date(readReceipts[0].created_at).toLocaleDateString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "America/New_York",
+        timeZoneName: "short"
+      })}
+    </Text>
+  );
 };
 
 /**
@@ -165,7 +334,22 @@ const ReadReceiptTooltipContent = ({ readReceipts }: { readReceipts: HelpRequest
   }
 
   if (readReceipts.length === 1) {
-    return <Text fontSize="xs">Read by {firstUserProfile?.name || readReceipts[0].viewer_id}</Text>;
+    return (
+      <Text fontSize="xs">
+        Read by {firstUserProfile?.name || readReceipts[0].viewer_id} on{" "}
+        {new Date(readReceipts[0].created_at).toLocaleDateString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: true,
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+          timeZone: "America/New_York",
+          timeZoneName: "short"
+        })}
+      </Text>
+    );
   }
 
   return (
@@ -175,7 +359,11 @@ const ReadReceiptTooltipContent = ({ readReceipts }: { readReceipts: HelpRequest
       </Text>
       <Stack gap={0}>
         {readReceipts.map((receipt, index) => (
-          <ReadReceiptUser key={`${receipt.viewer_id}-${index}`} userId={receipt.viewer_id} />
+          <ReadReceiptUser
+            key={`${receipt.viewer_id}-${index}`}
+            userId={receipt.viewer_id}
+            readReceipts={readReceipts}
+          />
         ))}
       </Stack>
     </Box>
@@ -277,7 +465,7 @@ const ReplyContext = ({
       <Text fontWeight="medium" color="fg.muted" mb={1}>
         Replying to {getReplyDisplayName()}
       </Text>
-      <Text
+      <Box
         color="fg.muted"
         lineHeight="1.3"
         overflow="hidden"
@@ -288,8 +476,8 @@ const ReplyContext = ({
           WebkitBoxOrient: "vertical"
         }}
       >
-        {getMessageContent(originalMessage)}
-      </Text>
+        <Markdown>{getMessageContent(originalMessage)}</Markdown>
+      </Box>
     </Box>
   );
 };
@@ -380,7 +568,7 @@ export const ChatMessageItem = ({
               }
             }}
           >
-            {getMessageContent(message)}
+            <CollapsibleMessageContent content={getMessageContent(message)} isOwnMessage={isOwnMessage} />
 
             {/* Reply Button - Only show for messages with database IDs */}
             {onReply && messageId && (

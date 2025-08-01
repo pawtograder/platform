@@ -1089,7 +1089,7 @@ BEGIN
         '11111111-1111-1111-1111-111111111111',
         'Debugging Template',
         'Standard debugging information',
-        '1. Expected behaviour vs. actual behaviour\n2. Steps to reproduce\n3. Relevant code snippets',
+        CONCAT('1. Expected behaviour vs. actual behaviour', CHR(10), '2. Steps to reproduce', CHR(10), '3. Relevant code snippets'),
         'Debugging',
         TRUE
     ) RETURNING id INTO debugging_template_id;
@@ -1100,7 +1100,7 @@ BEGIN
         '11111111-1111-1111-1111-111111111111',
         'Concept Question Template',
         'Template for conceptual questions',
-        '1. Concept you are struggling with\n2. Your current understanding\n3. Resources already consulted',
+        CONCAT('1. Concept you are struggling with', CHR(10), '2. Your current understanding', CHR(10), '3. Resources already consulted'),
         'Concept',
         TRUE
     ) RETURNING id INTO concept_template_id;

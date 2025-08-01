@@ -1,15 +1,46 @@
 import { Tooltip } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
-import { Badge, Box, IconButton, VStack, Text } from "@chakra-ui/react";
+import { Badge, Box, IconButton, VStack, Text, Button, HStack } from "@chakra-ui/react";
 import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/components/ui/popover";
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser from "./notification-teaser";
 import { useState } from "react";
+import { useCourse } from "@/hooks/useAuthState";
 
 export default function NotificationsBox() {
   const { notifications, set_read, dismiss } = useNotifications();
   const [isOpen, setIsOpen] = useState(false);
-  const unreadCount = notifications?.filter((n) => !n.viewed_at).length || 0;
+  const course = useCourse();
+
+  // Filter out notifications where the author is the current user
+  const filteredNotifications =
+    notifications?.filter((n) => {
+      // Keep notifications without a body (if any exist)
+      if (!n.body || typeof n.body !== "object") return true;
+
+      // Filter out notifications where the author is the current user
+      const body = n.body as { author_profile_id?: string };
+      return (
+        body.author_profile_id !== course?.private_profile_id && body.author_profile_id !== course?.public_profile_id
+      );
+    }) || [];
+  const unreadCount = filteredNotifications?.filter((n) => !n.viewed_at).length || 0;
+
+  /**
+   * Marks all unread notifications as read
+   */
+  const markAllAsRead = async () => {
+    if (!filteredNotifications) return;
+
+    const unreadNotifications = filteredNotifications.filter((n) => !n.viewed_at);
+    const promises = unreadNotifications.map((notification) => set_read(notification, true));
+
+    try {
+      await Promise.all(promises);
+    } catch {
+      // Individual notification update failures are handled by the set_read function
+    }
+  };
 
   return (
     <Box>
@@ -56,19 +87,28 @@ export default function NotificationsBox() {
         <PopoverContent shadow="lg" borderRadius="lg" borderWidth="1px" portalled={false}>
           <PopoverBody p="0">
             <Box p="4" borderBottom="1px" borderColor="border.muted">
-              <Text fontWeight="semibold" fontSize="lg" color="fg.default">
-                Notifications
-              </Text>
-              {unreadCount > 0 && (
-                <Text fontSize="sm" color="fg.muted" mt="1">
-                  {unreadCount} unread
-                </Text>
-              )}
+              <HStack justify="space-between" align="center">
+                <Box>
+                  <Text fontWeight="semibold" fontSize="lg" color="fg.default">
+                    Notifications
+                  </Text>
+                  {unreadCount > 0 && (
+                    <Text fontSize="sm" color="fg.muted" mt="1">
+                      {unreadCount} unread
+                    </Text>
+                  )}
+                </Box>
+                {unreadCount > 1 && (
+                  <Button size="xs" variant="ghost" colorPalette="blue" onClick={markAllAsRead}>
+                    Mark all as read
+                  </Button>
+                )}
+              </HStack>
             </Box>
             <Box maxHeight="500px" overflowY="auto">
-              {notifications && notifications.length > 0 ? (
+              {filteredNotifications && filteredNotifications.length > 0 ? (
                 <VStack align="stretch" gap="0">
-                  {notifications.map((n) => (
+                  {filteredNotifications.map((n) => (
                     <NotificationTeaser
                       key={n.id}
                       notification_id={n.id}
