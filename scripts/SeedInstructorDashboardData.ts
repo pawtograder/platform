@@ -1232,8 +1232,8 @@ async function createClassSections(class_id: number, numSections: number) {
   return sections || [];
 }
 
-// Helper function to create lab sections
-async function createLabSections(class_id: number, numSections: number, instructorId: string) {
+// Helper function to create lab sections with distributed instructors
+async function createLabSections(class_id: number, numSections: number, instructors: TestingUser[]) {
   const daysOfWeek = ["monday", "tuesday", "wednesday", "thursday", "friday"] as const;
   const times = ["09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 
@@ -1244,6 +1244,10 @@ async function createLabSections(class_id: number, numSections: number, instruct
     const startTime = times[timeIndex];
     const endTime = `${String(parseInt(startTime.split(":")[0]) + 1).padStart(2, "0")}:${startTime.split(":")[1]}`;
 
+    // Distribute instructors among lab sections
+    const instructorIndex = i % instructors.length;
+    const instructorId = instructors[instructorIndex].private_profile_id;
+
     return {
       class_id: class_id,
       name: `Lab ${String.fromCharCode(65 + i)}`, // Lab A, Lab B, etc.
@@ -1251,7 +1255,7 @@ async function createLabSections(class_id: number, numSections: number, instruct
       start_time: startTime,
       end_time: endTime,
       lab_leader_id: instructorId,
-      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime}`
+      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime} (led by ${instructors[instructorIndex].private_profile_name})`
     };
   });
 
@@ -1576,6 +1580,7 @@ interface SeedingOptions {
   numAssignments: number;
   firstAssignmentDate: Date;
   lastAssignmentDate: Date;
+  numManualGradedColumns?: number;
   rubricConfig?: {
     minPartsPerAssignment: number;
     maxPartsPerAssignment: number;
@@ -1608,6 +1613,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     numAssignments,
     firstAssignmentDate,
     lastAssignmentDate,
+    numManualGradedColumns,
     rubricConfig,
     sectionsAndTagsConfig,
     labAssignmentConfig,
@@ -1652,6 +1658,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
   const effectiveGroupAssignmentConfig = groupAssignmentConfig || defaultGroupAssignmentConfig;
 
+  // Default manual graded columns configuration if not provided
+  const effectiveNumManualGradedColumns = numManualGradedColumns || 0;
+
   console.log("🌱 Starting instructor dashboard data seeding...\n");
   console.log(`📊 Configuration:`);
   console.log(`   Students: ${numStudents}`);
@@ -1662,6 +1671,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
   console.log(`   Group Assignments: ${effectiveGroupAssignmentConfig.numGroupAssignments}`);
   console.log(`   Lab Group Assignments: ${effectiveGroupAssignmentConfig.numLabGroupAssignments}`);
   console.log(`   Minutes Due After Lab: ${effectiveLabAssignmentConfig.minutesDueAfterLab}`);
+  console.log(`   Manual Graded Columns: ${effectiveNumManualGradedColumns}`);
   console.log(`   First Assignment: ${firstAssignmentDate.toISOString().split("T")[0]}`);
   console.log(`   Last Assignment: ${lastAssignmentDate.toISOString().split("T")[0]}`);
   console.log(
@@ -1686,14 +1696,6 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     // Create users using TestingUtils
     console.log("\n👥 Creating test users...");
-    const instructor = await createUserInClass({ role: "instructor", class_id });
-
-    console.log(`  Creating ${numGraders} graders`);
-    const graderItems = Array.from({ length: numGraders }, (_, i) => ({ index: i }));
-    const graders = await Promise.all(
-      graderItems.map(async () => limiter.schedule(() => createUserInClass({ role: "grader", class_id })))
-    );
-    console.log(`✓ Created ${graders.length} graders`);
 
     console.log(`  Creating ${numInstructors} instructors`);
     const instructorItems = Array.from({ length: numInstructors }, (_, i) => ({ index: i }));
@@ -1702,24 +1704,40 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     );
     console.log(`✓ Created ${instructors.length} instructors`);
 
+    console.log(`  Creating ${numGraders} graders`);
+    const graderItems = Array.from({ length: numGraders }, (_, i) => ({ index: i }));
+    const graders = await Promise.all(
+      graderItems.map(async () => limiter.schedule(() => createUserInClass({ role: "grader", class_id })))
+    );
+    console.log(`✓ Created ${graders.length} graders`);
+
     console.log(`  Creating ${numStudents} students`);
     const studentItems = Array.from({ length: numStudents }, (_, i) => ({ index: i }));
     const students = await Promise.all(
       studentItems.map(async () => limiter.schedule(() => createUserInClass({ role: "student", class_id })))
     );
-    console.log(`✓ Created ${students.length} students, 1 instructor, ${graders.length} graders`);
+    console.log(`✓ Created ${students.length} students, ${instructors.length} instructors, ${graders.length} graders`);
 
     // Create sections and tags
     console.log("\n🏫 Creating class and lab sections...");
     const classSections = await createClassSections(class_id, effectiveSectionsAndTagsConfig.numClassSections);
     console.log(`✓ Created ${classSections.length} class sections`);
 
-    const labSections = await createLabSections(
-      class_id,
-      effectiveSectionsAndTagsConfig.numLabSections,
-      instructor.private_profile_id
-    );
+    // Create lab sections and distribute instructors among them
+    const labSections = await createLabSections(class_id, effectiveSectionsAndTagsConfig.numLabSections, instructors);
     console.log(`✓ Created ${labSections.length} lab sections`);
+
+    // Log instructor distribution among lab sections
+    console.log("\n👨‍🏫 Instructor Distribution:");
+    const instructorLabCounts = new Map<string, number>();
+    labSections.forEach((section, index) => {
+      const instructorIndex = index % instructors.length;
+      const instructorName = instructors[instructorIndex].private_profile_name;
+      instructorLabCounts.set(instructorName, (instructorLabCounts.get(instructorName) || 0) + 1);
+    });
+    instructorLabCounts.forEach((count, name) => {
+      console.log(`   ${name}: ${count} lab section(s)`);
+    });
 
     console.log("\n🏷️ Defining tag types...");
     const studentTagTypes = defineTagTypes("Student", effectiveSectionsAndTagsConfig.numStudentTags);
@@ -1738,7 +1756,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         studentTagTypes,
         class_id,
         "student",
-        instructor.user_id
+        instructors[0].user_id
       ),
       assignUsersToSectionsAndTags(
         graders,
@@ -1747,14 +1765,14 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         graderTagTypes,
         class_id,
         "grader",
-        instructor.user_id
+        instructors[0].user_id
       )
     ]);
     console.log(`✓ Assigned ${students.length} students and ${graders.length} graders to sections and tags`);
 
     // Create grader conflicts based on specified patterns
     console.log("\n⚔️ Creating grader conflicts based on specified patterns...");
-    await insertGraderConflicts(graders, students, class_id, instructor.private_profile_id);
+    await insertGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
 
     // Create assignments with enhanced rubric generation
     console.log("\n📚 Creating test assignments with diverse rubrics...");
@@ -2087,6 +2105,38 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     await new Promise((resolve) => setTimeout(resolve, 10000));
     // Create simple columns first (without expressions)
     console.log("\n📊 Creating gradebook columns...");
+
+    // Create manual graded columns if specified
+    const manualGradedColumns: Array<{
+      id: number;
+      name: string;
+      slug: string;
+      max_score: number | null;
+      score_expression: string | null;
+    }> = [];
+
+    if (effectiveNumManualGradedColumns > 0) {
+      console.log(`\n📊 Creating ${effectiveNumManualGradedColumns} manual graded columns...`);
+
+      for (let i = 1; i <= effectiveNumManualGradedColumns; i++) {
+        const columnName = `Manual Grade ${i}`;
+        const columnSlug = `manual-grade-${i}`;
+
+        const manualColumn = await createGradebookColumn({
+          class_id,
+          name: columnName,
+          description: `Manual grading column ${i}`,
+          slug: columnSlug,
+          max_score: 100,
+          sort_order: 1000 + i
+        });
+
+        manualGradedColumns.push(manualColumn);
+      }
+
+      console.log(`✓ Created ${manualGradedColumns.length} manual graded columns`);
+    }
+
     const participationColumn = await createGradebookColumn({
       class_id,
       name: "Participation",
@@ -2096,10 +2146,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       sort_order: 1000
     });
 
-    // // Wait a moment for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const averageAssignmentsColumn = await createGradebookColumn({
+    await createGradebookColumn({
       class_id,
       name: "Average Assignments",
       description: "Average of all assignments",
@@ -2109,10 +2156,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       sort_order: 2
     });
 
-    // Wait a moment for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const averageLabAssignmentsColumn = await createGradebookColumn({
+    await createGradebookColumn({
       class_id,
       name: "Average Lab Assignments",
       description: "Average of all lab assignments",
@@ -2122,10 +2166,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       sort_order: 3
     });
 
-    // Wait a moment for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const finalGradeColumn = await createGradebookColumn({
+    await createGradebookColumn({
       class_id,
       name: "Final Grade",
       description: "Calculated final grade",
@@ -2136,7 +2177,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       sort_order: 999
     });
 
-    console.log(`✓ Created ${4} gradebook columns without expressions`);
+    console.log(
+      `✓ Created ${4 + manualGradedColumns.length} gradebook columns (${4} standard + ${manualGradedColumns.length} manual)`
+    );
 
     // Now update the columns with score expressions one by one
     console.log("📊 Adding score expressions to gradebook columns...");
@@ -2155,6 +2198,25 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       `✓ Set participation scores: avg=${participationStats.averageActual}, min=${participationStats.minScore}, max=${participationStats.maxScore}`
     );
 
+    // Set scores for manual graded columns using normal distribution
+    if (manualGradedColumns.length > 0) {
+      console.log("\n📊 Setting scores for manual graded columns...");
+
+      for (const manualColumn of manualGradedColumns) {
+        const manualStats = await setGradebookColumnScores({
+          class_id,
+          gradebook_column_id: manualColumn.id,
+          students,
+          averageScore: 80 + Math.random() * 20, // Random average between 80-100
+          standardDeviation: 10 + Math.random() * 10, // Random deviation between 10-20
+          maxScore: 100
+        });
+        console.log(
+          `✓ Set ${manualColumn.name} scores: avg=${manualStats.averageActual}, min=${manualStats.minScore}, max=${manualStats.maxScore}`
+        );
+      }
+    }
+
     console.log("\n🎉 Database seeding completed successfully!");
     console.log(`\n📊 Summary:`);
     console.log(`   Class ID: ${class_id}`);
@@ -2163,6 +2225,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`   Lab Assignments: ${labAssignments.length}`);
     console.log(`   Group Assignments: ${groupAssignments.length}`);
     console.log(`   Lab Group Assignments: ${labGroupAssignments.length}`);
+    console.log(`   Manual Graded Columns: ${manualGradedColumns.length}`);
     console.log(`   Students: ${students.length}`);
     console.log(`   Graders: ${graders.length}`);
     console.log(`   Instructors: ${instructors.length}`);
@@ -2188,8 +2251,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     graderTagTypes.forEach((tagType) => console.log(`   Grader: ${tagType.name} (${tagType.color})`));
 
     console.log(`\n🔐 Instructor Login Credentials:`);
-    console.log(`   Email: ${instructor.email}`);
-    console.log(`   Password: ${instructor.password}`);
+    console.log(`   Email: ${instructors[0].email}`);
+    console.log(`   Password: ${instructors[0].password}`);
     console.log(`\n🔗 View the instructor dashboard at: /course/${class_id}`);
   } catch (error) {
     console.error("❌ Error seeding database:", error);
@@ -2210,6 +2273,7 @@ export async function runLargeScale() {
     numAssignments: 20,
     firstAssignmentDate: subDays(now, 60), // 60 days in the past
     lastAssignmentDate: addDays(now, 50), // 50 days in the future
+    numManualGradedColumns: 20, // 20 manual graded columns for large scale
     rubricConfig: {
       minPartsPerAssignment: 3,
       maxPartsPerAssignment: 5,
@@ -2242,10 +2306,11 @@ async function runSmallScale() {
   await seedInstructorDashboardData({
     numStudents: 50,
     numGraders: 5,
-    numInstructors: 5,
+    numInstructors: 2,
     numAssignments: 20,
     firstAssignmentDate: subDays(now, 5), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
+    numManualGradedColumns: 5, // 5 manual graded columns for small scale
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
@@ -2274,9 +2339,9 @@ async function runSmallScale() {
 // Run the large-scale example by default
 // To run small-scale instead, change this to: runSmallScale()
 async function main() {
-  await runLargeScale();
+  // await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  // await runSmallScale();
+  await runSmallScale();
 }
 
 main();

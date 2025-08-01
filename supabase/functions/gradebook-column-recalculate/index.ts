@@ -17,15 +17,15 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     sleep_seconds: 60, // Short sleep since we're polling frequently
     n: 500
   });
-  
+
   if (result.error) {
     console.error("Queue read error:", result.error);
     return false;
   }
-  
+
   if (result.data && result.data.length > 0) {
     console.log(`Processing ${result.data.length} messages from queue`);
-    
+
     const studentColumns = (
       result.data as QueueMessage<{
         gradebook_column_id: number;
@@ -44,7 +44,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
           .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
       }
     }));
-    
+
     try {
       await processGradebookCellCalculation(studentColumns, adminSupabase);
       console.log(`Successfully processed ${studentColumns.length} gradebook calculations`);
@@ -66,11 +66,11 @@ export async function runBatchHandler() {
   );
 
   console.log("Starting gradebook batch handler - polling every 10 seconds");
-  
+
   let isRunning = true;
   let consecutiveErrors = 0;
   const maxConsecutiveErrors = 5;
-  
+
   // Handle graceful shutdown
   const controller = new AbortController();
   const shutdownHandler = () => {
@@ -78,7 +78,7 @@ export async function runBatchHandler() {
     isRunning = false;
     controller.abort();
   };
-  
+
   // Listen for termination signals (if supported in edge runtime)
   try {
     Deno.addSignalListener("SIGINT", shutdownHandler);
@@ -93,27 +93,26 @@ export async function runBatchHandler() {
     try {
       const hasWork = await processBatch(adminSupabase);
       consecutiveErrors = 0; // Reset error count on successful processing
-      
+
       // If there was work, check again immediately, otherwise wait 10 seconds
       if (!hasWork) {
         console.log("Waiting 10 seconds before next poll...");
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        await new Promise((resolve) => setTimeout(resolve, 10000));
       }
-      
     } catch (error) {
       consecutiveErrors++;
       console.error(`Batch processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
-      
+
       if (consecutiveErrors >= maxConsecutiveErrors) {
         console.error("Too many consecutive errors, stopping batch handler");
         break;
       }
-      
+
       // Wait before retrying on error
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
-  
+
   console.log("Batch handler stopped");
 }
 
@@ -126,14 +125,19 @@ Deno.serve((req) => {
       headers: { "Content-Type": "application/json" }
     });
   }
-  
+
   EdgeRuntime.waitUntil(runBatchHandler());
-  
+
   // Return immediately to acknowledge the start request
-  return Promise.resolve(new Response(JSON.stringify({ 
-    message: "Gradebook batch handler started",
-    timestamp: new Date().toISOString()
-  }), { 
-    headers: { "Content-Type": "application/json" } 
-  }));
+  return Promise.resolve(
+    new Response(
+      JSON.stringify({
+        message: "Gradebook batch handler started",
+        timestamp: new Date().toISOString()
+      }),
+      {
+        headers: { "Content-Type": "application/json" }
+      }
+    )
+  );
 });
