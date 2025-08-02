@@ -289,7 +289,8 @@ export default function ImportGradebookColumns() {
                               let oldValue = null;
                               if (existingCol && studentPrivateProfileId) {
                                 const found = gradebookController.gradebook_column_students.rows.find(
-                                  (s) => s.gradebook_column_id === existingCol.id && s.student_id === studentPrivateProfileId
+                                  (s) =>
+                                    s.gradebook_column_id === existingCol.id && s.student_id === studentPrivateProfileId
                                 );
                                 oldValue = getScore(found) ?? null;
                               }

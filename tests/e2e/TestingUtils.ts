@@ -1236,9 +1236,12 @@ export async function createAssignmentsAndGradebookColumns({
 
     // Shuffle and select random rubric parts deterministically
     const shuffledTemplates = [...RUBRIC_PART_TEMPLATES].sort((a, b) => {
-      const aHash = a.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-      const bHash = b.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-      return (aHash + assignmentIndex) % RUBRIC_PART_TEMPLATES.length - (bHash + assignmentIndex) % RUBRIC_PART_TEMPLATES.length;
+      const aHash = a.name.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      const bHash = b.name.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      return (
+        ((aHash + assignmentIndex) % RUBRIC_PART_TEMPLATES.length) -
+        ((bHash + assignmentIndex) % RUBRIC_PART_TEMPLATES.length)
+      );
     });
     const selectedParts = shuffledTemplates.slice(0, Math.min(numParts, RUBRIC_PART_TEMPLATES.length));
 
@@ -1545,7 +1548,7 @@ export async function createAssignmentsAndGradebookColumns({
       }
 
       // Generate deterministic score based on student index and base score
-      const score = Math.max(0, Math.min(100, baseScore + (index % variation) - (variation / 2)));
+      const score = Math.max(0, Math.min(100, baseScore + (index % variation) - variation / 2));
 
       const { error: updateError } = await supabase
         .from("gradebook_column_students")
@@ -1568,7 +1571,7 @@ export async function createAssignmentsAndGradebookColumns({
   const assignments = [];
   for (let i = 0; i < numAssignments; i++) {
     const assignmentDate = new Date(assignmentDateRange.start.getTime() + timeStep * i);
-    
+
     const assignment = await createAssignmentWithRubric({
       assignmentIndex: i,
       due_date: assignmentDate.toISOString(),
@@ -1653,7 +1656,7 @@ export async function createAssignmentsAndGradebookColumns({
 
   if (students && students.length > 0) {
     // Transform the data to match TestingUser structure
-    const transformedStudents: TestingUser[] = students.map(student => ({
+    const transformedStudents: TestingUser[] = students.map((student) => ({
       private_profile_name: `Student ${student.user_id}`,
       public_profile_name: `Pseudonym ${student.user_id}`,
       email: `student-${student.user_id}@pawtograder.net`,
@@ -1665,14 +1668,12 @@ export async function createAssignmentsAndGradebookColumns({
     }));
 
     // Set scores for columns that should have manual grades
-    const columnsToGrade = gradebookColumns.filter(col => 
-      manualGradedColumnSlugs.includes(col.slug)
-    );
+    const columnsToGrade = gradebookColumns.filter((col) => manualGradedColumnSlugs.includes(col.slug));
 
     for (const column of columnsToGrade) {
       // Generate deterministic base score based on column slug
-      const baseScore = column.slug.split('-').reduce((acc, part) => acc + part.charCodeAt(0), 0) % 40 + 60; // 60-100 range
-      
+      const baseScore = (column.slug.split("-").reduce((acc, part) => acc + part.charCodeAt(0), 0) % 40) + 60; // 60-100 range
+
       await setGradebookColumnScores({
         class_id,
         gradebook_column_id: column.id,

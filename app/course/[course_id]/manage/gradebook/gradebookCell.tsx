@@ -28,7 +28,6 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { useUpdate } from "@refinedev/core";
 import { memo, useEffect, useId, useState } from "react";
 import { useForm } from "react-hook-form";
 import { FaRobot } from "react-icons/fa6";
@@ -87,8 +86,8 @@ export function OverrideScoreForm({
       !studentGradebookColumn.score_override &&
       studentGradebookColumn.is_missing;
     await gradebookController.gradebook_column_students.update(studentGradebookColumn.id, {
-        ...values,
-        score: values.is_missing && !forceMissingOff ? null : values.score,
+      ...values,
+      score: values.is_missing && !forceMissingOff ? null : values.score,
       is_missing: forceMissingOff ? false : values.is_missing
     });
     console.log("updated");
@@ -257,11 +256,6 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   const column = useGradebookColumn(columnId);
   const [isEditing, setIsEditing] = useState(false);
   const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
-  if (!studentGradebookColumn) {
-    console.log("no student gradebook column", columnId, studentId);
-    console.log(gradebookController.gradebook_column_students.rows.length);
-    console.log(gradebookController.gradebook_column_students.rows.filter(s => s.gradebook_column_id === columnId));
-  }
   const triggerId = useId();
 
   let scoreAdvice: string | undefined = undefined;
