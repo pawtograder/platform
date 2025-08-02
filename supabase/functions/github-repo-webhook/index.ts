@@ -526,6 +526,118 @@ eventHandler.on("organization", async ({ id: _id, name: _name, payload }) => {
   }
 });
 
+// Handle workflow_run events (requested, in_progress, completed, cancelled)
+eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload }) => {
+  console.log(
+    `Received workflow_run event for ${payload.repository.full_name}, action: ${payload.action}, workflow_run_id: ${payload.workflow_run.id}`
+  );
+  
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL") || "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+  );
+
+  try {
+    const workflowRun = payload.workflow_run;
+    const repository = payload.repository;
+    
+    // Map GitHub workflow action to our event_type
+    let eventType: string;
+    switch (payload.action) {
+      case "requested":
+        eventType = "requested";
+        break;
+      case "in_progress":
+        eventType = "in_progress";
+        break;
+      case "completed":
+        eventType = "completed";
+        break;
+      case "cancelled":
+        eventType = "cancelled";
+        break;
+      default:
+        console.log(`Unknown workflow_run action: ${payload.action}, skipping`);
+        return;
+    }
+
+    // Try to match repository against repositories table
+    const { data: matchedRepo, error: repoError } = await adminSupabase
+      .from("repositories")
+      .select("id, class_id")
+      .eq("repository", repository.full_name)
+      .maybeSingle();
+
+    if (repoError) {
+      console.error("Error looking up repository:", repoError);
+    }
+
+    let repositoryId: number | null = null;
+    let classId: number | null = null;
+
+    if (matchedRepo) {
+      repositoryId = matchedRepo.id;
+      classId = matchedRepo.class_id;
+      console.log(`Matched repository ${repository.full_name} to repository_id ${repositoryId}, class_id ${classId}`);
+    } else {
+      console.log(`No matching repository found for ${repository.full_name}`);
+    }
+
+    // Extract pull request information if available
+    const pullRequests = workflowRun.pull_requests?.map((pr: any) => ({
+      id: pr.id,
+      number: pr.number,
+      head: {
+        ref: pr.head?.ref,
+        sha: pr.head?.sha
+      },
+      base: {
+        ref: pr.base?.ref,
+        sha: pr.base?.sha
+      }
+    })) || [];
+
+    // Insert workflow event into database
+    const { error: insertError } = await (adminSupabase as any).from("workflow_events").insert({
+      workflow_run_id: workflowRun.id,
+      repository_name: repository.full_name,
+      github_repository_id: repository.id,
+      repository_id: repositoryId,
+      class_id: classId,
+      workflow_name: workflowRun.name,
+      workflow_path: workflowRun.path,
+      event_type: eventType,
+      status: workflowRun.status,
+      conclusion: workflowRun.conclusion,
+      head_sha: workflowRun.head_sha,
+      head_branch: workflowRun.head_branch,
+      run_number: workflowRun.run_number,
+      run_attempt: workflowRun.run_attempt,
+      actor_login: workflowRun.actor?.login,
+      triggering_actor_login: workflowRun.triggering_actor?.login,
+      started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
+      updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
+      run_started_at: workflowRun.run_started_at ? new Date(workflowRun.run_started_at).toISOString() : null,
+      run_updated_at: workflowRun.updated_at ? new Date(workflowRun.updated_at).toISOString() : null,
+      pull_requests: pullRequests.length > 0 ? pullRequests : null,
+      payload: payload
+    });
+
+    if (insertError) {
+      console.error("Error inserting workflow event:", insertError);
+      throw new Error("Failed to store workflow event");
+    }
+
+    console.log(
+      `Successfully logged workflow event: ${eventType} for workflow ${workflowRun.name} (${workflowRun.id}) in ${repository.full_name}`
+    );
+
+  } catch (error) {
+    console.error("Error processing workflow_run event:", error);
+    // Don't throw here to avoid breaking the webhook processing
+  }
+});
+
 // Type guard to check if a unit is a mutation test unit
 export function isMutationTestUnit(unit: GradedUnit): unit is MutationTestUnit {
   return "locations" in unit && "breakPoints" in unit;
@@ -588,7 +700,7 @@ Deno.serve(async (req) => {
     try {
       await eventHandler.receive({
         id: id || "",
-        name: eventName as "push" | "check_run",
+        name: eventName as "push" | "check_run" | "workflow_run" | "membership" | "organization",
         payload: body.detail
       });
       await adminSupabase
