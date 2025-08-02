@@ -94,12 +94,15 @@ async function getOctoKit(repoName: string) {
       });
     });
   }
+  if (!repoName || !repoName.includes("/")) {
+    console.warn(`Invalid repo name: ${repoName}, must be org/repo`);
+    return undefined;
+  }
   const ret = installations.find((i) => i.orgName === repoName.split("/")[0])?.octokit;
   if (ret) {
     return ret;
   }
-  console.warn(`No octokit found for ${repoName}, using default: ${installations[0].orgName}`);
-  return installations[0].octokit;
+  return undefined;
 }
 export async function resolveRef(action_repository: string, action_ref: string) {
   const octokit = await getOctoKit(action_repository);
@@ -107,6 +110,9 @@ export async function resolveRef(action_repository: string, action_ref: string) 
     throw new Error(`Resolve ref failed: No octokit found for ${action_repository}`);
   }
   async function getRefOrUndefined(ref: string) {
+    if (!octokit) {
+      return undefined;
+    }
     try {
       const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
         owner: action_repository.split("/")[0],
@@ -347,7 +353,7 @@ export async function createRepo(
   repoName: string,
   template_repo: string,
   { is_template_repo }: { is_template_repo?: boolean } = {}
-): string {
+): Promise<string> {
   console.log("Creating repo", org, repoName, template_repo);
   const octokit = await getOctoKit(org);
   if (!octokit) {
@@ -515,9 +521,14 @@ export async function syncStudentTeam(
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
 export async function syncTeam(team_slug: string, org: string, githubUsernamesFetcher: () => Promise<string[]>) {
+  if (!org || !team_slug) {
+    console.warn("Invalid org or team_slug", org, team_slug);
+    return;
+  }
   const octokit = await getOctoKit(org);
   if (!octokit) {
-    throw new Error("No octokit found for organization " + org);
+    console.warn("No octokit found for organization " + org);
+    return;
   }
   let team_id: number;
   try {

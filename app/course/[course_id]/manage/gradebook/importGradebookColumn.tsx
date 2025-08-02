@@ -4,9 +4,9 @@ import { Alert } from "@/components/ui/alert";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
-import { getScore, useGradebookController } from "@/hooks/useGradebook";
+import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import { GradebookColumn, GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
+import { GradebookColumn, GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate } from "@refinedev/core";
 import { parse } from "csv-parse/browser/esm/sync";
@@ -53,7 +53,7 @@ export default function ImportGradebookColumns() {
   const [importJob, setImportJob] = useState<ImportJob>();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const gradebookController = useGradebookController();
-  const existingColumns = gradebookController.gradebook.gradebook_columns as GradebookColumnWithEntries[];
+  const existingColumns = useGradebookColumns();
   // State for mapping
   const [studentIdentifierCol, setStudentIdentifierCol] = useState<number | null>(null);
   const [studentIdentifierType, setStudentIdentifierType] = useState<"email" | "sid">("email");
@@ -267,7 +267,7 @@ export default function ImportGradebookColumns() {
                             .filter((c) => c.idx !== idCol && c.mapping !== "ignore");
                           // For each import col, build preview: new/updated, and for each student, old/new value
                           const previewCols = importCols.map((col) => {
-                            let existingCol: GradebookColumnWithEntries | null = null;
+                            let existingCol: GradebookColumn | null = null;
                             if (col.mapping !== "new") {
                               existingCol = existingColumns.find((ec) => ec.id === col.mapping) ?? null;
                             } else {
@@ -288,8 +288,9 @@ export default function ImportGradebookColumns() {
                               }
                               let oldValue = null;
                               if (existingCol && studentPrivateProfileId) {
-                                const found = existingCol.gradebook_column_students?.find(
-                                  (s) => s.student_id === studentPrivateProfileId
+                                const found = gradebookController.gradebook_column_students.rows.find(
+                                  (s) =>
+                                    s.gradebook_column_id === existingCol.id && s.student_id === studentPrivateProfileId
                                 );
                                 oldValue = getScore(found) ?? null;
                               }
@@ -534,8 +535,8 @@ export default function ImportGradebookColumns() {
 
                                 const insertObj = {
                                   name: col.name + ` (Imported ${new Date().toLocaleDateString()} #${randomChars})`,
-                                  gradebook_id: gradebookController.gradebook.id,
-                                  class_id: gradebookController.gradebook.class_id,
+                                  gradebook_id: gradebookController.gradebook_id,
+                                  class_id: gradebookController.class_id,
                                   external_data: {
                                     source: "csv",
                                     fileName: importJob?.filename,
@@ -626,14 +627,14 @@ export default function ImportGradebookColumns() {
                                     }
                                     if (!studentPrivateProfileId) return null;
                                     // Find the gradebook_column_students row for this student/column
-                                    const column = gradebookController.gradebook.gradebook_columns.find(
+                                    const column = gradebookController.gradebook_columns.rows.find(
                                       (c) => c.id === colId
                                     );
                                     const gcs = col.isNew
                                       ? col.newGradebookColumnStudents?.find(
                                           (g) => g.student_id === studentPrivateProfileId && g.is_private
                                         )
-                                      : column?.gradebook_column_students?.find(
+                                      : gradebookController.gradebook_column_students.rows.find(
                                           (g) => g.student_id === studentPrivateProfileId && g.is_private
                                         );
                                     if (!gcs) return null;
