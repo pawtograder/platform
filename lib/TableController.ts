@@ -104,7 +104,6 @@ export default class TableController<
       try {
         let page = 0;
         const pageSize = 1000;
-        let nRows: number | undefined;
 
         // Set up realtime subscription if controller is provided
         if (this._classRealTimeController) {
@@ -139,7 +138,7 @@ export default class TableController<
           }
         }
         //Load initial data, do all of the pages.
-        while (page * pageSize < (nRows ?? 1000)) {
+        while (true) {
           const { data, error } = await this._query.range(page * pageSize, (page + 1) * pageSize);
           if (error) {
             reject(error);
@@ -354,6 +353,9 @@ export default class TableController<
       __db_pending: is_pending
     };
     const listeners = this._itemDataListeners.get(id as IDType);
+    if (this._table === "gradebook_column_students") {
+      console.log("update", id, newRow, oldRow, listeners);
+    }
     if (listeners) {
       listeners.forEach((listener) => listener(this._rows[index]));
     }
@@ -426,6 +428,9 @@ export default class TableController<
     const oldRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
     if (!oldRow) {
       throw new Error("Row not found");
+    }
+    if (this._table === "gradebook_column_students") {
+      console.log("update", id, row, oldRow);
     }
     this._updateRow(id, { ...oldRow, ...row, id, __db_pending: true }, true);
     const { data, error } = await this._client.from(this._table).update(row).eq("id", id).select("*").single();

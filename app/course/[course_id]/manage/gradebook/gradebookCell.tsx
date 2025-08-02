@@ -45,9 +45,7 @@ export function OverrideScoreForm({
   isAutoCalculated?: boolean;
   showWarning?: boolean;
 }) {
-  const { mutateAsync: updateStudentGradebookColumn } = useUpdate<GradebookColumnStudent>({
-    resource: "gradebook_column_students"
-  });
+  const gradebookController = useGradebookController();
   const linkToAssignment = useLinkToAssignment(
     studentGradebookColumn.gradebook_column_id,
     studentGradebookColumn.student_id
@@ -71,7 +69,6 @@ export function OverrideScoreForm({
 
   // Watch form values for checkboxes
   const watchedValues = watch();
-  const gradebookController = useGradebookController();
   const column = gradebookController.getGradebookColumn(studentGradebookColumn.gradebook_column_id);
   const renderer = gradebookController.getRendererForColumn(studentGradebookColumn.gradebook_column_id);
 
@@ -89,14 +86,12 @@ export function OverrideScoreForm({
       !studentGradebookColumn.score &&
       !studentGradebookColumn.score_override &&
       studentGradebookColumn.is_missing;
-    await updateStudentGradebookColumn({
-      id: studentGradebookColumn.id,
-      values: {
+    await gradebookController.gradebook_column_students.update(studentGradebookColumn.id, {
         ...values,
         score: values.is_missing && !forceMissingOff ? null : values.score,
-        is_missing: forceMissingOff ? false : values.is_missing
-      }
+      is_missing: forceMissingOff ? false : values.is_missing
     });
+    console.log("updated");
     if (onSuccess) onSuccess();
   };
 
@@ -262,6 +257,11 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   const column = useGradebookColumn(columnId);
   const [isEditing, setIsEditing] = useState(false);
   const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
+  if (!studentGradebookColumn) {
+    console.log("no student gradebook column", columnId, studentId);
+    console.log(gradebookController.gradebook_column_students.rows.length);
+    console.log(gradebookController.gradebook_column_students.rows.filter(s => s.gradebook_column_id === columnId));
+  }
   const triggerId = useId();
 
   let scoreAdvice: string | undefined = undefined;
