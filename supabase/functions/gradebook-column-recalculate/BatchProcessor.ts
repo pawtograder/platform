@@ -4,6 +4,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookCellCalculation } from "./GradebookProcessor.ts";
 import { QueueMessage } from "./index.ts";
 
+console.log(Deno.env.get("SUPABASE_URL"));
 export async function runHandler() {
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -11,10 +12,10 @@ export async function runHandler() {
   );
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_column_recalculate",
-    sleep_seconds: 5,
-    n: 10000
+    sleep_seconds: 20,
+    n: 500
   });
-  const startTime = Date.now();
+  let nDone = 0;
   console.log(`Reading ${result.data?.length} messages from gradebook_column_recalculate queue`);
   if (result.error) {
     console.error(result.error);
@@ -33,19 +34,19 @@ export async function runHandler() {
       gradebook_column_student_id: s.message.gradebook_column_student_id,
       is_private: s.message.is_private,
       debug: s,
-      onComplete: () => {
-        adminSupabase
+      onComplete: async () => {
+        nDone++;
+        if (nDone % 10 === 0) {
+          console.log(`Done ${nDone} of ${studentColumns.length}`);
+        }
+        await adminSupabase
           .schema("pgmq_public")
           .rpc("archive", { queue_name: "gradebook_column_recalculate", message_id: s.msg_id });
       }
     }));
-    for (const studentColumn of studentColumns) {
-      if (studentColumn.gradebook_column_id === 17) {
-        console.error(studentColumn);
-        throw new Error("Test error");
-      }
-    }
     await processGradebookCellCalculation(studentColumns, adminSupabase);
+    console.log(`Done ${nDone} of ${studentColumns.length}`);
+    await runHandler();
   }
 }
 

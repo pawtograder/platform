@@ -160,6 +160,8 @@ export default class TableController<
           page++;
         }
         this._ready = true;
+        //Emit a change event
+        this._listDataListeners.forEach((listener) => listener(this._rows, { entered: this._rows, left: [] }));
         resolve();
       } catch (error) {
         reject(error);
@@ -169,7 +171,6 @@ export default class TableController<
 
   close() {
     if (this._realtimeUnsubscribe) {
-      console.log("Unsubscribing from realtime messages");
       this._realtimeUnsubscribe();
     }
   }
@@ -251,15 +252,19 @@ export default class TableController<
       return;
     }
     this._nonExistantKeys.add(id);
-    this._fetchRow(id).then((row) => {
-      if (row) {
-        this._addRow({
-          ...row,
-          __db_pending: false
-        });
-        this._nonExistantKeys.delete(id);
-      }
-    });
+    this._fetchRow(id)
+      .then((row) => {
+        if (row) {
+          this._addRow({
+            ...row,
+            __db_pending: false
+          });
+          this._nonExistantKeys.delete(id);
+        }
+      })
+      .catch(() => {
+        // console.error("Error fetching row, will not try again", error);
+      });
   }
   getById(id: IDType, listener?: (data: PossiblyTentativeResult<ResultOne> | undefined) => void) {
     const data = this._rows.find(

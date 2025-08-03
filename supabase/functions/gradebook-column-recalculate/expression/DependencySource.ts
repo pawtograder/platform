@@ -1,4 +1,4 @@
-import { SupabaseClient } from "@supabase/supabase-js";
+import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isArray, isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
@@ -6,7 +6,8 @@ import type {
   Assignment,
   GradebookColumn,
   GradebookColumnStudent,
-  GradebookColumnStudentWithMaxScore
+  GradebookColumnStudentWithMaxScore,
+  SubmissionWithGradesForAssignment
 } from "./types.d.ts";
 
 export type PrivateProfileId = string;
@@ -102,24 +103,20 @@ abstract class DependencySourceBase implements DependencySource {
   private valuesMap: Map<PrivateProfileId, ResolvedExprDependencyInstance[]> = new Map();
   abstract _retrieveValues({
     keys,
-    class_id,
     supabase
   }: {
     keys: ExprDependencyInstance[];
-    class_id: number;
     supabase: SupabaseClient<Database>;
   }): Promise<ResolvedExprDependencyInstance[]>;
   async retrieveValues({
     keys,
-    class_id,
     supabase
   }: {
     keys: ExprDependencyInstance[];
-    class_id: number;
     supabase: SupabaseClient<Database>;
   }): Promise<void> {
     try {
-      const allValues = await this._retrieveValues({ keys, class_id, supabase });
+      const allValues = await this._retrieveValues({ keys, supabase });
       for (const value of allValues) {
         this.valuesMap.set(value.student_id, [...(this.valuesMap.get(value.student_id) ?? []), value]);
       }
@@ -195,24 +192,23 @@ class AssignmentsDependencySource extends DependencySourceBase {
 
   async _retrieveValues({
     keys,
-    class_id,
     supabase
   }: {
     keys: ExprDependencyInstance[];
-    class_id: number;
     supabase: SupabaseClient<Database>;
   }): Promise<ResolvedExprDependencyInstance[]> {
     // Fetch all assignments with pagination
     const allAssignments: Assignment[] = [];
     let from = 0;
     const pageSize = 1000;
+    const classIds = new Set(keys.map((key) => key.class_id));
 
     while (true) {
       const to = from + pageSize - 1;
       const { data: assignments, error: assignmentsFetchError } = await supabase
         .from("assignments")
         .select("*")
-        .eq("class_id", class_id)
+        .in("class_id", Array.from(classIds))
         .range(from, to);
 
       if (assignmentsFetchError) {
@@ -240,7 +236,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
     const assignmentIds = keys.map((key) => Number(key.key));
 
     // Fetch all submissions with pagination
-    const allSubmissions: any[] = [];
+    const allSubmissions: SubmissionWithGradesForAssignment[] = [];
     from = 0;
 
     while (true) {
@@ -249,7 +245,6 @@ class AssignmentsDependencySource extends DependencySourceBase {
         .from("submissions_with_grades_for_assignment")
         .select("*")
         .in("assignment_id", assignmentIds)
-        .eq("class_id", class_id)
         .range(from, to);
 
       if (submissionsFetchError) {
@@ -296,7 +291,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
     return ["gradebook_columns"];
   }
   private gradebookColumnMap: Map<number, GradebookColumn> = new Map();
-  execute({
+  override execute({
     function_name,
     context,
     key,
@@ -353,11 +348,9 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
   }
   async _retrieveValues({
     keys,
-    class_id,
     supabase
   }: {
     keys: ExprDependencyInstance[];
-    class_id: number;
     supabase: SupabaseClient<Database>;
   }): Promise<ResolvedExprDependencyInstance[]> {
     const students = new Set<string>(keys.map((key) => key.student_id));
@@ -375,7 +368,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .from("gradebook_column_students")
         .select("*")
         .in("gradebook_column_id", uniqueGradebookColumnIds)
-        .eq("class_id", class_id)
         .range(from, to);
 
       if (gradebookColumnsFetchError) {
@@ -405,7 +397,6 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .from("gradebook_columns")
         .select("*")
         .in("id", uniqueGradebookColumnIds)
-        .eq("class_id", class_id)
         .range(from, to);
 
       if (gradebookColumnsError) {
@@ -475,18 +466,14 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
 export async function addDependencySourceFunctions({
   math,
   keys,
-  class_id,
   supabase
 }: {
   math: MathJsInstance;
   keys: ExprDependencyInstance[];
-  class_id: number;
   supabase: SupabaseClient<Database>;
 }) {
   await Promise.all(
-    Object.values(DependencySourceMap).map((dependencySource) =>
-      dependencySource.retrieveValues({ keys, class_id, supabase })
-    )
+    Object.values(DependencySourceMap).map((dependencySource) => dependencySource.retrieveValues({ keys, supabase }))
   );
 
   //eslint-disable-next-line @typescript-eslint/no-explicit-any

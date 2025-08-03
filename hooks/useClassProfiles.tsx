@@ -1,13 +1,13 @@
 "use client";
 import NotFound from "@/components/ui/not-found";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CourseWithFeatures, UserProfile, UserRole, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { CourseWithFeatures, UserProfile, UserRole, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
 import { CrudFilter, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useMemo } from "react";
 import useAuthState from "./useAuthState";
 type ClassProfileContextType = {
-  role: UserRoleWithCourse;
+  role: UserRoleWithCourseAndUser;
   allVisibleRoles: UserRole[];
   profiles: UserProfile[];
   private_profile_id: string;
@@ -71,6 +71,10 @@ export function useIsGraderOrInstructor() {
   return role.role === "grader" || role.role === "instructor";
 }
 
+export function useIsStudent() {
+  const { role } = useClassProfiles();
+  return role.role === "student";
+}
 /**
  * Returns the user role object matching the specified private profile ID from all visible roles.
  *

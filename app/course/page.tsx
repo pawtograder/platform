@@ -1,4 +1,3 @@
-import LinkAccount from "@/components/github/link-account";
 import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
@@ -19,8 +18,6 @@ export default async function ProtectedPage() {
   }
 
   //list identities
-  const identities = await supabase.auth.getUserIdentities();
-  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
   const courses = await supabase
     .from("classes")
     .select("*")
@@ -29,10 +26,6 @@ export default async function ProtectedPage() {
 
   if (courses.data?.length === 1) {
     return redirect(`/course/${courses.data[0].id}`);
-  }
-  let actions = <></>;
-  if (!githubIdentity) {
-    actions = <LinkAccount />;
   }
   return (
     <VStack>
@@ -43,7 +36,6 @@ export default async function ProtectedPage() {
           </Box>
           <Button onClick={signOutAction}>Sign out</Button>
         </Flex>
-        {actions}
         <Heading size="xl">Your courses</Heading>
         <Flex>
           <Stack gap="4" direction="row" wrap="wrap">
