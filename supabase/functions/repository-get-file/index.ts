@@ -9,30 +9,33 @@ const RATE_LIMIT_MAX_REQUESTS = 3;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 
 function cleanupOldEntries(timestamps: number[], currentTime: number): number[] {
-  return timestamps.filter(timestamp => currentTime - timestamp < RATE_LIMIT_WINDOW_MS);
+  return timestamps.filter((timestamp) => currentTime - timestamp < RATE_LIMIT_WINDOW_MS);
 }
 
 function checkRateLimit(orgName: string, repoName: string, path: string): void {
   const fileKey = `${orgName}/${repoName}:${path}`;
   const currentTime = Date.now();
-  
+
   // Get existing timestamps for this file
   let timestamps = rateLimitStore.get(fileKey) || [];
-  
+
   // Clean up old entries
   timestamps = cleanupOldEntries(timestamps, currentTime);
-  
+
   // Check if rate limit is exceeded
   if (timestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
-    throw new Error(`Rate limit exceeded: File ${path} in ${orgName}/${repoName} has been requested ${RATE_LIMIT_MAX_REQUESTS} times within the last minute. Please wait before trying again.`);
+    throw new Error(
+      `Rate limit exceeded: File ${path} in ${orgName}/${repoName} has been requested ${RATE_LIMIT_MAX_REQUESTS} times within the last minute. Please wait before trying again.`
+    );
   }
-  
+
   // Add current timestamp
   timestamps.push(currentTime);
   rateLimitStore.set(fileKey, timestamps);
-  
+
   // Cleanup old entries from the store periodically
-  if (Math.random() < 0.1) { // 10% chance to clean up on each request
+  if (Math.random() < 0.1) {
+    // 10% chance to clean up on each request
     for (const [key, ts] of rateLimitStore.entries()) {
       const cleanedTs = cleanupOldEntries(ts, currentTime);
       if (cleanedTs.length === 0) {
@@ -53,10 +56,10 @@ async function handleRequest(req: Request) {
       `Requested a file from ${orgName}/${repoName} but the course is associated with ${courseOrgName.data?.github_org}`
     );
   }
-  
+
   // Check rate limit before making the GitHub API call
   checkRateLimit(orgName, repoName, path);
-  
+
   try {
     return await github.getFileFromRepo(orgName + "/" + repoName, path);
   } catch (error) {

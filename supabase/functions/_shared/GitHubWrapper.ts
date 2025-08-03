@@ -87,9 +87,8 @@ export async function getOctoKit(repoOrOrgName: string) {
           port: 6379
         },
         Redis
-      })
+      });
       connection.on("error", (err) => console.error(err));
-
     }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
@@ -108,11 +107,15 @@ export async function getOctoKit(repoOrOrgName: string) {
             id: "pawtograder-production",
             Bottleneck,
             onRateLimit: (_retryAfter, options, _octokit, _retryCount) => {
-              console.warn(`Request quota exhausted for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`);
+              console.warn(
+                `Request quota exhausted for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
+              );
               return true;
             },
             onSecondaryRateLimit: (_retryAfter, options, _octokit) => {
-              console.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`);
+              console.warn(
+                `SecondaryRateLimit detected for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
+              );
               return true;
             }
           }
@@ -501,26 +504,26 @@ export async function archiveRepoAndLock(org: string, repo: string) {
   });
 }
 /**
-* Syncs the staff team for a course.
-*
-* @param org The organization name.
-* @param courseSlug The course slug.
-* @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the staff team.
-*     This function should be idempotent, and should not throw an error if the team already exists (or not).
-*     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
-*/
+ * Syncs the staff team for a course.
+ *
+ * @param org The organization name.
+ * @param courseSlug The course slug.
+ * @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the staff team.
+ *     This function should be idempotent, and should not throw an error if the team already exists (or not).
+ *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
+ */
 export async function syncStaffTeam(org: string, courseSlug: string, githubUsernamesFetcher: () => Promise<string[]>) {
   await syncTeam(`${courseSlug}-staff`, org, githubUsernamesFetcher);
 }
 /**
-* Syncs the student team for a course.
-*
-* @param org The organization name.
-* @param courseSlug The course slug.
-* @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the student team.
-*     This function should be idempotent, and should not throw an error if the team already exists (or not).
-*     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
-*/
+ * Syncs the student team for a course.
+ *
+ * @param org The organization name.
+ * @param courseSlug The course slug.
+ * @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the student team.
+ *     This function should be idempotent, and should not throw an error if the team already exists (or not).
+ *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
+ */
 export async function syncStudentTeam(
   org: string,
   courseSlug: string,
@@ -529,17 +532,17 @@ export async function syncStudentTeam(
   await syncTeam(`${courseSlug}-students`, org, githubUsernamesFetcher);
 }
 /**
-* Syncs a team for a course.
-*
-* This function is used to sync the members of a team for a course.
-* It is used to ensure that the team has the correct members, and to add and remove members as needed.
-*
-* @param team_slug The slug of the team to sync.
-* @param org The organization name.
-* @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the team.
-*     This function should be idempotent, and should not throw an error if the team already exists (or not).
-*     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
-*/
+ * Syncs a team for a course.
+ *
+ * This function is used to sync the members of a team for a course.
+ * It is used to ensure that the team has the correct members, and to add and remove members as needed.
+ *
+ * @param team_slug The slug of the team to sync.
+ * @param org The organization name.
+ * @param githubUsernamesFetcher A function that fetches the list of GitHub usernames for the team.
+ *     This function should be idempotent, and should not throw an error if the team already exists (or not).
+ *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
+ */
 export async function syncTeam(team_slug: string, org: string, githubUsernamesFetcher: () => Promise<string[]>) {
   const octokit = await getOctoKit(org);
   if (!octokit) {
