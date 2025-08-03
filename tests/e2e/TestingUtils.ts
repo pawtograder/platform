@@ -7,6 +7,8 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+// export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
+export const TEST_SOLUTION_REPO = "pawtograder-playground/test-e2e-java-solution"; //TODO use env variable?
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = format(new Date(), "dd/MM/yy HH:mm:ss") + "#" + suffix;
@@ -461,7 +463,7 @@ export async function insertAssignment({
       description: "This is a test assignment for E2E testing",
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
-      template_repo: "pawtograder-playground/test-e2e-java-handout",
+      template_repo: TEST_HANDOUT_REPO,
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,

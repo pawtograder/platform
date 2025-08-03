@@ -33,6 +33,9 @@ async function handleRequest(req: Request) {
   const intendedTeam = classData.slug + "-" + (enrollment?.role === "student" ? "students" : "staff");
   const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!);
   if (!resp) {
+    await supabase.from("user_roles").update({
+      github_org_confirmed: true
+    }).eq("user_id", user_id).eq("class_id", course_id);
     return {
       is_ok: true,
       message: `Whops, we noticed that user ${githubUsername.github_username} is already in team ${intendedTeam}. We've updated our records!`

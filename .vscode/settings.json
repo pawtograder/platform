@@ -1,4 +1,8 @@
 {
   "typescript.tsdk": "node_modules/typescript/lib",
-  "deno.enablePaths": ["supabase/functions/"]
+  "deno.enablePaths": [
+    "supabase/functions/"
+  ],
+  "deno.enable": true,
+  "deno.path": "/Users/jon/.nvm/versions/node/v22.13.0/bin/deno"
 }
