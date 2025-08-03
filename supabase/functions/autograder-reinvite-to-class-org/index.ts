@@ -31,7 +31,13 @@ async function handleRequest(req: Request) {
     throw new UserVisibleError("No github username found for user");
   }
   const intendedTeam = classData.slug + "-" + (enrollment?.role === "student" ? "students" : "staff");
-  await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!);
+  const resp = await reinviteToOrgTeam(classData.github_org!, intendedTeam, githubUsername.github_username!);
+  if (!resp) {
+    return {
+      is_ok: true,
+      message: `Whops, we noticed that user ${githubUsername.github_username} is already in team ${intendedTeam}. We've updated our records!`
+    };
+  }
   return {
     is_ok: true,
     message: `Invited ${githubUsername.github_username} to ${intendedTeam}`
