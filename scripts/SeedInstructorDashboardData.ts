@@ -10,6 +10,7 @@ import {
   createRegradeRequest,
   createUserInClass,
   supabase,
+  TEST_HANDOUT_REPO,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
 
@@ -1052,7 +1053,7 @@ async function insertEnhancedAssignment({
       description: "This is an enhanced test assignment with diverse rubric structure",
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
-      template_repo: "pawtograder-playground/test-e2e-java-handout",
+      template_repo: TEST_HANDOUT_REPO,
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,

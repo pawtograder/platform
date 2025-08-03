@@ -3,6 +3,8 @@ import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
+import Bottleneck from "https://esm.sh/bottleneck?target=deno";
+import { Redis } from "https://esm.sh/ioredis?target=deno";
 
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
@@ -66,8 +68,28 @@ const installations: {
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
 
-async function getOctoKit(repoName: string) {
+export async function getOctoKit(repoOrOrgName: string) {
+  const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
   if (installations.length === 0) {
+    let connection: Bottleneck.IORedisConnection | undefined;
+    if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+      console.log("Using Upstash Redis for GitHub API rate limiting", Deno.env.get("UPSTASH_REDIS_REST_URL"));
+      const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
+      const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+      connection = new Bottleneck({
+        datastore: "ioredis",
+        clearDatastore: false,
+        clientOptions: {
+          host,
+          password,
+          username: "default",
+          tls: {},
+          port: 6379
+        },
+        Redis
+      });
+      connection.on("error", (err) => console.error(err));
+    }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
       installations.push({
@@ -81,12 +103,19 @@ async function getOctoKit(repoName: string) {
             installationId: i.id
           },
           throttle: {
+            connection,
+            id: "pawtograder-production",
+            Bottleneck,
             onRateLimit: (_retryAfter, options, _octokit, _retryCount) => {
-              console.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
+              console.warn(
+                `Request quota exhausted for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
+              );
               return true;
             },
             onSecondaryRateLimit: (_retryAfter, options, _octokit) => {
-              octokit.log.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
+              console.warn(
+                `SecondaryRateLimit detected for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
+              );
               return true;
             }
           }
@@ -94,11 +123,11 @@ async function getOctoKit(repoName: string) {
       });
     });
   }
-  const ret = installations.find((i) => i.orgName === repoName.split("/")[0])?.octokit;
+  const ret = installations.find((i) => i.orgName === org)?.octokit;
   if (ret) {
     return ret;
   }
-  console.warn(`No octokit found for ${repoName}, using default: ${installations[0].orgName}`);
+  console.warn(`No octokit found for ${repoOrOrgName}, using default: ${installations[0].orgName}`);
   return installations[0].octokit;
 }
 export async function resolveRef(action_repository: string, action_ref: string) {
