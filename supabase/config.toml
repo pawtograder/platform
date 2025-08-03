@@ -317,7 +317,7 @@ entrypoint = "./functions/github-repo-configure-webhook/index.ts"
 
 [functions.autograder-create-repos-for-student]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/autograder-create-repos-for-student/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -372,7 +372,7 @@ entrypoint = "./functions/autograder-create-submission/index.ts"
 
 [functions.assignment-create-all-repos]
 enabled = true
-verify_jwt = true
+verify_jwt = false
 import_map = "./functions/assignment-create-all-repos/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx

@@ -1052,7 +1052,7 @@ async function insertEnhancedAssignment({
       description: "This is an enhanced test assignment with diverse rubric structure",
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
-      template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+      template_repo: "pawtograder-playground/test-e2e-java-handout",
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,
@@ -1087,6 +1087,8 @@ async function insertEnhancedAssignment({
   await supabase
     .from("autograder")
     .update({
+      grader_repo: "pawtograder-playground/test-e2e-java-solution",
+      grader_commit_sha: "76ece6af6a251346596fcc71181a86599faf0fe3be0f85c532ff20c2f0939177", // Avoid races :)
       config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
     })
     .eq("id", assignmentData.id);
@@ -2295,12 +2297,47 @@ async function runSmallScale() {
   });
 }
 
+async function runMicro() {
+  const now = new Date();
+
+  await seedInstructorDashboardData({
+    numStudents: 2,
+    numGraders: 1,
+    numAssignments: 5,
+    firstAssignmentDate: addDays(now, 5),
+    lastAssignmentDate: addDays(now, 10),
+    rubricConfig: {
+      minPartsPerAssignment: 2,
+      maxPartsPerAssignment: 4,
+      minCriteriaPerPart: 1,
+      maxCriteriaPerPart: 2,
+      minChecksPerCriteria: 2,
+      maxChecksPerCriteria: 3
+    },
+    sectionsAndTagsConfig: {
+      numClassSections: 1,
+      numLabSections: 1,
+      numStudentTags: 1,
+      numGraderTags: 1
+    },
+    labAssignmentConfig: {
+      numLabAssignments: 1, // 40% of 5 assignments
+      minutesDueAfterLab: 10 // 1 hour
+    },
+    groupAssignmentConfig: {
+      numGroupAssignments: 1, // 40% of regular assignments (3 * 0.4 ≈ 1)
+      numLabGroupAssignments: 1 // 50% of lab assignments (2 * 0.5 = 1)
+    }
+  });
+}
+
 // Run the large-scale example by default
 // To run small-scale instead, change this to: runSmallScale()
 async function main() {
   // await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  await runSmallScale();
+  // await runSmallScale();
+  await runMicro();
 }
 
 main();

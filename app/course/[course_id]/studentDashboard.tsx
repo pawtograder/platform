@@ -20,6 +20,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { TZDate } from "@date-fns/tz";
 import Link from "next/link";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
+import LinkAccount from "@/components/github/link-account";
 export default async function StudentDashboard({ course_id }: { course_id: number }) {
   const supabase = await createClient();
   const { data: assignments, error: assignmentsError } = await supabase
@@ -48,10 +49,14 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     .eq("status", "open")
     .order("created_at", { ascending: true });
 
+  const identities = await supabase.auth.getUserIdentities();
+  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
+
   return (
     <VStack spaceY={0} align="stretch" p={2}>
-      <Heading size="xl">Course Dashboard</Heading>
+      {identities.data && !githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+      <Heading size="xl">Course Dashboard</Heading>
 
       <StudentLabSection />
       <Box>
