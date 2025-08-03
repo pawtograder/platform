@@ -216,6 +216,40 @@ export async function assignmentGroupInstructorCreateGroup(
   }
   return data as { message: string; id: number };
 }
+
+export async function assignmentCreateHandoutRepo(
+  params: FunctionTypes.AssignmentCreateHandoutRepoRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("assignment-create-handout-repo", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.AssignmentCreateHandoutRepoResponse;
+}
+
+export async function assignmentCreateSolutionRepo(
+  params: FunctionTypes.AssignmentCreateSolutionRepoRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("assignment-create-solution-repo", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.AssignmentCreateSolutionRepoResponse;
+}
+export async function resendOrgInvitation(
+  params: { course_id: number; user_id: string },
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("autograder-reinvite-to-class-org", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+}
 export class EdgeFunctionError extends Error {
   details: string;
   recoverable: boolean;

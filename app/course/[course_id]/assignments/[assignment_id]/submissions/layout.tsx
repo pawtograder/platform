@@ -19,7 +19,7 @@ export default async function SubmissionsLayout({
     .single();
   const showGradingToolbar = await isInstructorOrGrader(Number(course_id));
   return (
-    <VStack w="100%" gap={0}>
+    <VStack w="100%" gap={0} alignItems="flex-start">
       <HStack
         w="100%"
         mt={2}
@@ -30,8 +30,8 @@ export default async function SubmissionsLayout({
         borderBottomRadius={0}
       >
         <Heading size="lg">{assignment?.title}</Heading>
-        {showGradingToolbar && <AssignmentGradingToolbar />}
       </HStack>
+      {showGradingToolbar && <AssignmentGradingToolbar />}
 
       <Box borderColor="border.muted" borderWidth="2px" w="100%" borderTopRadius={0} borderBottomRadius="md">
         {children}

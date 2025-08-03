@@ -14,8 +14,30 @@ type RepoToCreate = {
 };
 
 async function handleRequest(req: Request) {
-  const { courseId, assignmentId } = (await req.json()) as AssignmentCreateAllReposRequest;
-  await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+  // Check for edge function secret authentication
+  const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
+  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
+
+  let courseId: number;
+  let assignmentId: number;
+
+  if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
+    // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
+    const url = new URL(req.url);
+    const course_id = Number.parseInt(url.searchParams.get("course_id")!);
+    const assignment_id = Number.parseInt(url.searchParams.get("assignment_id")!);
+    // Edge function secret authentication - get parameters from request body
+    courseId = course_id;
+    assignmentId = assignment_id;
+    console.log("Creating all repos for assignment with courseId:", courseId, "assignmentId:", assignmentId);
+  } else {
+    // JWT authentication - get parameters from request body and validate instructor permissions
+    const { courseId: cId, assignmentId: aId } = (await req.json()) as AssignmentCreateAllReposRequest;
+    courseId = cId;
+    assignmentId = aId;
+    await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+  }
+
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -29,7 +51,7 @@ async function handleRequest(req: Request) {
       "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
     ) // , classes(canvas_id), user_roles(user_id)')
     .eq("id", assignmentId)
-    .lte("release_date", TZDate.tz(timeZone).toISOString())
+    .lte("release_date", TZDate.tz(timeZone || "America/New_York").toISOString())
     .eq("class_id", courseId)
     .single();
   if (!assignment) {
