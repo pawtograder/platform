@@ -7,6 +7,8 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+// export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
+export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = format(new Date(), "dd/MM/yy HH:mm:ss") + "#" + suffix;
@@ -31,6 +33,7 @@ export async function createClass() {
     .insert({
       name: className,
       slug: className.toLowerCase().replace(/ /g, "-"),
+      github_org: "pawtograder-playground",
       start_date: addDays(new Date(), -30).toISOString(),
       end_date: addDays(new Date(), 180).toISOString(),
       late_tokens_per_student: 10,
@@ -43,6 +46,14 @@ export async function createClass() {
   }
   if (!classData) {
     throw new Error("Failed to create class");
+  }
+  //Update slug to include class_id
+  const { error: classError2 } = await supabase
+    .from("classes")
+    .update({ slug: `${classData.slug}-${classData.id}` })
+    .eq("id", classData.id);
+  if (classError2) {
+    throw new Error(`Failed to update class slug: ${classError2.message}`);
   }
   return classData;
 }
@@ -112,13 +123,14 @@ export async function createUserInClass({
   randomSuffix?: string;
 }): Promise<TestingUser> {
   const password = process.env.TEST_PASSWORD || "change-it";
-  const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 15);
+  const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
   const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const name = `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
   const public_profile_name = `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
   const private_profile_name = `${name}`;
   userIdx[role]++;
+  console.log(`Creating user ${email}`);
   const { data: userData, error: userError } = await supabase.auth.admin.createUser({
     email: email,
     password: password,
@@ -468,7 +480,7 @@ export async function insertAssignment({
       description: "This is a test assignment for E2E testing",
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
-      template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+      template_repo: TEST_HANDOUT_REPO,
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,

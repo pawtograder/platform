@@ -24,6 +24,7 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 import { getPrivateProfileId } from "@/lib/ssrUtils";
+import LinkAccount from "@/components/github/link-account";
 
 // Custom styled DataListRoot with reduced vertical spacing
 const CompactDataListRoot = ({ children, ...props }: React.ComponentProps<typeof DataListRoot>) => (
@@ -199,11 +200,14 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     };
   };
   const { data: course } = await supabase.from("classes").select("time_zone").eq("id", course_id).single();
+  const identities = await supabase.auth.getUserIdentities();
+  const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
-      <Heading size="xl">Course Dashboard</Heading>
+      {!githubIdentity && <LinkAccount />}
       <ResendOrgInvitation />
+      <Heading size="xl">Course Dashboard</Heading>
 
       {/* Review Assignments Section */}
       {reviewAssignmentsSummary && reviewAssignmentsSummary.length > 0 && (
