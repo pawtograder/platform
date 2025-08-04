@@ -2325,13 +2325,11 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       );
     });
 
-    await Promise.all(regradePromises);
-    console.log(`✓ Created ${regradePromises.length} regrade requests`);
+    // await Promise.all(regradePromises);
+    // console.log(`✓ Created ${regradePromises.length} regrade requests`);
 
-    // Create gradebook columns after all other operations are complete
+    // // Create gradebook columns after all other operations are complete
 
-    //Wait for 10 seconds to make sure all other operations are complete
-    await new Promise((resolve) => setTimeout(resolve, 10000));
     // Create simple columns first (without expressions)
     console.log("\n📊 Creating gradebook columns...");
 
@@ -2430,7 +2428,6 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     // Set scores for manual graded columns using normal distribution
     if (manualGradedColumns.length > 0) {
       console.log("\n📊 Setting scores for manual graded columns...");
-
       for (const manualColumn of manualGradedColumns) {
         const manualStats = await setGradebookColumnScores({
           class_id,

@@ -251,3 +251,12 @@ export type AutograderCreateReposForStudentRequest = {
   user_id?: string; // Optional: if provided, use this user_id instead of JWT auth
   class_id?: number; // Optional: if provided, only create repos for this specific class
 };
+
+export type AssignmentDeleteRequest = {
+  assignment_id: number;
+  class_id: number;
+};
+
+export type AssignmentDeleteResponse = {
+  message: string;
+};
