@@ -1,7 +1,7 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
-import { ClassRealTimeController } from "./ClassRealTimeController";
+import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeController";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -52,7 +52,9 @@ export default class TableController<
   private _temporaryIdCounter: number = -1;
   private _classRealTimeController: ClassRealTimeController | null = null;
   private _realtimeUnsubscribe: (() => void) | null = null;
+  private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
+  private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
 
   private _listDataListeners: ((
     data: ResultOne[],
@@ -75,6 +77,109 @@ export default class TableController<
     }
     return data;
   }
+
+  /**
+   * Fetch initial data with pagination
+   */
+  private async _fetchInitialData(): Promise<ResultOne[]> {
+    const rows: ResultOne[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    let nRows: number | undefined;
+
+    // Load initial data, do all of the pages.
+    while (page * pageSize < (nRows ?? 1000)) {
+      const { data, error } = await this._query.range(page * pageSize, (page + 1) * pageSize);
+      if (error) {
+        throw error;
+      }
+      if (!data) {
+        break;
+      }
+      rows.push(...data);
+      if (data.length < pageSize) {
+        break;
+      }
+      page++;
+    }
+
+    return rows;
+  }
+
+  /**
+   * Refetch all data and notify subscribers of changes
+   */
+  private async _refetchAllData(): Promise<void> {
+    try {
+      console.log(`Refetching data for table ${this._table} after reconnection`);
+
+      const oldRows = [...this._rows];
+      const newData = await this._fetchInitialData();
+
+      // Convert new data to our internal format
+      const newRows = newData.map((row) => ({
+        ...row,
+        __db_pending: false
+      })) as PossiblyTentativeResult<ResultOne>[];
+
+      // Update internal state
+      this._rows = newRows;
+
+      // Calculate changes for list listeners
+      const oldIds = new Set(oldRows.map((r) => (r as ResultOne & { id: IDType }).id));
+      const newIds = new Set(newRows.map((r) => (r as ResultOne & { id: IDType }).id));
+
+      const entered = newRows.filter((r) => !oldIds.has((r as ResultOne & { id: IDType }).id)) as ResultOne[];
+      const left = oldRows.filter((r) => !newIds.has((r as ResultOne & { id: IDType }).id)) as ResultOne[];
+
+      // Notify list listeners
+      this._listDataListeners.forEach((listener) => listener(this._rows, { entered, left }));
+
+      // Notify item listeners for all items
+      for (const row of newRows) {
+        const id = (row as ResultOne & { id: IDType }).id;
+        const listeners = this._itemDataListeners.get(id);
+        if (listeners) {
+          listeners.forEach((listener) => listener(row));
+        }
+      }
+
+      // Notify item listeners for removed items
+      for (const row of left) {
+        const id = (row as ResultOne & { id: IDType }).id;
+        const listeners = this._itemDataListeners.get(id);
+        if (listeners) {
+          listeners.forEach((listener) => listener(undefined));
+        }
+      }
+
+      console.log(
+        `Refetched ${newRows.length} rows for table ${this._table}. Changes: +${entered.length}, -${left.length}`
+      );
+    } catch (error) {
+      console.error(`Failed to refetch data for table ${this._table}:`, error);
+    }
+  }
+
+  /**
+   * Handle connection status changes
+   */
+  private _handleConnectionStatusChange(status: ConnectionStatus): void {
+    const wasDisconnected =
+      this._lastConnectionStatus === "disconnected" ||
+      this._lastConnectionStatus === "partial" ||
+      this._lastConnectionStatus === "connecting";
+    const isNowConnected = status.overall === "connected";
+
+    if (wasDisconnected && isNowConnected && this._ready) {
+      // We've reconnected after being disconnected, refetch all data
+      console.log(`Refetching data for table ${this._table} after reconnection`);
+      this._refetchAllData();
+    }
+
+    this._lastConnectionStatus = status.overall;
+  }
+
   constructor({
     query,
     client,
@@ -100,12 +205,9 @@ export default class TableController<
     this._table = table;
     this._classRealTimeController = classRealTimeController || null;
     this._submissionId = submissionId || null;
+
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
-        let page = 0;
-        const pageSize = 1000;
-        let nRows: number | undefined;
-
         // Set up realtime subscription if controller is provided
         if (this._classRealTimeController) {
           const messageHandler = (message: BroadcastMessage) => {
@@ -137,28 +239,23 @@ export default class TableController<
           } else {
             this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTable(table, messageHandler);
           }
+
+          // Subscribe to connection status changes for reconnection handling
+          this._statusUnsubscribe = this._classRealTimeController.subscribeToStatus((status) => {
+            this._handleConnectionStatusChange(status);
+          });
+
+          // Get initial connection status
+          this._lastConnectionStatus = this._classRealTimeController.getConnectionStatus().overall;
         }
-        //Load initial data, do all of the pages.
-        while (page * pageSize < (nRows ?? 1000)) {
-          const { data, error } = await this._query.range(page * pageSize, (page + 1) * pageSize);
-          if (error) {
-            reject(error);
-          }
-          if (!data) {
-            break;
-          }
-          this._rows = [
-            ...this._rows,
-            ...data.map((row) => ({
-              ...row,
-              __db_pending: false
-            }))
-          ];
-          if (data.length < pageSize) {
-            break;
-          }
-          page++;
-        }
+
+        // Fetch initial data using the helper function
+        const initialData = await this._fetchInitialData();
+        this._rows = initialData.map((row) => ({
+          ...row,
+          __db_pending: false
+        })) as PossiblyTentativeResult<ResultOne>[];
+
         this._ready = true;
         //Emit a change event
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered: this._rows, left: [] }));
@@ -172,6 +269,10 @@ export default class TableController<
   close() {
     if (this._realtimeUnsubscribe) {
       this._realtimeUnsubscribe();
+    }
+    if (this._statusUnsubscribe) {
+      console.log("Unsubscribing from connection status changes");
+      this._statusUnsubscribe();
     }
   }
 
