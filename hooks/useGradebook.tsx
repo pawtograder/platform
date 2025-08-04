@@ -467,14 +467,11 @@ export class GradebookController {
 
   private _setupGradebookSubscriptions() {
     // Subscribe to gradebook_columns changes for column structure updates
-    const unsubscribeColumns = this._classRealTimeController.subscribeToTable(
-      "gradebook_columns",
-      (message) => {
-        // The TableController will handle the actual data updates
-        // This subscription is for any additional gradebook-specific logic
-        console.log("Gradebook columns change:", message);
-      }
-    );
+    const unsubscribeColumns = this._classRealTimeController.subscribeToTable("gradebook_columns", (message) => {
+      // The TableController will handle the actual data updates
+      // This subscription is for any additional gradebook-specific logic
+      console.log("Gradebook columns change:", message);
+    });
     this._unsubscribes.push(unsubscribeColumns);
 
     // Subscribe to gradebook_column_students changes for grade updates
@@ -484,7 +481,7 @@ export class GradebookController {
         // The TableController will handle the actual data updates
         // This subscription is for any additional gradebook-specific logic
         console.log("Gradebook column students change:", message);
-        
+
         // Handle specific business logic for grade changes
         if (message.operation === "UPDATE" && message.data) {
           this._handleGradeChange(message.data as GradebookColumnStudent);
@@ -497,7 +494,7 @@ export class GradebookController {
   private _handleGradeChange(gradeData: GradebookColumnStudent) {
     // Handle any gradebook-specific logic when grades change
     // This could include updating calculated columns, notifications, etc.
-    
+
     // Example: If this is a student's public grade (is_private = false),
     // we might want to trigger additional UI updates
     if (gradeData.is_private === false) {
