@@ -63,7 +63,7 @@ export default function HelpRequestHistory({
 
   const handleCreateFollowup = (e: React.MouseEvent, requestId: number) => {
     e.stopPropagation();
-    router.push(`/course/${course_id}/office-hours/${queue_id}?tab=new-request&followup_to=${requestId}`);
+    router.push(`/course/${course_id}/office-hours/${queue_id}/new?&followup_to=${requestId}`);
   };
 
   if (requests.length === 0) {
