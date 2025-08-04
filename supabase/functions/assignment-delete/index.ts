@@ -70,8 +70,8 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
   const { data: releasedReviews } = await adminSupabase
     .from("submission_reviews")
     .select("id")
-    .eq("assignment_id", assignment_id)
-    .not("released_at", "is", null)
+    .eq("submissions.assignment_id", assignment_id)
+    .eq("released", true)
     .limit(1);
 
   if (releasedReviews && releasedReviews.length > 0) {
@@ -157,8 +157,12 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
           console.log(`Successfully deleted repository ${repo.repository} from GitHub`);
         }
       } catch (deleteError) {
-        console.warn(`Failed to delete repository ${repo.repository} from GitHub:`, deleteError);
-        // Continue with deletion - missing repos should not be an error
+        if (deleteError instanceof Error && deleteError.message.includes("Not Found")) {
+          console.log(`Repository ${repo.repository} not found, skipping`);
+        } else {
+          console.warn(`Failed to delete repository ${repo.repository} from GitHub:`, deleteError);
+          // Continue with deletion - missing repos should not be an error
+        }
       }
     }
   }
@@ -178,8 +182,16 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
         console.log(`Successfully deleted handout repository ${assignment.template_repo} from GitHub`);
       }
     } catch (deleteError) {
-      console.warn(`Failed to delete handout repository ${assignment.template_repo} from GitHub:`, deleteError);
-      // Continue with deletion - missing repos should not be an error
+      if (deleteError instanceof Error && deleteError.message.includes("Not Found")) {
+        console.log(`Handout repository ${assignment.template_repo} not found, skipping`);
+      } else {
+        console.warn(`Failed to delete handout repository ${assignment.template_repo} from GitHub:`, deleteError);
+        throw new UserVisibleError(
+          `Failed to delete handout repository ${assignment.template_repo} from GitHub: ${
+            deleteError instanceof Error ? deleteError.message : "Unknown error"
+          }`
+        );
+      }
     }
   }
 
@@ -198,123 +210,50 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
         console.log(`Successfully deleted solution repository ${assignment.autograder.grader_repo} from GitHub`);
       }
     } catch (deleteError) {
-      console.warn(
-        `Failed to delete solution repository ${assignment.autograder.grader_repo} from GitHub:`,
-        deleteError
-      );
-      // Continue with deletion - missing repos should not be an error
-    }
-  }
-
-  // ========================
-  // PHASE 3: DELETE GRADEBOOK COLUMNS AND DEPENDENCIES
-  // ========================
-
-  console.log("Phase 3: Handling gradebook columns...");
-
-  // Find gradebook columns that reference this assignment
-  const { data: gradebookColumns } = await adminSupabase
-    .from("gradebook_columns")
-    .select("id, dependencies")
-    .eq("class_id", class_id)
-    .eq("assignment_id", assignment_id);
-
-  if (gradebookColumns && gradebookColumns.length > 0) {
-    const columnIds = gradebookColumns.map((col) => col.id);
-    console.log(`Found ${columnIds.length} gradebook columns to delete:`, columnIds);
-
-    // Remove these columns from dependencies of other columns
-    const { data: allColumns } = await adminSupabase
-      .from("gradebook_columns")
-      .select("id, dependencies")
-      .eq("class_id", class_id)
-      .not("assignment_id", "eq", assignment_id);
-
-    if (allColumns) {
-      for (const column of allColumns) {
-        if (column.dependencies && Array.isArray(column.dependencies)) {
-          const updatedDependencies = column.dependencies.filter((dep: number) => !columnIds.includes(dep));
-
-          if (updatedDependencies.length !== column.dependencies.length) {
-            console.log(`Updating dependencies for column ${column.id}`);
-            await adminSupabase
-              .from("gradebook_columns")
-              .update({ dependencies: updatedDependencies })
-              .eq("id", column.id);
-          }
-        }
+      if (deleteError instanceof Error && deleteError.message.includes("Not Found")) {
+        console.log(`Solution repository ${assignment.autograder.grader_repo} not found, skipping`);
+      } else {
+        console.warn(
+          `Failed to delete solution repository ${assignment.autograder.grader_repo} from GitHub:`,
+          deleteError
+        );
+        throw new UserVisibleError(
+          `Failed to delete solution repository ${assignment.autograder.grader_repo} from GitHub: ${
+            deleteError instanceof Error ? deleteError.message : "Unknown error"
+          }`
+        );
       }
     }
-
-    // Delete the gradebook columns
-    await adminSupabase.from("gradebook_columns").delete().eq("assignment_id", assignment_id);
   }
 
   // ========================
-  // PHASE 4: DELETE ALL RELATED DATA FROM SUPABASE
+  // PHASE 3: DELETE ALL DATA FROM DATABASE USING RPC FUNCTION
   // ========================
 
-  console.log("Phase 4: Deleting all related data from database...");
+  console.log("Phase 3: Deleting all related data from database using RPC function...");
 
-  // Delete in order to respect foreign key constraints
-
-  // Delete submission reviews first
-  await adminSupabase.from("submission_reviews").delete().eq("assignment_id", assignment_id);
-
-  // Delete grader results
-  await adminSupabase.from("grader_results").delete().eq("assignment_id", assignment_id);
-
-  // Delete submissions
-  await adminSupabase.from("submissions").delete().eq("assignment_id", assignment_id);
-
-  // Delete repositories
-  await adminSupabase.from("repositories").delete().eq("assignment_id", assignment_id);
-
-  // Delete assignment group members
-  await adminSupabase.from("assignment_groups_members").delete().eq("assignment_id", assignment_id);
-
-  // Delete assignment group invitations for this assignment's groups
-  const { data: assignmentGroups } = await adminSupabase
-    .from("assignment_groups")
-    .select("id")
-    .eq("assignment_id", assignment_id);
-
-  if (assignmentGroups && assignmentGroups.length > 0) {
-    const groupIds = assignmentGroups.map((g) => g.id);
-    await adminSupabase.from("assignment_group_invitations").delete().in("assignment_group_id", groupIds);
-  }
-
-  // Delete assignment group join requests
-  await adminSupabase.from("assignment_group_join_request").delete().eq("assignment_id", assignment_id);
-
-  // Delete assignment groups
-  await adminSupabase.from("assignment_groups").delete().eq("assignment_id", assignment_id);
-
-  // Delete due date exceptions
-  await adminSupabase.from("assignment_due_date_exceptions").delete().eq("assignment_id", assignment_id);
-
-  // Delete review assignments
-  await adminSupabase.from("review_assignments").delete().eq("assignment_id", assignment_id);
-
-  // Delete autograder if exists
-  await adminSupabase.from("autograder").delete().eq("assignment_id", assignment_id);
-
-  // Finally, delete the assignment itself
-  const { error: deleteError } = await adminSupabase
-    .from("assignments")
-    .delete()
-    .eq("id", assignment_id)
-    .eq("class_id", class_id);
+  // Call the RPC function to delete all assignment data
+  const { data: deleteResult, error: deleteError } = await adminSupabase.rpc("delete_assignment_with_all_data", {
+    p_assignment_id: assignment_id,
+    p_class_id: class_id
+  });
 
   if (deleteError) {
-    console.error("Failed to delete assignment:", deleteError);
-    throw new UserVisibleError(`Failed to delete assignment: ${deleteError.message}`);
+    console.error("Failed to delete assignment data:", deleteError);
+    throw new UserVisibleError(`Failed to delete assignment data: ${deleteError.message}`);
+  }
+
+  if (!deleteResult || !deleteResult.success) {
+    console.error("RPC function returned error:", deleteResult);
+    throw new UserVisibleError(`Failed to delete assignment: ${deleteResult?.message || "Unknown error"}`);
   }
 
   console.log(`Successfully deleted assignment ${assignment_id}: "${assignment.title}"`);
 
   return {
-    message: `Assignment "${assignment.title}" has been successfully deleted along with all related data.`
+    message:
+      deleteResult.message ||
+      `Assignment "${assignment.title}" has been successfully deleted along with all related data.`
   };
 }
 

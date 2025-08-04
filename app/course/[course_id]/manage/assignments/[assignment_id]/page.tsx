@@ -1,11 +1,10 @@
+import { getPrivateProfileId } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
-import { Box, DataList, HStack, Link, VStack, Tabs } from "@chakra-ui/react";
+import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
-import DeleteAssignmentButton from "./deleteAssignmentButton";
-import { getPrivateProfileId, isInstructor } from "@/lib/ssrUtils";
 export default async function AssignmentHome({
   params
 }: {
@@ -19,7 +18,6 @@ export default async function AssignmentHome({
     .eq("id", Number.parseInt(assignment_id))
     .single();
   const private_profile_id = await getPrivateProfileId(Number.parseInt(course_id));
-  const userIsInstructor = await isInstructor(Number.parseInt(course_id));
   const hasReviewAssignments =
     (
       await client
@@ -100,7 +98,6 @@ export default async function AssignmentHome({
           <AssignmentsTable />
         </Tabs.Content>
       </Tabs.Root>
-      {userIsInstructor && <DeleteAssignmentButton assignment={assignment} courseId={Number.parseInt(course_id)} />}
     </Box>
   );
 }
