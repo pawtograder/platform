@@ -66,20 +66,6 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
 
   console.log("Phase 1: Performing all safety checks...");
 
-  // Check for released submission reviews
-  const { data: releasedReviews } = await adminSupabase
-    .from("submission_reviews")
-    .select("id")
-    .eq("submissions.assignment_id", assignment_id)
-    .eq("released", true)
-    .limit(1);
-
-  if (releasedReviews && releasedReviews.length > 0) {
-    throw new UserVisibleError(
-      "Cannot delete assignment: This assignment has released submission reviews. Delete cannot proceed."
-    );
-  }
-
   // Get all repositories for this assignment
   const { data: repositories } = await adminSupabase
     .from("repositories")

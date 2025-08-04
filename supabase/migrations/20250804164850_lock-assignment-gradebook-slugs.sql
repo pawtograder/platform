@@ -6,6 +6,7 @@ CREATE OR REPLACE FUNCTION public.prevent_slug_update()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $function$
 BEGIN
     -- Only check for updates (not inserts)
