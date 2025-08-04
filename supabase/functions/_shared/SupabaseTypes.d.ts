@@ -2764,6 +2764,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          help_request_id: number | null;
           id: number;
           message_id: number;
           viewer_id: string;
@@ -2771,6 +2772,7 @@ export type Database = {
         Insert: {
           class_id: number;
           created_at?: string;
+          help_request_id?: number | null;
           id?: number;
           message_id: number;
           viewer_id: string;
@@ -2778,6 +2780,7 @@ export type Database = {
         Update: {
           class_id?: number;
           created_at?: string;
+          help_request_id?: number | null;
           id?: number;
           message_id?: number;
           viewer_id?: string;
@@ -2788,6 +2791,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
             referencedColumns: ["id"];
           },
           {
@@ -3138,6 +3148,7 @@ export type Database = {
           assignee: string | null;
           class_id: number;
           created_at: string;
+          created_by: string | null;
           followup_to: number | null;
           help_queue: number;
           id: number;
@@ -3155,6 +3166,7 @@ export type Database = {
           assignee?: string | null;
           class_id: number;
           created_at?: string;
+          created_by?: string | null;
           followup_to?: number | null;
           help_queue: number;
           id?: number;
@@ -3172,6 +3184,7 @@ export type Database = {
           assignee?: string | null;
           class_id?: number;
           created_at?: string;
+          created_by?: string | null;
           followup_to?: number | null;
           help_queue?: number;
           id?: number;
@@ -3206,6 +3219,20 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_requests_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_requests_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
           },
           {
             foreignKeyName: "help_requests_help_queue_fkey";
