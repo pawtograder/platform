@@ -1,16 +1,18 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import { BroadcastMessage } from "./TableController";
+import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import { RealtimeChannelManager } from "./RealtimeChannelManager";
+import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 
 type MessageFilter = {
-  type?: BroadcastMessage["type"];
+  type?: OfficeHoursBroadcastMessage["type"];
   table?: string;
   help_request_id?: number;
   help_queue_id?: number;
   student_profile_id?: string;
 };
 
-type MessageCallback = (message: BroadcastMessage) => void;
+type MessageCallback = (message: OfficeHoursBroadcastMessage) => void;
 
 interface MessageSubscription {
   id: string;
@@ -45,13 +47,8 @@ export class OfficeHoursRealTimeController {
   private _classId: number;
   private _profileId: string;
   private _isStaff: boolean;
-
-  // Channel management
-  private _helpRequestChannels: Map<number, RealtimeChannel> = new Map();
-  private _helpRequestStaffChannels: Map<number, RealtimeChannel> = new Map();
-  private _helpQueueChannels: Map<number, RealtimeChannel> = new Map();
-  private _helpQueuesChannel: RealtimeChannel | null = null;
-  private _classStaffChannel: RealtimeChannel | null = null;
+  private _channelManager: RealtimeChannelManager;
+  private _channelUnsubscribers: Map<string, () => void> = new Map();
 
   // Subscription management
   private _subscriptions: Map<string, MessageSubscription> = new Map();
@@ -59,6 +56,8 @@ export class OfficeHoursRealTimeController {
   private _statusChangeListeners: ((status: ConnectionStatus) => void)[] = [];
   private _objDebugId = `${new Date().getTime()}-${Math.random()}`;
   private _closed = false;
+  private _started = false;
+  private _initializationPromise: Promise<void>;
 
   constructor({
     client,
@@ -75,8 +74,31 @@ export class OfficeHoursRealTimeController {
     this._classId = classId;
     this._profileId = profileId;
     this._isStaff = isStaff;
+    this._channelManager = RealtimeChannelManager.getInstance();
 
-    this._initializeGlobalChannels();
+    // Set the client on the channel manager
+    this._channelManager.setClient(client);
+
+    // Start async initialization immediately
+    this._initializationPromise = this._initializeGlobalChannels();
+  }
+
+  /**
+   * Start the realtime controller
+   * Returns true when initialization is complete
+   */
+  async start(): Promise<boolean> {
+    if (this._started) {
+      await this._initializationPromise;
+      return true;
+    }
+
+    this._started = true;
+
+    // Wait for initialization that started in constructor
+    await this._initializationPromise;
+
+    return true;
   }
 
   /**
@@ -86,123 +108,120 @@ export class OfficeHoursRealTimeController {
     console.log(
       `Initializing global channels for class ${this._classId} with profile ${this._profileId} (Staff: ${this._isStaff})`
     );
-    const accessToken = await this._client.auth.getSession();
-    await this._client.realtime.setAuth(accessToken.data.session?.access_token);
 
     if (this._closed) {
       return;
     }
 
+    // Session refresh is now handled by the channel manager
+
     // Initialize global help_queues channel
-    this._helpQueuesChannel = this._client.channel("help_queues", {
-      config: { private: true }
-    });
+    const helpQueuesUnsubscriber = await this._channelManager.subscribe(
+      "help_queues",
+      (message: OfficeHoursBroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        console.log(`Help queues channel status: help_queues`, status, err);
+        this._notifyStatusChange();
+      }
+    );
 
-    this._helpQueuesChannel.on("broadcast", { event: "broadcast" }, (message) => {
-      this._handleBroadcastMessage(message.payload as BroadcastMessage);
-    });
-
-    this._helpQueuesChannel.subscribe((status, err) => {
-      console.log(`Help queues channel status: help_queues`, status, err);
-      this._notifyStatusChange();
-    });
+    this._channelUnsubscribers.set("help_queues", helpQueuesUnsubscriber);
 
     // Initialize class-level staff channel if user is staff
     // This channel receives broadcasts for student_karma_notes and help_request_moderation
     if (this._isStaff) {
-      this._classStaffChannel = this._client.channel(`class:${this._classId}:staff`, {
-        config: { private: true }
-      });
+      const staffChannelTopic = `class:${this._classId}:staff`;
+      const staffUnsubscriber = await this._channelManager.subscribe(
+        staffChannelTopic,
+        (message: OfficeHoursBroadcastMessage) => {
+          this._handleBroadcastMessage(message);
+        },
+        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+          console.log(`Class staff channel status: ${staffChannelTopic}`, status, err);
+          this._notifyStatusChange();
+        }
+      );
 
-      this._classStaffChannel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message.payload as BroadcastMessage);
-      });
-
-      this._classStaffChannel.subscribe((status, err) => {
-        console.log(`Class staff channel status: class:${this._classId}:staff`, status, err);
-        this._notifyStatusChange();
-      });
+      this._channelUnsubscribers.set(staffChannelTopic, staffUnsubscriber);
     }
   }
 
   /**
    * Ensure help request channels are created for a given help request
    */
-  private _ensureHelpRequestChannels(helpRequestId: number) {
+  private async _ensureHelpRequestChannels(helpRequestId: number) {
     if (this._closed) {
       return;
     }
 
     // Create main help request channel if it doesn't exist
-    if (!this._helpRequestChannels.has(helpRequestId)) {
-      const mainChannelName = `help_request:${helpRequestId}`;
-      const mainChannel = this._client.channel(mainChannelName, {
-        config: { private: true }
-      });
+    const mainChannelName = `help_request:${helpRequestId}`;
+    if (!this._channelUnsubscribers.has(mainChannelName)) {
+      const mainUnsubscriber = await this._channelManager.subscribe(
+        mainChannelName,
+        (message: OfficeHoursBroadcastMessage) => {
+          this._handleBroadcastMessage(message);
+        },
+        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+          console.log(`Help request channel status: ${mainChannelName}`, status, err);
+          this._notifyStatusChange();
+        }
+      );
 
-      mainChannel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message.payload as BroadcastMessage);
-      });
-
-      mainChannel.subscribe((status, err) => {
-        console.log(`Help request channel status: ${mainChannelName}`, status, err);
-        this._notifyStatusChange();
-      });
-
-      this._helpRequestChannels.set(helpRequestId, mainChannel);
+      this._channelUnsubscribers.set(mainChannelName, mainUnsubscriber);
     }
 
     // Create staff channel if user is staff and doesn't exist
-    if (this._isStaff && !this._helpRequestStaffChannels.has(helpRequestId)) {
+    if (this._isStaff) {
       const staffChannelName = `help_request:${helpRequestId}:staff`;
-      const staffChannel = this._client.channel(staffChannelName, {
-        config: { private: true }
-      });
+      if (!this._channelUnsubscribers.has(staffChannelName)) {
+        const staffUnsubscriber = await this._channelManager.subscribe(
+          staffChannelName,
+          (message: OfficeHoursBroadcastMessage) => {
+            this._handleBroadcastMessage(message);
+          },
+          async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+            console.log(`Help request staff channel status: ${staffChannelName}`, status, err);
+            this._notifyStatusChange();
+          }
+        );
 
-      staffChannel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message.payload as BroadcastMessage);
-      });
-
-      staffChannel.subscribe((status, err) => {
-        console.log(`Help request staff channel status: ${staffChannelName}`, status, err);
-        this._notifyStatusChange();
-      });
-
-      this._helpRequestStaffChannels.set(helpRequestId, staffChannel);
+        this._channelUnsubscribers.set(staffChannelName, staffUnsubscriber);
+      }
     }
   }
 
   /**
    * Ensure help queue channel is created for a given help queue
    */
-  private _ensureHelpQueueChannel(helpQueueId: number) {
+  private async _ensureHelpQueueChannel(helpQueueId: number) {
     if (this._closed) {
       return;
     }
 
-    if (!this._helpQueueChannels.has(helpQueueId)) {
-      const channelName = `help_queue:${helpQueueId}`;
-      const channel = this._client.channel(channelName, {
-        config: { private: true }
-      });
+    const channelName = `help_queue:${helpQueueId}`;
+    if (!this._channelUnsubscribers.has(channelName)) {
+      const unsubscriber = await this._channelManager.subscribe(
+        channelName,
+        (message: OfficeHoursBroadcastMessage) => {
+          this._handleBroadcastMessage(message);
+        },
+        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+          console.log(`Help queue channel status: ${channelName}`, status, err);
+          this._notifyStatusChange();
+        }
+      );
 
-      channel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message.payload as BroadcastMessage);
-      });
-
-      channel.subscribe((status, err) => {
-        console.log(`Help queue channel status: ${channelName}`, status, err);
-        this._notifyStatusChange();
-      });
-
-      this._helpQueueChannels.set(helpQueueId, channel);
+      this._channelUnsubscribers.set(channelName, unsubscriber);
     }
   }
 
   /**
    * Handle incoming broadcast messages and route them to relevant subscriptions
    */
-  private _handleBroadcastMessage(message: BroadcastMessage) {
+  private _handleBroadcastMessage(message: OfficeHoursBroadcastMessage) {
     console.log("Received office hours broadcast message:", message);
 
     // Skip system messages like channel_created
@@ -221,7 +240,7 @@ export class OfficeHoursRealTimeController {
   /**
    * Check if a message matches the given filter
    */
-  private _messageMatchesFilter(message: BroadcastMessage, filter: MessageFilter): boolean {
+  private _messageMatchesFilter(message: OfficeHoursBroadcastMessage, filter: MessageFilter): boolean {
     if (filter.type && message.type !== filter.type) {
       return false;
     }
@@ -261,7 +280,7 @@ export class OfficeHoursRealTimeController {
       callback
     });
 
-    // Ensure relevant channels are created based on filter
+    // Ensure relevant channels are created based on filter (fire and forget)
     if (filter.help_request_id) {
       this._ensureHelpRequestChannels(filter.help_request_id);
     }
@@ -280,6 +299,12 @@ export class OfficeHoursRealTimeController {
    * Subscribe to all messages for a specific help request
    */
   subscribeToHelpRequest(helpRequestId: number, callback: MessageCallback): () => void {
+    if (this._closed) {
+      throw new Error("Cannot subscribe to office hours channels after they have been closed");
+    }
+    // Ensure submission channels are created (fire and forget)
+    this._ensureHelpRequestChannels(helpRequestId);
+
     return this.subscribe({ help_request_id: helpRequestId }, callback);
   }
 
@@ -304,6 +329,12 @@ export class OfficeHoursRealTimeController {
    * Subscribe to help queue changes
    */
   subscribeToHelpQueue(helpQueueId: number, callback: MessageCallback): () => void {
+    if (this._closed) {
+      throw new Error("Cannot subscribe to office hours channels after they have been closed");
+    }
+    // Ensure help queue channel is created (fire and forget)
+    this._ensureHelpQueueChannel(helpQueueId);
+
     return this.subscribe({ help_queue_id: helpQueueId }, callback);
   }
 
@@ -326,52 +357,39 @@ export class OfficeHoursRealTimeController {
    */
   getConnectionStatus(): ConnectionStatus {
     const channels: ChannelStatus[] = [];
+    const managerInfo = this._channelManager.getDebugInfo();
 
-    // Add help_queues channel
-    if (this._helpQueuesChannel) {
-      channels.push({
-        name: "help_queues",
-        state: this._helpQueuesChannel.state,
-        type: "help_queues"
-      });
-    }
+    // Map managed channels to our status format
+    for (const channelInfo of managerInfo.channels) {
+      const topic = channelInfo.topic;
+      let type: ChannelStatus["type"];
+      let help_request_id: number | undefined;
+      let help_queue_id: number | undefined;
 
-    // Add class staff channel
-    if (this._classStaffChannel) {
-      channels.push({
-        name: `class:${this._classId}:staff`,
-        state: this._classStaffChannel.state,
-        type: "class_staff"
-      });
-    }
+      // Check if this channel is relevant to this controller
+      if (topic === "help_queues") {
+        type = "help_queues";
+      } else if (topic === `class:${this._classId}:staff` && this._isStaff) {
+        type = "class_staff";
+      } else if (topic.startsWith("help_request:") && topic.includes(":staff") && this._isStaff) {
+        type = "help_request_staff";
+        help_request_id = parseInt(topic.split(":")[1]);
+      } else if (topic.startsWith("help_request:") && !topic.includes(":staff")) {
+        type = "help_request";
+        help_request_id = parseInt(topic.split(":")[1]);
+      } else if (topic.startsWith("help_queue:")) {
+        type = "help_queue";
+        help_queue_id = parseInt(topic.split(":")[1]);
+      } else {
+        continue; // Skip channels that don't belong to this controller
+      }
 
-    // Add help request channels
-    for (const [helpRequestId, channel] of this._helpRequestChannels.entries()) {
       channels.push({
-        name: `help_request:${helpRequestId}`,
-        state: channel.state,
-        type: "help_request",
-        help_request_id: helpRequestId
-      });
-    }
-
-    // Add help request staff channels
-    for (const [helpRequestId, channel] of this._helpRequestStaffChannels.entries()) {
-      channels.push({
-        name: `help_request:${helpRequestId}:staff`,
-        state: channel.state,
-        type: "help_request_staff",
-        help_request_id: helpRequestId
-      });
-    }
-
-    // Add help queue channels
-    for (const [helpQueueId, channel] of this._helpQueueChannels.entries()) {
-      channels.push({
-        name: `help_queue:${helpQueueId}`,
-        state: channel.state,
-        type: "help_queue",
-        help_queue_id: helpQueueId
+        name: topic,
+        state: channelInfo.state as ChannelStatus["state"],
+        type,
+        help_request_id,
+        help_queue_id
       });
     }
 
@@ -419,28 +437,8 @@ export class OfficeHoursRealTimeController {
    * Check if the controller is ready (channels subscribed)
    */
   get isReady(): boolean {
-    const helpQueuesReady = !this._helpQueuesChannel || this._helpQueuesChannel.state === "joined";
-    const classStaffReady = !this._classStaffChannel || this._classStaffChannel.state === "joined";
-
-    const helpRequestChannelsReady = Array.from(this._helpRequestChannels.values()).every(
-      (channel) => channel.state === "joined"
-    );
-
-    const helpRequestStaffChannelsReady = Array.from(this._helpRequestStaffChannels.values()).every(
-      (channel) => channel.state === "joined"
-    );
-
-    const helpQueueChannelsReady = Array.from(this._helpQueueChannels.values()).every(
-      (channel) => channel.state === "joined"
-    );
-
-    return (
-      helpQueuesReady &&
-      classStaffReady &&
-      helpRequestChannelsReady &&
-      helpRequestStaffChannelsReady &&
-      helpQueueChannelsReady
-    );
+    const status = this.getConnectionStatus();
+    return status.overall === "connected";
   }
 
   /**
@@ -467,33 +465,13 @@ export class OfficeHoursRealTimeController {
     this._subscriptions.clear();
     this._statusChangeListeners = [];
 
-    if (this._helpQueuesChannel) {
-      this._helpQueuesChannel.unsubscribe();
-      this._helpQueuesChannel = null;
+    // Unsubscribe from all channels using the stored unsubscribe functions
+    for (const unsubscriber of this._channelUnsubscribers.values()) {
+      unsubscriber();
     }
+    this._channelUnsubscribers.clear();
 
-    if (this._classStaffChannel) {
-      this._classStaffChannel.unsubscribe();
-      this._classStaffChannel = null;
-    }
-
-    // Clean up help request channels
-    for (const channel of this._helpRequestChannels.values()) {
-      channel.unsubscribe();
-    }
-    this._helpRequestChannels.clear();
-
-    // Clean up help request staff channels
-    for (const channel of this._helpRequestStaffChannels.values()) {
-      channel.unsubscribe();
-    }
-    this._helpRequestStaffChannels.clear();
-
-    // Clean up help queue channels
-    for (const channel of this._helpQueueChannels.values()) {
-      channel.unsubscribe();
-    }
-    this._helpQueueChannels.clear();
+    this._started = false;
   }
 
   /**
@@ -504,16 +482,15 @@ export class OfficeHoursRealTimeController {
       classId: this._classId,
       profileId: this._profileId,
       isStaff: this._isStaff,
-      helpQueuesChannelState: this._helpQueuesChannel?.state,
-      classStaffChannelState: this._classStaffChannel?.state,
-      helpRequestChannelCount: this._helpRequestChannels.size,
-      helpRequestStaffChannelCount: this._helpRequestStaffChannels.size,
-      helpQueueChannelCount: this._helpQueueChannels.size,
+      started: this._started,
+      closed: this._closed,
+      channelUnsubscribers: Array.from(this._channelUnsubscribers.keys()),
       subscriptionCount: this._subscriptions.size,
       subscriptions: Array.from(this._subscriptions.values()).map((sub) => ({
         id: sub.id,
         filter: sub.filter
-      }))
+      })),
+      channelManagerInfo: this._channelManager.getDebugInfo()
     };
   }
 }
