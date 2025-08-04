@@ -54,7 +54,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       return false;
     }
   } else {
-    console.log("No messages in queue");
+    // console.log("No messages in queue");
     return false;
   }
 }
@@ -64,8 +64,6 @@ export async function runBatchHandler() {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
-
-  console.log("Starting gradebook batch handler - polling every 10 seconds");
 
   let isRunning = true;
   let consecutiveErrors = 0;
@@ -96,7 +94,7 @@ export async function runBatchHandler() {
 
       // If there was work, check again immediately, otherwise wait 10 seconds
       if (!hasWork) {
-        console.log("Waiting 10 seconds before next poll...");
+        // console.log("Waiting 10 seconds before next poll...");
         await new Promise((resolve) => setTimeout(resolve, 10000));
       }
     } catch (error) {

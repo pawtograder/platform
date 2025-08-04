@@ -483,7 +483,12 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                       *
                     </Text>
                   </Label>
-                  <Input id="slug" {...register("slug", { required: "Slug is required" })} placeholder="Slug" />
+                  <Input
+                    id="slug"
+                    {...register("slug", { required: "Slug is required" })}
+                    placeholder="Slug"
+                    disabled
+                  />
                   {errors.slug && (
                     <Text color="red.500" fontSize="sm">
                       {errors.slug.message as string}
