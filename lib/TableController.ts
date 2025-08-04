@@ -311,7 +311,33 @@ export default class TableController<
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
-      if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id)) {
+
+      // Check for exact ID match first
+      const existingRowById = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+      if (existingRowById) {
+        return;
+      }
+
+      // Check for pending tentative rows that might represent the same data
+      // This prevents duplication when optimistic updates are followed by real-time broadcasts
+      const pendingRow = this._rows.find((r) => {
+        const row = r as PossiblyTentativeResult<ResultOne>;
+        return row.__db_pending && this._isPotentialMatch(row, data);
+      });
+
+      if (pendingRow) {
+        // Update the pending row with the real data instead of adding a duplicate
+        const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
+        pendingRowWithId.id = data.id as IDType;
+        this._updateRow(
+          data.id as IDType,
+          {
+            ...data,
+            id: data.id
+          } as ResultOne & { id: IDType },
+          false
+        );
+      } else {
         this._addRow({
           ...data,
           __db_pending: false
@@ -328,13 +354,62 @@ export default class TableController<
           if (this._rows.find((r) => (r as ResultOne & { id: IDType }).id === message.row_id)) {
             return;
           }
-          this._addRow({
-            ...row,
-            __db_pending: false
+
+          // Check for pending tentative rows that might represent the same data
+          const pendingRow = this._rows.find((r) => {
+            const rowData = r as PossiblyTentativeResult<ResultOne>;
+            return rowData.__db_pending && this._isPotentialMatch(rowData, row);
           });
+
+          if (pendingRow) {
+            // Update the pending row with the real data instead of adding a duplicate
+            const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
+            pendingRowWithId.id = message.row_id as IDType;
+            this._updateRow(message.row_id as IDType, row as ResultOne & { id: IDType }, false);
+          } else {
+            this._addRow({
+              ...row,
+              __db_pending: false
+            });
+          }
         });
       }
     }
+  }
+
+  /**
+   * Check if a pending tentative row potentially represents the same data as an incoming broadcast.
+   * This helps prevent duplicates when optimistic updates are followed by real-time broadcasts.
+   */
+  private _isPotentialMatch(
+    pendingRow: PossiblyTentativeResult<ResultOne>,
+    incomingData: Record<string, unknown>
+  ): boolean {
+    // System fields that should be ignored in comparison
+    const systemFields = new Set([
+      "id",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "edited_at",
+      "edited_by",
+      "__db_pending"
+    ]);
+
+    // Compare non-system fields to determine if this could be the same logical record
+    const pendingRowData = pendingRow as Record<string, unknown>;
+
+    for (const [key, value] of Object.entries(incomingData)) {
+      if (systemFields.has(key)) {
+        continue;
+      }
+
+      if (pendingRowData[key] !== value) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private _handleUpdate(message: BroadcastMessage) {
@@ -539,8 +614,22 @@ export default class TableController<
       this._removeRow(newRow.id as IDType);
       throw error;
     }
-    tentativeRow.id = data.id;
-    this._updateRow(data.id, data, false);
+
+    // Check if the real-time broadcast has already updated this row
+    const currentRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+    if (currentRow && !(currentRow as PossiblyTentativeResult<ResultOne>).__db_pending) {
+      // Row was already updated by real-time broadcast, just return the data
+      return data;
+    }
+
+    // If the row hasn't been updated by real-time broadcast yet, update it manually
+    // This handles cases where real-time might be slow or disabled
+    const tentativeRowStillExists = this._rows.find((r) => r === tentativeRow);
+    if (tentativeRowStillExists) {
+      tentativeRow.id = data.id;
+      this._updateRow(data.id, data, false);
+    }
+
     return data;
   }
 

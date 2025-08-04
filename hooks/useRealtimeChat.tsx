@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { useHelpRequestMessages, useHelpRequestReadReceipts, useOfficeHoursController } from "./useOfficeHoursRealtime";
-import { help } from "mathjs";
 
 export interface UseRealtimeChatOptions {
   helpRequestId: number;
@@ -150,7 +149,7 @@ export function useRealtimeChat({
         throw error;
       }
     },
-    [enableChat, user, private_profile_id, classId, allReadReceipts, helpRequestReadReceipts, controller]
+    [enableChat, user, private_profile_id, classId, allReadReceipts, helpRequestReadReceipts, controller, helpRequestId]
   );
 
   return {
