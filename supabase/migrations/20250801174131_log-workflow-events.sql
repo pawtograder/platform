@@ -46,3 +46,11 @@ CREATE POLICY "workflow_events_service_role_all" ON "workflow_events"
 -- Allow authenticated users to read workflow events (you may want to restrict this further based on your needs)
 CREATE POLICY "workflow_events_authenticated_read" ON "workflow_events"
     FOR SELECT USING (auth.role() = 'authenticated');
+
+-- Allow instructors to read workflow events for their classes when class_id is not null
+CREATE POLICY "workflow_events_instructor_read" ON "workflow_events"
+    FOR SELECT USING (
+        auth.role() = 'authenticated' 
+        AND class_id IS NOT NULL 
+        AND authorizeforclassinstructor(class_id)
+    );
