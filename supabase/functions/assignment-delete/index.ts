@@ -134,21 +134,21 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
   // ========================
   // PHASE 2: DELETE FROM GITHUB FIRST
   // ========================
-  
+
   console.log("Phase 2: Deleting repositories from GitHub...");
-  
+
   // Delete student repositories
   if (repositories && repositories.length > 0) {
     for (const repo of repositories) {
       if (!repo.repository) {
         continue;
       }
-      
+
       try {
         console.log(`Deleting student repository ${repo.repository} from GitHub...`);
         const [org, repoName] = repo.repository.split("/");
         const octokit = await getOctoKit(org);
-        
+
         if (octokit) {
           await octokit.request("DELETE /repos/{owner}/{repo}", {
             owner: org,
@@ -169,7 +169,7 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
       console.log(`Deleting handout repository ${assignment.template_repo} from GitHub...`);
       const [org, repoName] = assignment.template_repo.split("/");
       const octokit = await getOctoKit(org);
-      
+
       if (octokit) {
         await octokit.request("DELETE /repos/{owner}/{repo}", {
           owner: org,
@@ -189,7 +189,7 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
       console.log(`Deleting solution repository ${assignment.autograder.grader_repo} from GitHub...`);
       const [org, repoName] = assignment.autograder.grader_repo.split("/");
       const octokit = await getOctoKit(org);
-      
+
       if (octokit) {
         await octokit.request("DELETE /repos/{owner}/{repo}", {
           owner: org,
@@ -198,7 +198,10 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
         console.log(`Successfully deleted solution repository ${assignment.autograder.grader_repo} from GitHub`);
       }
     } catch (deleteError) {
-      console.warn(`Failed to delete solution repository ${assignment.autograder.grader_repo} from GitHub:`, deleteError);
+      console.warn(
+        `Failed to delete solution repository ${assignment.autograder.grader_repo} from GitHub:`,
+        deleteError
+      );
       // Continue with deletion - missing repos should not be an error
     }
   }
