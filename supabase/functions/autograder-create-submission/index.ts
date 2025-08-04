@@ -339,9 +339,15 @@ async function handleRequest(req: Request) {
         );
       }
       const pawtograderConfig = config.config as unknown as PawtograderConfig;
+      if (!pawtograderConfig) {
+        throw new UserVisibleError("Incorrect instructor setup for assignment: no pawtograder config found");
+      }
+      if (!pawtograderConfig.submissionFiles) {
+        throw new UserVisibleError("Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section.");
+      }
       const expectedFiles = [
-        ...pawtograderConfig.submissionFiles.files,
-        ...pawtograderConfig.submissionFiles.testFiles
+        ...(pawtograderConfig.submissionFiles.files || []),
+        ...(pawtograderConfig.submissionFiles.testFiles || [])
       ];
 
       if (expectedFiles.length === 0) {

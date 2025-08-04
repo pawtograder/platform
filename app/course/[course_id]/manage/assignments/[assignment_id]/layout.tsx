@@ -9,6 +9,7 @@ import React, { useState } from "react";
 import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
 import { AssignmentProvider } from "@/hooks/useAssignment";
+import { FaRobot } from "react-icons/fa6";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },

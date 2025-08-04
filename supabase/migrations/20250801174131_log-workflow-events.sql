@@ -54,3 +54,56 @@ CREATE POLICY "workflow_events_instructor_read" ON "workflow_events"
         AND class_id IS NOT NULL 
         AND authorizeforclassinstructor(class_id)
     );
+
+-- Create view that pivots workflow events by workflow_run_id and event_type
+
+CREATE OR REPLACE VIEW "workflow_events_summary" 
+WITH (security_invoker='true') 
+AS
+SELECT 
+    workflow_run_id,
+    run_attempt,
+    we.class_id,
+    workflow_name,
+    workflow_path,
+    head_sha,
+    head_branch,
+    run_number,
+    run_attempt,
+    actor_login,
+    triggering_actor_login,
+    r.assignment_id,
+    r.profile_id,
+    -- Pivot columns for event types
+    MAX(CASE WHEN event_type = 'requested' THEN updated_at END) AS requested_at,
+    MAX(CASE WHEN event_type = 'in_progress' THEN updated_at END) AS in_progress_at,
+    MAX(CASE WHEN event_type = 'completed' THEN updated_at END) AS completed_at,
+    -- Calculated time columns
+    CASE 
+      WHEN MAX(CASE WHEN event_type = 'requested' THEN updated_at END) IS NOT NULL 
+           AND MAX(CASE WHEN event_type = 'in_progress' THEN updated_at END) IS NOT NULL
+      THEN EXTRACT(EPOCH FROM (MAX(CASE WHEN event_type = 'in_progress' THEN updated_at END) - MAX(CASE WHEN event_type = 'requested' THEN updated_at END)))
+      ELSE NULL
+    END AS queue_time_seconds,
+    CASE 
+      WHEN MAX(CASE WHEN event_type = 'in_progress' THEN updated_at END) IS NOT NULL 
+           AND MAX(CASE WHEN event_type = 'completed' THEN updated_at END) IS NOT NULL
+      THEN EXTRACT(EPOCH FROM (MAX(CASE WHEN event_type = 'completed' THEN updated_at END) - MAX(CASE WHEN event_type = 'in_progress' THEN updated_at END)))
+      ELSE NULL
+    END AS run_time_seconds
+FROM workflow_events we
+INNER JOIN repositories r ON we.repository_id = r.id
+GROUP BY 
+    workflow_run_id,
+    run_attempt,
+    we.class_id,
+    workflow_name,
+    workflow_path,
+    head_sha,
+    head_branch,
+    run_number,
+    run_attempt,
+    actor_login,
+    triggering_actor_login,
+    r.assignment_id,
+    r.profile_id;

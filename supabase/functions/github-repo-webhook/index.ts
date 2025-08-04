@@ -553,9 +553,6 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload }) => {
       case "completed":
         eventType = "completed";
         break;
-      case "cancelled":
-        eventType = "cancelled";
-        break;
       default:
         console.log(`Unknown workflow_run action: ${payload.action}, skipping`);
         return;
@@ -659,7 +656,6 @@ Deno.serve(async (req) => {
       }
     );
   }
-  console.log("Received webhook");
   const body = await req.json();
   console.log(JSON.stringify(body, null, 2));
   const eventName = body["detail-type"];
@@ -669,7 +665,6 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
 
-  console.log(`Received webhook for ${eventName} id ${id}`);
   try {
     const { error: repoError } = await adminSupabase.from("webhook_process_status").insert({
       webhook_id: id,
@@ -700,7 +695,7 @@ Deno.serve(async (req) => {
     try {
       await eventHandler.receive({
         id: id || "",
-        name: eventName as "push" | "check_run" | "workflow_run" | "membership" | "organization",
+        name: eventName as "push" | "check_run" | "workflow_run" | "workflow_job" | "membership" | "organization",
         payload: body.detail
       });
       await adminSupabase
