@@ -402,6 +402,7 @@ export class GradebookController {
   readonly class_id: number;
 
   private _unsubscribes: (() => void)[] = [];
+  private _classRealTimeController: ClassRealTimeController;
   public constructor(
     isInstructorOrGrader: boolean,
     class_id: number,
@@ -412,6 +413,7 @@ export class GradebookController {
     this._isInstructorOrGrader = isInstructorOrGrader;
     this.gradebook_id = gradebook_id;
     this.class_id = class_id;
+    this._classRealTimeController = classRealTimeController;
     this.gradebook_columns = new TableController({
       client,
       table: "gradebook_columns",
@@ -458,6 +460,50 @@ export class GradebookController {
       this.gradebook_column_students.readyPromise,
       this.assignments_table.readyPromise
     ]);
+
+    // Set up gradebook-specific broadcast subscriptions
+    this._setupGradebookSubscriptions();
+  }
+
+  private _setupGradebookSubscriptions() {
+    // Subscribe to gradebook_columns changes for column structure updates
+    const unsubscribeColumns = this._classRealTimeController.subscribeToTable(
+      "gradebook_columns",
+      (message) => {
+        // The TableController will handle the actual data updates
+        // This subscription is for any additional gradebook-specific logic
+        console.log("Gradebook columns change:", message);
+      }
+    );
+    this._unsubscribes.push(unsubscribeColumns);
+
+    // Subscribe to gradebook_column_students changes for grade updates
+    const unsubscribeColumnStudents = this._classRealTimeController.subscribeToTable(
+      "gradebook_column_students",
+      (message) => {
+        // The TableController will handle the actual data updates
+        // This subscription is for any additional gradebook-specific logic
+        console.log("Gradebook column students change:", message);
+        
+        // Handle specific business logic for grade changes
+        if (message.operation === "UPDATE" && message.data) {
+          this._handleGradeChange(message.data as GradebookColumnStudent);
+        }
+      }
+    );
+    this._unsubscribes.push(unsubscribeColumnStudents);
+  }
+
+  private _handleGradeChange(gradeData: GradebookColumnStudent) {
+    // Handle any gradebook-specific logic when grades change
+    // This could include updating calculated columns, notifications, etc.
+    
+    // Example: If this is a student's public grade (is_private = false),
+    // we might want to trigger additional UI updates
+    if (gradeData.is_private === false) {
+      // Update any cached calculations or trigger UI refresh
+      // The actual data updates are handled by TableController
+    }
   }
 
   close() {

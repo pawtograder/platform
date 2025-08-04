@@ -191,11 +191,10 @@ export function OverrideScoreForm({
               size="sm"
               colorPalette="orange"
               variant="surface"
-              onClick={() => {
-                updateStudentGradebookColumn({
-                  id: studentGradebookColumn.id,
-                  values: { score_override: null }
-                });
+              onClick={async () => {
+                await gradebookController.gradebook_column_students.update(studentGradebookColumn.id,
+                  { score_override: null }
+                );
                 if (onSuccess) onSuccess();
               }}
             >

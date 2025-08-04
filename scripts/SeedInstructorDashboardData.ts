@@ -2345,6 +2345,7 @@ async function runMicro() {
   await seedInstructorDashboardData({
     numStudents: 2,
     numGraders: 1,
+    numInstructors: 1,
     numAssignments: 5,
     firstAssignmentDate: addDays(now, 5),
     lastAssignmentDate: addDays(now, 10),
