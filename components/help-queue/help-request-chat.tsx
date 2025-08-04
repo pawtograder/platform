@@ -1225,7 +1225,6 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
       <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
         <RealtimeChat
-          messages={helpRequestMessages}
           helpRequest={request}
           helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling
           readOnly={readOnly}

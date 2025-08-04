@@ -7,7 +7,12 @@ import { useChatScroll } from "@/hooks/use-chat-scroll";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
-import { useOfficeHoursController, useRealtimeChat, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpRequestMessages,
+  useOfficeHoursController,
+  useRealtimeChat,
+  type ChatMessage
+} from "@/hooks/useOfficeHoursRealtime";
 import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
@@ -101,13 +106,13 @@ const ReplyPreview = ({
  */
 export const RealtimeChat = ({
   onMessage,
-  messages: databaseMessages = [],
   helpRequest,
   helpRequestStudentIds = [],
   readOnly = false
 }: RealtimeChatProps) => {
   const { containerRef, scrollToBottom } = useChatScroll();
   const moderationStatus = useModerationStatus(helpRequest.class_id);
+  const messages = useHelpRequestMessages(helpRequest.id);
 
   // Get authenticated user and their profile
   const { user } = useAuthState();
@@ -143,19 +148,14 @@ export const RealtimeChat = ({
     return new Date().toISOString();
   };
 
-  // Use database messages if provided, otherwise empty array (chat hook will handle real-time messages)
   const allMessages = useMemo(() => {
-    if (!databaseMessages || databaseMessages.length === 0) {
-      return [];
-    }
-
     // Sort messages by creation time to ensure proper order
-    return databaseMessages.sort((a, b) => {
+    return messages.sort((a, b) => {
       const aTime = getMessageTimestamp(a);
       const bTime = getMessageTimestamp(b);
       return new Date(aTime).getTime() - new Date(bTime).getTime();
     });
-  }, [databaseMessages]);
+  }, [messages]);
 
   // Notify parent component when messages change
   useEffect(() => {

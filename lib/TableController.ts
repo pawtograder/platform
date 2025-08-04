@@ -120,8 +120,6 @@ export default class TableController<
    */
   private async _refetchAllData(): Promise<void> {
     try {
-      console.log(`Refetching data for table ${this._table} after reconnection`);
-
       const oldRows = [...this._rows];
       const newData = await this._fetchInitialData();
 
@@ -161,10 +159,6 @@ export default class TableController<
           listeners.forEach((listener) => listener(undefined));
         }
       }
-
-      console.log(
-        `Refetched ${newRows.length} rows for table ${this._table}. Changes: +${entered.length}, -${left.length}`
-      );
     } catch (error) {
       console.error(`Failed to refetch data for table ${this._table}:`, error);
     }
@@ -182,7 +176,6 @@ export default class TableController<
 
     if (wasDisconnected && isNowConnected && this._ready) {
       // We've reconnected after being disconnected, refetch all data
-      console.log(`Refetching data for table ${this._table} after reconnection`);
       this._refetchAllData();
     }
 
@@ -290,6 +283,14 @@ export default class TableController<
         this._ready = true;
         //Emit a change event
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered: this._rows, left: [] }));
+        this._itemDataListeners.forEach((listeners, id) => {
+          const row = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
+          if (row) {
+            listeners.forEach((listener) => listener(row));
+          } else {
+            listeners.forEach((listener) => listener(undefined));
+          }
+        });
         resolve();
       } catch (error) {
         reject(error);
@@ -302,7 +303,6 @@ export default class TableController<
       this._realtimeUnsubscribe();
     }
     if (this._statusUnsubscribe) {
-      console.log("Unsubscribing from connection status changes");
       this._statusUnsubscribe();
     }
   }

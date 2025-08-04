@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
+import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
+import { useCallback, useEffect, useMemo } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
-import { useOfficeHoursController, useHelpRequestMessages, useHelpRequestReadReceipts } from "./useOfficeHoursRealtime";
-import type { HelpRequestMessageReadReceipt } from "@/utils/supabase/DatabaseTypes";
+import { useHelpRequestMessages, useHelpRequestReadReceipts, useOfficeHoursController } from "./useOfficeHoursRealtime";
+import { help } from "mathjs";
 
 export interface UseRealtimeChatOptions {
   helpRequestId: number;
@@ -58,6 +59,13 @@ export function useRealtimeChat({
       (receipt) => messageIds.includes(receipt.message_id) && receipt.viewer_id !== private_profile_id
     );
   }, [allReadReceipts, messages, helpRequestId, private_profile_id]);
+
+  useEffect(() => {
+    const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, () => {}); //Table controller will receive updates
+    return () => {
+      unsubscribe();
+    };
+  }, [helpRequestId, classId, controller]);
 
   const { helpRequestMessages, helpRequestReadReceipts } = controller;
 
@@ -116,7 +124,6 @@ export function useRealtimeChat({
 
       // Use controller's persistent tracking to prevent duplicate API calls
       if (!controller.markMessageAsRead(messageId)) {
-        console.log(`Message ${messageId} already marked as read, skipping API call`);
         return;
       }
 
@@ -126,7 +133,6 @@ export function useRealtimeChat({
       );
 
       if (existingReceipt) {
-        console.log(`Read receipt already exists for message ${messageId}, skipping API call`);
         return;
       }
 
@@ -137,9 +143,7 @@ export function useRealtimeChat({
           class_id: classId,
           help_request_id: helpRequestId
         } as unknown as HelpRequestMessageReadReceipt);
-        console.log(`Successfully created read receipt for message ${messageId}`);
       } catch (error) {
-        console.error(`Failed to create read receipt for message ${messageId}:`, error);
         // Remove from marked set on failure to allow retry
         controller.clearMarkedAsReadState();
         controller.markMessageAsRead(messageId); // Re-mark since we cleared all
