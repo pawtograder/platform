@@ -13,7 +13,7 @@ import type { HelpRequestFeedback } from "@/utils/supabase/DatabaseTypes";
 type HelpRequestFeedbackModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (feedback: HelpRequestFeedback) => void;
+  onSuccess: (feedback?: HelpRequestFeedback) => void;
   helpRequestId: number;
   classId: number;
   studentProfileId: string;
@@ -22,7 +22,8 @@ type HelpRequestFeedbackModalProps = {
 /**
  * Modal component for collecting student feedback on help requests.
  * Allows students to provide thumbs up/down feedback and optional comments
- * when resolving or closing their help requests.
+ * when resolving or closing their help requests, or skip feedback entirely
+ * while still resolving/closing the request.
  */
 export default function HelpRequestFeedbackModal({
   isOpen,
@@ -63,12 +64,6 @@ export default function HelpRequestFeedbackModal({
       return;
     }
 
-    console.log("helpRequestId", helpRequestId);
-    console.log("classId", classId);
-    console.log("studentProfileId", studentProfileId);
-    console.log("selectedRating", selectedRating);
-    console.log("comment", data.comment);
-
     try {
       const feedbackData = await createFeedback({
         resource: "help_request_feedback",
@@ -94,6 +89,12 @@ export default function HelpRequestFeedbackModal({
         description: `Failed to submit feedback: ${error instanceof Error ? error.message : String(error)}`
       });
     }
+  };
+
+  const handleSkipFeedback = () => {
+    handleClose();
+    // Call onSuccess without feedback data to resolve/close the request without recording feedback
+    onSuccess();
   };
 
   const handleRatingSelect = (rating: boolean) => {
@@ -194,7 +195,7 @@ export default function HelpRequestFeedbackModal({
 
           <Dialog.Footer>
             <HStack justify="end" gap={3}>
-              <Button variant="outline" onClick={handleClose}>
+              <Button variant="outline" onClick={handleSkipFeedback}>
                 Skip Feedback
               </Button>
               <Button

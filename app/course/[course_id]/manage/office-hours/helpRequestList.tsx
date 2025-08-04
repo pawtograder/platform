@@ -89,7 +89,7 @@ export default function HelpRequestList() {
     return allHelpRequestsFromController;
   }, [allHelpRequestsFromController, searchTerm, requestStudentsMap, studentNameMap]);
 
-  // Enhanced requests with queue information and students, sorted in descending order (newest first)
+  // Enhanced requests with queue information and students
   const enhancedRequests = useMemo(() => {
     return allHelpRequests
       .map(
@@ -106,7 +106,7 @@ export default function HelpRequestList() {
           students: requestStudentsMap[request.id] || []
         })
       )
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()); // Descending order (newest first)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); // oldest first
   }, [allHelpRequests, queueMap, requestStudentsMap]);
 
   // Show loading state while data is being fetched

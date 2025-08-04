@@ -87,7 +87,7 @@ export default function HelpRequestHistory({
             // Sort by resolved_at if available, otherwise by created_at
             const dateA = new Date(a.resolved_at || a.created_at).getTime();
             const dateB = new Date(b.resolved_at || b.created_at).getTime();
-            return dateB - dateA;
+            return dateA - dateB; // oldest first
           })
           .map((request) => (
             <Card.Root

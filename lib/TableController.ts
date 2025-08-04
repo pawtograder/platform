@@ -328,7 +328,19 @@ export default class TableController<
       if (pendingRow) {
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
+        const oldId = pendingRowWithId.id;
         pendingRowWithId.id = data.id as IDType;
+
+        // Debug logging for development
+        if (process.env.NODE_ENV === "development") {
+          console.log(`[TableController] Matched pending row for ${this._table}:`, {
+            oldId,
+            newId: data.id,
+            pendingData: pendingRow,
+            incomingData: data
+          });
+        }
+
         this._updateRow(
           data.id as IDType,
           {
@@ -364,7 +376,19 @@ export default class TableController<
           if (pendingRow) {
             // Update the pending row with the real data instead of adding a duplicate
             const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
+            const oldId = pendingRowWithId.id;
             pendingRowWithId.id = message.row_id as IDType;
+
+            // Debug logging for development
+            if (process.env.NODE_ENV === "development") {
+              console.log(`[TableController] Matched pending row (ID-only) for ${this._table}:`, {
+                oldId,
+                newId: message.row_id,
+                pendingData: pendingRow,
+                fetchedData: row
+              });
+            }
+
             this._updateRow(message.row_id as IDType, row as ResultOne & { id: IDType }, false);
           } else {
             this._addRow({
@@ -396,20 +420,66 @@ export default class TableController<
       "__db_pending"
     ]);
 
-    // Compare non-system fields to determine if this could be the same logical record
     const pendingRowData = pendingRow as Record<string, unknown>;
+
+    // First, check if this row has a negative (temporary) ID, which indicates it's likely an optimistic update
+    const pendingId = pendingRowData.id;
+    if (typeof pendingId === "number" && pendingId > 0) {
+      // If pending row has a positive ID, it's already been updated, so don't match
+      return false;
+    }
+
+    // Count how many non-system fields match between pending and incoming data
+    let matchingFields = 0;
+    let totalComparableFields = 0;
 
     for (const [key, value] of Object.entries(incomingData)) {
       if (systemFields.has(key)) {
         continue;
       }
 
-      if (pendingRowData[key] !== value) {
-        return false;
+      totalComparableFields++;
+
+      // Handle null/undefined equivalence
+      const pendingValue = pendingRowData[key];
+      const incomingValue = value;
+
+      // Consider null and undefined as equivalent
+      if ((pendingValue == null && incomingValue == null) || pendingValue === incomingValue) {
+        matchingFields++;
+      }
+      // Handle timestamp comparisons more loosely (within 500 milliseconds)
+      else if (key.includes("_at") || key.includes("timestamp")) {
+        if (this._isTimestampMatch(pendingValue, incomingValue)) {
+          matchingFields++;
+        }
       }
     }
 
-    return true;
+    // Consider it a match if at least 90% of fields match and we have at least 3 comparable fields
+    // This handles cases where there might be minor differences in computed fields
+    const matchRatio = totalComparableFields > 0 ? matchingFields / totalComparableFields : 0;
+    return totalComparableFields >= 3 && matchRatio >= 0.9;
+  }
+
+  /**
+   * Helper to check if two timestamp values are close enough to be considered the same
+   */
+  private _isTimestampMatch(value1: unknown, value2: unknown): boolean {
+    try {
+      if (typeof value1 === "string" && typeof value2 === "string") {
+        const date1 = new Date(value1);
+        const date2 = new Date(value2);
+        if (isNaN(date1.getTime()) || isNaN(date2.getTime())) {
+          return false;
+        }
+        // Consider timestamps within 500 milliseconds as matching (handles slight timing differences)
+        return Math.abs(date1.getTime() - date2.getTime()) <= 500;
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   private _handleUpdate(message: BroadcastMessage) {
