@@ -31,7 +31,7 @@ async function handleRequest(req: Request) {
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug");
   }
-  const solutionRepoName = `${assignment.classes.slug}-${assignment.slug}-solution`;
+  const solutionRepoName = `${assignment.classes.slug}-solution-${assignment.slug}`;
   const solutionRepoOrg = assignment.classes.github_org;
   if (!solutionRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");

@@ -29,7 +29,7 @@ async function handleRequest(req: Request) {
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug");
   }
-  const handoutRepoName = `${assignment.classes.slug}-${assignment.slug}-handout`;
+  const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
   const handoutRepoOrg = assignment.classes.github_org;
   if (!handoutRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
