@@ -35,6 +35,15 @@ export async function liveMeetingForHelpRequest(
   return data as { Meeting: CreateMeetingCommandOutput; Attendee: CreateAttendeeCommandOutput };
 }
 
+export async function liveMeetingEnd(params: FunctionTypes.LiveMeetingEndRequest, supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("live-meeting-end", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as { message: string };
+}
+
 export async function repositoriesForClass(
   params: FunctionTypes.ListReposRequest,
   supabase: SupabaseClient<Database>

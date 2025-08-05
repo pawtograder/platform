@@ -281,7 +281,7 @@ const EmailListWithPagination = ({ userRoles }: { userRoles?: UserRoleWithUserDe
                 size="sm"
                 variant={page === currentPage ? "solid" : "outline"}
                 onClick={() => handlePageChange(page)}
-                colorScheme={page === currentPage ? "blue" : "gray"}
+                colorPalette={page === currentPage ? "blue" : "gray"}
               >
                 {page}
               </Button>

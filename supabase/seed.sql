@@ -1048,3 +1048,283 @@ BEGIN
         END LOOP;
     END;
 END $$;
+
+-- Seed data for Help Queue and Office Hours feature
+DO $$
+DECLARE
+    demo_class_id int8 := 1;
+    text_queue_id int8;
+    video_queue_id int8;
+    inperson_queue_id int8;
+    debugging_template_id int8;
+    concept_template_id int8;
+    student_private_profile_ids uuid[];
+    student_priv uuid;
+    submission_file_sample int8;
+    i int;
+    help_req_id int8;
+    first_msg_id int8;
+BEGIN
+    ------------------------------------------------------------------
+    -- Create diverse help queues ------------------------------------
+    ------------------------------------------------------------------
+    INSERT INTO public.help_queues (name, description, class_id, available, depth, queue_type, color)
+    VALUES ('General Text Queue', 'Text-based help requests handled asynchronously.', demo_class_id, TRUE, 0, 'text', '#1E90FF')
+    RETURNING id INTO text_queue_id;
+
+    INSERT INTO public.help_queues (name, description, class_id, available, depth, queue_type, color)
+    VALUES ('Office Hours Video Queue', 'Live video queue for real-time debugging sessions.', demo_class_id, TRUE, 0, 'video', '#32CD32')
+    RETURNING id INTO video_queue_id;
+
+    INSERT INTO public.help_queues (name, description, class_id, available, depth, queue_type, color)
+    VALUES ('In-Person Queue', 'Queue for students physically present in the lab.', demo_class_id, TRUE, 0, 'in_person', '#FFA500')
+    RETURNING id INTO inperson_queue_id;
+
+    ------------------------------------------------------------------
+    -- Create help-request templates ---------------------------------
+    ------------------------------------------------------------------
+    INSERT INTO public.help_request_templates (class_id, created_by_id, name, description, template_content, category, is_active)
+    VALUES (
+        demo_class_id,
+        '11111111-1111-1111-1111-111111111111',
+        'Debugging Template',
+        'Standard debugging information',
+        CONCAT('1. Expected behaviour vs. actual behaviour', CHR(10), '2. Steps to reproduce', CHR(10), '3. Relevant code snippets'),
+        'Debugging',
+        TRUE
+    ) RETURNING id INTO debugging_template_id;
+
+    INSERT INTO public.help_request_templates (class_id, created_by_id, name, description, template_content, category, is_active)
+    VALUES (
+        demo_class_id,
+        '11111111-1111-1111-1111-111111111111',
+        'Concept Question Template',
+        'Template for conceptual questions',
+        CONCAT('1. Concept you are struggling with', CHR(10), '2. Your current understanding', CHR(10), '3. Resources already consulted'),
+        'Concept',
+        TRUE
+    ) RETURNING id INTO concept_template_id;
+
+    ------------------------------------------------------------------
+    -- Assign instructor Eva to queues as on-duty TA ------------------
+    ------------------------------------------------------------------
+    INSERT INTO public.help_queue_assignments (help_queue_id, ta_profile_id, class_id, started_at, is_active, max_concurrent_students)
+    VALUES
+        (text_queue_id, (SELECT private_profile_id FROM public.user_roles WHERE user_id='11111111-1111-1111-1111-111111111111'), demo_class_id, now() - interval '2 hours', TRUE, 6),
+        (video_queue_id, (SELECT private_profile_id FROM public.user_roles WHERE user_id='11111111-1111-1111-1111-111111111111'), demo_class_id, now() - interval '90 minutes', TRUE, 4),
+        (inperson_queue_id, (SELECT private_profile_id FROM public.user_roles WHERE user_id='11111111-1111-1111-1111-111111111111'), demo_class_id, now() - interval '30 minutes', TRUE, 12);
+
+    ------------------------------------------------------------------
+    -- Get a sample submission file reference ------------------------
+    ------------------------------------------------------------------
+    SELECT id INTO submission_file_sample FROM public.submission_files LIMIT 1;
+
+    ------------------------------------------------------------------
+    -- Collect private profile IDs for first 10 seeded students -------
+    ------------------------------------------------------------------
+    student_private_profile_ids := ARRAY(
+        SELECT private_profile_id
+        FROM public.user_roles
+        WHERE user_id IN (
+            SELECT id FROM auth.users WHERE email LIKE 'student%' ORDER BY email LIMIT 10
+        )
+    );
+
+    ------------------------------------------------------------------
+    -- Generate diverse help requests --------------------------------
+    ------------------------------------------------------------------
+    FOR i IN 1..array_length(student_private_profile_ids, 1) LOOP
+        student_priv := student_private_profile_ids[i];
+
+        -- Create help request (alternate queue & privacy)
+        INSERT INTO public.help_requests (
+            class_id,
+            request,
+            help_queue,
+            is_private,
+            location_type,
+            template_id,
+            status,
+            created_by
+        ) VALUES (
+            demo_class_id,
+            format('Help request #%s: My program crashes on edge cases.', i),
+            CASE WHEN i % 3 = 1 THEN text_queue_id WHEN i % 3 = 2 THEN video_queue_id ELSE inperson_queue_id END,
+            (i % 2 = 0),
+            CASE 
+                WHEN i % 3 = 1 THEN 'remote'::public.location_type
+                WHEN i % 3 = 2 THEN 'remote'::public.location_type
+                ELSE 'in_person'::public.location_type
+            END,
+            CASE WHEN i % 2 = 0 THEN debugging_template_id ELSE concept_template_id END,
+            'open',
+            student_priv
+        ) RETURNING id INTO help_req_id;
+
+        -- Add student to help request via the new many-to-many table
+        INSERT INTO public.help_request_students (
+            help_request_id,
+            profile_id,
+            class_id
+        ) VALUES (
+            help_req_id,
+            student_priv,
+            demo_class_id
+        );
+
+        -- Optional file reference for even numbered requests
+        IF i % 2 = 0 THEN
+            INSERT INTO public.help_request_file_references (
+                help_request_id,
+                class_id,
+                submission_file_id,
+                submission_id,
+                line_number,
+                assignment_id
+            ) VALUES (
+                help_req_id,
+                demo_class_id,
+                submission_file_sample,
+                (SELECT submission_id FROM public.submission_files WHERE id = submission_file_sample),
+                42,
+                1
+            );
+        END IF;
+
+        -- Initial student message
+        INSERT INTO public.help_request_messages (
+            help_request_id,
+            class_id,
+            author,
+            message,
+            instructors_only
+        ) VALUES (
+            help_req_id,
+            demo_class_id,
+            student_priv,
+            'Here are the steps I have tried so far...',
+            FALSE
+        ) RETURNING id INTO first_msg_id;
+
+        -- TA reply
+        INSERT INTO public.help_request_messages (
+            help_request_id,
+            class_id,
+            author,
+            message,
+            instructors_only,
+            reply_to_message_id
+        ) VALUES (
+            help_req_id,
+            demo_class_id,
+            (SELECT private_profile_id FROM public.user_roles WHERE user_id='11111111-1111-1111-1111-111111111111'),
+            'Thanks for the details — let''s debug this together.',
+            FALSE,
+            first_msg_id
+        );
+
+        -- Log student activity
+        INSERT INTO public.student_help_activity (
+            class_id,
+            help_request_id,
+            student_profile_id,
+            activity_type,
+            activity_description
+        ) VALUES (
+            demo_class_id,
+            help_req_id,
+            student_priv,
+            'request_created',
+            'Student created a new help request via web UI.'
+        );
+    END LOOP;
+
+    ------------------------------------------------------------------
+    -- Create some group help requests to demonstrate many-to-many ---
+    ------------------------------------------------------------------
+    
+    -- Create a group help request with multiple students
+    INSERT INTO public.help_requests (
+        class_id,
+        request,
+        help_queue,
+        is_private,
+        location_type,
+        status,
+        created_by
+    ) VALUES (
+        demo_class_id,
+        'Group project debugging session - need help with merge conflicts and integration issues.',
+        video_queue_id,
+        FALSE,
+        'remote',
+        'open',
+        student_private_profile_ids[1]
+    ) RETURNING id INTO help_req_id;
+
+    -- Add multiple students to this group help request
+    FOR i IN 1..3 LOOP
+        INSERT INTO public.help_request_students (
+            help_request_id,
+            profile_id,
+            class_id
+        ) VALUES (
+            help_req_id,
+            student_private_profile_ids[i],
+            demo_class_id
+        );
+    END LOOP;
+
+    -- Group message from first student
+    INSERT INTO public.help_request_messages (
+        help_request_id,
+        class_id,
+        author,
+        message,
+        instructors_only
+    ) VALUES (
+        help_req_id,
+        demo_class_id,
+        student_private_profile_ids[1],
+        'We are working on our group project and ran into some Git merge conflicts. Can we get help during office hours?',
+        FALSE
+    );
+
+    -- Another group member adds details
+    INSERT INTO public.help_request_messages (
+        help_request_id,
+        class_id,
+        author,
+        message,
+        instructors_only
+    ) VALUES (
+        help_req_id,
+        demo_class_id,
+        student_private_profile_ids[2],
+        'Also having issues with our database integration tests failing after the merge.',
+        FALSE
+    );
+
+    ------------------------------------------------------------------
+    -- Example moderation action -------------------------------------
+    ------------------------------------------------------------------
+    INSERT INTO public.help_request_moderation (
+        help_request_id,
+        student_profile_id,
+        moderator_profile_id,
+        class_id,
+        action_type,
+        reason,
+        duration_minutes,
+        is_permanent
+    ) VALUES (
+        (SELECT id FROM public.help_requests ORDER BY created_at DESC LIMIT 1),
+        student_private_profile_ids[4],
+        (SELECT private_profile_id FROM public.user_roles WHERE user_id='11111111-1111-1111-1111-111111111111'),
+        demo_class_id,
+        'temporary_ban',
+        'Inappropriate language detected in the chat.',
+        60,
+        FALSE
+    );
+END $$;

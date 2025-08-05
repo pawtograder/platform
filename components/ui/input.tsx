@@ -1,19 +1,42 @@
 import * as React from "react";
+import { Input as ChakraInput, InputProps as ChakraInputProps } from "@chakra-ui/react";
 
-import { cn } from "@/lib/utils";
-
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
-
-const Input = React.forwardRef<HTMLInputElement, InputProps>(({ className, type, ...props }, ref) => {
+const Input = React.forwardRef<HTMLInputElement, ChakraInputProps>(({ ...props }, ref) => {
   return (
-    <input
-      type={type}
-      className={cn(
-        "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-        className
-      )}
+    <ChakraInput
       ref={ref}
+      h="40px"
+      w="full"
+      borderRadius="md"
+      border="1px"
+      borderColor="gray.300"
+      bg="white"
+      px={3}
+      py={2}
+      fontSize={{ base: "16px", md: "sm" }}
+      transition="border-color 0.2s, box-shadow 0.2s"
+      placeholder={""}
+      _placeholder={{
+        color: "gray.500"
+      }}
+      _focusVisible={{
+        outline: "2px solid",
+        outlineColor: "blue.500",
+        outlineOffset: "2px",
+        borderColor: "blue.500"
+      }}
+      _disabled={{
+        cursor: "not-allowed",
+        opacity: 0.5
+      }}
+      _dark={{
+        bg: "gray.800",
+        borderColor: "gray.600",
+        color: "white",
+        _placeholder: {
+          color: "gray.400"
+        }
+      }}
       {...props}
     />
   );
