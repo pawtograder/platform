@@ -183,28 +183,16 @@ export default function HelpRequestForm() {
     if (!private_profile_id) return;
 
     try {
-      // Get user's help request associations from realtime data
-      const userRequestStudents = allHelpRequestStudents.filter(
-        (student) =>
-          student.profile_id === private_profile_id && student.class_id === Number.parseInt(course_id as string)
+      const classId = Number.parseInt(course_id as string);
+
+      // Get user's requests directly by created_by field for more reliable data
+      const userRequests = allHelpRequests.filter(
+        (request) => request.class_id === classId && request.created_by === private_profile_id
       );
 
-      if (userRequestStudents.length === 0) {
-        setUserPreviousRequests([]);
-        setUserActiveRequests([]);
-        return;
-      }
-
-      const requestIds = userRequestStudents.map((item) => item.help_request_id);
-
       // Get previous requests (resolved/closed) from realtime data
-      const previousRequestsData = allHelpRequests
-        .filter(
-          (request) =>
-            request.class_id === Number.parseInt(course_id as string) &&
-            (request.status === "resolved" || request.status === "closed") &&
-            requestIds.includes(request.id)
-        )
+      const previousRequestsData = userRequests
+        .filter((request) => request.status === "resolved" || request.status === "closed")
         .sort((a, b) => {
           const aTime = a.resolved_at ? new Date(a.resolved_at).getTime() : 0;
           const bTime = b.resolved_at ? new Date(b.resolved_at).getTime() : 0;
@@ -215,14 +203,11 @@ export default function HelpRequestForm() {
       setUserPreviousRequests(previousRequestsData);
 
       // Get active requests from realtime data
-      const activeRequestsData = allHelpRequests.filter(
-        (request) =>
-          request.class_id === Number.parseInt(course_id as string) &&
-          (request.status === "open" || request.status === "in_progress") &&
-          requestIds.includes(request.id)
+      const activeRequestsData = userRequests.filter(
+        (request) => request.status === "open" || request.status === "in_progress"
       );
 
-      // Get student counts for each active request
+      // Get student counts for each active request from help request students associations
       const activeRequestsWithCount: HelpRequestWithStudentCount[] = activeRequestsData.map((request) => {
         const studentCount = allHelpRequestStudents.filter((student) => student.help_request_id === request.id).length;
 
@@ -290,17 +275,18 @@ export default function HelpRequestForm() {
       const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
       const is_private = getValues("is_private");
       if (isCreatingSoloRequest) {
-        // For solo requests, check if user already has a solo request in this queue
+        // For solo requests, check if user already has a solo request in this queue with the same privacy setting
         const hasSoloRequestInQueue = userActiveRequests.some(
           (request) =>
-            request.help_queue === selectedQueueId && request.student_count === 1 && request.is_private === is_private
+            Number(request.help_queue) === Number(selectedQueueId) &&
+            request.student_count === 1 &&
+            Boolean(request.is_private) === Boolean(is_private)
         );
 
         if (hasSoloRequestInQueue) {
           toaster.error({
             title: "Error",
-            description:
-              "You already have a solo help request in this queue. Please resolve your current request before submitting a new solo request."
+            description: `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`
           });
           return;
         }
@@ -493,7 +479,9 @@ export default function HelpRequestForm() {
       isCreatingSoloRequest &&
       userActiveRequests.some(
         (request) =>
-          request.help_queue === selectedHelpQueue && request.student_count === 1 && request.is_private === is_private
+          Number(request.help_queue) === Number(selectedHelpQueue) &&
+          request.student_count === 1 &&
+          Boolean(request.is_private) === Boolean(is_private)
       )
   );
 
@@ -505,8 +493,9 @@ export default function HelpRequestForm() {
 
       {wouldConflict && (
         <Text color="orange.500" mb={4}>
-          ⚠️ You already have a solo help request in this queue. Please resolve your current request before submitting a
-          new solo request, or add other students to create a group request.
+          ⚠️ You already have a {is_private ? "private" : "public"} solo help request in this queue. You can have up to
+          2 solo requests per queue (1 private + 1 public). Please resolve or close your current request, switch privacy
+          settings, or add other students to create a group request.
         </Text>
       )}
 
