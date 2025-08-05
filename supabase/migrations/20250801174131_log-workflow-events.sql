@@ -200,3 +200,23 @@ CREATE POLICY "workflow_run_error_select" ON "public"."workflow_run_error"
 GRANT ALL ON TABLE "public"."workflow_run_error" TO "anon";
 GRANT ALL ON TABLE "public"."workflow_run_error" TO "authenticated";
 GRANT ALL ON TABLE "public"."workflow_run_error" TO "service_role";
+
+-- Create function to validate assignment slug
+CREATE OR REPLACE FUNCTION validate_assignment_slug()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Check if slug is 'handout' or 'solution' (case insensitive)
+    IF LOWER(NEW.slug) IN ('handout', 'solution') THEN
+        RAISE EXCEPTION 'Assignment slug cannot be "handout" or "solution". These are reserved slugs used for repository creation.'
+            USING ERRCODE = 'check_violation';
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger to validate assignment slug before insert
+CREATE TRIGGER trigger_validate_assignment_slug
+    BEFORE INSERT ON "public"."assignments"
+    FOR EACH ROW
+    EXECUTE FUNCTION validate_assignment_slug();
