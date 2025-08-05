@@ -3,7 +3,8 @@
 }
 
 a,
-button {
+button,
+select {
   cursor: pointer;
 }
 
