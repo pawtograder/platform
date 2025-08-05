@@ -131,15 +131,9 @@ test.describe("Office Hours", () => {
     // Wait for the popup to load
     await popup.waitForLoadState();
 
-    // Verify the popup contains video call elements
-    // TODO: Fix this, also test the actual functionality of the video call controls
-    // await expect(popup.getByText("Meeting Roster")).toBeVisible();
-    // await expect(popup.getByText("Mute")).toBeVisible();
-    // await expect(popup.getByText("Video")).toBeVisible();
-    // await expect(popup.getByText("Content")).toBeVisible();
-    // await expect(popup.getByText("Speaker")).toBeVisible();
-    // await expect(popup.getByText("Leave")).toBeVisible();
+    await expect(popup.getByText("Meeting Roster")).toBeVisible();
     await expect(popup.getByText(instructor!.private_profile_name)).toBeVisible();
+    await percySnapshot(popup, "Office Hours - Instructor alone in a call");
 
     // Close the popup when done
     await popup.close();

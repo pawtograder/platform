@@ -436,6 +436,17 @@ entrypoint = "./functions/autograder-test-workflow/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/autograder-test-workflow/*.html" ]
 
+[functions.live-meeting-end]
+enabled = true
+verify_jwt = false
+import_map = "./functions/live-meeting-end/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/live-meeting-end/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/live-meeting-end/*.html" ]
+
 [functions.live-meeting-callback]
 enabled = true
 verify_jwt = false
