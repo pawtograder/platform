@@ -596,7 +596,7 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload }) => {
       })) || [];
 
     // Insert workflow event into database
-    const { error: insertError } = await (adminSupabase as any).from("workflow_events").insert({
+    const { error: insertError } = await adminSupabase.from("workflow_events").insert({
       workflow_run_id: workflowRun.id,
       repository_name: repository.full_name,
       github_repository_id: repository.id,

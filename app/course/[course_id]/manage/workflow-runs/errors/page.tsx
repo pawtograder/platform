@@ -461,7 +461,7 @@ function WorkflowErrorsTable() {
 
   const uniqueCommits = [...new Set(workflowErrors.map((error) => error.submissions?.sha).filter(Boolean))].map(
     (sha) => ({
-      label: sha.substring(0, 7),
+      label: sha?.substring(0, 7) || "unknown",
       value: sha
     })
   );

@@ -120,7 +120,6 @@ async function handleRequest(req: Request) {
     .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
     .eq("repository", repository)
     .single();
-  console.log(`Repo data: ${JSON.stringify(repoData)}`);
   if (repoError) {
     throw new UserVisibleError(`Failed to find repository: ${repoError.message}`);
   }
@@ -128,7 +127,6 @@ async function handleRequest(req: Request) {
   // Begin code where we might report an error to the user.
   let submission_id: number | undefined;
   async function recordWorkflowRunError({ name, data, is_private }: { name: string; data: Json; is_private: boolean }) {
-    console.log(`Recording workflow run error: ${name}`);
     if (!repoData) {
       throw new SecurityError(
         `Repository not found for run_number: ${run_id}, run_attempt: ${run_attempt}, repository: ${repository}, sha: ${sha}`
@@ -399,7 +397,6 @@ async function handleRequest(req: Request) {
           );
         }
         const contentsStr = contents.toString("utf-8");
-        console.log(`Contents: ${contentsStr}`);
         // Retrieve the autograder config
         const { data: config } = await adminSupabase.from("autograder").select("*").eq("id", assignment_id).single();
         if (!config) {
@@ -482,8 +479,6 @@ async function handleRequest(req: Request) {
           );
         }
         const { download_link: grader_url, sha: grader_sha } = await getRepoTarballURL(config.grader_repo!);
-        console.log(`Grader URL: ${grader_url}`);
-        console.log(`Grader SHA: ${grader_sha}`);
         //Debug-only hack... TODO cleanup
         const patchedURL = grader_url.replace("http://kong:8000", "https://khoury-classroom-dev.ngrok.pizza");
         return {
@@ -546,10 +541,10 @@ async function handleRequest(req: Request) {
             is_private: true
           });
         }
-        //Swallow SecurityError and UserVisibleError because they are for users mainly and are logged to DB
         throw err;
       }
     }
+    throw err;
   }
 }
 Deno.serve(async (req) => {

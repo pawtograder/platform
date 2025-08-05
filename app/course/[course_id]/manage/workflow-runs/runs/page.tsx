@@ -21,6 +21,7 @@ import {
   PaginationState
 } from "@tanstack/react-table";
 import { Select, CreatableSelect } from "chakra-react-select";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
 export default function WorkflowRunsPage() {
   return (
@@ -37,6 +38,7 @@ export default function WorkflowRunsPage() {
   );
 }
 
+type WorkflowEventSummaryRow = Database["public"]["Views"]["workflow_events_summary"]["Row"];
 function WorkflowRunTable() {
   const { course_id } = useParams();
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -51,7 +53,7 @@ function WorkflowRunTable() {
     pageSize: 25
   });
 
-  const { data, isLoading, error } = useList({
+  const { data, isLoading, error } = useList<WorkflowEventSummaryRow>({
     resource: "workflow_events_summary",
     filters: [
       {
@@ -72,7 +74,7 @@ function WorkflowRunTable() {
     }
   });
 
-  const columns = useMemo<ColumnDef<any>[]>(
+  const columns = useMemo<ColumnDef<WorkflowEventSummaryRow>[]>(
     () => [
       {
         id: "workflow_run_id",
@@ -80,7 +82,7 @@ function WorkflowRunTable() {
         header: "Run ID",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => (
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => (
           <Text fontFamily="mono" fontSize="sm">
             #{getValue() as string}
           </Text>
@@ -97,7 +99,9 @@ function WorkflowRunTable() {
         header: "Attempt",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => <Text fontSize="sm">{(getValue() as number) || "-"}</Text>,
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => (
+          <Text fontSize="sm">{(getValue() as number) || "-"}</Text>
+        ),
         filterFn: (row, id, filterValue) => {
           const attempt = String(row.original.run_attempt || "");
           const filterString = String(filterValue).toLowerCase();
@@ -110,7 +114,7 @@ function WorkflowRunTable() {
         header: "Student",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => {
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => {
           const profileId = getValue() as string;
           if (!profileId) return <Text fontSize="sm">-</Text>;
           return <PersonName uid={profileId} size="sm" showAvatar={false} />;
@@ -127,7 +131,7 @@ function WorkflowRunTable() {
         header: "Triggered By",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => (
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => (
           <Text fontSize="sm">{(getValue() as string) || "Unknown"}</Text>
         ),
         filterFn: (row, id, filterValue) => {
@@ -142,7 +146,7 @@ function WorkflowRunTable() {
         header: "Branch",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => (
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => (
           <Box as="span" px={2} py={1} bg="bg.subtle" borderRadius="sm" fontSize="xs" fontFamily="mono">
             {(getValue() as string) || "Unknown"}
           </Box>
@@ -159,7 +163,7 @@ function WorkflowRunTable() {
         header: "Commit",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => {
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => {
           const sha = getValue() as string;
           if (!sha) return <Text fontSize="sm">-</Text>;
           return (
@@ -179,7 +183,7 @@ function WorkflowRunTable() {
         header: "Status",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ row }: CellContext<any, unknown>) => {
+        cell: ({ row }: CellContext<WorkflowEventSummaryRow, unknown>) => {
           const { requested_at, in_progress_at, completed_at } = row.original;
 
           if (completed_at) {
@@ -261,7 +265,7 @@ function WorkflowRunTable() {
         header: "Timeline",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ row }: CellContext<any, unknown>) => {
+        cell: ({ row }: CellContext<WorkflowEventSummaryRow, unknown>) => {
           const { requested_at, in_progress_at, completed_at } = row.original;
 
           return (
@@ -299,7 +303,9 @@ function WorkflowRunTable() {
         header: "Run #",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => <Text fontSize="sm">{(getValue() as number) || "-"}</Text>,
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => (
+          <Text fontSize="sm">{(getValue() as number) || "-"}</Text>
+        ),
         filterFn: (row, id, filterValue) => {
           const runNumber = String(row.original.run_number || "");
           const filterString = String(filterValue).toLowerCase();
@@ -312,7 +318,7 @@ function WorkflowRunTable() {
         header: "Queue Time",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => {
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => {
           const seconds = getValue() as number;
           if (!seconds) return <Text fontSize="sm">-</Text>;
 
@@ -364,7 +370,7 @@ function WorkflowRunTable() {
         header: "Run Time",
         enableColumnFilter: true,
         enableSorting: true,
-        cell: ({ getValue }: CellContext<any, unknown>) => {
+        cell: ({ getValue }: CellContext<WorkflowEventSummaryRow, unknown>) => {
           const seconds = getValue() as number;
           if (!seconds) return <Text fontSize="sm">-</Text>;
 
@@ -482,7 +488,7 @@ function WorkflowRunTable() {
   );
 
   const uniqueCommits = [...new Set(allData.map((run) => run.head_sha).filter(Boolean))].map((sha) => ({
-    label: sha.substring(0, 7),
+    label: sha?.substring(0, 7) || "unknown",
     value: sha
   }));
 

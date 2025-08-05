@@ -125,22 +125,10 @@ export default function GraderResults() {
               <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>, but the
               autograder encountered issues.
               {userVisibleErrors.map((error) => {
-                let errorMessage = error.name;
+                const errorMessage = error.name;
                 let errorDetails = null;
-
-                try {
-                  const errorData = JSON.parse(error.data || "{}");
-                  if (errorData.user_visible_message) {
-                    errorMessage = errorData.user_visible_message;
-                  }
-                  if (errorData.details) {
-                    errorDetails = errorData.details;
-                  }
-                } catch {
-                  // Invalid JSON, use raw data
-                  if (error.data && error.data !== "{}") {
-                    errorDetails = error.data;
-                  }
+                if (error.data && error.data !== "{}") {
+                  errorDetails = error.data;
                 }
 
                 return (
@@ -223,7 +211,7 @@ export default function GraderResults() {
                   {error.data && error.data !== "{}" && (
                     <Box mt={2} p={2} bg="blue.25" borderRadius="sm">
                       <Text fontSize="xs" fontFamily="mono" color="blue.600">
-                        {error.data}
+                        {typeof error.data === "string" ? error.data : JSON.stringify(error.data, null, 2)}
                       </Text>
                     </Box>
                   )}

@@ -541,12 +541,14 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
           });
         }
       }
-      //Swallow SecurityError and UserVisibleError because they are for users mainly and are logged to DB
-      throw err;
     }
+    throw err;
   }
 }
 
 Deno.serve(async (req) => {
-  return await wrapRequestHandler(req, handleRequest);
+  return await wrapRequestHandler(req, handleRequest, {
+    recordUserVisibleErrors: false,
+    recordSecurityErrors: false
+  });
 });

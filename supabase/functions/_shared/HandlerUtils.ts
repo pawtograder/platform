@@ -134,7 +134,19 @@ export async function userCanCreateSubmission({
     throw new UserVisibleError(`Failed to find submission: ${submissionError.message}`);
   }
 }
-export async function wrapRequestHandler(req: Request, handler: (req: Request) => Promise<any>) {
+export async function wrapRequestHandler(
+  req: Request,
+  handler: (req: Request) => Promise<any>,
+  {
+    recordUserVisibleErrors,
+    recordSecurityErrors
+  }:
+    | {
+        recordUserVisibleErrors?: boolean;
+        recordSecurityErrors?: boolean;
+      }
+    | undefined = { recordUserVisibleErrors: true, recordSecurityErrors: true }
+) {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }

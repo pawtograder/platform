@@ -101,7 +101,6 @@ GROUP BY
     head_sha,
     head_branch,
     run_number,
-    run_attempt,
     actor_login,
     triggering_actor_login,
     r.assignment_id,

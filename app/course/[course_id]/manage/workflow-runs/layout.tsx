@@ -75,7 +75,7 @@ export default function WorkflowRunsLayout({ children }: { children: React.React
           <Select
             onChange={(e) => {
               if (e) {
-                setSelectedPage(e.label);
+                setSelectedPage(e.value);
                 router.replace(e.value);
               }
             }}
