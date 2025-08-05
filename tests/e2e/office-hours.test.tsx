@@ -1,6 +1,6 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
 import percySnapshot from "@percy/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -20,6 +20,7 @@ let student2: TestingUser | undefined;
 let instructor: TestingUser | undefined;
 let submission_id: number | undefined;
 let assignment: Assignment | undefined;
+
 test.beforeAll(async () => {
   course = await createClass();
   student = await createUserInClass({ role: "student", class_id: course.id });
@@ -97,7 +98,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);
     await page.getByRole("button", { name: "Send" }).click();
   });
-  test("Instructor can view all, comment and start a video call", async ({ page }) => {
+  test("Instructor can view all, comment, and start a video call", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.getByRole("link", { name: HELP_REQUEST_MESSAGE_1 }).click();
@@ -116,6 +117,41 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(PRIVATE_HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await page.getByRole("button", { name: "Send" }).click();
-    //TODO: test video call
+
+    // Test video call popup handling
+    // Start waiting for popup before clicking, but no await here
+    const popupPromise = page.waitForEvent("popup");
+
+    // Click the button that triggers the popup
+    await page.getByRole("button", { name: "Start Video Call" }).click();
+
+    // Now await the popup
+    const popup = await popupPromise;
+
+    // Wait for the popup to load
+    await popup.waitForLoadState();
+
+    // Verify the popup contains video call elements
+    // TODO: Fix this, also test the actual functionality of the video call controls
+    // await expect(popup.getByText("Meeting Roster")).toBeVisible();
+    // await expect(popup.getByText("Mute")).toBeVisible();
+    // await expect(popup.getByText("Video")).toBeVisible();
+    // await expect(popup.getByText("Content")).toBeVisible();
+    // await expect(popup.getByText("Speaker")).toBeVisible();
+    // await expect(popup.getByText("Leave")).toBeVisible();
+    await expect(popup.getByText(instructor!.private_profile_name)).toBeVisible();
+
+    // Close the popup when done
+    await popup.close();
+
+    // Verify the original page shows "Join Video Call" button after popup closes
+    await expect(page.getByRole("button", { name: "Join Video Call" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "End Call" })).toBeVisible();
+
+    // Test end call button
+    await page.getByRole("button", { name: "End Call" }).click();
+    await expect(page.getByRole("button", { name: "Join Video Call" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "End Call" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Start Video Call" })).toBeVisible();
   });
 });
