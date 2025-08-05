@@ -1,52 +1,104 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
+import { AutograderCreateReposForStudentRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+
 async function handleRequest(req: Request) {
-  const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
-    global: {
-      headers: { Authorization: req.headers.get("Authorization")! }
-    }
-  });
-  const { data: user } = await supabase.auth.getUser();
-  if (!user) {
-    throw new UserVisibleError("User not found");
-  }
-  console.log("Creating GitHub repos for student ", user.user!.email);
-  // Get the user's Github username
-  const { data: userData, error: userDataError } = await supabase
-    .from("users")
-    .select("github_username")
-    .eq("user_id", user.user!.id)
-    .single();
-  if (userDataError) {
-    console.error(userDataError);
-    throw new SecurityError(`Invalid user: ${user.user!.id}`);
-  }
-  if (!userData) {
-    throw new SecurityError(`Invalid user: ${user.user!.id}`);
-  }
-  const githubUsername = userData.github_username;
-  if (!githubUsername) {
-    throw new UserVisibleError(`User ${user.user!.id} has no Github username linked`);
-  }
+  // Check for edge function secret authentication
+  const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
+  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+  let userId: string;
+  let githubUsername: string | null;
+  let classId: number | undefined;
+
+  if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
+    // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
+    const url = new URL(req.url);
+    const class_id = Number.parseInt(url.searchParams.get("class_id")!);
+    console.log("class_id", class_id);
+    const user_id = url.searchParams.get("user_id");
+    console.log("user_id", user_id);
+
+    // Edge function secret authentication - get user_id from request body
+    if (!user_id) {
+      throw new UserVisibleError("user_id is required when using edge function secret authentication");
+    }
+
+    userId = user_id;
+    classId = class_id;
+    console.log("Creating GitHub repos for student with user_id:", userId, "class_id:", classId);
+    // Get the user's Github username
+    const { data: userData, error: userDataError } = await adminSupabase
+      .from("users")
+      .select("github_username")
+      .eq("user_id", userId)
+      .single();
+    if (userDataError) {
+      console.error(userDataError);
+      throw new SecurityError(`Invalid user: ${userId}`);
+    }
+    if (!userData) {
+      throw new SecurityError(`Invalid user: ${userId}`);
+    }
+    githubUsername = userData.github_username;
+  } else {
+    const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
+      global: {
+        headers: { Authorization: req.headers.get("Authorization") || "" }
+      }
+    });
+    // JWT authentication - get user from token
+    const { data: user } = await supabase.auth.getUser();
+    if (!user) {
+      throw new UserVisibleError("User not found");
+    }
+    userId = user.user!.id;
+    console.log("Creating GitHub repos for student ", user.user!.email);
+
+    // Get the user's Github username
+    const { data: userData, error: userDataError } = await supabase
+      .from("users")
+      .select("github_username")
+      .eq("user_id", userId)
+      .single();
+    if (userDataError) {
+      console.error(userDataError);
+      throw new SecurityError(`Invalid user: ${userId}`);
+    }
+    if (!userData) {
+      throw new SecurityError(`Invalid user: ${userId}`);
+    }
+    githubUsername = userData.github_username;
+  }
+
+  if (!githubUsername) {
+    throw new UserVisibleError(`User ${userId} has no Github username linked`);
+  }
 
   //Must use adminSupabase because students can't see each others' github usernames
-  const { data: classes, error: classesError } = await adminSupabase
+  let classesQuery = adminSupabase
     .from("user_roles")
     .select(
       // "*"
       // "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*,assignments(*), assignment_groups(*,repositories(*)), user_roles(users(github_username)))))",
       "class_id, classes(slug, github_org), profiles!private_profile_id(id, name, sortable_name, repositories(*), assignment_groups_members!assignment_groups_members_profile_id_fkey(*, assignments(*), assignment_groups(*, repositories(*), assignment_groups_members(*, user_roles(users(github_username))))))"
     )
-    .eq("user_id", user.user!.id); //.eq("role", "student");
+    .eq("user_id", userId); //.eq("role", "student");
+
+  // If class_id is provided, filter to only that class
+  if (classId) {
+    classesQuery = classesQuery.eq("class_id", classId);
+  }
+
+  const { data: classes, error: classesError } = await classesQuery;
   if (classesError) {
     console.error(classesError);
     throw new UserVisibleError("Error fetching classes");
@@ -72,7 +124,7 @@ async function handleRequest(req: Request) {
       "class_id",
       classes!.map((c) => c!.class_id)
     )
-    .eq("classes.user_roles.user_id", user.user!.id)
+    .eq("classes.user_roles.user_id", userId)
     .not("template_repo", "is", "null")
     .not("template_repo", "eq", "")
     .limit(1000);
@@ -87,6 +139,7 @@ async function handleRequest(req: Request) {
         a.classes.user_roles.some((r) => r.role === "instructor" || r.role === "grader"))
   );
 
+  const errorMessages: string[] = [];
   //For each group repo, sync the permissions
   const createdAsGroupRepos = await Promise.all(
     classes.flatMap((c) =>
@@ -126,29 +179,46 @@ async function handleRequest(req: Request) {
             console.error(error);
             throw new UserVisibleError(`Error creating repo: ${error}`);
           }
-          const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
-          await adminSupabase
-            .from("repositories")
-            .update({
-              synced_repo_sha: headSha
-            })
-            .eq("id", dbRepo!.id);
-          if (error) {
-            console.error(error);
-            throw new UserVisibleError(`Error creating repo: ${error}`);
+          try {
+            const headSha = await createRepo(c.classes!.github_org!, repoName, assignment.template_repo!);
+            await adminSupabase
+              .from("repositories")
+              .update({
+                synced_repo_sha: headSha || null
+              })
+              .eq("id", dbRepo!.id);
+            if (error) {
+              console.error(error);
+              throw new UserVisibleError(`Error creating repo: ${error}`);
+            }
+          } catch (e) {
+            console.log(`Error creating repo: ${repoName}`);
+            console.error(e);
+            await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
+            errorMessages.push(
+              `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
+            );
           }
           return assignment;
         }
 
-        await syncRepoPermissions(
-          c.classes!.github_org!,
-          repoName,
-          c.classes!.slug!,
-          group.assignment_groups_members
-            .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
-            .filter((m) => m.user_roles.users.github_username)
-            .map((m) => m.user_roles.users.github_username!)
-        );
+        try {
+          await syncRepoPermissions(
+            c.classes!.github_org!,
+            repoName,
+            c.classes!.slug!,
+            group.assignment_groups_members
+              .filter((m) => m.user_roles) // Needed to not barf when a student is removed from the class
+              .filter((m) => m.user_roles.users.github_username)
+              .map((m) => m.user_roles.users.github_username!)
+          );
+        } catch (e) {
+          console.log(`Error syncing repo permissions: ${repoName}`);
+          console.error(e);
+          errorMessages.push(
+            `Error syncing repo permissions: ${repoName}, please ask your instructor to check that this is configured correctly.`
+          );
+        }
       })
     )
   );
@@ -210,16 +280,17 @@ async function handleRequest(req: Request) {
 
         return new_repo_sha;
       } catch (e) {
-        console.log(`Error creating repo: ${repoName}`);
+        errorMessages.push(
+          `Error creating repo: ${repoName}, please ask your instructor to check that this is configured correctly.`
+        );
         console.error(e);
         await adminSupabase.from("repositories").delete().eq("id", dbRepo!.id);
-        throw new UserVisibleError(`Error creating repo: ${e}`);
       }
     });
   await Promise.all(requests);
   return {
     is_ok: true,
-    message: `Repositories created for ${assignments!.length} assignments`
+    message: `Repositories created for ${assignments!.length} assignments. ${errorMessages.length > 0 ? `\n\n${errorMessages.join("\n")}` : ""}`
   };
 }
 

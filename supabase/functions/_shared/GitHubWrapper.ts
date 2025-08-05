@@ -3,6 +3,8 @@ import { createAppAuth } from "https://esm.sh/@octokit/auth-app?dts";
 import { throttling } from "https://esm.sh/@octokit/plugin-throttling";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
+import Bottleneck from "https://esm.sh/bottleneck?target=deno";
+import { Redis } from "https://esm.sh/ioredis?target=deno";
 
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
@@ -66,8 +68,28 @@ const installations: {
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
 
-async function getOctoKit(repoName: string) {
+export async function getOctoKit(repoOrOrgName: string) {
+  const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
   if (installations.length === 0) {
+    let connection: Bottleneck.IORedisConnection | undefined;
+    if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
+      console.log("Using Upstash Redis for GitHub API rate limiting", Deno.env.get("UPSTASH_REDIS_REST_URL"));
+      const host = Deno.env.get("UPSTASH_REDIS_REST_URL")?.replace("https://", "");
+      const password = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
+      connection = new Bottleneck({
+        datastore: "ioredis",
+        clearDatastore: false,
+        clientOptions: {
+          host,
+          password,
+          username: "default",
+          tls: {},
+          port: 6379
+        },
+        Redis
+      });
+      connection.on("error", (err) => console.error(err));
+    }
     const _installations = await app.octokit.request("GET /app/installations");
     _installations.data.forEach((i) => {
       installations.push({
@@ -81,12 +103,19 @@ async function getOctoKit(repoName: string) {
             installationId: i.id
           },
           throttle: {
+            connection,
+            id: "pawtograder-production",
+            Bottleneck,
             onRateLimit: (_retryAfter, options, _octokit, _retryCount) => {
-              console.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
+              console.warn(
+                `Request quota exhausted for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
+              );
               return true;
             },
             onSecondaryRateLimit: (_retryAfter, options, _octokit) => {
-              octokit.log.warn(`SecondaryRateLimit detected for request ${options.method} ${options.url}`);
+              console.warn(
+                `SecondaryRateLimit detected for request ${options.method} ${options.url}, retrying in ${_retryAfter} seconds`
+              );
               return true;
             }
           }
@@ -94,12 +123,11 @@ async function getOctoKit(repoName: string) {
       });
     });
   }
-  const ret = installations.find((i) => i.orgName === repoName.split("/")[0])?.octokit;
+  const ret = installations.find((i) => i.orgName === org)?.octokit;
   if (ret) {
     return ret;
   }
-  console.warn(`No octokit found for ${repoName}, using default: ${installations[0].orgName}`);
-  return installations[0].octokit;
+  return undefined;
 }
 export async function resolveRef(action_repository: string, action_ref: string) {
   const octokit = await getOctoKit(action_repository);
@@ -107,6 +135,9 @@ export async function resolveRef(action_repository: string, action_ref: string) 
     throw new Error(`Resolve ref failed: No octokit found for ${action_repository}`);
   }
   async function getRefOrUndefined(ref: string) {
+    if (!octokit) {
+      return undefined;
+    }
     try {
       const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
         owner: action_repository.split("/")[0],
@@ -347,7 +378,7 @@ export async function createRepo(
   repoName: string,
   template_repo: string,
   { is_template_repo }: { is_template_repo?: boolean } = {}
-): string {
+): Promise<string> {
   console.log("Creating repo", org, repoName, template_repo);
   const octokit = await getOctoKit(org);
   if (!octokit) {
@@ -365,12 +396,12 @@ export async function createRepo(
       name: repoName,
       private: true
     });
-    //Disable squash merging
+    //Disable squash merging, make template
     await octokit.request("PATCH /repos/{owner}/{repo}", {
       owner: org,
       repo: repoName,
       allow_squash_merge: false,
-      template: is_template_repo ? true : false
+      is_template: is_template_repo ? true : false
     });
     //Get the head SHA
     const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
@@ -379,7 +410,7 @@ export async function createRepo(
     });
     console.log(`Created repo ${org}/${repoName} with head SHA ${heads.data.object.sha}`);
     console.log(`Heads: ${JSON.stringify(heads.data)}`);
-    return heads.data.object.sha;
+    return heads.data.object.sha as string;
   } catch (e) {
     if (e instanceof RequestError) {
       if (e.message.includes("Name already exists on this account")) {
@@ -515,9 +546,14 @@ export async function syncStudentTeam(
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
 export async function syncTeam(team_slug: string, org: string, githubUsernamesFetcher: () => Promise<string[]>) {
+  if (!org || !team_slug) {
+    console.warn("Invalid org or team_slug", org, team_slug);
+    return;
+  }
   const octokit = await getOctoKit(org);
   if (!octokit) {
-    throw new Error("No octokit found for organization " + org);
+    console.warn("No octokit found for organization " + org);
+    return;
   }
   let team_id: number;
   try {
@@ -597,6 +633,28 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
   const userID = user.data.id;
   const teamID = team.data.id;
   console.log(`Team ${team_slug} has id ${teamID}`);
+
+  // Check if user is already in the team
+  try {
+    console.log(`Checking if user ${githubUsername} is already in team ${team_slug}...`);
+    const teamMembers = await octokit.paginate("GET /orgs/{org}/teams/{team_slug}/members", {
+      org,
+      team_slug,
+      per_page: 100 // Optimize for large teams
+    });
+    console.log(`Found ${teamMembers.length} members in team ${team_slug}`);
+
+    const isUserInTeam = teamMembers.some((member) => member.login === githubUsername);
+    if (isUserInTeam) {
+      console.log(`User ${githubUsername} is already in team ${team_slug}`);
+      return false;
+    }
+    console.log(`User ${githubUsername} is not in team ${team_slug}, proceeding with invitation`);
+  } catch (error) {
+    console.log(`Error checking team membership: ${error}`);
+    // Continue with invitation if we can't check membership
+  }
+
   const resp = await octokit.request("POST /orgs/{org}/invitations", {
     org,
     role: "direct_member",
@@ -604,6 +662,7 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
     team_ids: [teamID]
   });
   console.log(`Invitation response: ${JSON.stringify(resp.data)}`);
+  return true;
 }
 const staffTeamCache = new Map<string, string[]>();
 const orgMembershipCache = new Map<string, string[]>();
@@ -639,8 +698,6 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
       orgMembers.data.map((m) => m.login)
     );
   }
-  const orgMembers = orgMembershipCache.get(org) || [];
-  console.log(`${org} org members: ${orgMembers.join(", ")}`);
 
   const existingInvitations = await octokit.paginate("GET /repos/{owner}/{repo}/invitations", {
     owner: org,
@@ -667,16 +724,22 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
     }
   }
 
-  const existingAccess = await octokit.request("GET /repos/{owner}/{repo}/collaborators", {
+  const existingAccess = await octokit.paginate("GET /repos/{owner}/{repo}/collaborators", {
     owner: org,
     repo,
     per_page: 100
   });
-  const existingUsernames = existingAccess.data
+  const existingUsernames = existingAccess
     .filter((c) => c.role_name === "admin" || c.role_name === "write" || c.role_name === "maintain")
     .map((c) => c.login);
   console.log(`${org}/${repo} existing collaborators: ${existingUsernames.join(", ")}`);
-  if (staffTeamUsernames.length && !existingUsernames.includes(staffTeamUsernames[0])) {
+  //Check if staff team has access to the repo, if not, add it
+  const teamsWithAccess = await octokit.paginate("GET /repos/{owner}/{repo}/teams", {
+    owner: org,
+    repo
+  });
+  if (!teamsWithAccess.length || !teamsWithAccess.some((t) => t.slug === team_slug)) {
+    console.log(`${org}/${repo} does not have team ${team_slug}, adding it`);
     await octokit.request("PUT /orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", {
       org,
       team_slug,
@@ -688,17 +751,16 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
   const newAccess = githubUsernames.filter(
     (u) => !existingUsernames.includes(u) && !existingInvitations.some((i) => i.invitee?.login === u)
   );
-  const removeAccess = existingUsernames.filter(
-    (u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u) && !orgMembers.includes(u)
-  );
+  const removeAccess = existingUsernames.filter((u) => !githubUsernames.includes(u) && !staffTeamUsernames.includes(u));
   for (const username of newAccess) {
     console.log(`adding collaborator ${username} to ${org}/${repo}`);
-    await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
+    const resp = await octokit.request("PUT /repos/{owner}/{repo}/collaborators/{username}", {
       owner: org,
       repo,
       username,
       permission: "write"
     });
+    console.log(`response for adding collaborator ${username} to ${org}/${repo}: ${JSON.stringify(resp.data)}`);
   }
   for (const username of removeAccess) {
     console.log(`removing collaborator ${username} from ${org}/${repo}`);

@@ -232,7 +232,7 @@ async function handlePushToTemplateRepo(
   }
 }
 
-eventHandler.on("push", async ({ id: id, name: name, payload }) => {
+eventHandler.on("push", async ({ name, payload }) => {
   if (name === "push") {
     const repoName = payload.repository.full_name;
     console.log(`Received push event for ${repoName}`);
@@ -282,7 +282,7 @@ eventHandler.on("push", async ({ id: id, name: name, payload }) => {
     console.log(payload.repository.full_name);
   }
 });
-eventHandler.on("check_run", async ({ id: _id, name: _name, payload }) => {
+eventHandler.on("check_run", async ({ payload }) => {
   console.log(
     `Received check_run event for ${payload.repository.full_name}, action: ${payload.action}, check_run_id: ${payload.check_run.id}`
   );
@@ -330,7 +330,7 @@ eventHandler.on("check_run", async ({ id: _id, name: _name, payload }) => {
   }
 });
 // Handle team membership changes (when users are added to GitHub teams)
-eventHandler.on("membership", async ({ id: _id, name: _name, payload }) => {
+eventHandler.on("membership", async ({ payload }) => {
   console.log(
     `Received membership event: ${payload.action} for team: ${(payload as any).team?.slug}, member: ${payload.member?.login}`
   );
@@ -441,7 +441,7 @@ eventHandler.on("membership", async ({ id: _id, name: _name, payload }) => {
 });
 
 // Handle organization invitation events
-eventHandler.on("organization", async ({ id: _id, name: _name, payload }) => {
+eventHandler.on("organization", async ({ payload }) => {
   const payloadAny = payload as any;
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
   console.log(
