@@ -1,7 +1,7 @@
 "use client";
 
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Stack, Text, Card, Badge, Button, Icon } from "@chakra-ui/react";
 import { useState } from "react";
 import { BsChevronDown, BsChevronUp, BsPersonCheck, BsPersonDash, BsReply, BsPeople } from "react-icons/bs";

@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import Markdown from "@/components/ui/markdown";
 import MessageInput from "@/components/ui/message-input";
-import { DiscussionThreadNotification } from "@/components/notifications/notification-teaser";
+import type { DiscussionThreadNotification } from "@/components/notifications/notification-teaser";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";

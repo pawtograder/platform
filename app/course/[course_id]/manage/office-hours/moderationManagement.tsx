@@ -47,7 +47,7 @@ export default function ModerationManagement() {
   const helpRequestsData = useHelpRequests();
   const controller = useOfficeHoursController();
 
-  const { mutate: deleteModerationAction, isPending: isDeleting } = useDelete();
+  const { mutate: deleteModerationAction, isLoading: isDeleting } = useDelete();
 
   // Create a map of profiles for efficient lookup
   const profilesMap = useMemo(() => {

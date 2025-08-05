@@ -1,5 +1,5 @@
 "use client";
-import { HelpRequestWatcher } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequestWatcher } from "@/utils/supabase/DatabaseTypes";
 import { useCreate, useUpdate } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";

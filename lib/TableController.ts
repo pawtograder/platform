@@ -1,9 +1,10 @@
 import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
-import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeController";
+import { type UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
+import { ClassRealTimeController, type ConnectionStatus } from "./ClassRealTimeController";
 import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
-import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
+import type { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
+import { toaster } from "@/components/ui/toaster";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -296,7 +297,7 @@ export default class TableController<
       const data = message.data as Record<string, unknown>;
 
       // Check for exact ID match first
-      const existingRowById = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
+      const existingRowById = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data["id"]);
       if (existingRowById) {
         return;
       }
@@ -312,23 +313,24 @@ export default class TableController<
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
         const oldId = pendingRowWithId.id;
-        pendingRowWithId.id = data.id as IDType;
+        pendingRowWithId.id = data["id"] as IDType;
 
         // Debug logging for development
         if (process.env.NODE_ENV === "development") {
+          // eslint-disable-next-line no-console
           console.log(`[TableController] Matched pending row for ${this._table}:`, {
             oldId,
-            newId: data.id,
+            newId: data["id"],
             pendingData: pendingRow,
             incomingData: data
           });
         }
 
         this._updateRow(
-          data.id as IDType,
+          data["id"] as IDType,
           {
             ...data,
-            id: data.id
+            id: data["id"]
           } as ResultOne & { id: IDType },
           false
         );
@@ -364,6 +366,7 @@ export default class TableController<
 
             // Debug logging for development
             if (process.env.NODE_ENV === "development") {
+              // eslint-disable-next-line no-console
               console.log(`[TableController] Matched pending row (ID-only) for ${this._table}:`, {
                 oldId,
                 newId: message.row_id,
@@ -406,7 +409,7 @@ export default class TableController<
     const pendingRowData = pendingRow as Record<string, unknown>;
 
     // First, check if this row has a negative (temporary) ID, which indicates it's likely an optimistic update
-    const pendingId = pendingRowData.id;
+    const pendingId = pendingRowData["id"];
     if (typeof pendingId === "number" && pendingId > 0) {
       // If pending row has a positive ID, it's already been updated, so don't match
       return false;
@@ -630,7 +633,7 @@ export default class TableController<
     const newRowsArray = [...this._rows];
     this._listDataListeners.forEach((listener) => listener(newRowsArray, { entered: [], left: [] }));
 
-    if (typeof newRow === "object" && "deleted_at" in newRow) {
+    if (typeof newRow === "object" && "deleted_at" in newRow && oldRow) {
       if (newRow.deleted_at && (!("deleted_at" in oldRow) || oldRow.deleted_at === null)) {
         const newRowsArrayDeleted = [...this._rows];
         this._listDataListeners.forEach((listener) => listener(newRowsArrayDeleted, { entered: [], left: [] }));

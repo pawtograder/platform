@@ -3,7 +3,7 @@
 
 "use client";
 
-import React, { useContext, useState, ReactNode, useEffect, useMemo } from "react";
+import React, { useContext, useState, type ReactNode, useEffect, useMemo } from "react";
 import { VideoPriorityBasedPolicy } from "amazon-chime-sdk-js";
 import {
   MeetingMode,

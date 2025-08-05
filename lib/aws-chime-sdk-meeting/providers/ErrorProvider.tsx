@@ -3,7 +3,7 @@
 
 "use client";
 
-import React, { useState, ReactNode } from "react";
+import React, { useState, type ReactNode } from "react";
 
 type Props = { children: ReactNode };
 

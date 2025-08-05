@@ -14,10 +14,10 @@
 import { useState, useEffect } from "react";
 import { usePathname, useParams } from "next/navigation";
 import { useCourseController } from "./useCourseController";
-import { ConnectionStatus } from "@/lib/ClassRealTimeController";
+import type { ConnectionStatus } from "@/lib/ClassRealTimeController";
 import {
   OfficeHoursRealTimeController,
-  ConnectionStatus as OfficeHoursConnectionStatus
+  type ConnectionStatus as OfficeHoursConnectionStatus
 } from "@/lib/OfficeHoursRealTimeController";
 import { useConnectionStatus } from "./useOfficeHoursRealtime";
 
@@ -188,7 +188,7 @@ export function useAutomaticRealtimeConnectionStatus(): CombinedConnectionStatus
 
   // Detect if we're in office hours context and have a valid course ID
   const isInOfficeHours = pathname?.includes("/office-hours") ?? false;
-  const courseId = params?.course_id ? parseInt(params.course_id as string, 10) : undefined;
+  const courseId = params?.["course_id"] ? parseInt(params["course_id"] as string, 10) : undefined;
   const shouldEnableOfficeHours = isInOfficeHours && courseId && !isNaN(courseId) && courseId > 0;
 
   // Get connection status from our individual hook when in office hours context

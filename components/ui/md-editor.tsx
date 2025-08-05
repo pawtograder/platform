@@ -72,7 +72,7 @@ const MdEditor = (props: ExtendedMdEditorProps) => {
           throw new Error(`Failed to upload file: ${error.message}`);
         }
         const urlEncodedFilename = encodeURIComponent(fileName);
-        const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/${uploadFolder}/${uuid}/${urlEncodedFilename}`;
+        const url = `${process.env["NEXT_PUBLIC_SUPABASE_URL"]}/storage/v1/object/public/uploads/${course_id}/${uploadFolder}/${uuid}/${urlEncodedFilename}`;
         return url;
       };
 

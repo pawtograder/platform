@@ -123,13 +123,17 @@ const extractFileAttachments = (content: string): Array<{ name: string; url: str
   // Find image attachments
   while ((match = imageRegex.exec(content)) !== null) {
     const [, name, url] = match;
-    attachments.push({ name, url, isImage: true });
+    if (name && url) {
+      attachments.push({ name, url, isImage: true });
+    }
   }
 
   // Find regular file attachments
   while ((match = linkRegex.exec(content)) !== null) {
     const [, name, url] = match;
-    attachments.push({ name, url, isImage: false });
+    if (name && url) {
+      attachments.push({ name, url, isImage: false });
+    }
   }
 
   return attachments;
@@ -305,10 +309,13 @@ const ReadReceiptUser = ({
   readReceipts: HelpRequestMessageReadReceipt[];
 }) => {
   const profile = useUserProfile(userId);
+  const firstReceipt = readReceipts[0];
+  if (!firstReceipt) return null;
+
   return (
     <Text>
       • {profile?.name || userId} on{" "}
-      {new Date(readReceipts[0].created_at).toLocaleDateString("en-US", {
+      {new Date(firstReceipt.created_at).toLocaleDateString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
         hour12: true,
@@ -334,10 +341,13 @@ const ReadReceiptTooltipContent = ({ readReceipts }: { readReceipts: HelpRequest
   }
 
   if (readReceipts.length === 1) {
+    const firstReceipt = readReceipts[0];
+    if (!firstReceipt) return <Text fontSize="xs">No one has read this message yet</Text>;
+
     return (
       <Text fontSize="xs">
-        Read by {firstUserProfile?.name || readReceipts[0].viewer_id} on{" "}
-        {new Date(readReceipts[0].created_at).toLocaleDateString("en-US", {
+        Read by {firstUserProfile?.name || firstReceipt.viewer_id} on{" "}
+        {new Date(firstReceipt.created_at).toLocaleDateString("en-US", {
           hour: "2-digit",
           minute: "2-digit",
           hour12: true,

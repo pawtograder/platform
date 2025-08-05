@@ -26,7 +26,7 @@ export default function StudentActivitySummary({
   compact = false
 }: StudentActivitySummaryProps) {
   const params = useParams();
-  const courseId = classId || parseInt(params.course_id as string, 10);
+  const courseId = classId || parseInt(params["course_id"] as string, 10);
   const [selectedStudentId, setSelectedStudentId] = useState<string>("");
 
   // Get all realtime data for the class

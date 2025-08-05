@@ -225,7 +225,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
                     Most recent warning:
                   </Text>
                   <Box p={3} borderRadius="lg" borderWidth="1px">
-                    <Text fontSize="sm">{moderationStatus.recentWarnings[0].reason}</Text>
+                    <Text fontSize="sm">{moderationStatus.recentWarnings[0]?.reason}</Text>
                   </Box>
                 </Box>
               )}

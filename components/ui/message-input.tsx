@@ -141,7 +141,7 @@ export default function MessageInput(props: MessageInputProps) {
       }
       const urlEncodedFilename = encodeURIComponent(fileName);
 
-      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/${uploadFolder}/${uuid}/${urlEncodedFilename}`;
+      const url = `${process.env["NEXT_PUBLIC_SUPABASE_URL"]}/storage/v1/object/public/uploads/${course_id}/${uploadFolder}/${uuid}/${urlEncodedFilename}`;
 
       // Determine if it's an image for proper markdown formatting
       const isImage = file.type.startsWith("image/");

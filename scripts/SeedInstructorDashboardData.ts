@@ -1687,12 +1687,15 @@ async function createHelpRequests({
     const batchPromises = batch.map(async () => {
       // Select a random student as the creator
       const creator = students[Math.floor(Math.random() * students.length)];
+      if (!creator) return; // Skip if no creator found
+
       const isPrivate = Math.random() < 0.3; // 30% chance of being private
       const isResolved = Math.random() < 0.8; // 80% chance of being resolved
       const status = isResolved ? (Math.random() < 0.5 ? "resolved" : "closed") : "open";
 
       // Select a random help request template
       const messageTemplate = HELP_REQUEST_TEMPLATES[Math.floor(Math.random() * HELP_REQUEST_TEMPLATES.length)];
+      if (!messageTemplate) return; // Skip if no template found
 
       // Create the help request
       const { data: helpRequestData, error: helpRequestError } = await supabase
@@ -1704,7 +1707,7 @@ async function createHelpRequests({
           is_private: isPrivate,
           status: status,
           created_by: creator.private_profile_id,
-          assignee: isResolved ? instructors[Math.floor(Math.random() * instructors.length)].private_profile_id : null,
+          assignee: isResolved ? instructors[Math.floor(Math.random() * instructors.length)]?.private_profile_id : null,
           resolved_at: isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString() : null // Random time in last 7 days
         })
         .select("id")
@@ -1759,14 +1762,16 @@ async function createHelpRequests({
           const replyTemplate = HELP_REQUEST_REPLIES[Math.floor(Math.random() * HELP_REQUEST_REPLIES.length)];
           const messageTime = new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000); // Random time in last 7 days
 
-          messageInserts.push({
-            help_request_id: helpRequestId,
-            author: sender.private_profile_id,
-            message: replyTemplate,
-            class_id: class_id,
-            instructors_only: isPrivate && Math.random() < 0.2, // 20% of private request messages are instructor-only
-            created_at: messageTime.toISOString()
-          });
+          if (sender && replyTemplate) {
+            messageInserts.push({
+              help_request_id: helpRequestId,
+              author: sender.private_profile_id,
+              message: replyTemplate,
+              class_id: class_id,
+              instructors_only: isPrivate && Math.random() < 0.2, // 20% of private request messages are instructor-only
+              created_at: messageTime.toISOString()
+            });
+          }
         }
 
         if (messageInserts.length > 0) {
@@ -2450,7 +2455,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       await createHelpRequests({
         class_id,
         students,
-        instructors: [instructors[0], ...graders],
+        instructors: [...instructors, ...graders],
         numHelpRequests: helpRequestConfig.numHelpRequests,
         minRepliesPerRequest: helpRequestConfig.minRepliesPerRequest,
         maxRepliesPerRequest: helpRequestConfig.maxRepliesPerRequest,
@@ -2497,20 +2502,20 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     console.log(`\n🔐 Login Credentials:`);
     console.log(`\n   Instructor:`);
-    console.log(`     Email: ${instructors[0].email}`);
-    console.log(`     Password: ${instructors[0].password}`);
+    console.log(`     Email: ${instructors[0]?.email}`);
+    console.log(`     Password: ${instructors[0]?.password}`);
 
     console.log(`\n   Graders (${graders.length} total):`);
     if (graders.length > 0) {
-      console.log(`     Email Template: ${graders[0].email.replace(/#\d+/, "#N")}`);
-      console.log(`     Password: ${graders[0].password}`);
+      console.log(`     Email Template: ${graders[0]?.email.replace(/#\d+/, "#N")}`);
+      console.log(`     Password: ${graders[0]?.password}`);
       console.log(`     Available Numbers: 1-${graders.length} `);
     }
 
     console.log(`\n   Students (${students.length} total):`);
     if (students.length > 0) {
-      console.log(`     Email Template: ${students[0].email.replace(/#\d+/, "#N")}`);
-      console.log(`     Password: ${students[0].password}`);
+      console.log(`     Email Template: ${students[0]?.email.replace(/#\d+/, "#N")}`);
+      console.log(`     Password: ${students[0]?.password}`);
       console.log(`     Available Numbers: 1-${students.length}`);
     }
 

@@ -1,7 +1,3 @@
-/**
- * Video Call Controls Component
- * Handles video call lifecycle management for help requests
- */
 "use client";
 
 import { useState, useCallback } from "react";

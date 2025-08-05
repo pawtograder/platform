@@ -13,7 +13,7 @@ import {
   useRealtimeChat,
   type ChatMessage
 } from "@/hooks/useOfficeHoursRealtime";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
 import { X } from "lucide-react";

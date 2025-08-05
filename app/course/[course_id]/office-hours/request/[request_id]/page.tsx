@@ -5,7 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { CourseControllerProvider } from "@/hooks/useCourseController";
 import { OfficeHoursControllerProvider, useConnectionStatus, useHelpRequest } from "@/hooks/useOfficeHoursRealtime";
 import { createClient } from "@/utils/supabase/client";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Badge, Box, HStack, Icon, Skeleton, Text, VStack } from "@chakra-ui/react";
 import { useParams, useSearchParams } from "next/navigation";
