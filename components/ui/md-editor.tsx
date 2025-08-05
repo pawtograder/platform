@@ -9,7 +9,26 @@ import "katex/dist/katex.min.css";
 import { MDEditorProps } from "@uiw/react-md-editor";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
-//https://github.com/uiwjs/react-md-editor/issues/83
+import { isTextFile, getLanguageFromFile } from "@/lib/utils";
+// https://github.com/uiwjs/react-md-editor/issues/83
+
+/**
+ * Extended props for MdEditor component
+ */
+type ExtendedMdEditorProps = MDEditorProps & {
+  /**
+   * The folder name to use for file uploads within the course directory.
+   * Files will be uploaded to: {course_id}/{uploadFolder}/{uuid}/{fileName}
+   * @default "discussion"
+   */
+  uploadFolder?: string;
+  /**
+   * Maximum number of lines for code files to be pasted as content.
+   * Files exceeding this limit will be uploaded as attachments instead.
+   * @default 300
+   */
+  maxCodeLines?: number;
+};
 
 const insertToTextArea = (intsertString: string) => {
   const textarea = document.querySelector("textarea");
@@ -33,13 +52,14 @@ const insertToTextArea = (intsertString: string) => {
   return sentence;
 };
 
-const MdEditor = (props: MDEditorProps) => {
-  const onChange = props.onChange;
+const MdEditor = (props: ExtendedMdEditorProps) => {
+  const { uploadFolder = "discussion", maxCodeLines = 300, onChange, ...mdEditorProps } = props;
   if (!onChange) {
     throw new Error("onChange is required");
   }
   const supabase = createClient();
   const { course_id } = useParams();
+
   const onImagePasted = useCallback(
     async (dataTransfer: DataTransfer) => {
       const fileUpload = async (file: File) => {
@@ -47,14 +67,15 @@ const MdEditor = (props: MDEditorProps) => {
         const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
         const { error } = await supabase.storage
           .from("uploads")
-          .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
+          .upload(`${course_id}/${uploadFolder}/${uuid}/${fileName}`, file);
         if (error) {
-          console.error("Error uploading image:", error);
+          throw new Error(`Failed to upload file: ${error.message}`);
         }
         const urlEncodedFilename = encodeURIComponent(fileName);
-        const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
+        const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/${uploadFolder}/${uuid}/${urlEncodedFilename}`;
         return url;
       };
+
       const files: File[] = [];
       for (let index = 0; index < dataTransfer.items.length; index += 1) {
         const file = dataTransfer.files.item(index);
@@ -64,24 +85,60 @@ const MdEditor = (props: MDEditorProps) => {
         }
       }
 
-      await Promise.all(
-        files.map(async (file) => {
+      for (const file of files) {
+        // Check if this is a text/code file
+        if (isTextFile(file)) {
+          try {
+            const content = await file.text();
+            const lineCount = content.split("\n").length;
+
+            // If file has too many lines, upload as file instead of pasting content
+            if (lineCount > maxCodeLines) {
+              const url = await fileUpload(file);
+              const insertedMarkdown = `[${file.name}](${url})`;
+              const insertedContent = insertToTextArea(insertedMarkdown);
+              if (insertedContent) {
+                onChange(insertedContent);
+              }
+            } else {
+              // File is small enough, paste as code block
+              const language = getLanguageFromFile(file.name);
+              const codeBlock = `**${file.name}**\n\n\`\`\`${language}\n${content}\n\`\`\``;
+
+              // Insert the code block into the textarea
+              const insertedContent = insertToTextArea(codeBlock);
+              if (insertedContent) {
+                onChange(insertedContent);
+              }
+            }
+          } catch {
+            // Fall back to regular file upload if reading fails
+            const url = await fileUpload(file);
+            const insertedMarkdown = `[${file.name}](${url})`;
+            const insertedContent = insertToTextArea(insertedMarkdown);
+            if (insertedContent) {
+              onChange(insertedContent);
+            }
+          }
+        } else {
+          // Handle non-text files as before
           const url = await fileUpload(file);
           const isImage = file.type.startsWith("image/");
           const insertedMarkdown = isImage ? `[![](${url})](${url})` : `[${file.name}](${url})`;
-          if (!insertToTextArea(insertedMarkdown)) {
-            return;
+          const insertedContent = insertToTextArea(insertedMarkdown);
+          if (insertedContent) {
+            onChange(insertedContent);
           }
-          onChange(insertedMarkdown);
-        })
-      );
+        }
+      }
     },
-    [supabase, onChange, course_id]
+    [supabase, onChange, course_id, uploadFolder, maxCodeLines]
   );
 
   return (
     <MDEditor
-      {...props}
+      {...mdEditorProps}
+      onChange={onChange}
       draggable={true}
       onPaste={async (event) => {
         await onImagePasted(event.clipboardData);
