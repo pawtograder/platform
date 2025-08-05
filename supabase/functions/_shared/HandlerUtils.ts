@@ -6,7 +6,7 @@ import { Database } from "./SupabaseTypes.d.ts";
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     dsn: Deno.env.get("SENTRY_DSN")!,
-    release: Deno.env.get("SUPABASE_URL")!,
+    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
     sendDefaultPii: true,
     integrations: [],
     tracesSampleRate: 0
@@ -175,13 +175,6 @@ export async function wrapRequestHandler(
     });
   } catch (e) {
     console.error(e);
-    //Try to save the request body to sentry
-    try {
-      scope.setTag("URL", req.url);
-    } catch (e) {
-      console.log("Failed to save request body to sentry");
-      console.error(e);
-    }
     if (e instanceof UserVisibleError) {
       if (recordUserVisibleErrors) {
         Sentry.captureException(e, scope);

@@ -171,7 +171,7 @@ export async function getActiveMeeting(helpRequest: HelpRequest, scope?: Sentry.
     if (updateError) {
       throw new UserVisibleError("Video Meeting Session Update Failed" + updateError?.message);
     }
-    newSession.chime_meeting_id = newMeeting.Meeting?.MeetingId || "";
+    newSession.chime_meeting_id = newMeeting.Meeting?.MeetingId || null; //MUST be string or null
     return newSession;
   } else {
     return activeMeeting.data;
