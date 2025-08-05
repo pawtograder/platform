@@ -7,10 +7,17 @@ import { useQueueData } from "@/hooks/useQueueData";
 export default function QueueStatusPage() {
   const { queue_id, course_id } = useParams();
 
-  const { queueRequests } = useQueueData({
+  const { queueRequests, requestCollaborators, userRequestIds } = useQueueData({
     courseId: Number(course_id),
     queueId: Number(queue_id)
   });
 
-  return <HelpRequestHistory requests={queueRequests} readOnly={false} />;
+  return (
+    <HelpRequestHistory
+      requests={queueRequests}
+      readOnly={false}
+      requestCollaborators={requestCollaborators}
+      userRequestIds={userRequestIds}
+    />
+  );
 }

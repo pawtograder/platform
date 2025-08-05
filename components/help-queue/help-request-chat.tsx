@@ -1,12 +1,6 @@
 "use client";
 import { useCallback, useState, useMemo } from "react";
-import type {
-  HelpRequest,
-  Assignment,
-  Submission,
-  SubmissionFile,
-  HelpRequestFormFileReference
-} from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest, Assignment, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { Flex, HStack, Stack, Text, AvatarGroup, Box, Icon, IconButton, Card, Badge, Input } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -51,6 +45,14 @@ import {
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
+
+/**
+ * Office hours form and UI helper types
+ */
+export type HelpRequestFormFileReference = {
+  submission_file_id: number;
+  line_number?: number;
+};
 
 // Type for help request students relationship
 type HelpRequestStudent = {

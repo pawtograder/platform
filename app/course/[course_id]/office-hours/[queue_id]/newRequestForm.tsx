@@ -15,7 +15,6 @@ import {
 import {
   Assignment,
   HelpRequest,
-  HelpRequestFormFileReference,
   HelpRequestLocationType,
   HelpRequestTemplate,
   HelpRequestWithStudentCount,
@@ -30,6 +29,7 @@ import { X } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
+import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
@@ -878,7 +878,7 @@ export default function HelpRequestForm() {
 
         {userPreviousRequests.length > 0 && (
           <Fieldset.Content>
-            <Field label="Follow-up to previous request " optionalText="(Optional)">
+            <Field label="Follow-Up to Previous Request " optionalText="(Optional)">
               <Controller
                 name="followup_to"
                 control={control}

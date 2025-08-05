@@ -1,14 +1,26 @@
 "use client";
 
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
-import { HelpRequest, HelpRequestHistoryProps } from "@/utils/supabase/DatabaseTypes";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { Box, HStack, Stack, Text, Card, Badge, Button, Icon } from "@chakra-ui/react";
 import { useState } from "react";
-import { BsChevronDown, BsChevronUp, BsPersonCheck, BsPersonDash, BsReply } from "react-icons/bs";
+import { BsChevronDown, BsChevronUp, BsPersonCheck, BsPersonDash, BsReply, BsPeople } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { useRouter, useParams } from "next/navigation";
 import Markdown from "@/components/ui/markdown";
+
+/**
+ * Office hours UI component prop types
+ */
+export type HelpRequestHistoryProps = {
+  requests: HelpRequest[];
+  showPrivacyIndicator?: boolean;
+  readOnly?: boolean;
+  requestCollaborators?: Map<number, Array<{ profile_id: string; class_id: number }>>;
+  userRequestIds?: number[];
+  sortOrder?: "oldest" | "newest";
+};
 
 /**
  * Component to display assignment status for a help request
@@ -40,10 +52,39 @@ function RequestAssignmentStatus({ request }: { request: HelpRequest }) {
   }
 }
 
+/**
+ * Component to display collaborator information for multi-student help requests
+ */
+function RequestCollaborators({
+  requestId,
+  collaborators
+}: {
+  requestId: number;
+  collaborators?: Map<number, Array<{ profile_id: string; class_id: number }>>;
+}) {
+  const requestCollaborators = collaborators?.get(requestId);
+
+  if (!requestCollaborators || requestCollaborators.length === 0) {
+    return null;
+  }
+
+  const collaboratorCount = requestCollaborators.length;
+
+  return (
+    <Badge colorPalette="purple" variant="outline" size="sm">
+      <Icon as={BsPeople} mr={1} />
+      {collaboratorCount === 1 ? "1 collaborator" : `${collaboratorCount} collaborators`}
+    </Badge>
+  );
+}
+
 export default function HelpRequestHistory({
   requests,
   showPrivacyIndicator = false,
-  readOnly = true
+  readOnly = true,
+  requestCollaborators,
+  userRequestIds = [],
+  sortOrder = "oldest"
 }: HelpRequestHistoryProps) {
   const [expandedRequest, setExpandedRequest] = useState<number | null>(null);
   const router = useRouter();
@@ -87,7 +128,7 @@ export default function HelpRequestHistory({
             // Sort by resolved_at if available, otherwise by created_at
             const dateA = new Date(a.resolved_at || a.created_at).getTime();
             const dateB = new Date(b.resolved_at || b.created_at).getTime();
-            return dateA - dateB; // oldest first
+            return sortOrder === "newest" ? dateB - dateA : dateA - dateB;
           })
           .map((request) => (
             <Card.Root
@@ -119,6 +160,7 @@ export default function HelpRequestHistory({
                         {request.status}
                       </Badge>
                       <RequestAssignmentStatus request={request} />
+                      <RequestCollaborators requestId={request.id} collaborators={requestCollaborators} />
                       {request.location_type && (
                         <Badge colorPalette="blue" size="sm">
                           {request.location_type}
@@ -142,10 +184,10 @@ export default function HelpRequestHistory({
                         colorPalette="blue"
                         onClick={(e) => handleCreateFollowup(e, request.id)}
                         title="Create a follow-up request"
-                        visibility={readOnly ? "visible" : "hidden"}
+                        visibility={readOnly && userRequestIds.includes(request.id) ? "visible" : "hidden"}
                       >
                         <Icon as={BsReply} mr={1} />
-                        Follow-up
+                        Follow-Up
                       </Button>
                       <Button size="xs" variant="ghost" onClick={(e) => toggleExpanded(e, request.id)}>
                         {expandedRequest === request.id ? "Hide" : "View"} Chat

@@ -636,16 +636,21 @@ export default class TableController<
       ...newRow,
       __db_pending: is_pending
     };
-    const listeners = this._itemDataListeners.get(id as IDType);
-    if (this._table === "gradebook_column_students") {
-      console.log("update", id, newRow, oldRow, listeners);
+
+    const itemListeners = this._itemDataListeners.get(id as IDType);
+
+    if (itemListeners) {
+      itemListeners.forEach((listener) => listener(this._rows[index]));
     }
-    if (listeners) {
-      listeners.forEach((listener) => listener(this._rows[index]));
-    }
+
+    // Create new array reference to ensure React detects the change
+    const newRowsArray = [...this._rows];
+    this._listDataListeners.forEach((listener) => listener(newRowsArray, { entered: [], left: [] }));
+
     if (typeof newRow === "object" && "deleted_at" in newRow) {
       if (newRow.deleted_at && (!("deleted_at" in oldRow) || oldRow.deleted_at === null)) {
-        this._listDataListeners.forEach((listener) => listener(this._rows, { entered: [], left: [] }));
+        const newRowsArrayDeleted = [...this._rows];
+        this._listDataListeners.forEach((listener) => listener(newRowsArrayDeleted, { entered: [], left: [] }));
       }
     }
   }

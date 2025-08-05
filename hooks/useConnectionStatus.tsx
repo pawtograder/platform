@@ -2,7 +2,23 @@
 
 import { useState, useEffect } from "react";
 import { useOfficeHoursController } from "./useOfficeHoursRealtime";
-import type { OfficeHoursConnectionStatus } from "@/utils/supabase/DatabaseTypes";
+
+/**
+ * Connection status for office hours realtime controller
+ */
+export type OfficeHoursChannelStatus = {
+  name: string;
+  state: "closed" | "errored" | "joined" | "joining" | "leaving";
+  type: "help_request" | "help_request_staff" | "help_queue" | "help_queues";
+  help_request_id?: number;
+  help_queue_id?: number;
+};
+
+export type OfficeHoursConnectionStatus = {
+  overall: "connected" | "connecting" | "disconnected" | "partial";
+  channels: OfficeHoursChannelStatus[];
+  lastUpdate: Date;
+};
 
 export interface UseConnectionStatusReturn {
   // Connection states
@@ -62,7 +78,7 @@ export function useConnectionStatus(): UseConnectionStatusReturn {
   // Calculate derived connection states
   const isConnected = connectionStatus?.overall === "connected";
   const isValidating = connectionStatus?.overall === "connecting";
-  const isAuthorized = connectionStatus?.overall !== "disconnected" || connectionError === null;
+  const isAuthorized = connectionStatus?.overall !== "disconnected" && connectionError === null;
   const isLoading = !controller.isReady;
 
   return {
