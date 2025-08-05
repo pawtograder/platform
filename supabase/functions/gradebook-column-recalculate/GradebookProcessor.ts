@@ -65,7 +65,8 @@ export async function processGradebookCellCalculation(
     for (const dependencyProvider of Object.keys(dependencies)) {
       // Validate that we have a dependency source for this provider
       if (!DependencySourceMap[dependencyProvider as keyof typeof DependencySourceMap]) {
-        throw new Error(`Dependency source ${dependencyProvider} not found`);
+        console.error(`Dependency source ${dependencyProvider} not found`);
+        continue;
       }
       ret.push(
         ...dependencies[dependencyProvider].map((key) => ({

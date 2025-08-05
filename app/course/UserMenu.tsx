@@ -527,6 +527,9 @@ function UserSettingsMenu() {
                           colorPalette="red"
                           size="sm"
                           w="100%"
+                          disabled={true}
+                          alignItems="center"
+                          gap={2}
                           justifyContent="flex-start"
                           py={0}
                         >
