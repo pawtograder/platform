@@ -79,6 +79,7 @@ export async function getOctoKit(repoOrOrgName: string) {
       connection = new Bottleneck({
         datastore: "ioredis",
         clearDatastore: false,
+        id: "gitHubRateLimiter" + (Deno.env.get("GITHUB_APP_ID") || ""),
         clientOptions: {
           host,
           password,
