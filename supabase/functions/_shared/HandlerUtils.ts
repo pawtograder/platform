@@ -108,9 +108,9 @@ export async function wrapRequestHandler(
     recordSecurityErrors
   }:
     | {
-      recordUserVisibleErrors?: boolean;
-      recordSecurityErrors?: boolean;
-    }
+        recordUserVisibleErrors?: boolean;
+        recordSecurityErrors?: boolean;
+      }
     | undefined = { recordUserVisibleErrors: true, recordSecurityErrors: true }
 ) {
   if (req.method === "OPTIONS") {

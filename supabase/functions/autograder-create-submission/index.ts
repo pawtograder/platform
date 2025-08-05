@@ -563,6 +563,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest, {
     recordUserVisibleErrors: false,
-    recordSecurityErrors: false,
+    recordSecurityErrors: false
   });
 });
