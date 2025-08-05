@@ -1,24 +1,21 @@
 "use client";
 import LinkAccount from "@/components/github/link-account";
 import ResendOrgInvitation from "@/components/github/resend-org-invitation";
-import { Alert } from "@/components/ui/alert";
 import { SelfReviewDueDate } from "@/components/ui/assignment-due-date";
 import Link from "@/components/ui/link";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
-import { autograderCreateReposForStudent } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
-import type { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
-import { Container, EmptyState, Heading, Icon, Spinner, Table, Text } from "@chakra-ui/react";
+import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Container, EmptyState, Heading, Icon, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useInvalidate, useList } from "@refinedev/core";
-import type { UserIdentity } from "@supabase/supabase-js";
+import { useList } from "@refinedev/core";
+import { UserIdentity } from "@supabase/supabase-js";
 import { addHours, differenceInHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { FaCheckCircle } from "react-icons/fa";
 
 // Define the type for the groups query result
@@ -52,7 +49,6 @@ export default function StudentPage() {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const { role } = useClassProfiles();
-  const supabase = createClient();
   const { data: courseData } = useList<{ time_zone: string }>({
     resource: "classes",
     meta: {
@@ -67,7 +63,6 @@ export default function StudentPage() {
   const course = courseData && courseData.data.length > 0 ? courseData.data[0] : null;
 
   const private_profile_id = role.private_profile_id;
-  const invalidate = useInvalidate();
   const { data: groupsData } = useList<AssignmentGroupMemberWithGroupAndRepo>({
     resource: "assignment_groups_members",
     meta: {
@@ -102,44 +97,7 @@ export default function StudentPage() {
 
   const githubIdentity: UserIdentity | null = identities?.find((identity) => identity.provider === "github") ?? null;
 
-  const assignmentsWithoutRepos = useMemo(
-    () =>
-      githubIdentity
-        ? assignments?.filter((assignment) => {
-            if (!assignment.template_repo || !assignment.template_repo.includes("/")) {
-              return false;
-            }
-            return assignment.repository === null;
-          })
-        : null,
-    [assignments, githubIdentity]
-  );
-
-  const actions = !githubIdentity ? (
-    <LinkAccount />
-  ) : assignmentsWithoutRepos?.length ? (
-    <>
-      <Alert status="info">GitHub repos created for you. You may need to refresh this page to see them.</Alert>
-    </>
-  ) : (
-    <></>
-  );
-  const [loading, setLoading] = useState(true);
-  const hasGitHubIdentity = githubIdentity?.user_id !== undefined;
-  useEffect(() => {
-    const createRepos = async () => {
-      try {
-        setLoading(true);
-        await autograderCreateReposForStudent(supabase);
-        await invalidate({ resource: "repositories", invalidates: ["all"] });
-      } finally {
-        setLoading(false);
-      }
-    };
-    if (hasGitHubIdentity && supabase) {
-      createRepos();
-    }
-  }, [hasGitHubIdentity, supabase, invalidate]);
+  const actions = !githubIdentity ? <LinkAccount /> : <></>;
 
   const allAssignedWork = useMemo(() => {
     const result: AssignmentUnit[] = [];
@@ -295,13 +253,9 @@ export default function StudentPage() {
                   )}
                 </Table.Cell>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  {loading && !work.repo ? (
-                    <Spinner />
-                  ) : (
-                    <Link target="_blank" href={`https://github.com/${work.repo}`}>
-                      {work.repo}
-                    </Link>
-                  )}
+                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                    {work.repo}
+                  </Link>
                 </Table.Cell>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>{work.group}</Table.Cell>
               </Table.Row>
@@ -366,13 +320,9 @@ export default function StudentPage() {
                   )}
                 </Table.Cell>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>
-                  {loading && !work.repo ? (
-                    <Spinner />
-                  ) : (
-                    <Link target="_blank" href={`https://github.com/${work.repo}`}>
-                      {work.repo}
-                    </Link>
-                  )}
+                  <Link target="_blank" href={`https://github.com/${work.repo}`}>
+                    {work.repo}
+                  </Link>
                 </Table.Cell>
                 <Table.Cell display={{ base: "none", sm: "table-cell" }}>{work.group}</Table.Cell>
               </Table.Row>

@@ -318,6 +318,7 @@ export default function AssignmentForm({
   const course = useCourse();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const timezone = course.classes.time_zone || "America/New_York";
+  const isEditing = !!form.getValues("id");
   const onSubmitWrapper = useCallback(
     async (values: FieldValues) => {
       setIsSubmitting(true);
@@ -364,9 +365,13 @@ export default function AssignmentForm({
           <Fieldset.Content>
             <Field
               label="Slug"
-              helperText="A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
-              errorText={errors["slug"]?.message?.toString()}
-              invalid={errors["slug"] ? true : false}
+              helperText={
+                isEditing
+                  ? "Slug cannot be changed when editing an assignment"
+                  : "A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
+              }
+              errorText={errors.slug?.message?.toString()}
+              invalid={errors.slug ? true : false}
               required={true}
             >
               <Input
@@ -378,6 +383,7 @@ export default function AssignmentForm({
                   },
                   maxLength: { value: 16, message: "Slug must be less than 16 characters" }
                 })}
+                disabled={isEditing}
               />
             </Field>
           </Fieldset.Content>

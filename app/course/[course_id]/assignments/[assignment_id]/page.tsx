@@ -20,6 +20,8 @@ import { useParams } from "next/navigation";
 import { CommitHistoryDialog } from "./commitHistory";
 import ManageGroupWidget from "./manageGroupWidget";
 import { NotGradedSubmissionIcon } from "@/components/ui/not-graded-submission-icon";
+import LinkAccount from "@/components/github/link-account";
+import ResendOrgInvitation from "@/components/github/resend-org-invitation";
 
 export default function AssignmentPage() {
   const { course_id, assignment_id } = useParams();
@@ -127,6 +129,8 @@ export default function AssignmentPage() {
   }
   return (
     <Box p={4}>
+      <LinkAccount />
+      <ResendOrgInvitation />
       <Flex width="100%" alignItems={"center"}>
         <Box>
           <Heading size="lg">{assignment.title}</Heading>

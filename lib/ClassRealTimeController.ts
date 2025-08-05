@@ -1,5 +1,7 @@
 import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
+import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import { RealtimeChannelManager } from "./RealtimeChannelManager";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -45,72 +47,237 @@ export type ConnectionStatus = {
   lastUpdate: Date;
 };
 
+export type ClassRealTimeControllerConfig = {
+  /** The number of milliseconds to wait before disconnecting from realtime when the document is not visible.
+   * Default is 10 minutes.
+   */
+  inactiveTabTimeoutSeconds?: number;
+};
+
 export class ClassRealTimeController {
   private _client: SupabaseClient<Database>;
   private _classId: number;
   private _profileId: string;
   private _isStaff: boolean;
-  private _staffChannel: RealtimeChannel | null = null;
-  private _userChannel: RealtimeChannel | null = null;
-  private _submissionChannels: Map<number, { graders?: RealtimeChannel; user?: RealtimeChannel }> = new Map();
+  private _channelManager: RealtimeChannelManager;
+  private _channelUnsubscribers: Map<string, () => void> = new Map();
   private _subscriptions: Map<string, MessageSubscription> = new Map();
   private _subscriptionCounter = 0;
   private _statusChangeListeners: ((status: ConnectionStatus) => void)[] = [];
-  private _objDebugId = `${new Date().getTime()}-${Math.random()}`;
   private _closed = false;
+
+  //Realtime reliability features
+  private _inactiveTabTimeoutSeconds = 10 * 60; // 10 minutes default
+  private _inactiveTabTimer: ReturnType<typeof setTimeout> | undefined;
+  private _visibilityChangeListener: (() => void) | undefined;
+  private _started = false;
+  private _initializationPromise: Promise<void>;
 
   constructor({
     client,
     classId,
     profileId,
-    isStaff
+    isStaff,
+    config
   }: {
     client: SupabaseClient<Database>;
     classId: number;
     profileId: string;
     isStaff: boolean;
+    config?: ClassRealTimeControllerConfig;
   }) {
     this._client = client;
     this._classId = classId;
     this._profileId = profileId;
     this._isStaff = isStaff;
+    this._channelManager = RealtimeChannelManager.getInstance();
 
-    this._initializeChannels();
+    // Set the client on the channel manager
+    this._channelManager.setClient(client);
+
+    if (config?.inactiveTabTimeoutSeconds) {
+      this._inactiveTabTimeoutSeconds = config.inactiveTabTimeoutSeconds;
+    }
+
+    // Start async initialization immediately
+    this._initializationPromise = this._initializeChannels();
+  }
+
+  /**
+   * Start the realtime controller with enhanced features
+   * Returns true when initialization is complete
+   */
+  async start(): Promise<boolean> {
+    if (this._started) {
+      await this._initializationPromise;
+      return true;
+    }
+
+    this._started = true;
+    this._addOnVisibilityChangeListener();
+
+    // Wait for initialization that started in constructor
+    await this._initializationPromise;
+
+    return true;
   }
 
   private async _initializeChannels() {
-    const accessToken = await this._client.auth.getSession();
-    await this._client.realtime.setAuth(accessToken.data.session?.access_token);
-    // Initialize staff channel if user is staff
     if (this._closed) {
       return;
     }
+
+    // Session refresh is now handled by the channel manager
+
+    // Initialize staff channel if user is staff
     if (this._isStaff) {
-      this._staffChannel = this._client.channel(`class:${this._classId}:staff`, {
-        config: { private: true }
-      });
-
-      this._staffChannel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
-      });
-
-      this._staffChannel.subscribe(() => {
-        this._notifyStatusChange();
-      });
+      await this._subscribeToStaffChannel();
     }
 
     // Initialize user channel (all users get their own channel)
-    this._userChannel = this._client.channel(`class:${this._classId}:user:${this._profileId}`, {
-      config: { private: true }
-    });
+    await this._subscribeToUserChannel();
+  }
 
-    this._userChannel.on("broadcast", { event: "broadcast" }, (message) => {
-      this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
-    });
+  /**
+   * Enhanced subscription state event handling from RealtimeHandler
+   */
+  private async _handleSubscriptionStateEvent(
+    channel: RealtimeChannel,
+    status: REALTIME_SUBSCRIBE_STATES,
+    err: Error | undefined
+  ) {
+    const channelName = this._getChannelDisplayName(channel);
 
-    this._userChannel.subscribe(() => {
-      this._notifyStatusChange();
-    });
+    switch (status) {
+      case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED: {
+        console.debug(`Successfully subscribed to '${channelName}'`);
+        this._notifyStatusChange();
+        break;
+      }
+      case REALTIME_SUBSCRIBE_STATES.CLOSED: {
+        console.debug(`Channel closed '${channelName}'`);
+        this._notifyStatusChange();
+        break;
+      }
+      case REALTIME_SUBSCRIBE_STATES.TIMED_OUT: {
+        console.debug(`Channel timed out '${channelName}'`);
+        this._notifyStatusChange();
+        break;
+      }
+      case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR: {
+        console.warn(`Channel error in '${channelName}': `, err?.message);
+        this._notifyStatusChange();
+        break;
+      }
+      default: {
+        const exhaustiveCheck: never = status;
+        throw new Error(`Unknown channel status: ${exhaustiveCheck}`);
+      }
+    }
+  }
+
+  /**
+   * Add visibility change listener for enhanced reconnection handling
+   */
+  private _addOnVisibilityChangeListener() {
+    const handler = () => this._handleVisibilityChange();
+    document.addEventListener("visibilitychange", handler);
+
+    this._visibilityChangeListener = () => {
+      document.removeEventListener("visibilitychange", handler);
+    };
+  }
+
+  /**
+   * Handle visibility changes - disconnect when inactive, reconnect when visible
+   */
+  private _handleVisibilityChange() {
+    if (document.hidden) {
+      if (!this._inactiveTabTimer) {
+        this._inactiveTabTimer = setTimeout(async () => {
+          console.log(`Tab inactive for ${this._inactiveTabTimeoutSeconds} seconds. Disconnecting from realtime.`);
+          this._channelManager.disconnectAllChannels();
+        }, this._inactiveTabTimeoutSeconds * 1000);
+      }
+    } else {
+      if (this._inactiveTabTimer) {
+        clearTimeout(this._inactiveTabTimer);
+        this._inactiveTabTimer = undefined;
+      }
+
+      this._channelManager.resubscribeToAllChannels();
+    }
+  }
+
+  private async _subscribeToStaffChannel() {
+    if (!this._isStaff) return;
+
+    const topic = `class:${this._classId}:staff`;
+    const unsubscriber = await this._channelManager.subscribe(
+      topic,
+      (message: BroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      }
+    );
+
+    this._channelUnsubscribers.set(topic, unsubscriber);
+  }
+
+  private async _subscribeToUserChannel() {
+    const topic = `class:${this._classId}:user:${this._profileId}`;
+    const unsubscriber = await this._channelManager.subscribe(
+      topic,
+      (message: BroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      }
+    );
+
+    this._channelUnsubscribers.set(topic, unsubscriber);
+  }
+
+  private async _subscribeToSubmissionGradersChannel(submissionId: number) {
+    if (!this._isStaff) return;
+
+    const topic = `submission:${submissionId}:graders`;
+    const unsubscriber = await this._channelManager.subscribe(
+      topic,
+      (message: BroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      }
+    );
+
+    this._channelUnsubscribers.set(topic, unsubscriber);
+  }
+
+  private async _subscribeToSubmissionUserChannel(submissionId: number) {
+    const topic = `submission:${submissionId}:profile_id:${this._profileId}`;
+    const unsubscriber = await this._channelManager.subscribe(
+      topic,
+      (message: BroadcastMessage) => {
+        this._handleBroadcastMessage(message);
+      },
+      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        await this._handleSubscriptionStateEvent(channel, status, err);
+      }
+    );
+
+    this._channelUnsubscribers.set(topic, unsubscriber);
+  }
+
+  /**
+   * Get display name for a channel
+   */
+  private _getChannelDisplayName(channel: RealtimeChannel): string {
+    return channel.topic;
   }
 
   private _handleBroadcastMessage(message: BroadcastMessage) {
@@ -213,109 +380,44 @@ export class ClassRealTimeController {
   }
 
   /**
-   * Check if the controller is ready (channels subscribed)
-   */
-  get isReady(): boolean {
-    const staffReady = !this._isStaff || this._staffChannel?.state === "joined";
-    const userReady = this._userChannel?.state === "joined";
-
-    // Check submission channels
-    const submissionChannelsReady = Array.from(this._submissionChannels.values()).every((channels) => {
-      const gradersReady = !this._isStaff || !channels.graders || channels.graders.state === "joined";
-      const userChannelReady = !channels.user || channels.user.state === "joined";
-      return gradersReady && userChannelReady;
-    });
-
-    return staffReady && userReady && submissionChannelsReady;
-  }
-
-  /**
-   * Wait for channels to be ready
-   */
-  async waitForReady(): Promise<void> {
-    return new Promise((resolve) => {
-      const checkReady = () => {
-        if (this.isReady) {
-          resolve();
-        } else {
-          setTimeout(checkReady, 100);
-        }
-      };
-      checkReady();
-    });
-  }
-
-  /**
    * Ensure submission-specific channels are created for a given submission
    */
   private _ensureSubmissionChannels(submissionId: number) {
-    if (this._submissionChannels.has(submissionId)) {
-      return; // Already created
-    }
-
-    const channels: { graders?: RealtimeChannel; user?: RealtimeChannel } = {};
-
     // Create graders channel if user is staff
     if (this._isStaff) {
-      const gradersChannelName = `submission:${submissionId}:graders`;
-      channels.graders = this._client.channel(gradersChannelName, {
-        config: { private: true }
-      });
-
-      channels.graders.on("broadcast", { event: "broadcast" }, (message) => {
-        this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
-      });
-
-      channels.graders.subscribe(() => {
-        this._notifyStatusChange();
-      });
+      this._subscribeToSubmissionGradersChannel(submissionId);
     }
 
     // Create user channel for this submission
-    const userChannelName = `submission:${submissionId}:profile_id:${this._profileId}`;
-    channels.user = this._client.channel(userChannelName, {
-      config: { private: true }
-    });
-
-    channels.user.on("broadcast", { event: "broadcast" }, (message) => {
-      this._handleBroadcastMessage(message["payload"] as BroadcastMessage);
-    });
-
-    channels.user.subscribe(() => {
-      this._notifyStatusChange();
-    });
-
-    this._submissionChannels.set(submissionId, channels);
+    this._subscribeToSubmissionUserChannel(submissionId);
   }
 
   /**
    * Clean up channels and subscriptions
    */
-  close() {
-    this._closed = true;
+  async close() {
     this._subscriptions.clear();
     this._statusChangeListeners = [];
 
-    if (this._staffChannel) {
-      this._staffChannel.unsubscribe();
-      this._staffChannel = null;
+    // Clear timers and listeners
+    if (this._inactiveTabTimer) {
+      clearTimeout(this._inactiveTabTimer);
+      this._inactiveTabTimer = undefined;
     }
 
-    if (this._userChannel) {
-      this._userChannel.unsubscribe();
-      this._userChannel = null;
+    if (this._visibilityChangeListener) {
+      this._visibilityChangeListener();
+      this._visibilityChangeListener = undefined;
     }
 
-    // Clean up submission channels
-    for (const channels of this._submissionChannels.values()) {
-      if (channels.graders) {
-        channels.graders.unsubscribe();
-      }
-      if (channels.user) {
-        channels.user.unsubscribe();
-      }
+    // Unsubscribe from all channels using the stored unsubscribe functions
+    for (const unsubscriber of this._channelUnsubscribers.values()) {
+      unsubscriber();
     }
-    this._submissionChannels.clear();
+    this._channelUnsubscribers.clear();
+
+    this._closed = true;
+    this._started = false;
   }
 
   /**
@@ -334,43 +436,35 @@ export class ClassRealTimeController {
    */
   getConnectionStatus(): ConnectionStatus {
     const channels: ChannelStatus[] = [];
+    const managerInfo = this._channelManager.getDebugInfo();
 
-    // Add class-level channels
-    if (this._staffChannel) {
-      channels.push({
-        name: `class:${this._classId}:staff`,
-        state: this._staffChannel.state,
-        type: "staff"
-      });
-    }
+    // Map managed channels to our status format
+    for (const channelInfo of managerInfo.channels) {
+      const topic = channelInfo.topic;
+      let type: ChannelStatus["type"];
+      let submissionId: number | undefined;
 
-    if (this._userChannel) {
-      channels.push({
-        name: `class:${this._classId}:user:${this._profileId}`,
-        state: this._userChannel.state,
-        type: "user"
-      });
-    }
-
-    // Add submission channels
-    for (const [submissionId, submissionChannels] of this._submissionChannels.entries()) {
-      if (submissionChannels.graders) {
-        channels.push({
-          name: `submission:${submissionId}:graders`,
-          state: submissionChannels.graders.state,
-          type: "submission_graders",
-          submissionId
-        });
+      // Check if this channel is relevant to this controller
+      if (topic === `class:${this._classId}:staff` && this._isStaff) {
+        type = "staff";
+      } else if (topic === `class:${this._classId}:user:${this._profileId}`) {
+        type = "user";
+      } else if (topic.startsWith("submission:") && topic.includes(":graders") && this._isStaff) {
+        type = "submission_graders";
+        submissionId = parseInt(topic.split(":")[1]);
+      } else if (topic.startsWith("submission:") && topic.includes(`:profile_id:${this._profileId}`)) {
+        type = "submission_user";
+        submissionId = parseInt(topic.split(":")[1]);
+      } else {
+        continue; // Skip channels that don't belong to this controller
       }
 
-      if (submissionChannels.user) {
-        channels.push({
-          name: `submission:${submissionId}:profile_id:${this._profileId}`,
-          state: submissionChannels.user.state,
-          type: "submission_user",
-          submissionId
-        });
-      }
+      channels.push({
+        name: topic,
+        state: channelInfo.state,
+        type,
+        submissionId
+      });
     }
 
     // Calculate overall status
@@ -411,18 +505,18 @@ export class ClassRealTimeController {
       classId: this._classId,
       profileId: this._profileId,
       isStaff: this._isStaff,
-      staffChannelState: this._staffChannel?.state,
-      userChannelState: this._userChannel?.state,
-      submissionChannels: Array.from(this._submissionChannels.entries()).map(([submissionId, channels]) => ({
-        submissionId,
-        gradersChannelState: channels.graders?.state,
-        userChannelState: channels.user?.state
-      })),
+      started: this._started,
+      closed: this._closed,
+      inactiveTabTimeoutSeconds: this._inactiveTabTimeoutSeconds,
+      hasInactiveTabTimer: !!this._inactiveTabTimer,
+      hasVisibilityChangeListener: !!this._visibilityChangeListener,
+      channelUnsubscribers: Array.from(this._channelUnsubscribers.keys()),
       subscriptionCount: this._subscriptions.size,
       subscriptions: Array.from(this._subscriptions.values()).map((sub) => ({
         id: sub.id,
         filter: sub.filter
-      }))
+      })),
+      channelManagerInfo: this._channelManager.getDebugInfo()
     };
   }
 }
