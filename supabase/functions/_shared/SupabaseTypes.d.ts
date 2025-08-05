@@ -4833,7 +4833,7 @@ export type Database = {
           karma_score?: number;
           last_activity_at?: string | null;
           student_profile_id: string;
-          updated_at: string;
+          updated_at?: string;
         };
         Update: {
           class_id?: number;

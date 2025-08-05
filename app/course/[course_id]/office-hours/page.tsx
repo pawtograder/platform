@@ -147,7 +147,7 @@ export default function OfficeHoursPage() {
   return (
     <ClassProfileProvider>
       <ModerationBanNotice classId={classId}>
-        <Container maxW="4xl" py={8}>
+        <Container maxW="4xl" my={4}>
           <Stack spaceY={6}>
             <Box textAlign="center">
               <Heading size="lg" mb={2}>
