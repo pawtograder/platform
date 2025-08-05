@@ -2,9 +2,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { ListReposRequest } from "../_shared/FunctionTypes.d.ts";
-
-async function handleRequest(req: Request) {
+import * as Sentry from "npm:@sentry/deno";
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { courseId, template_only } = (await req.json()) as ListReposRequest;
+  scope?.setTag("function", "repositories-list");
+  scope?.setTag("courseId", courseId.toString());
+  scope?.setTag("template_only", template_only?.toString() || "(null)");
   const { supabase } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
   const { data: course } = await supabase.from("classes").select("*").eq("id", courseId).single();
   if (!course?.github_org) {

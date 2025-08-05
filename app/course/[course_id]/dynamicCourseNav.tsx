@@ -22,7 +22,7 @@ import Image from "next/image";
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
 import React, { Fragment, useEffect, useRef, useState } from "react";
-import { FaScroll } from "react-icons/fa";
+import { FaRobot, FaScroll } from "react-icons/fa";
 import {
   FiAlertCircle,
   FiBookOpen,
@@ -75,7 +75,8 @@ const LinkItems = (courseID: number) => [
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
-      { name: "Emailer", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` }
+      { name: "Emailer", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` },
+      { name: "Workflow Runs", icon: FaRobot, target: `/course/${courseID}/manage/workflow-runs` }
     ]
   }
 ];

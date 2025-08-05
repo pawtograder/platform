@@ -5,12 +5,18 @@ import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
 import type { AddEnrollmentRequest } from "../_shared/FunctionTypes.d.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { email, name, role, courseId } = (await req.json()) as AddEnrollmentRequest;
   if (!courseId) {
     throw new UserVisibleError("Course ID is required");
   }
+  scope?.setTag("function", "enrollments-add");
+  scope?.setTag("email", email);
+  scope?.setTag("name", name);
+  scope?.setTag("role", role);
+  scope?.setTag("courseId", courseId.toString());
   //Validate that the user is an instructor for this course
   await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
   const adminSupabase = createClient<Database>(

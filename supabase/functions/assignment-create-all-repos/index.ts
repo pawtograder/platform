@@ -5,6 +5,7 @@ import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/Fun
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
 type RepoToCreate = {
   name: string;
@@ -13,7 +14,8 @@ type RepoToCreate = {
   student_github_usernames: string[];
 };
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  scope?.setTag("function", "assignment-create-all-repos");
   // Check for edge function secret authentication
   const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
@@ -24,19 +26,22 @@ async function handleRequest(req: Request) {
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
     // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
     const url = new URL(req.url);
-    const course_id = Number.parseInt(url.searchParams.get("course_id")!);
-    const assignment_id = Number.parseInt(url.searchParams.get("assignment_id")!);
+    const course_id = Number.parseInt(url.searchParams.get("courseId")!);
+    const assignment_id = Number.parseInt(url.searchParams.get("assignmentId")!);
     // Edge function secret authentication - get parameters from request body
     courseId = course_id;
     assignmentId = assignment_id;
-    console.log("Creating all repos for assignment with courseId:", courseId, "assignmentId:", assignmentId);
+    scope?.setTag("Source", "edge-function-secret");
   } else {
     // JWT authentication - get parameters from request body and validate instructor permissions
     const { courseId: cId, assignmentId: aId } = (await req.json()) as AssignmentCreateAllReposRequest;
     courseId = cId;
     assignmentId = aId;
     await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+    scope?.setTag("Source", "jwt");
   }
+  scope?.setTag("assignment_id", assignmentId.toString());
+  scope?.setTag("course_id", courseId.toString());
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -45,7 +50,7 @@ async function handleRequest(req: Request) {
   const { data: classData } = await adminSupabase.from("classes").select("time_zone").eq("id", courseId).single();
   const timeZone = classData?.time_zone;
   // Get the assignment from supabase
-  const { data: assignment } = await adminSupabase
+  const { data: assignment, error: assignmentError } = await adminSupabase
     .from("assignments")
     .select(
       "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
@@ -54,9 +59,20 @@ async function handleRequest(req: Request) {
     .lte("release_date", TZDate.tz(timeZone || "America/New_York").toISOString())
     .eq("class_id", courseId)
     .single();
+  if (assignmentError) {
+    scope?.setTag("db_error", "assignment_fetch_failed");
+    scope?.setTag("db_error_message", assignmentError.message);
+    throw new UserVisibleError("Error fetching assignment: " + assignmentError.message);
+  }
   if (!assignment) {
+    scope?.setTag("assignment_error", "not_found_or_not_released");
     throw new UserVisibleError("Assignment not found. Please be sure that the release date has passed.");
   }
+
+  scope?.setTag("assignment_slug", assignment.slug || "unknown");
+  scope?.setTag("assignment_group_config", assignment.group_config || "unknown");
+  scope?.setTag("github_org", assignment.classes?.github_org || "unknown");
+  scope?.setTag("template_repo", assignment.template_repo || "none");
   // Select all existing repos for the assignment
   const { data: existingRepos } = await adminSupabase
     .from("repositories")
@@ -98,6 +114,11 @@ async function handleRequest(req: Request) {
     reposToCreate.push(...groupRepos);
   }
 
+  scope?.setTag("existing_repos_count", existingRepos?.length.toString() || "0");
+  scope?.setTag("repos_to_create_count", reposToCreate.length.toString());
+  scope?.setTag("students_in_groups_count", studentsInAGroup?.length.toString() || "0");
+  scope?.setTag("assignment_groups_count", assignment.assignment_groups?.length.toString() || "0");
+
   const createRepo = async (
     name: string,
     github_username: string[],
@@ -133,12 +154,19 @@ async function handleRequest(req: Request) {
     }
 
     try {
-      const headSha = await github.createRepo(assignment.classes!.github_org!, repoName, assignment.template_repo);
+      const headSha = await github.createRepo(
+        assignment.classes!.github_org!,
+        repoName,
+        assignment.template_repo,
+        {},
+        scope
+      );
       await github.syncRepoPermissions(
         assignment.classes!.github_org!,
         repoName,
         assignment.classes!.slug!,
-        github_username
+        github_username,
+        scope
       );
       await adminSupabase
         .from("repositories")
@@ -175,7 +203,7 @@ async function handleRequest(req: Request) {
           }
           student_github_usernames = [github_username];
         }
-        await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, student_github_usernames);
+        await github.syncRepoPermissions(org, repoName, assignment.classes!.slug!, student_github_usernames, scope);
       })
     );
   }
