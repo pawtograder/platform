@@ -1,10 +1,5 @@
-import {
-  ChimeSDKMeetings,
-  CreateAttendeeCommandOutput,
-  CreateMeetingCommandOutput
-} from "npm:@aws-sdk/client-chime-sdk-meetings";
-import { Database } from "./SupabaseTypes.d.ts";
-import { jwtDecode } from "npm:jwt-decode";
+import { ChimeSDKMeetings } from "npm:@aws-sdk/client-chime-sdk-meetings";
+import type { Database } from "./SupabaseTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 function uuid() {
@@ -14,10 +9,6 @@ function uuid() {
     return v.toString(16);
   });
 }
-type JoinMeetingResponse = {
-  Meeting: CreateMeetingCommandOutput;
-  Attendee: CreateAttendeeCommandOutput;
-};
 
 type VideoMeetingSession = Database["public"]["Tables"]["video_meeting_sessions"]["Row"];
 type HelpRequest = Database["public"]["Tables"]["help_requests"]["Row"];
@@ -45,7 +36,6 @@ export type ChimeSNSMessage = {
 };
 
 export async function processSNSMessage(message: ChimeSNSMessage): Promise<void> {
-  console.log(JSON.stringify(message, null, 2));
   if (message.detail.eventType === "chime:AttendeeLeft") {
     const remainingAttendees = message.detail.attendeeCount;
     if (remainingAttendees === 0) {

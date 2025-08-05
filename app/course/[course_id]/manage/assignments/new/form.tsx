@@ -370,8 +370,8 @@ export default function AssignmentForm({
                   ? "Slug cannot be changed when editing an assignment"
                   : "A short identifier for the assignment, e.g. 'hw1' or 'project2'. Must contain only lowercase letters, numbers, underscores, and hyphens, and be less than 16 characters."
               }
-              errorText={errors.slug?.message?.toString()}
-              invalid={errors.slug ? true : false}
+              errorText={errors["slug"]?.message?.toString()}
+              invalid={errors["slug"] ? true : false}
               required={true}
             >
               <Input

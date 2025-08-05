@@ -1,4 +1,4 @@
-import { Database } from "../../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../../_shared/SupabaseTypes.d.ts";
 
 export type GradebookColumnStudent = Database["public"]["Tables"]["gradebook_column_students"]["Row"];
 export type GradebookColumnStudentWithMaxScore = Omit<GradebookColumnStudent, "score"> & {

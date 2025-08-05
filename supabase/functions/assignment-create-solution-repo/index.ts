@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, getFileFromRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { parse } from "jsr:@std/yaml";

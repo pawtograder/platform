@@ -11,7 +11,7 @@ import { TZDate } from "npm:@date-fns/tz";
 import { addSeconds, format, isAfter } from "npm:date-fns@4";
 import micromatch from "npm:micromatch";
 import { Open as openZip } from "npm:unzipper";
-import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
+import type { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import {
   cloneRepository,
   getRepoTarballURL,
@@ -20,15 +20,15 @@ import {
   validateOIDCToken
 } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { Buffer } from "node:buffer";
 import { decode } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 function formatSeconds(seconds: number) {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  const parts = [];
+  const parts: string[] = [];
   if (days > 0) parts.push(`${days} day${days === 1 ? "" : "s"}`);
   if (hours > 0) parts.push(`${hours} hour${hours === 1 ? "" : "s"}`);
   if (minutes > 0) parts.push(`${minutes} minute${minutes === 1 ? "" : "s"}`);

@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
 import { SecurityError, assertUserIsInCourse, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 async function handleAssignmentGroupApproveRequest(req: Request): Promise<{ message: string }> {
   const { join_request_id, course_id } = (await req.json()) as { join_request_id: number; course_id: number };

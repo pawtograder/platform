@@ -4,7 +4,7 @@ import { TZDate } from "npm:@date-fns/tz";
 import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 type RepoToCreate = {
   name: string;

@@ -8,7 +8,7 @@ import {
   assertUserIsInCourse,
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 async function handleAssignmentGroupLeave(req: Request): Promise<{ message: string }> {
   const { assignment_id } = (await req.json()) as { assignment_id: number };
   const adminSupabase = createClient<Database>(

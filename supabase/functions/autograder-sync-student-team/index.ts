@@ -7,7 +7,7 @@ import {
   wrapRequestHandler,
   fetchAllPages
 } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 //See also autograder-sync-staff-team
 async function handleRequest(req: Request) {

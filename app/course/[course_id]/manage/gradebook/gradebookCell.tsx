@@ -90,7 +90,6 @@ export function OverrideScoreForm({
       score: values.is_missing && !forceMissingOff ? null : values.score,
       is_missing: forceMissingOff ? false : values.is_missing
     });
-    console.log("updated");
     if (onSuccess) onSuccess();
   };
 

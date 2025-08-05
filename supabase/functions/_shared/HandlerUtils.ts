@@ -1,8 +1,8 @@
 import { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
-import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
-import { Database } from "./SupabaseTypes.d.ts";
+import type { RepositoryCheckRun } from "./FunctionTypes.d.ts";
+import type { Database } from "./SupabaseTypes.d.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

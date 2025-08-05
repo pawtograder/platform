@@ -68,7 +68,7 @@ import {
   type RowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { useVirtualizer, VirtualItem } from "@tanstack/react-virtual";
+import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import type { FieldValues } from "react-hook-form";
 import { FiDownload, FiPlus, FiFilter, FiChevronDown } from "react-icons/fi";
@@ -489,7 +489,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                     placeholder="Slug"
                     disabled
                   />
-                  {errors.slug && (
+                  {errors["slug"] && (
                     <Text color="red.500" fontSize="sm">
                       {errors["slug"].message as string}
                     </Text>
@@ -641,7 +641,7 @@ function DeleteColumnDialog({ columnId, onClose }: { columnId: number; onClose: 
         c.dependencies &&
         typeof c.dependencies === "object" &&
         "gradebook_columns" in c.dependencies &&
-        (c.dependencies.gradebook_columns as number[])?.includes(columnId)
+        (c.dependencies["gradebook_columns"] as number[])?.includes(columnId)
     );
   }, [columns, columnId]);
   return (
@@ -2090,7 +2090,7 @@ export default function GradebookTable() {
           >
             {/* Single row with all grouped headers */}
             <Table.Row style={{ display: "flex" }}>
-              {headerGroups[0].headers
+              {headerGroups[0]?.headers
                 .filter((header) => {
                   // Filter out headers that should be hidden when collapsed
                   if (header.column.id.startsWith("grade_")) {
@@ -2139,7 +2139,7 @@ export default function GradebookTable() {
                       if (groupEntry && groupEntry[1].columns.length > 1) {
                         // Check if this is the first column in its group
                         const groupColumns = groupEntry[1].columns;
-                        const isFirstInGroup = groupColumns[0].id === columnId;
+                        const isFirstInGroup = groupColumns[0]?.id === columnId;
                         const isCollapsed = collapsedGroups.has(groupEntry[1].groupName);
 
                         // When collapsed, check if this is the column that was selected to be shown
@@ -2151,14 +2151,16 @@ export default function GradebookTable() {
                         if (isFirstInGroup || (isCollapsed && isVisibleInCollapsedGroup)) {
                           // Create group header spanning all columns in this group
                           const groupColumnIds = groupColumns.map((col) => `grade_${col.id}`);
-                          const groupHeaders = headerGroups[0].headers.filter((h) => groupColumnIds.includes(h.id));
+                          const groupHeaders =
+                            headerGroups[0]?.headers.filter((h) => groupColumnIds.includes(h.id)) || [];
 
                           // Calculate width based on column positions
                           // First column is dynamic, others are 120px
                           const groupWidth = isCollapsed
                             ? 120 // Single column width
                             : groupHeaders.reduce((total, groupHeader) => {
-                                const headerColIdx = headerGroups[0].headers.findIndex((h) => h.id === groupHeader.id);
+                                const headerColIdx =
+                                  headerGroups[0]?.headers.findIndex((h) => h.id === groupHeader.id) ?? -1;
                                 return total + (headerColIdx === 0 ? firstColumnWidth : 120);
                               }, 0);
 

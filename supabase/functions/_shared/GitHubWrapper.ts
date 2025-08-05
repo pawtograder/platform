@@ -7,10 +7,10 @@ import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { Redis } from "https://esm.sh/ioredis?target=deno";
 
 import { Buffer } from "node:buffer";
-import { Database } from "./SupabaseTypes.d.ts";
+import type { Database } from "./SupabaseTypes.d.ts";
 
 import { createHash } from "node:crypto";
-import { FileListing } from "./FunctionTypes.d.ts";
+import type { FileListing } from "./FunctionTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];

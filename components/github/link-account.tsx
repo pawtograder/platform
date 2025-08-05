@@ -6,6 +6,8 @@ import { createBrowserClient } from "@supabase/ssr";
 import { BsGithub, BsInfoCircle } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot } from "../ui/popover";
 import { useIdentity } from "@/hooks/useIdentities";
+import { toaster } from "../ui/toaster";
+
 function HelpDialog() {
   return (
     <PopoverRoot>

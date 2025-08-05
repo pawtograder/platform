@@ -1246,11 +1246,11 @@ async function createLabSections(class_id: number, numSections: number, instruct
     const dayIndex = i % daysOfWeek.length;
     const timeIndex = Math.floor(i / daysOfWeek.length) % times.length;
     const startTime = times[timeIndex];
-    const endTime = `${String(parseInt(startTime.split(":")[0]) + 1).padStart(2, "0")}:${startTime.split(":")[1]}`;
+    const endTime = `${String(parseInt(startTime!.split(":")[0]!) + 1).padStart(2, "0")}:${startTime!.split(":")[1]!}`;
 
     // Distribute instructors among lab sections
     const instructorIndex = i % instructors.length;
-    const instructorId = instructors[instructorIndex].private_profile_id;
+    const instructorId = instructors[instructorIndex]!.private_profile_id;
 
     return {
       class_id: class_id,
@@ -1259,7 +1259,7 @@ async function createLabSections(class_id: number, numSections: number, instruct
       start_time: startTime!,
       end_time: endTime,
       lab_leader_id: instructorId,
-      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime} (led by ${instructors[instructorIndex].private_profile_name})`
+      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime} (led by ${instructors[instructorIndex]!.private_profile_name})`
     };
   });
 
@@ -1736,7 +1736,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const instructorLabCounts = new Map<string, number>();
     labSections.forEach((section, index) => {
       const instructorIndex = index % instructors.length;
-      const instructorName = instructors[instructorIndex].private_profile_name;
+      const instructorName = instructors[instructorIndex]!.private_profile_name;
       instructorLabCounts.set(instructorName, (instructorLabCounts.get(instructorName) || 0) + 1);
     });
     instructorLabCounts.forEach((count, name) => {
@@ -1760,7 +1760,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         studentTagTypes,
         class_id,
         "student",
-        instructors[0].user_id
+        instructors[0]!.user_id
       ),
       assignUsersToSectionsAndTags(
         graders,
@@ -1769,14 +1769,14 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         graderTagTypes,
         class_id,
         "grader",
-        instructors[0].user_id
+        instructors[0]!.user_id
       )
     ]);
     console.log(`✓ Assigned ${students.length} students and ${graders.length} graders to sections and tags`);
 
     // Create grader conflicts based on specified patterns
     console.log("\n⚔️ Creating grader conflicts based on specified patterns...");
-    await insertGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
+    await insertGraderConflicts(graders, students, class_id, instructors[0]!.private_profile_id);
 
     // Create assignments with enhanced rubric generation
     console.log("\n📚 Creating test assignments with diverse rubrics...");
@@ -2252,8 +2252,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     graderTagTypes.forEach((tagType) => console.log(`   Grader: ${tagType.name} (${tagType.color})`));
 
     console.log(`\n🔐 Instructor Login Credentials:`);
-    console.log(`   Email: ${instructors[0].email}`);
-    console.log(`   Password: ${instructors[0].password}`);
+    console.log(`   Email: ${instructors[0]!.email}`);
+    console.log(`   Password: ${instructors[0]!.password}`);
     console.log(`\n🔗 View the instructor dashboard at: /course/${class_id}`);
   } catch (error) {
     console.error("❌ Error seeding database:", error);
@@ -2301,6 +2301,7 @@ export async function runLargeScale() {
 }
 
 // Small-scale example for testing
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function runSmallScale() {
   const now = new Date();
 

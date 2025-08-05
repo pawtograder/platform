@@ -1,12 +1,12 @@
-import { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { Page } from "@playwright/test";
+import type { Assignment, Course, RubricCheck } from "@/utils/supabase/DatabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { addDays, format } from "date-fns";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
-export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+export const supabase = createClient<Database>(process.env["SUPABASE_URL"]!, process.env["SUPABASE_SERVICE_ROLE_KEY"]!);
 // export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
 export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
 export function getTestRunPrefix(randomSuffix?: string) {
@@ -122,9 +122,9 @@ export async function createUserInClass({
   lab_section_id?: number;
   randomSuffix?: string;
 }): Promise<TestingUser> {
-  const password = process.env.TEST_PASSWORD || "change-it";
+  const password = process.env["TEST_PASSWORD"] || "change-it";
   const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
-  const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
+  const workerIndex = process.env["TEST_WORKER_INDEX"] || "undefined-worker-index";
   const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const name = `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
   const public_profile_name = `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
@@ -998,7 +998,7 @@ export async function createAssignmentsAndGradebookColumns({
 }> {
   // Import required dependencies
   const { addDays } = await import("date-fns");
-  const { all, ConstantNode, create, FunctionNode } = await import("mathjs");
+  const mathjs = await import("mathjs");
   const { minimatch } = await import("minimatch");
 
   // Helper function to extract dependencies from score expressions
@@ -1009,7 +1009,7 @@ export async function createAssignmentsAndGradebookColumns({
   ): { assignments?: number[]; gradebook_columns?: number[] } | null {
     if (!expr) return null;
 
-    const math = create(all);
+    const math = mathjs.create(mathjs.all || {});
     const dependencies: Record<string, Set<number>> = {};
     const errors: string[] = [];
 
@@ -1022,13 +1022,16 @@ export async function createAssignmentsAndGradebookColumns({
 
       exprNode.traverse((node) => {
         if (node.type === "FunctionNode") {
-          const functionNode = node as any;
+          const functionNode = node as unknown as {
+            fn: { name: string };
+            args: Array<{ type: string; value?: unknown }>;
+          };
           const functionName = functionNode.fn.name;
           if (functionName in availableDependencies) {
             const args = functionNode.args;
-            const argType = args[0].type;
+            const argType = args[0]?.type;
             if (argType === "ConstantNode") {
-              const argName = (args[0] as any).value;
+              const argName = args[0]?.value;
               if (typeof argName === "string") {
                 const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
                   minimatch(d.slug!, argName)
@@ -1037,7 +1040,7 @@ export async function createAssignmentsAndGradebookColumns({
                   if (!(functionName in dependencies)) {
                     dependencies[functionName] = new Set();
                   }
-                  matching.forEach((d) => dependencies[functionName].add(d.id));
+                  matching.forEach((d) => dependencies[functionName]?.add(d.id));
                 } else {
                   errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
                 }
@@ -1456,9 +1459,10 @@ export async function createAssignmentsAndGradebookColumns({
             ordinal: criteriaTemplate.ordinal,
             total_points: criteriaTemplate.total_points,
             is_additive: true,
-            rubric_part_id: partData.id,
-            rubric_id: rubricId || 0
-          })
+            rubric_part_id: partData.id!,
+            rubric_id: rubricId!
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any)
           .select("id")
           .single();
 
@@ -1471,7 +1475,7 @@ export async function createAssignmentsAndGradebookColumns({
           const { data: checkData, error: checkError } = await supabase
             .from("rubric_checks")
             .insert({
-              rubric_criteria_id: criteriaData.id,
+              rubric_criteria_id: criteriaData.id!,
               name: checkTemplate.name,
               description: `${checkTemplate.name} evaluation`,
               ordinal: checkTemplate.ordinal,
@@ -1480,7 +1484,8 @@ export async function createAssignmentsAndGradebookColumns({
               is_comment_required: checkTemplate.is_comment_required,
               class_id: class_id,
               is_required: checkTemplate.is_required
-            })
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            } as any)
             .select("*")
             .single();
 
@@ -1672,7 +1677,7 @@ export async function createAssignmentsAndGradebookColumns({
       private_profile_name: `Student ${student.user_id}`,
       public_profile_name: `Pseudonym ${student.user_id}`,
       email: `student-${student.user_id}@pawtograder.net`,
-      password: process.env.TEST_PASSWORD || "change-it",
+      password: process.env["TEST_PASSWORD"] || "change-it",
       user_id: student.user_id,
       private_profile_id: student.private_profile_id,
       public_profile_id: student.public_profile_id,

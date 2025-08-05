@@ -1,9 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { AutograderRerunGraderRequest } from "../_shared/FunctionTypes.d.ts";
+import type { AutograderRerunGraderRequest } from "../_shared/FunctionTypes.d.ts";
 import { triggerWorkflow } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructorOrGrader, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 async function handleRequest(req: Request) {
   const { submission_ids, class_id } = (await req.json()) as AutograderRerunGraderRequest;

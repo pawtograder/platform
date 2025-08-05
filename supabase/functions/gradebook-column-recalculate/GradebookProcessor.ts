@@ -3,7 +3,7 @@ import { all, ConstantNode, create, EvalFunction, FunctionNode, MathNode } from 
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
   addDependencySourceFunctions,
   ContextFunctions,

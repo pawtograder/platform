@@ -5,10 +5,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { getFileFromRepo, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
 import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
-import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
-import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
+import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
 type RequestBody = {
   new_repo: string;
   assignment_id: number;

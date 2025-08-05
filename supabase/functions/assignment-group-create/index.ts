@@ -1,10 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
-import { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
+import type { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 async function createAutograderGroup(req: Request): Promise<{ message: string }> {
   //Get the user
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {

@@ -1,4 +1,4 @@
-import { Database, Json } from "./SupabaseTypes.d.ts";
+import type { Database, Json } from "./SupabaseTypes.d.ts";
 
 export type Autograder = Database["public"]["Tables"]["autograder"]["Row"];
 export type AutograderRegressionTest = Database["public"]["Tables"]["autograder_regression_test"]["Row"];

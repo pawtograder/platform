@@ -7,7 +7,7 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 //See also autograder-sync-student-team
 async function handleRequest(req: Request) {

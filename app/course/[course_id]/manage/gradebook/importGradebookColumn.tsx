@@ -6,7 +6,7 @@ import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
-import { GradebookColumn, GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
+import type { GradebookColumn, GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Dialog, HStack, Icon, NativeSelect, Portal, Table, Text, VStack } from "@chakra-ui/react";
 import { useInvalidate } from "@refinedev/core";
 import { parse } from "csv-parse/browser/esm/sync";

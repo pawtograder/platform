@@ -2,7 +2,7 @@
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   Assignment,
   GradebookColumn,
   GradebookColumnDependencies,
@@ -580,7 +580,9 @@ export class GradebookController {
     this.studentColumnIndex.forEach((studentId, key) => {
       // Extract column_id from the key (format: "student_id:column_id")
       const keyParts = key.split(":");
-      const keyColumnId = parseInt(keyParts[1]);
+      const columnIdStr = keyParts[1];
+      if (!columnIdStr) return;
+      const keyColumnId = parseInt(columnIdStr);
 
       if (keyColumnId === column_id) {
         const student = this.gradebook_column_students.rows.find((s) => s.id === studentId);
