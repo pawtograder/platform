@@ -1,7 +1,9 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useContext, useState, type ReactNode, useEffect, useMemo } from "react";
+"use client";
+
+import React, { useContext, useState, ReactNode, useEffect, useMemo } from "react";
 import { VideoPriorityBasedPolicy } from "amazon-chime-sdk-js";
 import {
   MeetingMode,

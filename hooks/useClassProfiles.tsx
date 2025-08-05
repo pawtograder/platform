@@ -30,18 +30,19 @@ export function useGradersAndInstructors() {
       .filter((r) => r.role === "grader" || r.role === "instructor")
       .map((r) => r.private_profile_id);
     return profiles.profiles.filter((p) => staff.includes(p.id));
-  }, [profiles]);
+  }, [profiles.allVisibleRoles, profiles.profiles]);
   return staffRoster;
 }
 
 export function useStudentRoster() {
   const profiles = useClassProfiles();
   const studentRoster = useMemo(() => {
-    const users = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
-    return profiles.profiles.filter((p) => users.includes(p.id));
+    const students = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
+    return profiles.profiles.filter((p) => students.includes(p.id));
   }, [profiles.allVisibleRoles, profiles.profiles]);
   return studentRoster;
 }
+
 export function useClassProfiles() {
   const context = useContext(ClassProfileContext);
   if (!context) {
@@ -113,7 +114,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     pagination: {
       pageSize: 1000
     },
-    filters
+    filters,
+    liveMode: "auto"
   });
   const { data: roles } = useList<UserRole>({
     resource: "user_roles",
@@ -127,7 +129,8 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
       cacheTime: Infinity,
       staleTime: Infinity
     },
-    filters
+    filters,
+    liveMode: "auto"
   });
 
   if (!profiles?.data || !roles?.data) {

@@ -18,18 +18,16 @@ import {
 import { FaCircleUser } from "react-icons/fa6";
 import { PiSignOut } from "react-icons/pi";
 import { signOutAction } from "../actions";
-
 import { useInvalidate, useList, useOne } from "@refinedev/core";
-
 import { ColorModeButton } from "@/components/ui/color-mode";
 import Link from "@/components/ui/link";
-import NotificationsBox from "@/components/ui/notifications/notifications-box";
+import NotificationsBox from "@/components/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState, { useCourse } from "@/hooks/useAuthState";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { useRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
+import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { createClient } from "@/utils/supabase/client";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import { Avatar } from "@chakra-ui/react";
@@ -38,6 +36,8 @@ import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef, use
 import { FaGithub, FaUnlink } from "react-icons/fa";
 import { HiOutlineSupport } from "react-icons/hi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
+import NotificationPreferences from "@/components/notifications/notification-preferences";
+import { IoNotificationsCircle } from "react-icons/io5";
 
 function SupportMenu() {
   return (
@@ -411,6 +411,40 @@ const ProfileChangesMenu = () => {
   );
 };
 
+/**
+ * Dialog component to allow users to manage their notification preferences.
+ */
+const NotificationPreferencesMenu = () => {
+  return (
+    <Dialog.Root size={"md"} placement={"center"}>
+      <Dialog.Trigger asChild>
+        <Button variant="ghost" colorPalette="gray" w="100%" justifyContent="flex-start" size="sm" py={0}>
+          <IoNotificationsCircle />
+          Notification Settings
+        </Button>
+      </Dialog.Trigger>
+      <Portal>
+        <Dialog.Backdrop />
+        <Dialog.Positioner>
+          <Dialog.Content maxHeight="80vh" overflowY="auto">
+            <Dialog.Header>
+              <Dialog.Title>Notification Settings</Dialog.Title>
+            </Dialog.Header>
+            <Dialog.Body>
+              <NotificationPreferences />
+            </Dialog.Body>
+            <Dialog.Footer>
+              <Dialog.ActionTrigger asChild>
+                <Button variant="outline">Close</Button>
+              </Dialog.ActionTrigger>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
+    </Dialog.Root>
+  );
+};
+
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
   const supabase = createClient();
@@ -550,6 +584,7 @@ function UserSettingsMenu() {
                   </>
                 )}
                 <ProfileChangesMenu />
+                <NotificationPreferencesMenu />
                 <Button
                   variant="ghost"
                   pl={0}
@@ -587,8 +622,12 @@ function ObfuscatedGradesModePicker() {
   );
 }
 
+/**
+ * Shows realtime connection status for both class and office hours functionality.
+ * Automatically detects office hours context and includes relevant channels.
+ */
 function ConnectionStatusIndicator() {
-  const status = useRealtimeConnectionStatus();
+  const status = useAutomaticRealtimeConnectionStatus();
 
   if (!status) {
     return null;
@@ -634,9 +673,35 @@ function ConnectionStatusIndicator() {
         return "Staff submission data for this submission";
       case "submission_user":
         return "Your submission data for this submission";
+      case "help_queues":
+        return "Office hours queues";
+      case "help_request":
+        return "Help request data";
+      case "help_request_staff":
+        return "Help request staff data";
+      case "help_queue":
+        return "Help queue data";
       default:
         return type;
     }
+  };
+
+  const getChannelDetails = (channel: (typeof status.channels)[0]) => {
+    const details = [];
+
+    if (channel.submissionId) {
+      details.push(`submission ${channel.submissionId}`);
+    }
+
+    if (channel.help_request_id) {
+      details.push(`request ${channel.help_request_id}`);
+    }
+
+    if (channel.help_queue_id) {
+      details.push(`queue ${channel.help_queue_id}`);
+    }
+
+    return details.length > 0 ? ` (${details.join(", ")})` : "";
   };
 
   const tooltipContent = (
@@ -650,7 +715,7 @@ function ConnectionStatusIndicator() {
           <Box width={2} height={2} borderRadius="full" bg={channel.state === "joined" ? "green.400" : "red.400"} />
           <Text>
             {getChannelTypeName(channel.type)}
-            {channel.submissionId ? ` (${channel.submissionId})` : ""}
+            {getChannelDetails(channel)}
           </Text>
           <Text color="gray.400">({channel.state})</Text>
         </HStack>

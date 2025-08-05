@@ -64,6 +64,13 @@ export type Notification = GetResult<
   Database["public"]["Tables"]["notifications"]["Relationships"],
   "*"
 >;
+export type NotificationPreferences = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["notification_preferences"]["Row"],
+  "notification_preferences",
+  Database["public"]["Tables"]["notification_preferences"]["Relationships"],
+  "*"
+>;
 export type Submission = GetResult<
   Database["public"],
   Database["public"]["Tables"]["submissions"]["Row"],
@@ -316,6 +323,14 @@ export type HelpQueue = GetResult<
   "*"
 >;
 
+export type HelpQueueAssignment = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_queue_assignments"]["Row"],
+  "help_queue_assignments",
+  Database["public"]["Tables"]["help_queue_assignments"]["Relationships"],
+  "*"
+>;
+
 export type HelpRequest = GetResult<
   Database["public"],
   Database["public"]["Tables"]["help_requests"]["Row"],
@@ -323,6 +338,151 @@ export type HelpRequest = GetResult<
   Database["public"]["Tables"]["help_requests"]["Relationships"],
   "*"
 >;
+
+export type HelpRequestStudent = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_students"]["Row"],
+  "help_request_students",
+  Database["public"]["Tables"]["help_request_students"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestModeration = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_moderation"]["Row"],
+  "help_request_moderation",
+  Database["public"]["Tables"]["help_request_moderation"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestMessageReadReceipt = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_message_read_receipts"]["Row"],
+  "help_request_message_read_receipts",
+  Database["public"]["Tables"]["help_request_message_read_receipts"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestLocationType = Database["public"]["Enums"]["location_type"];
+
+export type HelpRequestTemplate = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_templates"]["Row"],
+  "help_request_templates",
+  Database["public"]["Tables"]["help_request_templates"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestModeration = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_moderation"]["Row"],
+  "help_request_moderation",
+  Database["public"]["Tables"]["help_request_moderation"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestFeedback = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_feedback"]["Row"],
+  "help_request_feedback",
+  Database["public"]["Tables"]["help_request_feedback"]["Relationships"],
+  "*"
+>;
+
+export type StudentKarmaNotes = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["student_karma_notes"]["Row"],
+  "student_karma_notes",
+  Database["public"]["Tables"]["student_karma_notes"]["Relationships"],
+  "*"
+>;
+
+export type VideoMeetingSession = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["video_meeting_sessions"]["Row"],
+  "video_meeting_sessions",
+  Database["public"]["Tables"]["video_meeting_sessions"]["Relationships"],
+  "*"
+>;
+
+export type StudentHelpActivity = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["student_help_activity"]["Row"],
+  "student_help_activity",
+  Database["public"]["Tables"]["student_help_activity"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestWatcher = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_watchers"]["Row"],
+  "help_request_watchers",
+  Database["public"]["Tables"]["help_request_watchers"]["Relationships"],
+  "*"
+>;
+
+export type OfficeHoursBroadcastMessage = {
+  type: "table_change" | "staff_data_change" | "queue_change" | "channel_created" | "system";
+  operation?: "INSERT" | "UPDATE" | "DELETE";
+  table?: string;
+  row_id?: number | string;
+  data?: Record<string, unknown>;
+  help_request_id?: number;
+  help_queue_id?: number;
+  class_id: number;
+  student_profile_id?: string;
+  timestamp: string;
+};
+
+export type HelpRequestDataChangeMessage = OfficeHoursBroadcastMessage & {
+  type: "table_change";
+  operation: "INSERT" | "UPDATE" | "DELETE";
+  table:
+    | "help_requests"
+    | "help_request_messages"
+    | "help_request_message_read_receipts"
+    | "help_request_file_references"
+    | "help_request_students";
+  help_request_id: number;
+};
+
+export type HelpRequestStaffDataChangeMessage = OfficeHoursBroadcastMessage & {
+  type: "staff_data_change";
+  operation: "INSERT" | "UPDATE" | "DELETE";
+  table: "help_request_moderation" | "student_karma_notes";
+  student_profile_id: string;
+  help_request_id?: number;
+};
+
+export type HelpQueueDataChangeMessage = OfficeHoursBroadcastMessage & {
+  type: "queue_change";
+  operation: "INSERT" | "UPDATE" | "DELETE";
+  table: "help_queues" | "help_queue_assignments" | "help_requests";
+  help_queue_id: number;
+};
+
+/**
+ * Channel subscription filter options for office hours
+ */
+export type OfficeHoursMessageFilter = {
+  type?: OfficeHoursBroadcastMessage["type"];
+  table?: string;
+  help_request_id?: number;
+  help_queue_id?: number;
+  student_profile_id?: string;
+};
+
+export type OfficeHoursMessageCallback = (message: OfficeHoursBroadcastMessage) => void;
+
+export type OfficeHoursSubscription = {
+  id: string;
+  filter: OfficeHoursMessageFilter;
+  callback: OfficeHoursMessageCallback;
+};
+
+export type HelpRequestWithStudentCount = HelpRequest & {
+  student_count: number;
+};
 
 export type UserProfile = GetResult<
   Database["public"],
@@ -346,11 +506,34 @@ export type UserProfileWithUser = GetResult<
   Database["public"]["Tables"]["profiles"]["Relationships"],
   "*, users(*)"
 >;
+
+export type HelpRequestMessageReadReceipt = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_message_read_receipts"]["Row"],
+  "help_request_message_read_receipts",
+  Database["public"]["Tables"]["help_request_message_read_receipts"]["Relationships"],
+  "*"
+>;
+
 export type HelpRequestMessage = GetResult<
   Database["public"],
   Database["public"]["Tables"]["help_request_messages"]["Row"],
   "help_request_messages",
   Database["public"]["Tables"]["help_request_messages"]["Relationships"],
+  "*"
+>;
+
+export type HelpRequestMessageWithoutId = Omit<HelpRequestMessage, "id">;
+
+export type HelpRequestMessageWithReadReceipts = HelpRequestMessage & {
+  read_receipts: HelpRequestMessageReadReceipt[];
+};
+
+export type HelpRequestFileReference = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["help_request_file_references"]["Row"],
+  "help_request_file_references",
+  Database["public"]["Tables"]["help_request_file_references"]["Relationships"],
   "*"
 >;
 

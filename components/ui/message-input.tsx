@@ -17,6 +17,8 @@ import { Tooltip } from "./tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { toaster } from "./toaster";
+import { isTextFile, getLanguageFromFile } from "@/lib/utils";
+
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   defaultSingleLine?: boolean;
   sendMessage: (message: string, profile_id: string, close?: boolean) => Promise<void>;
@@ -32,7 +34,20 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   onClose?: () => void;
   closeButtonText?: string;
   ariaLabel?: string;
+  /**
+   * The folder name to use for file uploads within the course directory.
+   * Files will be uploaded to: {course_id}/{uploadFolder}/{uuid}/{fileName}
+   * @default "discussion"
+   */
+  uploadFolder?: string;
+  /**
+   * Maximum number of lines for code files to be pasted as content.
+   * Files exceeding this limit will be uploaded as attachments instead.
+   * @default 300
+   */
+  maxCodeLines?: number;
 };
+
 export default function MessageInput(props: MessageInputProps) {
   const {
     defaultSingleLine,
@@ -50,6 +65,8 @@ export default function MessageInput(props: MessageInputProps) {
     closeButtonText,
     value: initialValue,
     ariaLabel,
+    uploadFolder = "discussion",
+    maxCodeLines = 300,
     ...editorProps
   } = props;
   const { course_id } = useParams();
@@ -77,29 +94,63 @@ export default function MessageInput(props: MessageInputProps) {
 
   const toggleEmojiPicker = () => setShowEmojiPicker(!showEmojiPicker);
   const toggleAnonymousMode = () => setAnonymousMode(!anonymousMode);
+
   const fileUpload = useCallback(
     async (file: File) => {
+      // Check if this is a text/code file
+      if (isTextFile(file)) {
+        try {
+          const content = await file.text();
+          const lineCount = content.split("\n").length;
+
+          // If file has too many lines, upload as file instead of pasting content
+          if (lineCount > maxCodeLines) {
+            // Fall through to regular file upload logic below
+          } else {
+            // File is small enough, send as code block
+            const language = getLanguageFromFile(file.name);
+            const codeBlock = `\`\`\`${language}\n${content}\n\`\`\``;
+
+            // Send the file content as a code block message
+            await sendMessage(`**${file.name}**\n\n${codeBlock}`, profile_id, false);
+            return null; // No URL for text files
+          }
+        } catch (error) {
+          toaster.error({
+            title: "Error reading file",
+            description: `Failed to read file content: ${error instanceof Error ? error.message : "Unknown error"}`
+          });
+          return null;
+        }
+      }
+
+      // For non-text files, upload to storage as before
       const supabase = createClient();
       const uuid = crypto.randomUUID();
       const fileName = file.name.replace(/[^a-zA-Z0-9-_\.]/g, "_");
 
       const { error } = await supabase.storage
         .from("uploads")
-        .upload(`${course_id}/discussion/${uuid}/${fileName}`, file);
+        .upload(`${course_id}/${uploadFolder}/${uuid}/${fileName}`, file);
       if (error) {
         toaster.error({
-          title: "Error uploading image: " + error.name,
+          title: "Error uploading file: " + error.name,
           description: error.message
         });
-        return;
+        return null;
       }
       const urlEncodedFilename = encodeURIComponent(fileName);
 
-      const url = `${process.env["NEXT_PUBLIC_SUPABASE_URL"]}/storage/v1/object/public/uploads/${course_id}/discussion/${uuid}/${urlEncodedFilename}`;
-      sendMessage(`Attachment: [${file.name}](${url})`, profile_id, false);
+      const url = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/uploads/${course_id}/${uploadFolder}/${uuid}/${urlEncodedFilename}`;
+
+      // Determine if it's an image for proper markdown formatting
+      const isImage = file.type.startsWith("image/");
+      const markdownLink = isImage ? `![${file.name}](${url})` : `[${file.name}](${url})`;
+
+      await sendMessage(`Attachment: ${markdownLink}`, profile_id, false);
       return url;
     },
-    [course_id, profile_id, sendMessage]
+    [course_id, uploadFolder, profile_id, sendMessage, maxCodeLines]
   );
 
   const attachFile = useCallback(
@@ -121,17 +172,13 @@ export default function MessageInput(props: MessageInputProps) {
           files.push(file);
         }
       }
-      const insertedMarkdowns = await Promise.all(
-        files.map(async (file) => {
-          const url = await fileUpload(file);
-          const isImage = file.type.startsWith("image/");
-          const insertedMarkdown = isImage ? `![](${url})` : `[${file.name}](${url})`;
-          return insertedMarkdown;
-        })
-      );
-      sendMessage("Attachment: " + insertedMarkdowns.join("\n"), profile_id, false);
+
+      // Process each file individually since text files are handled differently
+      for (const file of files) {
+        await fileUpload(file);
+      }
     },
-    [profile_id, fileUpload, sendMessage]
+    [fileUpload]
   );
   if (singleLine) {
     return (
@@ -196,7 +243,7 @@ export default function MessageInput(props: MessageInputProps) {
                   setValue("");
                 })
                 .catch((error) => {
-                  toaster.error({
+                  toaster.create({
                     title: "Error sending message",
                     description: error instanceof Error ? error.message : "Unknown error"
                   });
@@ -337,7 +384,7 @@ export default function MessageInput(props: MessageInputProps) {
                 setIsSending(true);
                 await sendMessage(value!, profile_id, true);
               } catch (error) {
-                toaster.error({
+                toaster.create({
                   title: "Error sending message",
                   description: error instanceof Error ? error.message : "Unknown error"
                 });
@@ -485,7 +532,7 @@ export default function MessageInput(props: MessageInputProps) {
               await sendMessage(value!, profile_id, true);
               setValue("");
             } catch (error) {
-              toaster.error({
+              toaster.create({
                 title: "Error sending message",
                 description: error instanceof Error ? error.message : "Unknown error"
               });

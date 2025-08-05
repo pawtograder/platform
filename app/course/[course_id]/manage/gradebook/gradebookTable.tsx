@@ -195,6 +195,7 @@ function AddColumnDialog() {
       setIsOpen(false);
     } catch (e) {
       setIsLoading(false);
+      toaster.dismiss();
       let message = "An unknown error occurred";
       if (e && typeof e === "object" && "message" in e && typeof (e as { message?: string }).message === "string") {
         message = (e as { message: string }).message;
@@ -384,7 +385,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   const scoreExpression = watch("scoreExpression");
 
   const onSubmit = async (data: FieldValues) => {
-    const loadingToast = toaster.create({
+    toaster.info({
       title: "Saving...",
       description: "This may take a few seconds to recalculate..."
     });
@@ -406,11 +407,11 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
         }
       });
       setIsLoading(false);
-      toaster.dismiss(loadingToast);
+      toaster.dismiss();
       onClose();
     } catch (e) {
-      toaster.dismiss(loadingToast);
       setIsLoading(false);
+      toaster.dismiss();
       let message = "An unknown error occurred";
       if (e && typeof e === "object" && "message" in e && typeof (e as { message?: string }).message === "string") {
         message = (e as { message: string }).message;
@@ -1148,11 +1149,11 @@ function GradebookColumnHeader({
   const allGrades = useGradebookColumnGrades(column_id);
 
   const moveLeft = useCallback(async () => {
-    if (column.sort_order === 0) return;
+    if (column.sort_order == null || column.sort_order === 0) return;
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order
+        sort_order: column.sort_order!
       })
       .eq("gradebook_id", column.gradebook_id)
       .eq("sort_order", column.sort_order! - 1);
@@ -1170,10 +1171,11 @@ function GradebookColumnHeader({
   }, [column_id, column, invalidate, supabase]);
 
   const moveRight = useCallback(async () => {
+    if (column.sort_order == null) return;
     await supabase
       .from("gradebook_columns")
       .update({
-        sort_order: column.sort_order
+        sort_order: column.sort_order!
       })
       .eq("gradebook_id", column.gradebook_id)
       .eq("sort_order", (column.sort_order ?? 0) + 1);

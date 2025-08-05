@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useCourseController } from "./useCourseController";
+
 export function useDiscussionThreadWatchStatus(threadId: number) {
   const controller = useCourseController();
   const [curWatch, setCurWatch] = useState<DiscussionThreadWatcher | undefined>(undefined);
@@ -46,7 +47,7 @@ export function useDiscussionThreadWatchStatus(threadId: number) {
         });
       }
     },
-    [threadId, curWatch, course_id, createThreadWatcher, updateWatch, user]
+    [threadId, curWatch, course_id, user?.id, updateWatch, createThreadWatcher]
   );
   return {
     status: curWatch?.enabled ?? false,

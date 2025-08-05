@@ -799,6 +799,7 @@ function EmailsInnerPage() {
           <Field.Root>
             <Field.Label>Body</Field.Label>
             <MdEditor
+              uploadFolder="emails"
               textareaProps={{
                 "aria-label": "Email body"
               }}

@@ -37,6 +37,9 @@ export function useUserProfile(
       });
       setProfile(data);
       return unsubscribe;
+    } else {
+      // Clear profile when id becomes null/undefined
+      setProfile(undefined);
     }
   }, [id, controller]);
   const ret = useMemo(() => {

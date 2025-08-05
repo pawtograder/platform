@@ -2461,6 +2461,68 @@ export type Database = {
           }
         ];
       };
+      help_queue_assignments: {
+        Row: {
+          class_id: number;
+          ended_at: string | null;
+          help_queue_id: number;
+          id: number;
+          is_active: boolean;
+          max_concurrent_students: number;
+          started_at: string;
+          ta_profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          ended_at?: string | null;
+          help_queue_id: number;
+          id?: number;
+          is_active?: boolean;
+          max_concurrent_students?: number;
+          started_at?: string;
+          ta_profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          ended_at?: string | null;
+          help_queue_id?: number;
+          id?: number;
+          is_active?: boolean;
+          max_concurrent_students?: number;
+          started_at?: string;
+          ta_profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_queue_assignments_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_queue_assignments_help_queue_id_fkey";
+            columns: ["help_queue_id"];
+            isOneToOne: false;
+            referencedRelation: "help_queues";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_queue_assignments_ta_profile_id_fkey";
+            columns: ["ta_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_queue_assignments_ta_profile_id_fkey";
+            columns: ["ta_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       help_queues: {
         Row: {
           available: boolean;
@@ -2471,7 +2533,10 @@ export type Database = {
           depth: number;
           description: string;
           id: number;
+          is_active: boolean;
+          max_concurrent_requests: number | null;
           name: string;
+          queue_type: Database["public"]["Enums"]["help_queue_type"];
         };
         Insert: {
           available?: boolean;
@@ -2482,7 +2547,10 @@ export type Database = {
           depth: number;
           description: string;
           id?: number;
+          is_active?: boolean;
+          max_concurrent_requests?: number | null;
           name: string;
+          queue_type?: Database["public"]["Enums"]["help_queue_type"];
         };
         Update: {
           available?: boolean;
@@ -2493,7 +2561,10 @@ export type Database = {
           depth?: number;
           description?: string;
           id?: number;
+          is_active?: boolean;
+          max_concurrent_requests?: number | null;
           name?: string;
+          queue_type?: Database["public"]["Enums"]["help_queue_type"];
         };
         Relationships: [
           {
@@ -2502,6 +2573,253 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          }
+        ];
+      };
+      help_request_feedback: {
+        Row: {
+          class_id: number;
+          comment: string | null;
+          created_at: string;
+          help_request_id: number;
+          id: number;
+          student_profile_id: string;
+          thumbs_up: boolean;
+        };
+        Insert: {
+          class_id: number;
+          comment?: string | null;
+          created_at?: string;
+          help_request_id: number;
+          id?: number;
+          student_profile_id: string;
+          thumbs_up: boolean;
+        };
+        Update: {
+          class_id?: number;
+          comment?: string | null;
+          created_at?: string;
+          help_request_id?: number;
+          id?: number;
+          student_profile_id?: string;
+          thumbs_up?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_feedback_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_feedback_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_feedback_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_feedback_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      help_request_file_references: {
+        Row: {
+          assignment_id: number;
+          class_id: number;
+          created_at: string;
+          help_request_id: number;
+          id: number;
+          line_number: number | null;
+          submission_file_id: number | null;
+          submission_id: number | null;
+        };
+        Insert: {
+          assignment_id: number;
+          class_id: number;
+          created_at?: string;
+          help_request_id: number;
+          id?: number;
+          line_number?: number | null;
+          submission_file_id?: number | null;
+          submission_id?: number | null;
+        };
+        Update: {
+          assignment_id?: number;
+          class_id?: number;
+          created_at?: string;
+          help_request_id?: number;
+          id?: number;
+          line_number?: number | null;
+          submission_file_id?: number | null;
+          submission_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_submission_file_id_fkey";
+            columns: ["submission_file_id"];
+            isOneToOne: false;
+            referencedRelation: "submission_files";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "help_request_file_references_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
+      help_request_message_read_receipts: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          help_request_id: number | null;
+          id: number;
+          message_id: number;
+          viewer_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          help_request_id?: number | null;
+          id?: number;
+          message_id: number;
+          viewer_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          help_request_id?: number | null;
+          id?: number;
+          message_id?: number;
+          viewer_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_message_read_receipts_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_message_id_fkey";
+            columns: ["message_id"];
+            isOneToOne: false;
+            referencedRelation: "help_request_messages";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_viewer_id_fkey";
+            columns: ["viewer_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_viewer_id_fkey";
+            columns: ["viewer_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };
@@ -2514,7 +2832,7 @@ export type Database = {
           id: number;
           instructors_only: boolean;
           message: string;
-          requestor: string | null;
+          reply_to_message_id: number | null;
         };
         Insert: {
           author: string;
@@ -2524,7 +2842,7 @@ export type Database = {
           id?: number;
           instructors_only?: boolean;
           message: string;
-          requestor?: string | null;
+          reply_to_message_id?: number | null;
         };
         Update: {
           author?: string;
@@ -2534,7 +2852,7 @@ export type Database = {
           id?: number;
           instructors_only?: boolean;
           message?: string;
-          requestor?: string | null;
+          reply_to_message_id?: number | null;
         };
         Relationships: [
           {
@@ -2564,6 +2882,264 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "help_requests";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_messages_reply_to_message_id_fkey";
+            columns: ["reply_to_message_id"];
+            isOneToOne: false;
+            referencedRelation: "help_request_messages";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      help_request_moderation: {
+        Row: {
+          action_type: Database["public"]["Enums"]["moderation_action_type"];
+          class_id: number;
+          created_at: string;
+          duration_minutes: number | null;
+          expires_at: string | null;
+          help_request_id: number;
+          id: number;
+          is_permanent: boolean;
+          message_id: number | null;
+          moderator_profile_id: string;
+          reason: string | null;
+          student_profile_id: string;
+        };
+        Insert: {
+          action_type: Database["public"]["Enums"]["moderation_action_type"];
+          class_id: number;
+          created_at?: string;
+          duration_minutes?: number | null;
+          expires_at?: string | null;
+          help_request_id: number;
+          id?: number;
+          is_permanent?: boolean;
+          message_id?: number | null;
+          moderator_profile_id: string;
+          reason?: string | null;
+          student_profile_id: string;
+        };
+        Update: {
+          action_type?: Database["public"]["Enums"]["moderation_action_type"];
+          class_id?: number;
+          created_at?: string;
+          duration_minutes?: number | null;
+          expires_at?: string | null;
+          help_request_id?: number;
+          id?: number;
+          is_permanent?: boolean;
+          message_id?: number | null;
+          moderator_profile_id?: string;
+          reason?: string | null;
+          student_profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_moderation_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_moderation_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_moderation_message_id_fkey";
+            columns: ["message_id"];
+            isOneToOne: false;
+            referencedRelation: "help_request_messages";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_moderation_moderator_profile_id_fkey";
+            columns: ["moderator_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_moderation_moderator_profile_id_fkey";
+            columns: ["moderator_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "help_request_moderation_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_moderation_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      help_request_students: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          help_request_id: number;
+          id: number;
+          profile_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          help_request_id: number;
+          id?: number;
+          profile_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          help_request_id?: number;
+          id?: number;
+          profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_students_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_students_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_students_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_students_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      help_request_templates: {
+        Row: {
+          category: string;
+          class_id: number;
+          created_at: string;
+          created_by_id: string;
+          description: string | null;
+          id: number;
+          is_active: boolean;
+          name: string;
+          template_content: string;
+          usage_count: number;
+        };
+        Insert: {
+          category: string;
+          class_id: number;
+          created_at?: string;
+          created_by_id: string;
+          description?: string | null;
+          id?: number;
+          is_active?: boolean;
+          name: string;
+          template_content: string;
+          usage_count?: number;
+        };
+        Update: {
+          category?: string;
+          class_id?: number;
+          created_at?: string;
+          created_by_id?: string;
+          description?: string | null;
+          id?: number;
+          is_active?: boolean;
+          name?: string;
+          template_content?: string;
+          usage_count?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_templates_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_templates_created_by_id_fkey";
+            columns: ["created_by_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      help_request_watchers: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          enabled: boolean;
+          help_request_id: number;
+          id: number;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          enabled: boolean;
+          help_request_id: number;
+          id?: number;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          enabled?: boolean;
+          help_request_id?: number;
+          id?: number;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "help_request_watchers_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_watchers_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_watchers_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
           }
         ];
       };
@@ -2572,40 +3148,55 @@ export type Database = {
           assignee: string | null;
           class_id: number;
           created_at: string;
-          creator: string;
+          created_by: string | null;
           followup_to: number | null;
           help_queue: number;
           id: number;
+          is_private: boolean;
           is_video_live: boolean;
+          location_type: Database["public"]["Enums"]["location_type"];
+          referenced_submission_id: number | null;
           request: string;
           resolved_at: string | null;
           resolved_by: string | null;
+          status: Database["public"]["Enums"]["help_request_status"];
+          template_id: number | null;
         };
         Insert: {
           assignee?: string | null;
           class_id: number;
           created_at?: string;
-          creator: string;
+          created_by?: string | null;
           followup_to?: number | null;
           help_queue: number;
           id?: number;
+          is_private?: boolean;
           is_video_live?: boolean;
+          location_type?: Database["public"]["Enums"]["location_type"];
+          referenced_submission_id?: number | null;
           request: string;
           resolved_at?: string | null;
           resolved_by?: string | null;
+          status?: Database["public"]["Enums"]["help_request_status"];
+          template_id?: number | null;
         };
         Update: {
           assignee?: string | null;
           class_id?: number;
           created_at?: string;
-          creator?: string;
+          created_by?: string | null;
           followup_to?: number | null;
           help_queue?: number;
           id?: number;
+          is_private?: boolean;
           is_video_live?: boolean;
+          location_type?: Database["public"]["Enums"]["location_type"];
+          referenced_submission_id?: number | null;
           request?: string;
           resolved_at?: string | null;
           resolved_by?: string | null;
+          status?: Database["public"]["Enums"]["help_request_status"];
+          template_id?: number | null;
         };
         Relationships: [
           {
@@ -2630,15 +3221,15 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
-            foreignKeyName: "help_requests_creator_fkey";
-            columns: ["creator"];
+            foreignKeyName: "help_requests_created_by_fkey";
+            columns: ["created_by"];
             isOneToOne: false;
             referencedRelation: "profiles";
             referencedColumns: ["id"];
           },
           {
-            foreignKeyName: "help_requests_creator_fkey";
-            columns: ["creator"];
+            foreignKeyName: "help_requests_created_by_fkey";
+            columns: ["created_by"];
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment";
             referencedColumns: ["student_private_profile_id"];
@@ -2651,6 +3242,41 @@ export type Database = {
             referencedColumns: ["id"];
           },
           {
+            foreignKeyName: "help_requests_referenced_submission_id_fkey";
+            columns: ["referenced_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_id"];
+          },
+          {
+            foreignKeyName: "help_requests_referenced_submission_id_fkey";
+            columns: ["referenced_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_requests_referenced_submission_id_fkey";
+            columns: ["referenced_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_requests_referenced_submission_id_fkey";
+            columns: ["referenced_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "help_requests_referenced_submission_id_fkey";
+            columns: ["referenced_submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
             foreignKeyName: "help_requests_resolved_by_fkey";
             columns: ["resolved_by"];
             isOneToOne: false;
@@ -2663,6 +3289,13 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment";
             referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "help_requests_template_id_fkey";
+            columns: ["template_id"];
+            isOneToOne: false;
+            referencedRelation: "help_request_templates";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -2789,6 +3422,54 @@ export type Database = {
           word?: string;
         };
         Relationships: [];
+      };
+      notification_preferences: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          email_digest_frequency: Database["public"]["Enums"]["email_digest_frequency"];
+          help_request_message_notifications: Database["public"]["Enums"]["notification_type"];
+          help_request_notifications: Database["public"]["Enums"]["notification_type"];
+          id: number;
+          updated_at: string | null;
+          user_id: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
+          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
+          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
+          id?: number;
+          updated_at?: string | null;
+          user_id: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
+          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
+          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
+          id?: number;
+          updated_at?: string | null;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "notification_preferences_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "notification_preferences_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
       };
       notifications: {
         Row: {
@@ -4069,6 +4750,130 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "users";
             referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      student_help_activity: {
+        Row: {
+          activity_description: string | null;
+          activity_type: Database["public"]["Enums"]["student_help_activity_type"];
+          class_id: number;
+          created_at: string;
+          help_request_id: number;
+          id: number;
+          student_profile_id: string;
+        };
+        Insert: {
+          activity_description?: string | null;
+          activity_type: Database["public"]["Enums"]["student_help_activity_type"];
+          class_id: number;
+          created_at?: string;
+          help_request_id: number;
+          id?: number;
+          student_profile_id: string;
+        };
+        Update: {
+          activity_description?: string | null;
+          activity_type?: Database["public"]["Enums"]["student_help_activity_type"];
+          class_id?: number;
+          created_at?: string;
+          help_request_id?: number;
+          id?: number;
+          student_profile_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "student_help_activity_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_help_activity_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_help_activity_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_help_activity_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
+      student_karma_notes: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          created_by_id: string;
+          id: number;
+          internal_notes: string | null;
+          karma_score: number;
+          last_activity_at: string | null;
+          student_profile_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          created_by_id: string;
+          id?: number;
+          internal_notes?: string | null;
+          karma_score?: number;
+          last_activity_at?: string | null;
+          student_profile_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          created_by_id?: string;
+          id?: number;
+          internal_notes?: string | null;
+          karma_score?: number;
+          last_activity_at?: string | null;
+          student_profile_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "student_karma_notes_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_karma_notes_created_by_id_fkey";
+            columns: ["created_by_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          },
+          {
+            foreignKeyName: "student_karma_notes_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_karma_notes_student_profile_id_fkey";
+            columns: ["student_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
           }
         ];
       };
@@ -6623,6 +7428,10 @@ export type Database = {
         };
         Returns: undefined;
       };
+      can_access_help_request: {
+        Args: { help_request_id: number };
+        Returns: boolean;
+      };
       check_assignment_deadlines_passed: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
@@ -6641,6 +7450,40 @@ export type Database = {
       };
       create_all_repos_for_assignment: {
         Args: { course_id: number; assignment_id: number };
+        Returns: undefined;
+      };
+      create_help_request_message_notification: {
+        Args: {
+          p_class_id: number;
+          p_help_request_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_message_id: number;
+          p_author_profile_id: string;
+          p_author_name: string;
+          p_message_preview: string;
+          p_help_request_creator_profile_id: string;
+          p_help_request_creator_name: string;
+          p_is_private?: boolean;
+        };
+        Returns: undefined;
+      };
+      create_help_request_notification: {
+        Args: {
+          p_class_id: number;
+          p_notification_type: string;
+          p_help_request_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_creator_profile_id: string;
+          p_creator_name: string;
+          p_assignee_profile_id?: string;
+          p_assignee_name?: string;
+          p_status?: Database["public"]["Enums"]["help_request_status"];
+          p_request_preview?: string;
+          p_is_private?: boolean;
+          p_action?: string;
+        };
         Returns: undefined;
       };
       create_regrade_request: {
@@ -6677,6 +7520,10 @@ export type Database = {
         Returns: {
           id: string;
         }[];
+      };
+      help_request_is_private: {
+        Args: { p_help_request_id: number };
+        Returns: boolean;
       };
       intval: {
         Args: { "": string };
@@ -6756,6 +7603,10 @@ export type Database = {
         };
         Returns: boolean;
       };
+      user_is_in_help_request: {
+        Args: { p_help_request_id: number; p_user_id?: string };
+        Returns: boolean;
+      };
     };
     Enums: {
       allowed_modes: "private" | "public" | "question" | "note";
@@ -6763,6 +7614,7 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+      email_digest_frequency: "daily" | "weekly" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -6773,9 +7625,21 @@ export type Database = {
         | "card_returned_to_deck"
         | "deck_progress_reset_all"
         | "deck_progress_reset_card";
+      help_queue_type: "text" | "video" | "in_person";
+      help_request_status: "open" | "in_progress" | "resolved" | "closed";
+      location_type: "remote" | "in_person" | "hybrid";
+      moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
+      notification_type: "immediate" | "digest" | "disabled";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
+      student_help_activity_type:
+        | "request_created"
+        | "request_updated"
+        | "message_sent"
+        | "request_resolved"
+        | "video_joined"
+        | "video_left";
     };
     CompositeTypes: {
       [_ in never]: never;
@@ -6889,6 +7753,7 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+      email_digest_frequency: ["daily", "weekly", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",
@@ -6900,9 +7765,22 @@ export const Constants = {
         "deck_progress_reset_all",
         "deck_progress_reset_card"
       ],
+      help_queue_type: ["text", "video", "in_person"],
+      help_request_status: ["open", "in_progress", "resolved", "closed"],
+      location_type: ["remote", "in_person", "hybrid"],
+      moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
+      notification_type: ["immediate", "digest", "disabled"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
       review_round: ["self-review", "grading-review", "meta-grading-review"],
-      rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"]
+      rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
+      student_help_activity_type: [
+        "request_created",
+        "request_updated",
+        "message_sent",
+        "request_resolved",
+        "video_joined",
+        "video_left"
+      ]
     }
   }
 } as const;

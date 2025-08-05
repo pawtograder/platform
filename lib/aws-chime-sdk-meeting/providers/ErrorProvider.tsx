@@ -1,7 +1,9 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useState, type ReactNode } from "react";
+"use client";
+
+import React, { useState, ReactNode } from "react";
 
 type Props = { children: ReactNode };
 
