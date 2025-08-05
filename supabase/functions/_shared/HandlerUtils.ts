@@ -1,28 +1,14 @@
-import { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
-import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
-import { Database } from "./SupabaseTypes.d.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as Sentry from "npm:@sentry/deno";
+import { Database } from "./SupabaseTypes.d.ts";
 
 if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     dsn: Deno.env.get("SENTRY_DSN")!,
     release: Deno.env.get("SUPABASE_URL")!,
     sendDefaultPii: true,
-    integrations: [
-      Sentry.requestDataIntegration({
-        include: {
-          cookies: true,
-          data: true,
-          headers: true,
-          ip: true,
-          query_string: true,
-          url: true,
-          user: { id: true, username: true, email: true }
-        }
-      })
-    ],
+    integrations: [],
     tracesSampleRate: 0
   });
 }
@@ -114,167 +100,69 @@ export async function assertUserIsInCourse(courseId: number, authHeader: string)
   return { supabase, enrollment };
 }
 
-type RepositoryWithAssignmentAndAutograder = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["repositories"]["Row"],
-  "repositories",
-  Database["public"]["Tables"]["repositories"]["Relationships"],
-  "*, assignments(submission_files, class_id, autograders(*))"
->;
-export async function userCanCreateSubmission({
-  checkRun,
-  repoData,
-  adminSupabase
-}: {
-  checkRun: RepositoryCheckRun;
-  repoData: RepositoryWithAssignmentAndAutograder;
-  adminSupabase: SupabaseClient<Database>;
-}) {
-  //If the check run was created by a grader or instructor, then we can always create a submission
-  if (checkRun.status.created_by && checkRun.status.created_by !== "github") {
-    const { data: profile, error: profileError } = await adminSupabase
-      .from("user_roles")
-      .select("*")
-      .eq("private_profile_id", checkRun.status.created_by)
-      .eq("class_id", checkRun.class_id)
-      .maybeSingle();
-    if (profileError) {
-      throw new UserVisibleError(`Failed to find profile: ${profileError.message}`);
-    }
-    if (profile?.role === "instructor" || profile?.role === "grader") {
-      return true;
-    }
-  }
-  //Check due date vs late date
-
-  const { data: submission, error: submissionError } = await adminSupabase
-    .from("submissions")
-    .select("*")
-    .eq("repository_id", checkRun.repository_id)
-    .eq("sha", checkRun.sha)
-    .maybeSingle();
-  if (submissionError) {
-    throw new UserVisibleError(`Failed to find submission: ${submissionError.message}`);
-  }
-}
 export async function wrapRequestHandler(
   req: Request,
-  handler: (req: Request, scope: Sentry.Scope) => Promise<any>,
+  handler: (req: Request, scope: Sentry.Scope) => Promise<unknown>,
   {
     recordUserVisibleErrors,
     recordSecurityErrors
   }:
     | {
-        recordUserVisibleErrors?: boolean;
-        recordSecurityErrors?: boolean;
-      }
+      recordUserVisibleErrors?: boolean;
+      recordSecurityErrors?: boolean;
+    }
     | undefined = { recordUserVisibleErrors: true, recordSecurityErrors: true }
 ) {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
-  await Sentry.withIsolationScope(async (scope) => {
+  const scope = new Sentry.Scope();
+  scope.setTag("URL", req.url);
+  scope.setTag("Method", req.method);
+  scope.setTag("Headers", JSON.stringify(Object.fromEntries(req.headers)));
+  try {
+    let data = await handler(req, scope);
+    if (!data) {
+      data = {};
+    }
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json"
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    //Try to save the request body to sentry
     try {
       scope.setTag("URL", req.url);
-      scope.setTag("Method", req.method);
-      scope.setTag("Headers", JSON.stringify(Object.fromEntries(req.headers)));
-      let data = await handler(req, scope);
-      if (!data) {
-        data = {};
-      }
-      return new Response(JSON.stringify(data), {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json"
-        }
-      });
     } catch (e) {
+      console.log("Failed to save request body to sentry");
       console.error(e);
-      //Try to save the request body to sentry
-      try {
-        scope.setTag("URL", req.url);
-      } catch (e) {
-        console.log("Failed to save request body to sentry");
-        console.error(e);
-      }
-      if (e instanceof UserVisibleError) {
-        if (recordUserVisibleErrors) {
-          Sentry.captureException(e, scope);
-        }
-      } else if (e instanceof SecurityError) {
-        if (recordSecurityErrors) {
-          Sentry.captureException(e, scope);
-        }
-      } else {
+    }
+    if (e instanceof UserVisibleError) {
+      if (recordUserVisibleErrors) {
         Sentry.captureException(e, scope);
       }
-      const genericErrorHeaders = {
-        "Content-Type": "application/json",
-        ...corsHeaders
-      };
-      if (e instanceof SecurityError) {
-        return new Response(
-          JSON.stringify({
-            error: {
-              recoverable: false,
-              message: "Security Error",
-              details: "This request has been reported to the staff"
-            }
-          }),
-          {
-            headers: genericErrorHeaders
-          }
-        );
+    } else if (e instanceof SecurityError) {
+      if (recordSecurityErrors) {
+        Sentry.captureException(e, scope);
       }
-      if (e instanceof UserVisibleError) {
-        return new Response(
-          JSON.stringify({
-            error: {
-              recoverable: false,
-              message: "Internal Server Error",
-              details: e.details
-            }
-          }),
-          {
-            headers: genericErrorHeaders
-          }
-        );
-      }
-      if (e instanceof NotFoundError) {
-        return new Response(
-          JSON.stringify({
-            error: {
-              recoverable: true,
-              message: "Not Found",
-              details: "The requested resource was not found"
-            }
-          }),
-          {
-            headers: genericErrorHeaders
-          }
-        );
-      }
-      if (e instanceof IllegalArgumentError) {
-        return new Response(
-          JSON.stringify({
-            error: {
-              recoverable: true,
-              message: "Illegal Argument",
-              details: e.details
-            }
-          }),
-          {
-            headers: genericErrorHeaders
-          }
-        );
-      }
+    } else {
+      Sentry.captureException(e, scope);
+    }
+    const genericErrorHeaders = {
+      "Content-Type": "application/json",
+      ...corsHeaders
+    };
+    if (e instanceof SecurityError) {
       return new Response(
         JSON.stringify({
           error: {
             recoverable: false,
-            message: "Internal Server Error",
-            details: "An unknown error occurred"
+            message: "Security Error",
+            details: "This request has been reported to the staff"
           }
         }),
         {
@@ -282,7 +170,61 @@ export async function wrapRequestHandler(
         }
       );
     }
-  });
+    if (e instanceof UserVisibleError) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            recoverable: false,
+            message: "Internal Server Error",
+            details: e.details
+          }
+        }),
+        {
+          headers: genericErrorHeaders
+        }
+      );
+    }
+    if (e instanceof NotFoundError) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            recoverable: true,
+            message: "Not Found",
+            details: "The requested resource was not found"
+          }
+        }),
+        {
+          headers: genericErrorHeaders
+        }
+      );
+    }
+    if (e instanceof IllegalArgumentError) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            recoverable: true,
+            message: "Illegal Argument",
+            details: e.details
+          }
+        }),
+        {
+          headers: genericErrorHeaders
+        }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        error: {
+          recoverable: false,
+          message: "Internal Server Error",
+          details: "An unknown error occurred"
+        }
+      }),
+      {
+        headers: genericErrorHeaders
+      }
+    );
+  }
 }
 export class SecurityError extends Error {
   details: string;
