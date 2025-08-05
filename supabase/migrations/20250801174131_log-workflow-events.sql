@@ -106,8 +106,8 @@ GROUP BY
     r.assignment_id,
     r.profile_id;
 
-    -- Drop existing table if it exists (to flatten migrations)
-DROP TABLE IF EXISTS "public"."workflow_run_error" CASCADE;
+-- Drop existing table if it exists (to flatten migrations)
+DROP TABLE IF EXISTS "public"."workflow_run_error";
 
 -- Create workflow_run_error table to track errors during workflow execution
 -- This table stores workflow information directly without foreign key dependencies
