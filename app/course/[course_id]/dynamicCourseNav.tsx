@@ -76,7 +76,7 @@ const LinkItems = (courseID: number) => [
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
       { name: "Emailer", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` },
-      { name: "Workflow Runs", icon: FaRobot, target: `/course/${courseID}/manage/course/workflow-runs` }
+      { name: "Workflow Runs", icon: FaRobot, target: `/course/${courseID}/manage/workflow-runs` }
     ]
   }
 ];

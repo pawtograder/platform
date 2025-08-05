@@ -232,7 +232,7 @@ async function handlePushToTemplateRepo(
   }
 }
 
-eventHandler.on("push", async ({ id: _id, name: _name, payload }) => {
+eventHandler.on("push", async ({ id: id, name: name, payload }) => {
   if (name === "push") {
     const repoName = payload.repository.full_name;
     console.log(`Received push event for ${repoName}`);
@@ -531,7 +531,7 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload }) => {
   console.log(
     `Received workflow_run event for ${payload.repository.full_name}, action: ${payload.action}, workflow_run_id: ${payload.workflow_run.id}`
   );
-  
+
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -540,7 +540,7 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload }) => {
   try {
     const workflowRun = payload.workflow_run;
     const repository = payload.repository;
-    
+
     // Map GitHub workflow action to our event_type
     let eventType: string;
     switch (payload.action) {
@@ -581,18 +581,19 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload }) => {
     }
 
     // Extract pull request information if available
-    const pullRequests = workflowRun.pull_requests?.map((pr: any) => ({
-      id: pr.id,
-      number: pr.number,
-      head: {
-        ref: pr.head?.ref,
-        sha: pr.head?.sha
-      },
-      base: {
-        ref: pr.base?.ref,
-        sha: pr.base?.sha
-      }
-    })) || [];
+    const pullRequests =
+      workflowRun.pull_requests?.map((pr: any) => ({
+        id: pr.id,
+        number: pr.number,
+        head: {
+          ref: pr.head?.ref,
+          sha: pr.head?.sha
+        },
+        base: {
+          ref: pr.base?.ref,
+          sha: pr.base?.sha
+        }
+      })) || [];
 
     // Insert workflow event into database
     const { error: insertError } = await (adminSupabase as any).from("workflow_events").insert({
@@ -628,7 +629,6 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload }) => {
     console.log(
       `Successfully logged workflow event: ${eventType} for workflow ${workflowRun.name} (${workflowRun.id}) in ${repository.full_name}`
     );
-
   } catch (error) {
     console.error("Error processing workflow_run event:", error);
     // Don't throw here to avoid breaking the webhook processing

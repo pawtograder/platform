@@ -212,6 +212,13 @@ export type SubmissionWithGraderResults = GetResult<
   Database["public"]["Tables"]["submissions"]["Relationships"],
   "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*))"
 >;
+export type SubmissionWithGraderResultsAndErrors = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["submissions"]["Row"],
+  "submissions",
+  Database["public"]["Tables"]["submissions"]["Relationships"],
+  "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
+>;
 export type GraderResultTest = GetResult<
   Database["public"],
   Database["public"]["Tables"]["grader_result_tests"]["Row"],

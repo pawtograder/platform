@@ -62,7 +62,6 @@ WITH (security_invoker='true')
 AS
 SELECT 
     workflow_run_id,
-    run_attempt,
     we.class_id,
     workflow_name,
     workflow_path,
@@ -107,3 +106,97 @@ GROUP BY
     triggering_actor_login,
     r.assignment_id,
     r.profile_id;
+
+    -- Drop existing table if it exists (to flatten migrations)
+DROP TABLE IF EXISTS "public"."workflow_run_error" CASCADE;
+
+-- Create workflow_run_error table to track errors during workflow execution
+-- This table stores workflow information directly without foreign key dependencies
+CREATE TABLE "public"."workflow_run_error" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "created_at" TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    
+    -- Core identifiers
+    "submission_id" BIGINT,
+    "class_id" BIGINT NOT NULL,
+    "repository_id" BIGINT NOT NULL,
+    "autograder_regression_test_id" BIGINT,
+    
+    -- Workflow run information
+    "run_number" BIGINT,
+    "run_attempt" INTEGER,
+    
+    -- Error details
+    "name" TEXT NOT NULL,
+    "data" JSONB,
+    "is_private" BOOLEAN NOT NULL DEFAULT false
+);
+
+-- Create indexes for efficient querying
+CREATE INDEX "idx_workflow_run_error_submission_id" ON "public"."workflow_run_error" ("submission_id");
+CREATE INDEX "idx_workflow_run_error_class_id" ON "public"."workflow_run_error" ("class_id");
+CREATE INDEX "idx_workflow_run_error_repository_id" ON "public"."workflow_run_error" ("repository_id");
+CREATE INDEX "idx_workflow_run_error_created_at" ON "public"."workflow_run_error" ("created_at");
+CREATE INDEX "idx_workflow_run_error_is_private" ON "public"."workflow_run_error" ("is_private");
+CREATE INDEX "idx_workflow_run_error_autograder_regression_test_id" ON "public"."workflow_run_error" ("autograder_regression_test_id");
+
+-- Create composite index for common query patterns
+CREATE INDEX "idx_workflow_run_error_class_submission" ON "public"."workflow_run_error" ("class_id", "submission_id");
+CREATE INDEX "idx_workflow_run_error_class_repository" ON "public"."workflow_run_error" ("class_id", "repository_id");
+
+-- Add foreign key constraints
+ALTER TABLE "public"."workflow_run_error"
+    ADD CONSTRAINT "workflow_run_error_submission_id_fkey"
+    FOREIGN KEY ("submission_id")
+    REFERENCES "public"."submissions"("id")
+    ON DELETE CASCADE;
+
+ALTER TABLE "public"."workflow_run_error"
+    ADD CONSTRAINT "workflow_run_error_class_id_fkey"
+    FOREIGN KEY ("class_id")
+    REFERENCES "public"."classes"("id")
+    ON DELETE CASCADE;
+
+ALTER TABLE "public"."workflow_run_error"
+    ADD CONSTRAINT "workflow_run_error_repository_id_fkey"
+    FOREIGN KEY ("repository_id")
+    REFERENCES "public"."repositories"("id")
+    ON DELETE CASCADE;
+
+ALTER TABLE "public"."workflow_run_error"
+    ADD CONSTRAINT "workflow_run_error_autograder_regression_test_id_fkey"
+    FOREIGN KEY ("autograder_regression_test_id")
+    REFERENCES "public"."autograder_regression_test"("id")
+    ON DELETE CASCADE;
+
+-- Add length constraint for error name
+ALTER TABLE "public"."workflow_run_error"
+    ADD CONSTRAINT "workflow_run_error_name_length"
+    CHECK (length("name") >= 1 AND length("name") <= 500);
+
+-- Enable Row Level Security
+ALTER TABLE "public"."workflow_run_error" ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS policies
+-- Allow service role to manage all workflow run errors
+CREATE POLICY "workflow_run_error_service_role_all" ON "public"."workflow_run_error"
+    FOR ALL USING (auth.role() = 'service_role');
+
+-- Allow select if user is authorized as class grader OR error is not private and user is authorized for the submission
+CREATE POLICY "workflow_run_error_select" ON "public"."workflow_run_error"
+    FOR SELECT USING (
+        auth.role() = 'authenticated'
+        AND (
+            authorizeforclassgrader("class_id")
+            OR (
+                NOT "is_private"
+                AND "submission_id" IS NOT NULL
+                AND authorize_for_submission("submission_id")
+            )
+        )
+    );
+
+-- Grant permissions to roles
+GRANT ALL ON TABLE "public"."workflow_run_error" TO "anon";
+GRANT ALL ON TABLE "public"."workflow_run_error" TO "authenticated";
+GRANT ALL ON TABLE "public"."workflow_run_error" TO "service_role";

@@ -4,7 +4,7 @@ import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
 import { Switch } from "@/components/ui/switch";
 import { useObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { GraderResultOutput, SubmissionWithGraderResults } from "@/utils/supabase/DatabaseTypes";
+import { GraderResultOutput, SubmissionWithGraderResultsAndErrors } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   CardBody,
@@ -58,12 +58,12 @@ function format_output(output: GraderResultOutput) {
 
 export default function GraderResults() {
   const { submissions_id } = useParams();
-  const { query } = useShow<SubmissionWithGraderResults>({
+  const { query } = useShow<SubmissionWithGraderResultsAndErrors>({
     resource: "submissions",
     id: Number(submissions_id),
     meta: {
       select:
-        "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*))"
+        "*, assignments(*), grader_results(*, grader_result_tests(*, grader_result_test_output(*)), grader_result_output(*)), workflow_run_error(*)"
     }
   });
   const isObfuscatedGradesMode = useObfuscatedGradesMode();
@@ -89,22 +89,153 @@ export default function GraderResults() {
   if (!query.data) {
     return <Box>No grader results found</Box>;
   }
-  if (query.data.data.grader_results?.errors) {
-    const errors = query.data.data.grader_results.errors;
-    const userVisibleMessage =
-      typeof errors === "object" && "user_visible_message" in errors ? errors.user_visible_message : null;
+  // Remove when we are certain we like the new error handling
+  // if (query.data.data.grader_results?.errors) {
+  //   const errors = query.data.data.grader_results.errors;
+  //   const userVisibleMessage =
+  //     typeof errors === "object" && "user_visible_message" in errors ? errors.user_visible_message : null;
+  //   return (
+  //     <Box>
+  //       <Alert title="Submission Error" status="error" p={4} m={4}>
+  //         An error occurred while creating the submission. Your code has not been submitted, although a record will
+  //         still exist <Link href={`https://github.com/${query.data.data.repository}`}>in your GitHub repository</Link>.
+  //         {userVisibleMessage && (
+  //           <Box p={2} fontWeight="bold">
+  //             Error: {String(userVisibleMessage)}
+  //           </Box>
+  //         )}
+  //       </Alert>
+  //     </Box>
+  //   );
+  // }
+  if (query.data.data.workflow_run_error && query.data.data.workflow_run_error.length > 0) {
+    const errors = query.data.data.workflow_run_error;
+
+    // Check if any errors are user-visible
+    const hasUserVisibleErrors = errors.some((error) => !error.is_private);
+    const userVisibleErrors = errors.filter((error) => !error.is_private);
+    const privateErrors = errors.filter((error) => error.is_private);
+
     return (
-      <Box>
-        <Alert title="Submission Error" status="error" p={4} m={4}>
-          An error occurred while creating the submission. Your code has not been submitted, although a record will
-          still exist <Link href={`https://github.com/${query.data.data.repository}`}>in your GitHub repository</Link>.
-          {userVisibleMessage && (
-            <Box p={2} fontWeight="bold">
-              Error: {String(userVisibleMessage)}
-            </Box>
+      <Container>
+        <Box p={4} margin={{ base: "2", lg: "4" }}>
+          {hasUserVisibleErrors ? (
+            <Alert title="Submission Error" status="error" p={4} mb={4}>
+              An error occurred while processing your submission. Your code has been submitted to{" "}
+              <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>, but the
+              autograder encountered issues.
+              {userVisibleErrors.map((error) => {
+                let errorMessage = error.name;
+                let errorDetails = null;
+
+                try {
+                  const errorData = JSON.parse(error.data || "{}");
+                  if (errorData.user_visible_message) {
+                    errorMessage = errorData.user_visible_message;
+                  }
+                  if (errorData.details) {
+                    errorDetails = errorData.details;
+                  }
+                } catch {
+                  // Invalid JSON, use raw data
+                  if (error.data && error.data !== "{}") {
+                    errorDetails = error.data;
+                  }
+                }
+
+                return (
+                  <Box
+                    key={error.id}
+                    mt={3}
+                    p={3}
+                    bg="red.50"
+                    borderRadius="md"
+                    border="1px solid"
+                    borderColor="red.200"
+                  >
+                    <Text fontWeight="bold" color="red.700" fontSize="sm">
+                      Error: {errorMessage}
+                    </Text>
+                    {errorDetails && (
+                      <Box mt={2} p={2} bg="red.25" borderRadius="sm">
+                        <Text fontSize="xs" fontFamily="mono" color="red.600">
+                          {typeof errorDetails === "string" ? errorDetails : JSON.stringify(errorDetails, null, 2)}
+                        </Text>
+                      </Box>
+                    )}
+                    <Text fontSize="xs" color="red.500" mt={2}>
+                      Error occurred {formatDistanceToNow(new Date(error.created_at), { addSuffix: true })}
+                    </Text>
+                  </Box>
+                );
+              })}
+              <Box mt={4}>
+                <Text fontSize="sm" color="red.600">
+                  Please check{" "}
+                  <Link
+                    href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
+                  >
+                    the GitHub Actions run for this submission
+                  </Link>{" "}
+                  for more details, or contact your instructor for assistance.
+                </Text>
+              </Box>
+            </Alert>
+          ) : (
+            <Alert title="Submission Processing Error" status="warning" p={4} mb={4}>
+              An error occurred while processing your submission, but no user-visible error details are available. Your
+              code has been submitted to{" "}
+              <Link href={`https://github.com/${query.data.data.repository}`}>your GitHub repository</Link>.
+              <Box mt={4}>
+                <Text fontSize="sm">
+                  Please check{" "}
+                  <Link
+                    href={`https://github.com/${query.data.data.repository}/actions/runs/${query.data.data.run_number}/attempts/${query.data.data.run_attempt}`}
+                  >
+                    the GitHub Actions run for this submission
+                  </Link>{" "}
+                  or contact your instructor for assistance.
+                </Text>
+              </Box>
+            </Alert>
           )}
-        </Alert>
-      </Box>
+
+          {/* Debug information for instructors - only show if there are private errors */}
+          {privateErrors.length > 0 && (
+            <Alert title="Debug Information (Instructor Only)" status="info" p={4}>
+              <Text fontSize="sm" mb={3}>
+                The following errors are marked as private and not visible to students:
+              </Text>
+
+              {privateErrors.map((error) => (
+                <Box
+                  key={error.id}
+                  mt={2}
+                  p={3}
+                  bg="blue.50"
+                  borderRadius="md"
+                  border="1px solid"
+                  borderColor="blue.200"
+                >
+                  <Text fontWeight="bold" color="blue.700" fontSize="sm">
+                    {error.name}
+                  </Text>
+                  {error.data && error.data !== "{}" && (
+                    <Box mt={2} p={2} bg="blue.25" borderRadius="sm">
+                      <Text fontSize="xs" fontFamily="mono" color="blue.600">
+                        {error.data}
+                      </Text>
+                    </Box>
+                  )}
+                  <Text fontSize="xs" color="blue.500" mt={2}>
+                    Error occurred {formatDistanceToNow(new Date(error.created_at), { addSuffix: true })}
+                  </Text>
+                </Box>
+              ))}
+            </Alert>
+          )}
+        </Box>
+      </Container>
     );
   }
   if (!query.data.data.grader_results) {

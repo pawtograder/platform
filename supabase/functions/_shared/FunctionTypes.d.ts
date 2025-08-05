@@ -77,6 +77,11 @@ export type GradingScriptResult = {
   action_ref: string;
   action_repository: string;
   regression_test_repo?: string;
+  errors?: {
+    name: string;
+    data: Json;
+    is_private: boolean;
+  }[];
 };
 export type GradeResponse = {
   is_ok: boolean;
