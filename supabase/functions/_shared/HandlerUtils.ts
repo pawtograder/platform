@@ -3,6 +3,29 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
 import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
 import { Database } from "./SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
+
+if (Deno.env.get("SENTRY_DSN")) {
+  Sentry.init({
+    dsn: Deno.env.get("SENTRY_DSN")!,
+    release: Deno.env.get("SUPABASE_URL")!,
+    sendDefaultPii: true,
+    integrations: [
+      Sentry.requestDataIntegration({
+        include: {
+          cookies: true,
+          data: true,
+          headers: true,
+          ip: true,
+          query_string: true,
+          url: true,
+          user: { id: true, username: true, email: true }
+        }
+      })
+    ],
+    tracesSampleRate: 0
+  });
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -150,45 +173,113 @@ export async function wrapRequestHandler(
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
-  try {
-    let data = await handler(req);
-    if (!data) {
-      data = {};
-    }
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "application/json"
+  await Sentry.withIsolationScope(async (scope) => {
+    try {
+      scope.setTag("URL", req.url);
+      scope.setTag("Method", req.method);
+      scope.setTag("Headers", JSON.stringify(Object.fromEntries(req.headers)));
+      let data = await handler(req);
+      if (!data) {
+        data = {};
       }
-    });
-  } catch (e) {
-    console.error(e);
-    const genericErrorHeaders = {
-      "Content-Type": "application/json",
-      ...corsHeaders
-    };
-    if (e instanceof SecurityError) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            recoverable: false,
-            message: "Security Error",
-            details: "This request has been reported to the staff"
-          }
-        }),
-        {
-          headers: genericErrorHeaders
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json"
         }
-      );
-    }
-    if (e instanceof UserVisibleError) {
+      });
+    } catch (e) {
+      console.error(e);
+      //Try to save the request body to sentry
+      try {
+        const reqBody = await req.text();
+        scope.setContext("request_body", {
+          body: reqBody,
+          headers: JSON.stringify(Object.fromEntries(req.headers))
+        });
+        scope.setTag("URL", req.url);
+      } catch (e) {
+        console.log("Failed to save request body to sentry");
+        console.error(e);
+      }
+      if (e instanceof UserVisibleError) {
+        if (recordUserVisibleErrors) {
+          Sentry.captureException(e, scope);
+        }
+      } else if (e instanceof SecurityError) {
+        if (recordSecurityErrors) {
+          Sentry.captureException(e, scope);
+        }
+      } else {
+        Sentry.captureException(e, scope);
+      }
+      const genericErrorHeaders = {
+        "Content-Type": "application/json",
+        ...corsHeaders
+      };
+      if (e instanceof SecurityError) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              recoverable: false,
+              message: "Security Error",
+              details: "This request has been reported to the staff"
+            }
+          }),
+          {
+            headers: genericErrorHeaders
+          }
+        );
+      }
+      if (e instanceof UserVisibleError) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              recoverable: false,
+              message: "Internal Server Error",
+              details: e.details
+            }
+          }),
+          {
+            headers: genericErrorHeaders
+          }
+        );
+      }
+      if (e instanceof NotFoundError) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              recoverable: true,
+              message: "Not Found",
+              details: "The requested resource was not found"
+            }
+          }),
+          {
+            headers: genericErrorHeaders
+          }
+        );
+      }
+      if (e instanceof IllegalArgumentError) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              recoverable: true,
+              message: "Illegal Argument",
+              details: e.details
+            }
+          }),
+          {
+            headers: genericErrorHeaders
+          }
+        );
+      }
       return new Response(
         JSON.stringify({
           error: {
             recoverable: false,
             message: "Internal Server Error",
-            details: e.details
+            details: "An unknown error occurred"
           }
         }),
         {
@@ -196,47 +287,7 @@ export async function wrapRequestHandler(
         }
       );
     }
-    if (e instanceof NotFoundError) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            recoverable: true,
-            message: "Not Found",
-            details: "The requested resource was not found"
-          }
-        }),
-        {
-          headers: genericErrorHeaders
-        }
-      );
-    }
-    if (e instanceof IllegalArgumentError) {
-      return new Response(
-        JSON.stringify({
-          error: {
-            recoverable: true,
-            message: "Illegal Argument",
-            details: e.details
-          }
-        }),
-        {
-          headers: genericErrorHeaders
-        }
-      );
-    }
-    return new Response(
-      JSON.stringify({
-        error: {
-          recoverable: false,
-          message: "Internal Server Error",
-          details: "An unknown error occurred"
-        }
-      }),
-      {
-        headers: genericErrorHeaders
-      }
-    );
-  }
+  });
 }
 export class SecurityError extends Error {
   details: string;

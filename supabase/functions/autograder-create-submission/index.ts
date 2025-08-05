@@ -25,6 +25,7 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { Buffer } from "node:buffer";
 import { decode } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.js";
+import * as Sentry from "npm:@sentry/deno";
 
 // Retry helper with exponential backoff
 async function retryWithExponentialBackoff<T>(
@@ -132,6 +133,9 @@ async function handleRequest(req: Request) {
         `Repository not found for run_number: ${run_id}, run_attempt: ${run_attempt}, repository: ${repository}, sha: ${sha}`
       );
     }
+    if (!name) {
+      throw new Error("No name provided to recordWorkflowRunError");
+    }
     const { error: workflowRunErrorError } = await adminSupabase.from("workflow_run_error").insert({
       run_number: Number.parseInt(run_id),
       run_attempt: Number.parseInt(run_attempt),
@@ -144,6 +148,10 @@ async function handleRequest(req: Request) {
     });
     if (workflowRunErrorError) {
       console.error(workflowRunErrorError);
+      Sentry.addBreadcrumb({
+        level: "error",
+        message: JSON.stringify(workflowRunErrorError)
+      });
       throw new Error(`Internal error: Failed to insert workflow run error: ${workflowRunErrorError.message}`);
     }
   }

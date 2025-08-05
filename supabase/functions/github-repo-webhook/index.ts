@@ -8,10 +8,32 @@ import { CheckRunStatus } from "../_shared/FunctionTypes.d.ts";
 import { createCheckRun, getFileFromRepo, triggerWorkflow, updateCheckRun } from "../_shared/GitHubWrapper.ts";
 import { GradedUnit, MutationTestUnit, PawtograderConfig, RegularTestUnit } from "../_shared/PawtograderYml.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 const eventHandler = createEventHandler({
   secret: Deno.env.get("GITHUB_WEBHOOK_SECRET") || "secret"
 });
 
+if (Deno.env.get("SENTRY_DSN")) {
+  Sentry.init({
+    dsn: Deno.env.get("SENTRY_DSN")!,
+    release: Deno.env.get("SUPABASE_URL")!,
+    sendDefaultPii: true,
+    integrations: [
+      Sentry.requestDataIntegration({
+        include: {
+          cookies: true,
+          data: true,
+          headers: true,
+          ip: true,
+          query_string: true,
+          url: true,
+          user: { id: true, username: true, email: true }
+        }
+      })
+    ],
+    tracesSampleRate: 0
+  });
+}
 const GRADER_WORKFLOW_PATH = ".github/workflows/grade.yml";
 
 type GitHubCommit = {
@@ -656,57 +678,83 @@ Deno.serve(async (req) => {
       }
     );
   }
-  const body = await req.json();
-  console.log(JSON.stringify(body, null, 2));
-  const eventName = body["detail-type"];
-  const id = body.id;
-  const adminSupabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL") || "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-  );
 
-  try {
-    const { error: repoError } = await adminSupabase.from("webhook_process_status").insert({
-      webhook_id: id,
-      completed: false
+  const body = await req.json();
+  await Sentry.withIsolationScope(async (scope) => {
+    scope.setContext("webhook", {
+      body: JSON.stringify(body)
     });
-    if (repoError) {
-      if (repoError.code === "23505") {
-        console.log(`Ignoring duplicate webhook id ${id}`);
+    scope.setTag("webhook_id", body.id);
+    scope.setTag("webhook_name", body["detail-type"]);
+    if (body?.detail?.repository) {
+      scope.setTag("repository", body.detail.repository.full_name);
+    }
+    scope.addAttachment({ filename: "webhook.json", data: JSON.stringify(body) });
+    const eventName = body["detail-type"];
+    const id = body.id;
+    const adminSupabase = createClient<Database>(
+      Deno.env.get("SUPABASE_URL") || "",
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
+    );
+
+    try {
+      const { error: repoError } = await adminSupabase.from("webhook_process_status").insert({
+        webhook_id: id,
+        completed: false
+      });
+      if (repoError) {
+        if (repoError.code === "23505") {
+          console.log(`Ignoring duplicate webhook id ${id}`);
+          return Response.json(
+            {
+              message: "Duplicate webhook received"
+            },
+            {
+              status: 200
+            }
+          );
+        }
+        Sentry.captureException(repoError, scope);
+        console.error(repoError);
         return Response.json(
           {
-            message: "Duplicate webhook received"
+            message: "Error processing webhook"
           },
           {
-            status: 200
+            status: 500
           }
         );
       }
-      console.error(repoError);
-      return Response.json(
-        {
-          message: "Error processing webhook"
-        },
-        {
-          status: 500
-        }
-      );
-    }
-    try {
-      await eventHandler.receive({
-        id: id || "",
-        name: eventName as "push" | "check_run" | "workflow_run" | "workflow_job" | "membership" | "organization",
-        payload: body.detail
-      });
-      await adminSupabase
-        .from("webhook_process_status")
-        .update({
-          completed: true
-        })
-        .eq("webhook_id", id);
+      try {
+        await eventHandler.receive({
+          id: id || "",
+          name: eventName as "push" | "check_run" | "workflow_run" | "workflow_job" | "membership" | "organization",
+          payload: body.detail
+        });
+        await adminSupabase
+          .from("webhook_process_status")
+          .update({
+            completed: true
+          })
+          .eq("webhook_id", id);
+      } catch (err) {
+        console.log(`Error processing webhook for ${eventName} id ${id}`);
+        console.error(err);
+        Sentry.captureException(err, scope);
+        return Response.json(
+          {
+            message: "Error processing webhook"
+          },
+          {
+            status: 500
+          }
+        );
+      }
+      console.log(`Completed processing webhook for ${eventName} id ${id}`);
     } catch (err) {
       console.log(`Error processing webhook for ${eventName} id ${id}`);
       console.error(err);
+      Sentry.captureException(err, scope);
       return Response.json(
         {
           message: "Error processing webhook"
@@ -716,20 +764,8 @@ Deno.serve(async (req) => {
         }
       );
     }
-    console.log(`Completed processing webhook for ${eventName} id ${id}`);
-  } catch (err) {
-    console.log(`Error processing webhook for ${eventName} id ${id}`);
-    console.error(err);
-    return Response.json(
-      {
-        message: "Error processing webhook"
-      },
-      {
-        status: 500
-      }
-    );
-  }
-  return Response.json({
-    message: "Triggered webhook"
+    return Response.json({
+      message: "Triggered webhook"
+    });
   });
 });

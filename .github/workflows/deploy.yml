@@ -32,6 +32,7 @@ jobs:
           GITHUB_PRIVATE_KEY_STRING: ${{ secrets.PAWTOGRADER_GITHUB_PRIVATE_KEY_STRING }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
       - name: Run Playwright tests
