@@ -99,7 +99,8 @@ async function validateOIDCTokenOrAllowE2E(token: string) {
   return await validateOIDCToken(token);
 }
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  scope?.setTag("function", "autograder-create-submission");
   const token = req.headers.get("Authorization");
   if (!token) {
     throw new UserVisibleError("No token provided");
@@ -108,7 +109,11 @@ async function handleRequest(req: Request) {
   const decoded = await validateOIDCTokenOrAllowE2E(token);
   const { repository, sha, workflow_ref, run_id, run_attempt } = decoded;
   const isE2ERun = repository.startsWith(END_TO_END_REPO_PREFIX); //Don't write back to GitHub for E2E runs, just pull
-
+  scope?.setTag("repository", repository);
+  scope?.setTag("sha", sha);
+  scope?.setTag("workflow_ref", workflow_ref);
+  scope?.setTag("run_id", run_id);
+  scope?.setTag("run_attempt", run_attempt);
   // Find the corresponding student and assignment
   console.log("Creating submission for", repository, sha, workflow_ref);
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);

@@ -159,7 +159,7 @@ export async function userCanCreateSubmission({
 }
 export async function wrapRequestHandler(
   req: Request,
-  handler: (req: Request) => Promise<any>,
+  handler: (req: Request, scope: Sentry.Scope) => Promise<any>,
   {
     recordUserVisibleErrors,
     recordSecurityErrors
@@ -178,7 +178,7 @@ export async function wrapRequestHandler(
       scope.setTag("URL", req.url);
       scope.setTag("Method", req.method);
       scope.setTag("Headers", JSON.stringify(Object.fromEntries(req.headers)));
-      let data = await handler(req);
+      let data = await handler(req, scope);
       if (!data) {
         data = {};
       }
@@ -193,11 +193,6 @@ export async function wrapRequestHandler(
       console.error(e);
       //Try to save the request body to sentry
       try {
-        const reqBody = await req.text();
-        scope.setContext("request_body", {
-          body: reqBody,
-          headers: JSON.stringify(Object.fromEntries(req.headers))
-        });
         scope.setTag("URL", req.url);
       } catch (e) {
         console.log("Failed to save request body to sentry");
@@ -302,7 +297,7 @@ export class UserVisibleError extends Error {
   details: string;
   status: number = 500;
   constructor(details: string) {
-    super("Error");
+    super(details);
     this.details = details;
   }
 }
@@ -319,7 +314,7 @@ export class NotFoundError extends Error {
   details: string;
   status: number = 404;
   constructor(details: string) {
-    super("Not Found");
+    super(details);
     this.details = details;
   }
 }

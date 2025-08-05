@@ -7,11 +7,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 import { assertUserIsInstructor } from "../_shared/HandlerUtils.ts";
 import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
-async function handleRequest(req: Request) {
+import * as Sentry from "npm:@sentry/deno";
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { course_id } = (await req.json()) as { course_id: number };
   if (!course_id) {
     throw new UserVisibleError("Course ID is required");
   }
+  scope?.setTag("function", "enrollments-sync-canvas");
+  scope?.setTag("course_id", course_id.toString());
   await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -41,7 +44,7 @@ async function handleRequest(req: Request) {
   const allUsers = await adminSupabase.auth.admin.listUsers({
     perPage: 10000
   });
-  console.log(`Retrieved ${allUsers.data!.users.length} users from supabase`);
+  scope?.setTag("supabase_users_length", allUsers.data!.users.length.toString());
   const failureMessages: string[] = [];
   await Promise.all(
     newEnrollments.map(async (enrollment) => {

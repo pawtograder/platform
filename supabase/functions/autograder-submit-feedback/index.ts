@@ -13,6 +13,7 @@ import {
 import { resolveRef, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
 async function insertComments({
   adminSupabase,
@@ -180,7 +181,8 @@ async function insertComments({
     }
   }
 }
-async function handleRequest(req: Request): Promise<GradeResponse> {
+async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeResponse> {
+  scope?.setTag("function", "autograder-submit-feedback");
   const token = req.headers.get("Authorization");
   const requestBody = (await req.json()) as GradingScriptResult;
   const url = new URL(req.url);
@@ -198,6 +200,11 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
   );
   const { repository, sha, run_id, run_attempt } = decoded;
+  scope?.setTag("repository", repository);
+  scope?.setTag("sha", sha);
+  scope?.setTag("run_id", run_id);
+  scope?.setTag("run_attempt", run_attempt);
+  scope?.setTag("autograder_regression_test_id", autograder_regression_test_id?.toString() || "(null)");
   let class_id: number | null = null;
   let assignment_id: number | null = null;
   let submission_id: number | null = null;
@@ -273,7 +280,13 @@ async function handleRequest(req: Request): Promise<GradeResponse> {
     checkRun = submission.repository_check_runs as RepositoryCheckRun;
     repository_id = submission.repository_id;
   }
-
+  scope?.setTag("class_id", class_id?.toString() || "(null)");
+  scope?.setTag("assignment_id", assignment_id?.toString() || "(null)");
+  scope?.setTag("submission_id", submission_id?.toString() || "(null)");
+  scope?.setTag("profile_id", profile_id || "(null)");
+  scope?.setTag("assignment_group_id", assignment_group_id?.toString() || "(null)");
+  scope?.setTag("grading_review_id", grading_review_id?.toString() || "(null)");
+  scope?.setTag("checkRun", checkRun ? JSON.stringify(checkRun) : "(null)");
   try {
     //Resolve the action SHA
     const action_sha = await resolveRef(requestBody.action_repository, requestBody.action_ref);

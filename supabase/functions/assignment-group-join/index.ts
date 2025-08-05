@@ -11,8 +11,14 @@ import {
   wrapRequestHandler
 } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
-async function handleAssignmentGroupJoin(req: Request): Promise<{ message: string; joined_group: boolean }> {
+import * as Sentry from "npm:@sentry/deno";
+async function handleAssignmentGroupJoin(
+  req: Request,
+  scope: Sentry.Scope
+): Promise<{ message: string; joined_group: boolean }> {
   const { assignment_group_id } = (await req.json()) as AssignmentGroupJoinRequest;
+  scope?.setTag("function", "assignment-group-join");
+  scope?.setTag("assignment_group_id", assignment_group_id.toString());
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""

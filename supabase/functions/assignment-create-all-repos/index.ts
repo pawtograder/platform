@@ -13,7 +13,8 @@ type RepoToCreate = {
   student_github_usernames: string[];
 };
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  scope?.setTag("function", "assignment-create-all-repos");
   // Check for edge function secret authentication
   const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
@@ -24,19 +25,22 @@ async function handleRequest(req: Request) {
   if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
     // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
     const url = new URL(req.url);
-    const course_id = Number.parseInt(url.searchParams.get("course_id")!);
-    const assignment_id = Number.parseInt(url.searchParams.get("assignment_id")!);
+    const course_id = Number.parseInt(url.searchParams.get("courseId")!);
+    const assignment_id = Number.parseInt(url.searchParams.get("assignmentId")!);
     // Edge function secret authentication - get parameters from request body
     courseId = course_id;
     assignmentId = assignment_id;
-    console.log("Creating all repos for assignment with courseId:", courseId, "assignmentId:", assignmentId);
+    scope?.setTag("Source", "edge-function-secret");
   } else {
     // JWT authentication - get parameters from request body and validate instructor permissions
     const { courseId: cId, assignmentId: aId } = (await req.json()) as AssignmentCreateAllReposRequest;
     courseId = cId;
     assignmentId = aId;
     await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+    scope?.setTag("Source", "jwt");
   }
+  scope?.setTag("assignment_id", assignmentId.toString());
+  scope?.setTag("course_id", courseId.toString());
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -45,7 +49,7 @@ async function handleRequest(req: Request) {
   const { data: classData } = await adminSupabase.from("classes").select("time_zone").eq("id", courseId).single();
   const timeZone = classData?.time_zone;
   // Get the assignment from supabase
-  const { data: assignment } = await adminSupabase
+  const { data: assignment, error: assignmentError } = await adminSupabase
     .from("assignments")
     .select(
       "*, assignment_groups(*,assignment_groups_members(*,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))), classes(slug,github_org,user_roles(users(github_username),profiles!private_profile_id(id, name, sortable_name)))"
@@ -54,6 +58,10 @@ async function handleRequest(req: Request) {
     .lte("release_date", TZDate.tz(timeZone || "America/New_York").toISOString())
     .eq("class_id", courseId)
     .single();
+  if (assignmentError) {
+    scope?.setTag("error", assignmentError.message);
+    throw new UserVisibleError("Error fetching assignment: " + assignmentError.message);
+  }
   if (!assignment) {
     throw new UserVisibleError("Assignment not found. Please be sure that the release date has passed.");
   }
