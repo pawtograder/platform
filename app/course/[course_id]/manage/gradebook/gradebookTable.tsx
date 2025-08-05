@@ -1846,6 +1846,15 @@ export default function GradebookTable() {
   // Dynamic first column width calculation
   const [firstColumnWidth, setFirstColumnWidth] = useState(180); // Default width
 
+  // Header height state for Safari compatibility
+  const [headerHeight, setHeaderHeight] = useState(0);
+
+  // Detect Safari browser
+  const isSafari = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  }, []);
+
   const calculateFirstColumnWidth = useCallback(() => {
     if (!students || students.length === 0) return;
 
@@ -1875,17 +1884,28 @@ export default function GradebookTable() {
     setFirstColumnWidth(finalWidth);
   }, [students]);
 
+  const calculateHeaderHeight = useCallback(() => {
+    if (headerRef.current) {
+      const height = headerRef.current.offsetHeight;
+      setHeaderHeight(height);
+    }
+  }, []);
+
   // Calculate width when students change
   useEffect(() => {
     calculateFirstColumnWidth();
   }, [calculateFirstColumnWidth]);
 
+  // Calculate header height after render
+  useEffect(() => {
+    calculateHeaderHeight();
+  }, [calculateHeaderHeight, gradebookColumns.length]);
 
   const virtualizer = useVirtualizer({
     count: rowModel.rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 45, // Estimated row height in pixels
-    overscan: 10 // Number of items to render outside visible area
+    overscan: 40 // Number of items to render outside visible area
   });
 
   const virtualRows = virtualizer.getVirtualItems();
@@ -1908,7 +1928,7 @@ export default function GradebookTable() {
             left: 0,
             width: "100%",
             height: `${virtualRow.size}px`,
-            transform: `translateY(${virtualRow.start}px)`,
+            transform: `translateY(${virtualRow.start + (isSafari ? headerHeight || 120 : 0)}px)`,
             display: "table",
             tableLayout: "fixed"
           }}
@@ -2042,15 +2062,7 @@ export default function GradebookTable() {
           <AddColumnDialog />
         </HStack>
       )}
-      <Box
-        ref={parentRef}
-        overflowX="auto"
-        overflowY="auto"
-        maxW="100%"
-        maxH="80vh"
-        height="80vh"
-        position="relative"
-      >
+      <Box ref={parentRef} overflowX="auto" overflowY="auto" maxW="100%" maxH="80vh" height="80vh" position="relative">
         {/* Expand/Collapse All Buttons */}
         {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
           <HStack gap={2} justifyContent="flex-end" px={4} py={2}>
@@ -2062,7 +2074,11 @@ export default function GradebookTable() {
             </Button>
           </HStack>
         )}
-        <Table.Root minW="100%" w="100%" style={{ tableLayout: "fixed", width: "100%", margin: 0, padding: 0, borderSpacing: 0, position: "relative" }}>
+        <Table.Root
+          minW="100%"
+          w="100%"
+          style={{ tableLayout: "fixed", width: "100%", margin: 0, padding: 0, borderSpacing: 0, position: "relative" }}
+        >
           <Table.Header
             ref={headerRef}
             style={{
@@ -2135,19 +2151,6 @@ export default function GradebookTable() {
 
                         // Show group header for first column when expanded, or for the visible column when collapsed
                         if (isFirstInGroup || (isCollapsed && isVisibleInCollapsedGroup)) {
-                          // Create group header spanning all columns in this group
-                          const groupColumnIds = groupColumns.map((col) => `grade_${col.id}`);
-                          const groupHeaders = headerGroups[0].headers.filter((h) => groupColumnIds.includes(h.id));
-
-                          // Calculate width based on column positions
-                          // First column is dynamic, others are 120px
-                          const groupWidth = isCollapsed
-                            ? 120 // Single column width
-                            : groupHeaders.reduce((total, groupHeader) => {
-                                const headerColIdx = headerGroups[0].headers.findIndex((h) => h.id === groupHeader.id);
-                                return total + (headerColIdx === 0 ? firstColumnWidth : 120);
-                              }, 0);
-
                           return (
                             <Table.ColumnHeader
                               key={header.id}
@@ -2161,9 +2164,12 @@ export default function GradebookTable() {
                                 top: 0,
                                 zIndex: 19,
                                 textAlign: "center",
-                                minWidth: groupWidth,
-                                width: groupWidth,
-                                backgroundColor: isCollapsed ? "var(--chakra-colors-bg-warning)" : "var(--chakra-colors-bg-subtle)"
+                                width: "120px",
+                                minWidth: "120px",
+                                maxWidth: "120px",
+                                backgroundColor: isCollapsed
+                                  ? "var(--chakra-colors-bg-warning)"
+                                  : "var(--chakra-colors-bg-subtle)"
                               }}
                             >
                               <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
@@ -2289,7 +2295,7 @@ export default function GradebookTable() {
           </Table.Header>
           <Table.Body
             style={{
-              height: `${virtualizer.getTotalSize()}px`,
+              height: `${virtualizer.getTotalSize() + (isSafari ? headerHeight || 120 : 0)}px`,
               position: "relative",
               margin: 0,
               padding: 0,
