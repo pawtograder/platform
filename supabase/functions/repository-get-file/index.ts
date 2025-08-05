@@ -16,6 +16,8 @@ async function handleRequest(req: Request) {
     return await github.getFileFromRepo(orgName + "/" + repoName, path);
   } catch (error) {
     if ("status" in (error as any) && (error as any).status === 404) {
+      //Add a random delay to help clients get over racing with repo creation
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 3000));
       throw new NotFoundError(`File ${path} not found in ${orgName}/${repoName}`);
     }
     throw error;
