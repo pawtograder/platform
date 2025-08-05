@@ -221,10 +221,6 @@ export class CourseController {
   constructor(public courseId: number) {}
 
   initializeRealTimeController(profileId: string, isStaff: boolean) {
-    if (this._classRealTimeController) {
-      this._classRealTimeController.close();
-    }
-
     this._classRealTimeController = new ClassRealTimeController({
       client: createClient(),
       classId: this.courseId,
@@ -1409,10 +1405,15 @@ export function CourseControllerProvider({
 }) {
   const controller = useRef<CourseController>(new CourseController(course_id));
   const [isInitialized, setIsInitialized] = useState(false);
+  const currentController = controller.current;
   useEffect(() => {
-    controller.current.initializeRealTimeController(profile_id, role === "instructor" || role === "grader");
+    console.log("Initializing realtime controller", profile_id, role);
+    currentController.initializeRealTimeController(profile_id, role === "instructor" || role === "grader");
     setIsInitialized(true);
-  }, [controller, profile_id, role]);
+    return () => {
+      currentController.classRealTimeController.close();
+    };
+  }, [currentController, profile_id, role]);
   if (!isInitialized) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">

@@ -1,18 +1,17 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui/react";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { useDelete } from "@refinedev/core";
-import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
-import { useParams } from "next/navigation";
-import { BsPlus, BsPencil, BsTrash } from "react-icons/bs";
-import useModalManager from "@/hooks/useModalManager";
 import { PopConfirm } from "@/components/ui/popconfirm";
+import useModalManager from "@/hooks/useModalManager";
+import { useConnectionStatus, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import { getQueueTypeColor } from "@/lib/utils";
+import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import { Badge, Box, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
+import { useDelete } from "@refinedev/core";
+import { BsPencil, BsPlus, BsTrash } from "react-icons/bs";
 import CreateHelpQueueModal from "./modals/createHelpQueueModal";
 import EditHelpQueueModal from "./modals/editHelpQueueModal";
-import { Alert } from "@/components/ui/alert";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
-import { getQueueTypeColor } from "@/lib/utils";
 
 /**
  * Component for managing help queues in a course.
@@ -20,28 +19,15 @@ import { getQueueTypeColor } from "@/lib/utils";
  * Uses real-time updates to show changes made by other instructors.
  */
 export default function HelpQueueManagement() {
-  const { course_id } = useParams();
-
   // Modal management
   const createModal = useModalManager();
   const editModal = useModalManager<HelpQueue>();
 
-  // Set up real-time subscriptions for global help queues
-  const {
-    data: realtimeData,
-    isConnected,
-    connectionStatus,
-    isLoading: realtimeLoading
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true,
-    enableStaffData: false
-  });
+  // Get help queues and connection status using individual hooks
+  const queues = useHelpQueues();
+  const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
 
   const { mutate: deleteQueue } = useDelete();
-
-  // Use only realtime data
-  const queues = realtimeData.helpQueues;
 
   const handleDeleteQueue = (queueId: number) => {
     deleteQueue({

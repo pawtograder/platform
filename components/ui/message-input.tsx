@@ -17,6 +17,7 @@ import { Tooltip } from "./tooltip";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { toaster } from "./toaster";
+import { isTextFile, getLanguageFromFile } from "@/lib/utils";
 
 type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
   defaultSingleLine?: boolean;
@@ -39,6 +40,12 @@ type MessageInputProps = React.ComponentProps<typeof MDEditor> & {
    * @default "discussion"
    */
   uploadFolder?: string;
+  /**
+   * Maximum number of lines for code files to be pasted as content.
+   * Files exceeding this limit will be uploaded as attachments instead.
+   * @default 300
+   */
+  maxCodeLines?: number;
 };
 
 export default function MessageInput(props: MessageInputProps) {
@@ -59,6 +66,7 @@ export default function MessageInput(props: MessageInputProps) {
     value: initialValue,
     ariaLabel,
     uploadFolder = "discussion",
+    maxCodeLines = 300,
     ...editorProps
   } = props;
   const { course_id } = useParams();
@@ -86,211 +94,6 @@ export default function MessageInput(props: MessageInputProps) {
 
   const toggleEmojiPicker = () => setShowEmojiPicker(!showEmojiPicker);
   const toggleAnonymousMode = () => setAnonymousMode(!anonymousMode);
-  /**
-   * Helper function to detect if a file is a text/code file
-   */
-  const isTextFile = useCallback((file: File): boolean => {
-    // Check MIME type first
-    if (file.type.startsWith("text/")) {
-      return true;
-    }
-
-    // Common code file extensions that might not have proper MIME types
-    const textExtensions = [
-      // Programming languages
-      ".js",
-      ".jsx",
-      ".ts",
-      ".tsx",
-      ".py",
-      ".java",
-      ".cpp",
-      ".c",
-      ".h",
-      ".cs",
-      ".php",
-      ".rb",
-      ".go",
-      ".rs",
-      ".kt",
-      ".swift",
-      ".scala",
-      ".clj",
-      ".hs",
-      ".ml",
-      ".fs",
-      ".elm",
-      ".dart",
-      ".lua",
-      ".perl",
-      ".pl",
-      ".r",
-      ".m",
-      ".vb",
-      ".pas",
-      ".ada",
-      ".asm",
-      ".s",
-      ".sh",
-      ".bat",
-      ".ps1",
-      ".fish",
-      ".zsh",
-      ".bash",
-      // Web technologies
-      ".html",
-      ".htm",
-      ".css",
-      ".scss",
-      ".sass",
-      ".less",
-      ".xml",
-      ".xhtml",
-      ".svg",
-      ".vue",
-      ".svelte",
-      // Data formats
-      ".json",
-      ".yaml",
-      ".yml",
-      ".toml",
-      ".ini",
-      ".cfg",
-      ".conf",
-      ".properties",
-      ".env",
-      // Documentation
-      ".md",
-      ".txt",
-      ".rst",
-      ".adoc",
-      ".tex",
-      ".rtf",
-      // Configuration files
-      ".gitignore",
-      ".gitattributes",
-      ".editorconfig",
-      ".prettierrc",
-      ".eslintrc",
-      ".babelrc",
-      ".tsconfig",
-      ".jsconfig",
-      ".dockerfile",
-      ".dockerignore",
-      ".makefile",
-      ".cmake",
-      ".gradle",
-      ".maven",
-      ".ant",
-      // Database
-      ".sql",
-      ".mongodb",
-      ".cql",
-      ".cypher",
-      // Other
-      ".log",
-      ".diff",
-      ".patch",
-      ".lock"
-    ];
-
-    const extension = "." + file.name.split(".").pop()?.toLowerCase();
-    return textExtensions.includes(extension);
-  }, []);
-
-  /**
-   * Helper function to get language identifier for syntax highlighting
-   */
-  const getLanguageFromFile = useCallback((fileName: string): string => {
-    const extension = fileName.split(".").pop()?.toLowerCase();
-
-    const languageMap: Record<string, string> = {
-      // JavaScript/TypeScript family
-      js: "javascript",
-      jsx: "javascript",
-      ts: "typescript",
-      tsx: "typescript",
-      // Web technologies
-      html: "html",
-      htm: "html",
-      css: "css",
-      scss: "scss",
-      sass: "sass",
-      less: "less",
-      xml: "xml",
-      svg: "xml",
-      vue: "vue",
-      svelte: "svelte",
-      // Programming languages
-      py: "python",
-      java: "java",
-      cpp: "cpp",
-      c: "c",
-      h: "c",
-      cs: "csharp",
-      php: "php",
-      rb: "ruby",
-      go: "go",
-      rs: "rust",
-      kt: "kotlin",
-      swift: "swift",
-      scala: "scala",
-      clj: "clojure",
-      hs: "haskell",
-      ml: "ocaml",
-      fs: "fsharp",
-      elm: "elm",
-      dart: "dart",
-      lua: "lua",
-      perl: "perl",
-      pl: "perl",
-      r: "r",
-      m: "matlab",
-      vb: "vbnet",
-      pas: "pascal",
-      ada: "ada",
-      asm: "assembly",
-      s: "assembly",
-      // Shell scripts
-      sh: "bash",
-      bash: "bash",
-      zsh: "bash",
-      fish: "bash",
-      bat: "batch",
-      ps1: "powershell",
-      // Data formats
-      json: "json",
-      yaml: "yaml",
-      yml: "yaml",
-      toml: "toml",
-      ini: "ini",
-      cfg: "ini",
-      conf: "ini",
-      properties: "properties",
-      env: "bash",
-      // Documentation
-      md: "markdown",
-      rst: "rst",
-      tex: "latex",
-      // Database
-      sql: "sql",
-      mongodb: "javascript",
-      cql: "sql",
-      cypher: "cypher",
-      // Configuration
-      dockerfile: "dockerfile",
-      makefile: "makefile",
-      cmake: "cmake",
-      gradle: "gradle",
-      // Other
-      diff: "diff",
-      patch: "diff",
-      log: "text",
-      txt: "text"
-    };
-
-    return languageMap[extension || ""] || "text";
-  }, []);
 
   const fileUpload = useCallback(
     async (file: File) => {
@@ -298,12 +101,20 @@ export default function MessageInput(props: MessageInputProps) {
       if (isTextFile(file)) {
         try {
           const content = await file.text();
-          const language = getLanguageFromFile(file.name);
-          const codeBlock = `\`\`\`${language}\n${content}\n\`\`\``;
+          const lineCount = content.split("\n").length;
 
-          // Send the file content as a code block message
-          await sendMessage(`**${file.name}**\n\n${codeBlock}`, profile_id, false);
-          return null; // No URL for text files
+          // If file has too many lines, upload as file instead of pasting content
+          if (lineCount > maxCodeLines) {
+            // Fall through to regular file upload logic below
+          } else {
+            // File is small enough, send as code block
+            const language = getLanguageFromFile(file.name);
+            const codeBlock = `\`\`\`${language}\n${content}\n\`\`\``;
+
+            // Send the file content as a code block message
+            await sendMessage(`**${file.name}**\n\n${codeBlock}`, profile_id, false);
+            return null; // No URL for text files
+          }
         } catch (error) {
           toaster.error({
             title: "Error reading file",
@@ -339,7 +150,7 @@ export default function MessageInput(props: MessageInputProps) {
       await sendMessage(`Attachment: ${markdownLink}`, profile_id, false);
       return url;
     },
-    [course_id, uploadFolder, profile_id, sendMessage, isTextFile, getLanguageFromFile]
+    [course_id, uploadFolder, profile_id, sendMessage, maxCodeLines]
   );
 
   const attachFile = useCallback(

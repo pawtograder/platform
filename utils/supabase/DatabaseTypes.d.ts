@@ -480,42 +480,8 @@ export type OfficeHoursSubscription = {
   callback: OfficeHoursMessageCallback;
 };
 
-/**
- * Connection status for office hours realtime controller
- */
-export type OfficeHoursChannelStatus = {
-  name: string;
-  state: "closed" | "errored" | "joined" | "joining" | "leaving";
-  type: "help_request" | "help_request_staff" | "help_queue" | "help_queues";
-  help_request_id?: number;
-  help_queue_id?: number;
-};
-
-export type OfficeHoursConnectionStatus = {
-  overall: "connected" | "connecting" | "disconnected" | "partial";
-  channels: OfficeHoursChannelStatus[];
-  lastUpdate: Date;
-};
-
-/**
- * Office hours form and UI helper types
- */
-export type HelpRequestFormFileReference = {
-  submission_file_id: number;
-  line_number?: number;
-};
-
 export type HelpRequestWithStudentCount = HelpRequest & {
   student_count: number;
-};
-
-/**
- * Office hours UI component prop types
- */
-export type HelpRequestHistoryProps = {
-  requests: HelpRequest[];
-  showPrivacyIndicator?: boolean;
-  readOnly?: boolean;
 };
 
 export type UserProfile = GetResult<

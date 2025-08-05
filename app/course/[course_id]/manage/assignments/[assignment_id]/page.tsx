@@ -1,10 +1,10 @@
+import { getPrivateProfileId } from "@/lib/ssrUtils";
 import { createClient } from "@/utils/supabase/server";
-import { Box, DataList, HStack, Link, VStack, Tabs } from "@chakra-ui/react";
+import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import AssignmentsTable from "./assignmentsTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
-import { getPrivateProfileId } from "@/lib/ssrUtils";
 export default async function AssignmentHome({
   params
 }: {

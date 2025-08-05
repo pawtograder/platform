@@ -1144,7 +1144,8 @@ BEGIN
             is_private,
             location_type,
             template_id,
-            status
+            status,
+            created_by
         ) VALUES (
             demo_class_id,
             format('Help request #%s: My program crashes on edge cases.', i),
@@ -1156,7 +1157,8 @@ BEGIN
                 ELSE 'in_person'::public.location_type
             END,
             CASE WHEN i % 2 = 0 THEN debugging_template_id ELSE concept_template_id END,
-            'open'
+            'open',
+            student_priv
         ) RETURNING id INTO help_req_id;
 
         -- Add student to help request via the new many-to-many table
@@ -1248,14 +1250,16 @@ BEGIN
         help_queue,
         is_private,
         location_type,
-        status
+        status,
+        created_by
     ) VALUES (
         demo_class_id,
         'Group project debugging session - need help with merge conflicts and integration issues.',
         video_queue_id,
         FALSE,
         'remote',
-        'open'
+        'open',
+        student_private_profile_ids[1]
     ) RETURNING id INTO help_req_id;
 
     -- Add multiple students to this group help request

@@ -1,12 +1,6 @@
 "use client";
 import { useCallback, useState, useMemo } from "react";
-import type {
-  HelpRequest,
-  Assignment,
-  Submission,
-  SubmissionFile,
-  HelpRequestFormFileReference
-} from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest, Assignment, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { Flex, HStack, Stack, Text, AvatarGroup, Box, Icon, IconButton, Card, Badge, Input } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -27,7 +21,7 @@ import {
 } from "react-icons/bs";
 import { useRouter, useParams, usePathname, useSearchParams } from "next/navigation";
 
-import { useUpdate, useList, useCreate, useDelete } from "@refinedev/core";
+import { useList } from "@refinedev/core";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import { toaster } from "@/components/ui/toaster";
@@ -43,8 +37,22 @@ import { Select } from "chakra-react-select";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import Link from "next/link";
-import { useOfficeHoursRealtime, useHelpRequestFeedback } from "@/hooks/useOfficeHoursRealtime";
+import {
+  useHelpRequestFeedback,
+  useHelpRequestStudents,
+  useHelpRequestFileReferences,
+  useHelpRequestMessages,
+  useOfficeHoursController
+} from "@/hooks/useOfficeHoursRealtime";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
+
+/**
+ * Office hours form and UI helper types
+ */
+export type HelpRequestFormFileReference = {
+  submission_file_id: number;
+  line_number?: number;
+};
 
 // Type for help request students relationship
 type HelpRequestStudent = {
@@ -68,49 +76,28 @@ type EditingFileReference = HelpRequestFormFileReference & {
 const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
   const { private_profile_id } = useClassProfiles();
 
-  // Get student data from realtime
-  const { data: realtimeData } = useOfficeHoursRealtime({
-    classId: request.class_id,
-    helpRequestId: request.id,
-    enableChat: false
-  });
+  // Get student data using individual hooks
+  const allHelpRequestStudents = useHelpRequestStudents();
+  const helpRequestStudentData = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
 
-  const { mutateAsync: updateRequest } = useUpdate<HelpRequest>({
-    resource: "help_requests",
-    id: request.id,
-    mutationOptions: {
-      onSuccess: () => {
-        toaster.success({
-          title: "Help request successfully updated",
-          description: `Help request ${request.id} updated`
-        });
-      }
-    }
-  });
-
-  // Hook for logging student activity
-  const { mutateAsync: createStudentActivity } = useCreate({
-    resource: "student_help_activity"
-  });
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpRequests, studentHelpActivity } = controller;
 
   // Helper function to log activity for all students in the request
   const logActivityForAllStudents = useCallback(
     async (activityType: "request_updated" | "request_resolved", description: string) => {
-      // Get all student associations for this help request from realtime data
-      const requestStudents = realtimeData.helpRequestStudents.filter(
-        (student) => student.help_request_id === request.id
-      );
+      // Get all student associations for this help request
+      const requestStudents = helpRequestStudentData;
 
       for (const student of requestStudents) {
         try {
-          await createStudentActivity({
-            values: {
-              student_profile_id: student.profile_id,
-              class_id: request.class_id,
-              help_request_id: request.id,
-              activity_type: activityType,
-              activity_description: description
-            }
+          await studentHelpActivity.create({
+            student_profile_id: student.profile_id,
+            class_id: request.class_id,
+            help_request_id: request.id,
+            activity_type: activityType,
+            activity_description: description
           });
         } catch (error) {
           toaster.error({
@@ -120,7 +107,7 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
         }
       }
     },
-    [request.id, request.class_id, createStudentActivity, realtimeData.helpRequestStudents]
+    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
   );
 
   // Disable assignment actions for resolved/closed requests
@@ -141,8 +128,12 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
               colorPalette="red"
               disabled={isRequestInactive}
               onClick={async () => {
-                await updateRequest({ id: request.id, values: { assignee: null, status: "open" } });
+                await helpRequests.update(request.id, { assignee: null, status: "open" });
                 await logActivityForAllStudents("request_updated", "Request assignment dropped and returned to queue");
+                toaster.success({
+                  title: "Help request successfully updated",
+                  description: `Help request ${request.id} updated`
+                });
               }}
             >
               <Icon as={BsClipboardCheckFill} />
@@ -172,11 +163,15 @@ const HelpRequestAssignment = ({ request }: { request: HelpRequest }) => {
               colorPalette="green"
               disabled={isRequestInactive}
               onClick={async () => {
-                await updateRequest({
-                  id: request.id,
-                  values: { assignee: private_profile_id, status: "in_progress" }
+                await helpRequests.update(request.id, {
+                  assignee: private_profile_id,
+                  status: "in_progress"
                 });
                 await logActivityForAllStudents("request_updated", "Request assigned and marked as in progress");
+                toaster.success({
+                  title: "Help request successfully updated",
+                  description: `Help request ${request.id} updated`
+                });
               }}
             >
               <Icon as={BsClipboardCheck} />
@@ -200,11 +195,8 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
   const [editingSubmissionId, setEditingSubmissionId] = useState<number | null>(null);
   const { private_profile_id } = useClassProfiles();
 
-  const { data: realtimeData } = useOfficeHoursRealtime({
-    classId: request.class_id,
-    helpRequestId: request.id,
-    enableChat: false
-  });
+  // Get file references using individual hook
+  const { fileReferences: currentFileReferences } = useHelpRequestFileReferences(request.id);
 
   // Fetch referenced submission if any
   const { data: referencedSubmission, refetch: refetchSubmission } = useList<Submission>({
@@ -216,7 +208,7 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
   });
 
   // Fetch the actual files referenced to get their name
-  const fileReferenceIds = realtimeData.helpRequestFileReferences?.map((ref) => ref.submission_file_id) || [];
+  const fileReferenceIds = currentFileReferences?.map((ref) => ref.submission_file_id) || [];
   const { data: referencedFiles, refetch: refetchReferencedFiles } = useList<SubmissionFile>({
     resource: "submission_files",
     filters: [{ field: "id", operator: "in", value: fileReferenceIds }],
@@ -266,31 +258,20 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
     }
   });
 
-  // Refine hooks for CRUD operations
-  const { mutateAsync: createFileReference } = useCreate({
-    resource: "help_request_file_references"
-  });
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpRequestFileReferences, helpRequests } = controller;
 
-  const { mutateAsync: updateFileReference } = useUpdate({
-    resource: "help_request_file_references"
-  });
-
-  const { mutateAsync: deleteFileReference } = useDelete();
-
-  const { mutateAsync: updateHelpRequest } = useUpdate({
-    resource: "help_requests"
-  });
-
-  const hasReferences = !!request.referenced_submission_id || (realtimeData.helpRequestFileReferences?.length ?? 0) > 0;
+  const hasReferences = !!request.referenced_submission_id || (currentFileReferences?.length ?? 0) > 0;
 
   /**
    * Initialize editing mode with current file references and submission
    */
   const handleEditClick = useCallback(() => {
-    if (!realtimeData.helpRequestFileReferences) return;
+    if (!currentFileReferences) return;
 
     // Convert database references to form format
-    const formReferences: EditingFileReference[] = realtimeData.helpRequestFileReferences.map((ref) => ({
+    const formReferences: EditingFileReference[] = currentFileReferences.map((ref) => ({
       id: ref.id, // Include ID for existing references
       submission_file_id: ref.submission_file_id!,
       line_number: ref.line_number || undefined
@@ -299,7 +280,7 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
     setEditingReferences(formReferences);
     setEditingSubmissionId(request.referenced_submission_id);
     setIsEditing(true);
-  }, [realtimeData.helpRequestFileReferences, request.referenced_submission_id]);
+  }, [currentFileReferences, request.referenced_submission_id]);
 
   /**
    * Cancel editing and revert changes
@@ -354,7 +335,7 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
    */
   const handleSaveChanges = useCallback(async () => {
     try {
-      const currentRefs = realtimeData.helpRequestFileReferences || [];
+      const currentRefs = currentFileReferences || [];
       const newRefs = editingReferences;
 
       // Determine which references to create, update, and delete
@@ -364,20 +345,14 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
 
       // Delete removed references
       for (const ref of refsToDelete) {
-        await deleteFileReference({
-          id: ref.id,
-          resource: "help_request_file_references"
-        });
+        await helpRequestFileReferences.delete(ref.id);
       }
 
       // Update existing references
       for (const ref of refsToUpdate) {
         if (ref.id) {
-          await updateFileReference({
-            id: ref.id,
-            values: {
-              line_number: ref.line_number
-            }
+          await helpRequestFileReferences.update(ref.id, {
+            line_number: ref.line_number
           });
         }
       }
@@ -390,15 +365,13 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
         }
 
         for (const ref of refsToCreate) {
-          await createFileReference({
-            values: {
-              help_request_id: request.id,
-              class_id: request.class_id,
-              assignment_id: selectedSubmission.assignment_id,
-              submission_file_id: ref.submission_file_id,
-              submission_id: editingSubmissionId,
-              line_number: ref.line_number
-            }
+          await helpRequestFileReferences.create({
+            help_request_id: request.id,
+            class_id: request.class_id,
+            assignment_id: selectedSubmission.assignment_id,
+            submission_file_id: ref.submission_file_id,
+            submission_id: editingSubmissionId,
+            line_number: ref.line_number ?? null
           });
         }
       }
@@ -408,12 +381,9 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
       const hasSubmissionReference = editingSubmissionId !== null;
       const shouldBePrivate = hasFileReferences || hasSubmissionReference;
 
-      await updateHelpRequest({
-        id: request.id,
-        values: {
-          referenced_submission_id: editingSubmissionId,
-          is_private: shouldBePrivate
-        }
+      await helpRequests.update(request.id, {
+        referenced_submission_id: editingSubmissionId,
+        is_private: shouldBePrivate
       });
 
       // Show appropriate privacy message
@@ -448,14 +418,12 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
     }
   }, [
     request,
-    realtimeData.helpRequestFileReferences,
+    currentFileReferences,
     editingReferences,
     editingSubmissionId,
     userSubmissions,
-    createFileReference,
-    updateFileReference,
-    deleteFileReference,
-    updateHelpRequest,
+    helpRequestFileReferences,
+    helpRequests,
     refetchReferencedFiles,
     refetchSubmission
   ]);
@@ -664,9 +632,7 @@ const HelpRequestFileReferences = ({ request, canEdit }: { request: HelpRequest;
                   </Text>
                   <Stack spaceY={2}>
                     {referencedFiles.data.map((file) => {
-                      const fileRef = realtimeData.helpRequestFileReferences?.find(
-                        (ref) => ref.submission_file_id === file.id
-                      );
+                      const fileRef = currentFileReferences?.find((ref) => ref.submission_file_id === file.id);
                       return (
                         <HStack key={fileRef?.id}>
                           <Icon as={BsFileEarmark} color="fg.muted" />
@@ -718,40 +684,28 @@ const HelpRequestStudents = ({
   const [isEditing, setIsEditing] = useState(false);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
 
-  // Get realtime data for activity logging
-  const { data: realtimeData } = useOfficeHoursRealtime({
-    classId: request.class_id,
-    helpRequestId: request.id,
-    enableChat: false
-  });
+  // Get student associations for activity logging
+  const allHelpRequestStudents = useHelpRequestStudents();
+  const helpRequestStudentData = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
 
-  // Refinedev hooks for student association management
-  const { mutateAsync: createStudentAssociation } = useCreate();
-  const { mutateAsync: deleteStudentAssociation } = useDelete();
-
-  // Hook for logging student activity
-  const { mutateAsync: createStudentActivity } = useCreate({
-    resource: "student_help_activity"
-  });
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpRequestStudents, studentHelpActivity } = controller;
 
   // Helper function to log activity for all students in the request
   const logActivityForAllStudents = useCallback(
     async (activityType: "request_updated" | "request_resolved", description: string) => {
-      // Get all student associations for this help request from realtime data
-      const requestStudents = realtimeData.helpRequestStudents.filter(
-        (student) => student.help_request_id === request.id
-      );
+      // Get all student associations for this help request
+      const requestStudents = helpRequestStudentData;
 
       for (const student of requestStudents) {
         try {
-          await createStudentActivity({
-            values: {
-              student_profile_id: student.profile_id,
-              class_id: request.class_id,
-              help_request_id: request.id,
-              activity_type: activityType,
-              activity_description: description
-            }
+          await studentHelpActivity.create({
+            student_profile_id: student.profile_id,
+            class_id: request.class_id,
+            help_request_id: request.id,
+            activity_type: activityType,
+            activity_description: description
           });
         } catch (error) {
           toaster.error({
@@ -761,7 +715,7 @@ const HelpRequestStudents = ({
         }
       }
     },
-    [request.id, request.class_id, createStudentActivity, realtimeData.helpRequestStudents]
+    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
   );
 
   // Initialize selected students when editing mode is entered
@@ -789,23 +743,17 @@ const HelpRequestStudents = ({
 
         // Delete each association
         for (const association of associationsToDelete) {
-          await deleteStudentAssociation({
-            resource: "help_request_students",
-            id: association.id!
-          });
+          await helpRequestStudents.delete(association.id!);
         }
       }
 
       // Add new students
       if (studentsToAdd.length > 0) {
         for (const studentId of studentsToAdd) {
-          await createStudentAssociation({
-            resource: "help_request_students",
-            values: {
-              help_request_id: request.id,
-              profile_id: studentId,
-              class_id: request.class_id
-            }
+          await helpRequestStudents.create({
+            help_request_id: request.id,
+            profile_id: studentId,
+            class_id: request.class_id
           });
         }
       }
@@ -900,37 +848,29 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   // Check if we're in popout mode
   const isPopOut = searchParams.get("popout") === "true";
 
-  // Use main realtime hook instead of individual hooks
-  const { data: realtimeData } = useOfficeHoursRealtime({
-    classId: request.class_id,
-    helpRequestId: request.id,
-    enableChat: true,
-    enableStaffData: role.role === "instructor" || role.role === "grader"
-  });
+  // Get data using individual hooks
+  const allHelpRequestStudents = useHelpRequestStudents();
+  const helpRequestStudentData = allHelpRequestStudents.filter((student) => student.help_request_id === request.id);
+  const helpRequestMessages = useHelpRequestMessages(request.id);
 
-  // Hook for logging student activity
-  const { mutateAsync: createStudentActivity } = useCreate({
-    resource: "student_help_activity"
-  });
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { studentHelpActivity, helpRequests } = controller;
 
   // Helper function to log activity for all students in the request
   const logActivityForAllStudents = useCallback(
     async (activityType: "request_updated" | "request_resolved", description: string) => {
-      // Get all student associations for this help request from realtime data
-      const requestStudents = realtimeData.helpRequestStudents.filter(
-        (student) => student.help_request_id === request.id
-      );
+      // Get all student associations for this help request
+      const requestStudents = helpRequestStudentData;
 
       for (const student of requestStudents) {
         try {
-          await createStudentActivity({
-            values: {
-              student_profile_id: student.profile_id,
-              class_id: request.class_id,
-              help_request_id: request.id,
-              activity_type: activityType,
-              activity_description: description
-            }
+          await studentHelpActivity.create({
+            student_profile_id: student.profile_id,
+            class_id: request.class_id,
+            help_request_id: request.id,
+            activity_type: activityType,
+            activity_description: description
           });
         } catch (error) {
           toaster.error({
@@ -940,12 +880,10 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         }
       }
     },
-    [request.id, request.class_id, createStudentActivity, realtimeData.helpRequestStudents]
+    [request.id, request.class_id, studentHelpActivity, helpRequestStudentData]
   );
 
-  // Extract data from realtime hook
-  const helpRequestMessages = realtimeData.helpRequestMessages;
-  const helpRequestStudentData = realtimeData.helpRequestStudents;
+  // Note: helpRequestMessages and helpRequestStudentData are already defined above
 
   // Get all feedback data to check if this request has feedback
   const allFeedback = useHelpRequestFeedback();
@@ -1003,8 +941,6 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
   const karmaModal = useModalManager();
   const feedbackModal = useModalManager<{ action: "resolve" | "close" }>();
 
-  const { mutate } = useUpdate({ resource: "help_requests", id: request.id });
-
   // Generate title based on number of students - memoized to prevent recalculation
   const requestTitle = useMemo(() => {
     if (students.length === 0) {
@@ -1056,21 +992,15 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       // Only update request status if it's not already resolved/closed
       if (request.status !== "resolved" && request.status !== "closed") {
         if (action === "resolve") {
-          await mutate({
-            id: request.id,
-            values: {
-              resolved_by: private_profile_id,
-              resolved_at: new Date().toISOString(),
-              status: "resolved"
-            }
+          await helpRequests.update(request.id, {
+            resolved_by: private_profile_id,
+            resolved_at: new Date().toISOString(),
+            status: "resolved"
           });
           await logActivityForAllStudents("request_resolved", "Request resolved by student");
         } else if (action === "close") {
-          await mutate({
-            id: request.id,
-            values: {
-              status: "closed"
-            }
+          await helpRequests.update(request.id, {
+            status: "closed"
           });
           await logActivityForAllStudents("request_updated", "Request closed by student");
         }
@@ -1083,7 +1013,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         description: `Failed to ${action} the request: ${error instanceof Error ? error.message : String(error)}`
       });
     }
-  }, [feedbackModal, mutate, request.id, private_profile_id, logActivityForAllStudents, request.status]);
+  }, [feedbackModal, helpRequests, request.id, private_profile_id, logActivityForAllStudents, request.status]);
 
   const resolveRequest = useCallback(async () => {
     // For students, show feedback modal first
@@ -1093,16 +1023,13 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     }
 
     // For instructors/graders, resolve directly
-    await mutate({
-      id: request.id,
-      values: {
-        resolved_by: private_profile_id,
-        resolved_at: new Date().toISOString(),
-        status: "resolved"
-      }
+    await helpRequests.update(request.id, {
+      resolved_by: private_profile_id,
+      resolved_at: new Date().toISOString(),
+      status: "resolved"
     });
     await logActivityForAllStudents("request_resolved", "Request resolved by instructor");
-  }, [mutate, request.id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
+  }, [helpRequests, request.id, private_profile_id, logActivityForAllStudents, role.role, feedbackModal]);
 
   const closeRequest = useCallback(async () => {
     // For students, show feedback modal first
@@ -1112,14 +1039,11 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     }
 
     // For instructors/graders, close directly
-    await mutate({
-      id: request.id,
-      values: {
-        status: "closed"
-      }
+    await helpRequests.update(request.id, {
+      status: "closed"
     });
     await logActivityForAllStudents("request_updated", "Request closed by instructor");
-  }, [mutate, request.id, logActivityForAllStudents, role.role, feedbackModal]);
+  }, [helpRequests, request.id, logActivityForAllStudents, role.role, feedbackModal]);
 
   /**
    * Open feedback modal for closed/resolved requests without existing feedback from the currently-logged in student
@@ -1303,7 +1227,6 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
 
       <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
         <RealtimeChat
-          messages={helpRequestMessages}
           helpRequest={request}
           helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling
           readOnly={readOnly}

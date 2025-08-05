@@ -3,7 +3,7 @@
 import Roster from "@/components/videocall/roster";
 import VideoGrid from "@/components/videocall/videogrid";
 import useUserProfiles from "@/hooks/useUserProfiles";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequest } from "@/hooks/useOfficeHoursRealtime";
 import MeetingControls from "@/lib/aws-chime-sdk-meeting/containers/MeetingControls";
 import { NavigationProvider } from "@/lib/aws-chime-sdk-meeting/providers/NavigationProvider";
 import { VideoTileGridProvider } from "@/lib/aws-chime-sdk-meeting/providers/VideoTileGridProvider";
@@ -55,16 +55,8 @@ function HelpMeeting() {
   const { users } = useUserProfiles();
   const { help_request_id, course_id } = useParams();
 
-  // Use realtime hook to monitor help request status
-  const { data: realtimeData } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    helpRequestId: Number(help_request_id),
-    enableActiveRequests: false,
-    enableGlobalQueues: false,
-    enableStaffData: false
-  });
-
-  const { helpRequest } = realtimeData;
+  // Use individual hook to monitor help request status
+  const helpRequest = useHelpRequest(Number(help_request_id));
 
   useEffect(() => {
     meetingManager.getAttendee = async (chimeAttendeeId: string, externalUserId?: string) => {

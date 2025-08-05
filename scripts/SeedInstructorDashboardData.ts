@@ -10,6 +10,7 @@ import {
   createRegradeRequest,
   createUserInClass,
   supabase,
+  TEST_HANDOUT_REPO,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
 
@@ -1052,7 +1053,7 @@ async function insertEnhancedAssignment({
       description: "This is an enhanced test assignment with diverse rubric structure",
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
-      template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+      template_repo: TEST_HANDOUT_REPO,
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,
@@ -1087,6 +1088,8 @@ async function insertEnhancedAssignment({
   await supabase
     .from("autograder")
     .update({
+      grader_repo: "pawtograder-playground/test-e2e-java-solution",
+      grader_commit_sha: "76ece6af6a251346596fcc71181a86599faf0fe3be0f85c532ff20c2f0939177", // Avoid races :)
       config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
     })
     .eq("id", assignmentData.id);
@@ -1232,8 +1235,8 @@ async function createClassSections(class_id: number, numSections: number) {
   return sections || [];
 }
 
-// Helper function to create lab sections
-async function createLabSections(class_id: number, numSections: number, instructorId: string) {
+// Helper function to create lab sections with distributed instructors
+async function createLabSections(class_id: number, numSections: number, instructors: TestingUser[]) {
   const daysOfWeek = ["monday", "tuesday", "wednesday", "thursday", "friday"] as const;
   const times = ["09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"];
 
@@ -1244,6 +1247,10 @@ async function createLabSections(class_id: number, numSections: number, instruct
     const startTime = times[timeIndex];
     const endTime = `${String(parseInt(startTime.split(":")[0]) + 1).padStart(2, "0")}:${startTime.split(":")[1]}`;
 
+    // Distribute instructors among lab sections
+    const instructorIndex = i % instructors.length;
+    const instructorId = instructors[instructorIndex].private_profile_id;
+
     return {
       class_id: class_id,
       name: `Lab ${String.fromCharCode(65 + i)}`, // Lab A, Lab B, etc.
@@ -1251,7 +1258,7 @@ async function createLabSections(class_id: number, numSections: number, instruct
       start_time: startTime,
       end_time: endTime,
       lab_leader_id: instructorId,
-      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime}`
+      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime} (led by ${instructors[instructorIndex].private_profile_name})`
     };
   });
 
@@ -1569,12 +1576,225 @@ async function insertGraderConflicts(
   console.log(`   Summary: ${conflictSummary}`);
 }
 
+// Sample help request messages for realistic data
+const HELP_REQUEST_TEMPLATES = [
+  "My algorithm keeps timing out on large datasets - any optimization tips?",
+  "Having trouble with memory management in my implementation",
+  "Getting a stack overflow error when recursion depth gets too high",
+  "My sorting algorithm works but seems inefficient - suggestions for improvement?",
+  "Struggling with edge cases in my binary search implementation",
+  "Need help debugging this segmentation fault in my C++ code",
+  "My program compiles but gives wrong output for certain test cases",
+  "Having issues with concurrent programming - thread safety concerns",
+  "My database query is running too slowly, need performance optimization",
+  "Getting unexpected behavior with pointer arithmetic",
+  "My neural network isn't converging - what hyperparameters should I adjust?",
+  "Need help understanding the requirements for the dynamic programming solution",
+  "My unit tests are failing intermittently - not sure why",
+  "Having trouble with the graph traversal algorithm implementation",
+  "My web app crashes under high load - need scalability advice",
+  "Getting strange compiler errors that I can't figure out",
+  "Need help with debugging this race condition",
+  "My machine learning model is overfitting - how to regularize?",
+  "Having issues with API integration and error handling",
+  "My algorithm works for small inputs but fails for large ones"
+];
+
+const HELP_REQUEST_REPLIES = [
+  "Have you tried using memoization to optimize your recursive calls?",
+  "Consider using a different data structure - maybe a hash table would help?",
+  "Try profiling your code to identify the bottleneck",
+  "You might want to implement tail recursion optimization",
+  "Check if you're creating unnecessary objects in your loop",
+  "Have you considered using a more efficient sorting algorithm?",
+  "Try adding some debug prints to trace the execution flow",
+  "Make sure you're handling boundary conditions correctly",
+  "Consider using parallel processing for large datasets",
+  "You might need to increase the stack size for deep recursion",
+  "Try breaking down the problem into smaller subproblems",
+  "Check your loop invariants and termination conditions",
+  "Consider using a different approach - maybe iterative instead of recursive?",
+  "Make sure you're not accessing memory out of bounds",
+  "Try using a debugger to step through your code line by line",
+  "Have you tested with edge cases like empty input or single elements?",
+  "Consider optimizing your space complexity if time complexity is already good",
+  "You might want to use a more appropriate design pattern here",
+  "Try caching expensive computations to avoid redundant work",
+  "Make sure your algorithm has the correct time complexity"
+];
+
+// Helper function to create help requests with replies and members
+async function createHelpRequests({
+  class_id,
+  students,
+  instructors,
+  numHelpRequests,
+  minRepliesPerRequest,
+  maxRepliesPerRequest,
+  maxMembersPerRequest
+}: {
+  class_id: number;
+  students: TestingUser[];
+  instructors: TestingUser[];
+  numHelpRequests: number;
+  minRepliesPerRequest: number;
+  maxRepliesPerRequest: number;
+  maxMembersPerRequest: number;
+}): Promise<void> {
+  console.log(`\n🆘 Creating ${numHelpRequests} help requests...`);
+
+  // First, create a help queue if it doesn't exist
+  const { data: existingQueue } = await supabase.from("help_queues").select("id").eq("class_id", class_id).single();
+
+  let queueId: number;
+  if (existingQueue) {
+    queueId = existingQueue.id;
+  } else {
+    const { data: queueData, error: queueError } = await supabase
+      .from("help_queues")
+      .insert({
+        class_id: class_id,
+        name: "Office Hours",
+        description: "General office hours help queue",
+        depth: 1,
+        queue_type: "video"
+      })
+      .select("id")
+      .single();
+
+    if (queueError) {
+      throw new Error(`Failed to create help queue: ${queueError.message}`);
+    }
+    queueId = queueData.id;
+  }
+
+  // Create help requests in batches
+  const BATCH_SIZE = 50;
+  const helpRequestBatches = chunkArray(
+    Array.from({ length: numHelpRequests }, (_, i) => i),
+    BATCH_SIZE
+  );
+
+  let totalCreated = 0;
+  let totalResolved = 0;
+
+  for (const batch of helpRequestBatches) {
+    console.log(
+      `  Creating help requests batch ${helpRequestBatches.indexOf(batch) + 1}/${helpRequestBatches.length}...`
+    );
+
+    const batchPromises = batch.map(async () => {
+      // Select a random student as the creator
+      const creator = students[Math.floor(Math.random() * students.length)];
+      const isPrivate = Math.random() < 0.3; // 30% chance of being private
+      const isResolved = Math.random() < 0.8; // 80% chance of being resolved
+      const status = isResolved ? (Math.random() < 0.5 ? "resolved" : "closed") : "open";
+
+      // Select a random help request template
+      const messageTemplate = HELP_REQUEST_TEMPLATES[Math.floor(Math.random() * HELP_REQUEST_TEMPLATES.length)];
+
+      // Create the help request
+      const { data: helpRequestData, error: helpRequestError } = await supabase
+        .from("help_requests")
+        .insert({
+          class_id: class_id,
+          help_queue: queueId,
+          request: messageTemplate,
+          is_private: isPrivate,
+          status: status,
+          created_by: creator.private_profile_id,
+          assignee: isResolved ? instructors[Math.floor(Math.random() * instructors.length)].private_profile_id : null,
+          resolved_at: isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString() : null // Random time in last 7 days
+        })
+        .select("id")
+        .single();
+
+      if (helpRequestError) {
+        throw new Error(`Failed to create help request: ${helpRequestError.message}`);
+      }
+
+      const helpRequestId = helpRequestData.id;
+
+      // Add the creator as a member
+      await supabase.from("help_request_students").insert({
+        help_request_id: helpRequestId,
+        profile_id: creator.private_profile_id,
+        class_id: class_id
+      });
+
+      // Add additional members (1 to maxMembersPerRequest total members)
+      const numMembers = Math.floor(Math.random() * maxMembersPerRequest) + 1;
+      const additionalMembers = Math.min(numMembers - 1, students.length - 1); // -1 because creator is already added
+
+      if (additionalMembers > 0) {
+        const availableStudents = students.filter((s) => s.private_profile_id !== creator.private_profile_id);
+        const selectedMembers = availableStudents.sort(() => Math.random() - 0.5).slice(0, additionalMembers);
+
+        const memberInserts = selectedMembers.map((student) => ({
+          help_request_id: helpRequestId,
+          profile_id: student.private_profile_id,
+          class_id: class_id
+        }));
+
+        if (memberInserts.length > 0) {
+          await supabase.from("help_request_students").insert(memberInserts);
+        }
+      }
+
+      // Create replies (messages)
+      const numReplies =
+        Math.floor(Math.random() * (maxRepliesPerRequest - minRepliesPerRequest + 1)) + minRepliesPerRequest;
+
+      if (numReplies > 0) {
+        const allParticipants = [creator, ...instructors];
+        const messageInserts = [];
+
+        for (let i = 0; i < numReplies; i++) {
+          const isFromInstructor = Math.random() < 0.4; // 40% chance message is from instructor
+          const sender = isFromInstructor
+            ? instructors[Math.floor(Math.random() * instructors.length)]
+            : allParticipants[Math.floor(Math.random() * allParticipants.length)];
+
+          const replyTemplate = HELP_REQUEST_REPLIES[Math.floor(Math.random() * HELP_REQUEST_REPLIES.length)];
+          const messageTime = new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000); // Random time in last 7 days
+
+          messageInserts.push({
+            help_request_id: helpRequestId,
+            author: sender.private_profile_id,
+            message: replyTemplate,
+            class_id: class_id,
+            instructors_only: isPrivate && Math.random() < 0.2, // 20% of private request messages are instructor-only
+            created_at: messageTime.toISOString()
+          });
+        }
+
+        if (messageInserts.length > 0) {
+          await supabase.from("help_request_messages").insert(messageInserts);
+        }
+      }
+
+      if (isResolved) {
+        totalResolved++;
+      }
+      totalCreated++;
+    });
+
+    await Promise.all(batchPromises);
+  }
+
+  console.log(
+    `✓ Created ${totalCreated} help requests (${totalResolved} resolved/closed, ${totalCreated - totalResolved} open)`
+  );
+}
+
 interface SeedingOptions {
   numStudents: number;
   numGraders: number;
+  numInstructors: number;
   numAssignments: number;
   firstAssignmentDate: Date;
   lastAssignmentDate: Date;
+  numManualGradedColumns?: number;
   rubricConfig?: {
     minPartsPerAssignment: number;
     maxPartsPerAssignment: number;
@@ -1597,19 +1817,28 @@ interface SeedingOptions {
     numGroupAssignments: number;
     numLabGroupAssignments: number;
   };
+  helpRequestConfig?: {
+    numHelpRequests: number;
+    minRepliesPerRequest: number;
+    maxRepliesPerRequest: number;
+    maxMembersPerRequest: number;
+  };
 }
 
 async function seedInstructorDashboardData(options: SeedingOptions) {
   const {
     numStudents,
     numGraders,
+    numInstructors,
     numAssignments,
     firstAssignmentDate,
     lastAssignmentDate,
+    numManualGradedColumns,
     rubricConfig,
     sectionsAndTagsConfig,
     labAssignmentConfig,
-    groupAssignmentConfig
+    groupAssignmentConfig,
+    helpRequestConfig
   } = options;
 
   // Default rubric configuration if not provided
@@ -1650,15 +1879,20 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
   const effectiveGroupAssignmentConfig = groupAssignmentConfig || defaultGroupAssignmentConfig;
 
+  // Default manual graded columns configuration if not provided
+  const effectiveNumManualGradedColumns = numManualGradedColumns || 0;
+
   console.log("🌱 Starting instructor dashboard data seeding...\n");
   console.log(`📊 Configuration:`);
   console.log(`   Students: ${numStudents}`);
   console.log(`   Graders: ${numGraders}`);
+  console.log(`   Instructors: ${numInstructors}`);
   console.log(`   Assignments: ${numAssignments}`);
   console.log(`   Lab Assignments: ${effectiveLabAssignmentConfig.numLabAssignments}`);
   console.log(`   Group Assignments: ${effectiveGroupAssignmentConfig.numGroupAssignments}`);
   console.log(`   Lab Group Assignments: ${effectiveGroupAssignmentConfig.numLabGroupAssignments}`);
   console.log(`   Minutes Due After Lab: ${effectiveLabAssignmentConfig.minutesDueAfterLab}`);
+  console.log(`   Manual Graded Columns: ${effectiveNumManualGradedColumns}`);
   console.log(`   First Assignment: ${firstAssignmentDate.toISOString().split("T")[0]}`);
   console.log(`   Last Assignment: ${lastAssignmentDate.toISOString().split("T")[0]}`);
   console.log(
@@ -1673,7 +1907,15 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
   console.log(`   Class Sections: ${effectiveSectionsAndTagsConfig.numClassSections}`);
   console.log(`   Lab Sections: ${effectiveSectionsAndTagsConfig.numLabSections}`);
   console.log(`   Student Tags: ${effectiveSectionsAndTagsConfig.numStudentTags}`);
-  console.log(`   Grader Tags: ${effectiveSectionsAndTagsConfig.numGraderTags}\n`);
+  console.log(`   Grader Tags: ${effectiveSectionsAndTagsConfig.numGraderTags}`);
+  if (helpRequestConfig) {
+    console.log(`   Help Requests: ${helpRequestConfig.numHelpRequests}`);
+    console.log(
+      `   Replies per Request: ${helpRequestConfig.minRepliesPerRequest}-${helpRequestConfig.maxRepliesPerRequest}`
+    );
+    console.log(`   Max Members per Request: ${helpRequestConfig.maxMembersPerRequest}`);
+  }
+  console.log("");
 
   try {
     // Create test class using TestingUtils
@@ -1683,7 +1925,13 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     // Create users using TestingUtils
     console.log("\n👥 Creating test users...");
-    const instructor = await createUserInClass({ role: "instructor", class_id });
+
+    console.log(`  Creating ${numInstructors} instructors`);
+    const instructorItems = Array.from({ length: numInstructors }, (_, i) => ({ index: i }));
+    const instructors = await Promise.all(
+      instructorItems.map(async () => limiter.schedule(() => createUserInClass({ role: "instructor", class_id })))
+    );
+    console.log(`✓ Created ${instructors.length} instructors`);
 
     console.log(`  Creating ${numGraders} graders`);
     const graderItems = Array.from({ length: numGraders }, (_, i) => ({ index: i }));
@@ -1697,19 +1945,28 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const students = await Promise.all(
       studentItems.map(async () => limiter.schedule(() => createUserInClass({ role: "student", class_id })))
     );
-    console.log(`✓ Created ${students.length} students, 1 instructor, ${graders.length} graders`);
+    console.log(`✓ Created ${students.length} students, ${instructors.length} instructors, ${graders.length} graders`);
 
     // Create sections and tags
     console.log("\n🏫 Creating class and lab sections...");
     const classSections = await createClassSections(class_id, effectiveSectionsAndTagsConfig.numClassSections);
     console.log(`✓ Created ${classSections.length} class sections`);
 
-    const labSections = await createLabSections(
-      class_id,
-      effectiveSectionsAndTagsConfig.numLabSections,
-      instructor.private_profile_id
-    );
+    // Create lab sections and distribute instructors among them
+    const labSections = await createLabSections(class_id, effectiveSectionsAndTagsConfig.numLabSections, instructors);
     console.log(`✓ Created ${labSections.length} lab sections`);
+
+    // Log instructor distribution among lab sections
+    console.log("\n👨‍🏫 Instructor Distribution:");
+    const instructorLabCounts = new Map<string, number>();
+    labSections.forEach((section, index) => {
+      const instructorIndex = index % instructors.length;
+      const instructorName = instructors[instructorIndex].private_profile_name;
+      instructorLabCounts.set(instructorName, (instructorLabCounts.get(instructorName) || 0) + 1);
+    });
+    instructorLabCounts.forEach((count, name) => {
+      console.log(`   ${name}: ${count} lab section(s)`);
+    });
 
     console.log("\n🏷️ Defining tag types...");
     const studentTagTypes = defineTagTypes("Student", effectiveSectionsAndTagsConfig.numStudentTags);
@@ -1728,7 +1985,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         studentTagTypes,
         class_id,
         "student",
-        instructor.user_id
+        instructors[0].user_id
       ),
       assignUsersToSectionsAndTags(
         graders,
@@ -1737,14 +1994,14 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         graderTagTypes,
         class_id,
         "grader",
-        instructor.user_id
+        instructors[0].user_id
       )
     ]);
     console.log(`✓ Assigned ${students.length} students and ${graders.length} graders to sections and tags`);
 
     // Create grader conflicts based on specified patterns
     console.log("\n⚔️ Creating grader conflicts based on specified patterns...");
-    await insertGraderConflicts(graders, students, class_id, instructor.private_profile_id);
+    await insertGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
 
     // Create assignments with enhanced rubric generation
     console.log("\n📚 Creating test assignments with diverse rubrics...");
@@ -2068,15 +2325,45 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       );
     });
 
-    await Promise.all(regradePromises);
-    console.log(`✓ Created ${regradePromises.length} regrade requests`);
+    // await Promise.all(regradePromises);
+    // console.log(`✓ Created ${regradePromises.length} regrade requests`);
 
-    // Create gradebook columns after all other operations are complete
+    // // Create gradebook columns after all other operations are complete
 
-    //Wait for 10 seconds to make sure all other operations are complete
-    await new Promise((resolve) => setTimeout(resolve, 10000));
     // Create simple columns first (without expressions)
     console.log("\n📊 Creating gradebook columns...");
+
+    // Create manual graded columns if specified
+    const manualGradedColumns: Array<{
+      id: number;
+      name: string;
+      slug: string;
+      max_score: number | null;
+      score_expression: string | null;
+    }> = [];
+
+    if (effectiveNumManualGradedColumns > 0) {
+      console.log(`\n📊 Creating ${effectiveNumManualGradedColumns} manual graded columns...`);
+
+      for (let i = 1; i <= effectiveNumManualGradedColumns; i++) {
+        const columnName = `Manual Grade ${i}`;
+        const columnSlug = `manual-grade-${i}`;
+
+        const manualColumn = await createGradebookColumn({
+          class_id,
+          name: columnName,
+          description: `Manual grading column ${i}`,
+          slug: columnSlug,
+          max_score: 100,
+          sort_order: 1000 + i
+        });
+
+        manualGradedColumns.push(manualColumn);
+      }
+
+      console.log(`✓ Created ${manualGradedColumns.length} manual graded columns`);
+    }
+
     const participationColumn = await createGradebookColumn({
       class_id,
       name: "Participation",
@@ -2086,87 +2373,43 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       sort_order: 1000
     });
 
-    // // Wait a moment for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const averageAssignmentsColumn = await createGradebookColumn({
+    await createGradebookColumn({
       class_id,
       name: "Average Assignments",
       description: "Average of all assignments",
       slug: "average-assignments",
+      score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
       max_score: 100,
       sort_order: 2
     });
 
-    // Wait a moment for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const averageLabAssignmentsColumn = await createGradebookColumn({
+    await createGradebookColumn({
       class_id,
       name: "Average Lab Assignments",
       description: "Average of all lab assignments",
       slug: "average-lab-assignments",
+      score_expression: "mean(gradebook_columns('assignment-lab-*'))",
       max_score: 100,
       sort_order: 3
     });
 
-    // Wait a moment for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const finalGradeColumn = await createGradebookColumn({
+    await createGradebookColumn({
       class_id,
       name: "Final Grade",
       description: "Calculated final grade",
       slug: "final-grade",
+      score_expression:
+        "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
       max_score: 100,
       sort_order: 999
     });
 
-    console.log(`✓ Created ${4} gradebook columns without expressions`);
+    console.log(
+      `✓ Created ${4 + manualGradedColumns.length} gradebook columns (${4} standard + ${manualGradedColumns.length} manual)`
+    );
 
     // Now update the columns with score expressions one by one
     console.log("📊 Adding score expressions to gradebook columns...");
-
-    // Update average assignments column with expression
-    const { error: avgAssignError } = await supabase
-      .from("gradebook_columns")
-      .update({ score_expression: "mean(gradebook_columns('assignment-assignment-*'))" })
-      .eq("id", averageAssignmentsColumn.id);
-
-    if (avgAssignError) {
-      console.warn(`Failed to update average assignments expression: ${avgAssignError.message}`);
-    }
-
-    // Wait for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Update average lab assignments column with expression
-    const { error: avgLabError } = await supabase
-      .from("gradebook_columns")
-      .update({ score_expression: "mean(gradebook_columns('assignment-lab-*'))" })
-      .eq("id", averageLabAssignmentsColumn.id);
-
-    if (avgLabError) {
-      console.warn(`Failed to update average lab assignments expression: ${avgLabError.message}`);
-    }
-
-    // Wait for triggers to settle
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Update final grade column with complex expression
-    const { error: finalGradeError } = await supabase
-      .from("gradebook_columns")
-      .update({
-        score_expression:
-          "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1"
-      })
-      .eq("id", finalGradeColumn.id);
-
-    if (finalGradeError) {
-      console.warn(`Failed to update final grade expression: ${finalGradeError.message}`);
-    }
-
-    console.log(`✓ Updated gradebook columns with score expressions`);
 
     // Set scores for the participation column using normal distribution
     console.log("\n📊 Setting scores for gradebook columns...");
@@ -2182,6 +2425,39 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       `✓ Set participation scores: avg=${participationStats.averageActual}, min=${participationStats.minScore}, max=${participationStats.maxScore}`
     );
 
+    // Set scores for manual graded columns using normal distribution
+    if (manualGradedColumns.length > 0) {
+      console.log("\n📊 Setting scores for manual graded columns...");
+      for (const manualColumn of manualGradedColumns) {
+        const manualStats = await setGradebookColumnScores({
+          class_id,
+          gradebook_column_id: manualColumn.id,
+          students,
+          averageScore: 80 + Math.random() * 20, // Random average between 80-100
+          standardDeviation: 10 + Math.random() * 10, // Random deviation between 10-20
+          maxScore: 100
+        });
+        console.log(
+          `✓ Set ${manualColumn.name} scores: avg=${manualStats.averageActual}, min=${manualStats.minScore}, max=${manualStats.maxScore}`
+        );
+      }
+    }
+
+    // Create help requests if configured
+    if (helpRequestConfig && helpRequestConfig.numHelpRequests > 0) {
+      console.log("\n🆘 Creating help requests...");
+      await createHelpRequests({
+        class_id,
+        students,
+        instructors: [instructors[0], ...graders],
+        numHelpRequests: helpRequestConfig.numHelpRequests,
+        minRepliesPerRequest: helpRequestConfig.minRepliesPerRequest,
+        maxRepliesPerRequest: helpRequestConfig.maxRepliesPerRequest,
+        maxMembersPerRequest: helpRequestConfig.maxMembersPerRequest
+      });
+      console.log(`✓ Help request generation completed`);
+    }
+
     console.log("\n🎉 Database seeding completed successfully!");
     console.log(`\n📊 Summary:`);
     console.log(`   Class ID: ${class_id}`);
@@ -2190,8 +2466,10 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`   Lab Assignments: ${labAssignments.length}`);
     console.log(`   Group Assignments: ${groupAssignments.length}`);
     console.log(`   Lab Group Assignments: ${labGroupAssignments.length}`);
+    console.log(`   Manual Graded Columns: ${manualGradedColumns.length}`);
     console.log(`   Students: ${students.length}`);
     console.log(`   Graders: ${graders.length}`);
+    console.log(`   Instructors: ${instructors.length}`);
     console.log(`   Class Sections: ${classSections.length}`);
     console.log(`   Lab Sections: ${labSections.length}`);
     console.log(`   Student Tag Types: ${studentTagTypes.length}`);
@@ -2204,6 +2482,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(
       `   Grader Conflicts: Created conflicts for graders #2, #3, #5 with students divisible by their numbers`
     );
+    if (helpRequestConfig) {
+      console.log(`   Help Requests: ${helpRequestConfig.numHelpRequests} (80% resolved/closed)`);
+    }
 
     console.log(`\n🏫 Section Details:`);
     classSections.forEach((section) => console.log(`   Class: ${section.name}`));
@@ -2213,9 +2494,25 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     studentTagTypes.forEach((tagType) => console.log(`   Student: ${tagType.name} (${tagType.color})`));
     graderTagTypes.forEach((tagType) => console.log(`   Grader: ${tagType.name} (${tagType.color})`));
 
-    console.log(`\n🔐 Instructor Login Credentials:`);
-    console.log(`   Email: ${instructor.email}`);
-    console.log(`   Password: ${instructor.password}`);
+    console.log(`\n🔐 Login Credentials:`);
+    console.log(`\n   Instructor:`);
+    console.log(`     Email: ${instructors[0].email}`);
+    console.log(`     Password: ${instructors[0].password}`);
+
+    console.log(`\n   Graders (${graders.length} total):`);
+    if (graders.length > 0) {
+      console.log(`     Email Template: ${graders[0].email.replace(/#\d+/, "#N")}`);
+      console.log(`     Password: ${graders[0].password}`);
+      console.log(`     Available Numbers: 1-${graders.length} `);
+    }
+
+    console.log(`\n   Students (${students.length} total):`);
+    if (students.length > 0) {
+      console.log(`     Email Template: ${students[0].email.replace(/#\d+/, "#N")}`);
+      console.log(`     Password: ${students[0].password}`);
+      console.log(`     Available Numbers: 1-${students.length}`);
+    }
+
     console.log(`\n🔗 View the instructor dashboard at: /course/${class_id}`);
   } catch (error) {
     console.error("❌ Error seeding database:", error);
@@ -2230,11 +2527,13 @@ export async function runLargeScale() {
   const now = new Date();
 
   await seedInstructorDashboardData({
-    numStudents: 500,
-    numGraders: 50,
+    numStudents: 900,
+    numGraders: 80,
+    numInstructors: 10,
     numAssignments: 20,
     firstAssignmentDate: subDays(now, 60), // 60 days in the past
     lastAssignmentDate: addDays(now, 50), // 50 days in the future
+    numManualGradedColumns: 20, // 20 manual graded columns for large scale
     rubricConfig: {
       minPartsPerAssignment: 3,
       maxPartsPerAssignment: 5,
@@ -2256,6 +2555,12 @@ export async function runLargeScale() {
     groupAssignmentConfig: {
       numGroupAssignments: 11, // 40% of regular assignments (28 * 0.4 ≈ 11)
       numLabGroupAssignments: 6 // 50% of lab assignments (12 * 0.5 = 6)
+    },
+    helpRequestConfig: {
+      numHelpRequests: 100,
+      minRepliesPerRequest: 0,
+      maxRepliesPerRequest: 300,
+      maxMembersPerRequest: 5
     }
   });
 }
@@ -2267,9 +2572,11 @@ async function runSmallScale() {
   await seedInstructorDashboardData({
     numStudents: 50,
     numGraders: 5,
+    numInstructors: 2,
     numAssignments: 20,
     firstAssignmentDate: subDays(now, 5), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
+    numManualGradedColumns: 5, // 5 manual graded columns for small scale
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
@@ -2291,6 +2598,47 @@ async function runSmallScale() {
     groupAssignmentConfig: {
       numGroupAssignments: 5, // 40% of regular assignments (3 * 0.4 ≈ 1)
       numLabGroupAssignments: 2 // 50% of lab assignments (2 * 0.5 = 1)
+    },
+    helpRequestConfig: {
+      numHelpRequests: 40,
+      minRepliesPerRequest: 0,
+      maxRepliesPerRequest: 70,
+      maxMembersPerRequest: 6
+    }
+  });
+}
+
+async function runMicro() {
+  const now = new Date();
+
+  await seedInstructorDashboardData({
+    numStudents: 2,
+    numGraders: 1,
+    numInstructors: 1,
+    numAssignments: 5,
+    firstAssignmentDate: addDays(now, 5),
+    lastAssignmentDate: addDays(now, 10),
+    rubricConfig: {
+      minPartsPerAssignment: 2,
+      maxPartsPerAssignment: 4,
+      minCriteriaPerPart: 1,
+      maxCriteriaPerPart: 2,
+      minChecksPerCriteria: 2,
+      maxChecksPerCriteria: 3
+    },
+    sectionsAndTagsConfig: {
+      numClassSections: 1,
+      numLabSections: 1,
+      numStudentTags: 1,
+      numGraderTags: 1
+    },
+    labAssignmentConfig: {
+      numLabAssignments: 1, // 40% of 5 assignments
+      minutesDueAfterLab: 10 // 1 hour
+    },
+    groupAssignmentConfig: {
+      numGroupAssignments: 1, // 40% of regular assignments (3 * 0.4 ≈ 1)
+      numLabGroupAssignments: 1 // 50% of lab assignments (2 * 0.5 = 1)
     }
   });
 }
@@ -2300,7 +2648,8 @@ async function runSmallScale() {
 async function main() {
   // await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  await runSmallScale();
+  // await runSmallScale();
+  await runMicro();
 }
 
 main();

@@ -1,19 +1,24 @@
 "use client";
 
-import { useChatScroll } from "@/hooks/use-chat-scroll";
-import { useOfficeHoursRealtime, useOfficeHoursController, type ChatMessage } from "@/hooks/useOfficeHoursRealtime";
 import { ChatMessageItem, type UnifiedMessage } from "@/components/chat-message";
-import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
-import { Box, Flex, Stack, Icon, Text, Button, HStack } from "@chakra-ui/react";
-import { X } from "lucide-react";
-import { useModerationStatus, formatTimeRemaining } from "@/hooks/useModerationStatus";
+import MessageInput from "@/components/ui/message-input";
+import { toaster } from "@/components/ui/toaster";
+import { useChatScroll } from "@/hooks/use-chat-scroll";
 import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { formatTimeRemaining, useModerationStatus } from "@/hooks/useModerationStatus";
+import {
+  useHelpRequestMessages,
+  useOfficeHoursController,
+  useRealtimeChat,
+  type ChatMessage
+} from "@/hooks/useOfficeHoursRealtime";
+import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Flex, HStack, Icon, Stack, Text } from "@chakra-ui/react";
 import { useCreate } from "@refinedev/core";
-import { toaster } from "@/components/ui/toaster";
+import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
-import MessageInput from "@/components/ui/message-input";
 
 interface RealtimeChatProps {
   onMessage?: (messages: UnifiedMessage[]) => void;
@@ -101,13 +106,13 @@ const ReplyPreview = ({
  */
 export const RealtimeChat = ({
   onMessage,
-  messages: databaseMessages = [],
   helpRequest,
   helpRequestStudentIds = [],
   readOnly = false
 }: RealtimeChatProps) => {
   const { containerRef, scrollToBottom } = useChatScroll();
   const moderationStatus = useModerationStatus(helpRequest.class_id);
+  const messages = useHelpRequestMessages(helpRequest.id);
 
   // Get authenticated user and their profile
   const { user } = useAuthState();
@@ -124,21 +129,13 @@ export const RealtimeChat = ({
     resource: "student_help_activity"
   });
 
-  // Use the enhanced office hours realtime hook with chat functionality enabled
-  const {
-    data,
-    sendMessage,
-    markMessageAsRead,
-    isConnected,
-    isValidating,
-    isAuthorized,
-    connectionError,
-    readReceipts
-  } = useOfficeHoursRealtime({
-    classId: helpRequest.class_id,
-    helpRequestId: helpRequest.id,
-    enableChat: true
-  });
+  // Use the new realtime chat hook for chat functionality
+  const { sendMessage, markMessageAsRead, isConnected, isValidating, isAuthorized, connectionError, readReceipts } =
+    useRealtimeChat({
+      helpRequestId: helpRequest.id,
+      classId: helpRequest.class_id,
+      enableChat: true
+    });
 
   // Helper function to get timestamp from either message type
   const getMessageTimestamp = (msg: UnifiedMessage): string => {
@@ -151,66 +148,14 @@ export const RealtimeChat = ({
     return new Date().toISOString();
   };
 
-  // Smart message prioritization based on data freshness and completeness
   const allMessages = useMemo(() => {
-    const hookMessages = data?.helpRequestMessages || [];
-    const propMessages = databaseMessages || [];
-
-    // If we have no data from either source, return empty array
-    if (hookMessages.length === 0 && propMessages.length === 0) {
-      return [];
-    }
-
-    // If we only have data from one source, use that
-    if (hookMessages.length === 0) {
-      return propMessages.sort((a, b) => {
-        const aTime = getMessageTimestamp(a);
-        const bTime = getMessageTimestamp(b);
-        return new Date(aTime).getTime() - new Date(bTime).getTime();
-      });
-    }
-
-    if (propMessages.length === 0) {
-      return hookMessages.sort((a, b) => {
-        const aTime = getMessageTimestamp(a);
-        const bTime = getMessageTimestamp(b);
-        return new Date(aTime).getTime() - new Date(bTime).getTime();
-      });
-    }
-
-    // If we have data from both sources, determine which is fresher
-    // Compare the latest message timestamp from each source
-    const latestHookMessage = hookMessages.reduce((latest, msg) => {
-      const msgTime = new Date(getMessageTimestamp(msg)).getTime();
-      const latestTime = new Date(getMessageTimestamp(latest)).getTime();
-      return msgTime > latestTime ? msg : latest;
-    });
-
-    const latestPropMessage = propMessages.reduce((latest, msg) => {
-      const msgTime = new Date(getMessageTimestamp(msg)).getTime();
-      const latestTime = new Date(getMessageTimestamp(latest)).getTime();
-      return msgTime > latestTime ? msg : latest;
-    });
-
-    const hookLatestTime = new Date(getMessageTimestamp(latestHookMessage)).getTime();
-    const propLatestTime = new Date(getMessageTimestamp(latestPropMessage)).getTime();
-
-    // Use the source with the more recent latest message
-    // Also consider the total count - if one source has significantly more messages
-    // and the timestamps are close (within 5 seconds), prefer the larger dataset
-    const timeDifference = Math.abs(hookLatestTime - propLatestTime);
-    const shouldUseHookData =
-      hookLatestTime > propLatestTime || (timeDifference < 5000 && hookMessages.length >= propMessages.length);
-
-    const selectedMessages = shouldUseHookData ? hookMessages : propMessages;
-
     // Sort messages by creation time to ensure proper order
-    return selectedMessages.sort((a, b) => {
+    return messages.sort((a, b) => {
       const aTime = getMessageTimestamp(a);
       const bTime = getMessageTimestamp(b);
       return new Date(aTime).getTime() - new Date(bTime).getTime();
     });
-  }, [data?.helpRequestMessages, databaseMessages]);
+  }, [messages]);
 
   // Notify parent component when messages change
   useEffect(() => {

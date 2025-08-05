@@ -9,7 +9,7 @@ import NextLink from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useMemo } from "react";
 import { BsClipboardCheckFill, BsCheckCircle, BsXCircle, BsChatText } from "react-icons/bs";
-import { useOfficeHoursRealtime, useHelpRequests } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpRequests, useHelpQueues, useHelpRequestStudents } from "@/hooks/useOfficeHoursRealtime";
 
 /**
  * Enhanced help request with queue information and multiple students
@@ -29,15 +29,10 @@ export default function HelpRequestList() {
   // Get ALL help requests directly from the controller
   const allHelpRequestsFromController = useHelpRequests();
 
-  // Use the consolidated office hours realtime hook for additional data
-  const { data: officeHoursData, isLoading: officeHoursLoading } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true, // Need queues data
-    enableActiveRequests: false // We don't need the filtered activeHelpRequests
-  });
-
-  // Extract data from the consolidated hook
-  const { helpQueues, helpRequestStudents: realtimeHelpRequestStudents } = officeHoursData;
+  // Use individual hooks for additional data
+  const helpQueues = useHelpQueues();
+  const realtimeHelpRequestStudents = useHelpRequestStudents();
+  const officeHoursLoading = false; // Individual hooks don't expose loading state
 
   // Create a mapping of help request ID to student profile IDs
   const requestStudentsMap = useMemo(() => {
@@ -94,7 +89,7 @@ export default function HelpRequestList() {
     return allHelpRequestsFromController;
   }, [allHelpRequestsFromController, searchTerm, requestStudentsMap, studentNameMap]);
 
-  // Enhanced requests with queue information and students, sorted in descending order (newest first)
+  // Enhanced requests with queue information and students
   const enhancedRequests = useMemo(() => {
     return allHelpRequests
       .map(
@@ -111,7 +106,7 @@ export default function HelpRequestList() {
           students: requestStudentsMap[request.id] || []
         })
       )
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()); // Descending order (newest first)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); // oldest first
   }, [allHelpRequests, queueMap, requestStudentsMap]);
 
   // Show loading state while data is being fetched

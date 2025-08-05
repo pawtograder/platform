@@ -2764,6 +2764,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          help_request_id: number | null;
           id: number;
           message_id: number;
           viewer_id: string;
@@ -2771,6 +2772,7 @@ export type Database = {
         Insert: {
           class_id: number;
           created_at?: string;
+          help_request_id?: number | null;
           id?: number;
           message_id: number;
           viewer_id: string;
@@ -2778,6 +2780,7 @@ export type Database = {
         Update: {
           class_id?: number;
           created_at?: string;
+          help_request_id?: number | null;
           id?: number;
           message_id?: number;
           viewer_id?: string;
@@ -2788,6 +2791,13 @@ export type Database = {
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_request_message_read_receipts_help_request_id_fkey";
+            columns: ["help_request_id"];
+            isOneToOne: false;
+            referencedRelation: "help_requests";
             referencedColumns: ["id"];
           },
           {
@@ -3138,6 +3148,7 @@ export type Database = {
           assignee: string | null;
           class_id: number;
           created_at: string;
+          created_by: string | null;
           followup_to: number | null;
           help_queue: number;
           id: number;
@@ -3155,6 +3166,7 @@ export type Database = {
           assignee?: string | null;
           class_id: number;
           created_at?: string;
+          created_by?: string | null;
           followup_to?: number | null;
           help_queue: number;
           id?: number;
@@ -3172,6 +3184,7 @@ export type Database = {
           assignee?: string | null;
           class_id?: number;
           created_at?: string;
+          created_by?: string | null;
           followup_to?: number | null;
           help_queue?: number;
           id?: number;
@@ -3206,6 +3219,20 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "classes";
             referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_requests_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "help_requests_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
           },
           {
             foreignKeyName: "help_requests_help_queue_fkey";
@@ -7409,9 +7436,21 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      check_assignment_release_dates: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
+      check_gradebook_realtime_authorization: {
+        Args: { topic_text: string };
+        Returns: boolean;
+      };
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
+      };
+      create_all_repos_for_assignment: {
+        Args: { course_id: number; assignment_id: number };
+        Returns: undefined;
       };
       create_help_request_message_notification: {
         Args: {
@@ -7456,8 +7495,16 @@ export type Database = {
         };
         Returns: number;
       };
+      create_repos_for_student: {
+        Args: { user_id: string; class_id?: number };
+        Returns: undefined;
+      };
       custom_access_token_hook: {
         Args: { event: Json };
+        Returns: Json;
+      };
+      delete_assignment_with_all_data: {
+        Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
       };
       finalize_submission_early: {
@@ -7481,6 +7528,10 @@ export type Database = {
       intval: {
         Args: { "": string };
         Returns: number;
+      };
+      invoke_gradebook_recalculation_background_task: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       is_allowed_grader_key: {
         Args: { graderkey: string; class: number };

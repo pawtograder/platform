@@ -3,7 +3,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  getFileFromRepo,
+  syncRepoPermissions,
+  updateAutograderWorkflowHash
+} from "../_shared/GitHubWrapper.ts";
 
 const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
 

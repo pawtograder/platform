@@ -3,12 +3,11 @@
 import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { useUpdate, useDelete } from "@refinedev/core";
-import { useParams } from "next/navigation";
 import { BsPerson, BsCalendar, BsStopwatch, BsTrash } from "react-icons/bs";
 import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { useOfficeHoursRealtime } from "@/hooks/useOfficeHoursRealtime";
+import { useHelpQueues, useHelpQueueAssignments, useConnectionStatus } from "@/hooks/useOfficeHoursRealtime";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useMemo } from "react";
 import type { HelpQueueAssignment, HelpQueue, UserProfile } from "@/utils/supabase/DatabaseTypes";
@@ -24,19 +23,13 @@ type AssignmentWithDetails = HelpQueueAssignment & {
  * Uses real-time updates to show assignment changes immediately.
  */
 export default function HelpQueueAssignmentManagement() {
-  const { course_id } = useParams();
+  // Use individual hooks for better performance and maintainability
+  const helpQueues = useHelpQueues();
+  const helpQueueAssignments = useHelpQueueAssignments();
+  const { isConnected, connectionStatus } = useConnectionStatus();
 
-  // Set up real-time subscriptions for global help queues and assignments
-  const {
-    data: realtimeData,
-    isConnected,
-    connectionStatus,
-    isLoading: realtimeLoading
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true,
-    enableStaffData: false
-  });
+  // Loading state when any data is still loading
+  const realtimeLoading = !helpQueues || !helpQueueAssignments;
 
   // Get class profiles
   const { profiles } = useClassProfiles();
@@ -45,16 +38,16 @@ export default function HelpQueueAssignmentManagement() {
   const { mutate: updateAssignment } = useUpdate();
   const { mutate: deleteAssignment } = useDelete();
 
-  // Combine realtime assignment and queue data with profile data
+  // Combine assignment and queue data with profile data
   const assignments = useMemo((): AssignmentWithDetails[] => {
-    const queues = realtimeData.helpQueues;
+    if (!helpQueueAssignments || !helpQueues) return [];
 
-    return realtimeData.helpQueueAssignments.map((assignment) => ({
+    return helpQueueAssignments.map((assignment) => ({
       ...assignment,
-      help_queue: queues.find((queue) => queue.id === assignment.help_queue_id),
+      help_queue: helpQueues.find((queue) => queue.id === assignment.help_queue_id),
       profile: profiles.find((profile) => profile.id === assignment.ta_profile_id)
     }));
-  }, [realtimeData.helpQueueAssignments, realtimeData.helpQueues, profiles]);
+  }, [helpQueueAssignments, helpQueues, profiles]);
 
   // Sort assignments by active status and start time
   const sortedAssignments = useMemo(() => {

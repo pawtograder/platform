@@ -7,6 +7,8 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+// export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout-prod"; //TODO use env variable?
+export const TEST_HANDOUT_REPO = "pawtograder-playground/test-e2e-java-handout"; //TODO use env variable?
 export function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = format(new Date(), "dd/MM/yy HH:mm:ss") + "#" + suffix;
@@ -31,6 +33,7 @@ export async function createClass() {
     .insert({
       name: className,
       slug: className.toLowerCase().replace(/ /g, "-"),
+      github_org: "pawtograder-playground",
       start_date: addDays(new Date(), -30).toISOString(),
       end_date: addDays(new Date(), 180).toISOString(),
       late_tokens_per_student: 10,
@@ -43,6 +46,14 @@ export async function createClass() {
   }
   if (!classData) {
     throw new Error("Failed to create class");
+  }
+  //Update slug to include class_id
+  const { error: classError2 } = await supabase
+    .from("classes")
+    .update({ slug: `${classData.slug}-${classData.id}` })
+    .eq("id", classData.id);
+  if (classError2) {
+    throw new Error(`Failed to update class slug: ${classError2.message}`);
   }
   return classData;
 }
@@ -112,13 +123,14 @@ export async function createUserInClass({
   randomSuffix?: string;
 }): Promise<TestingUser> {
   const password = process.env.TEST_PASSWORD || "change-it";
-  const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 15);
+  const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
   const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const name = `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
   const public_profile_name = `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
   const private_profile_name = `${name}`;
   userIdx[role]++;
+  console.log(`Creating user ${email}`);
   const { data: userData, error: userError } = await supabase.auth.admin.createUser({
     email: email,
     password: password,
@@ -413,6 +425,23 @@ export async function createLabSectionWithStudents({
   return labSectionData;
 }
 
+export async function insertOfficeHoursQueue({ class_id, name }: { class_id: number; name: string }) {
+  const { data: officeHoursQueueData, error: officeHoursQueueError } = await supabase
+    .from("help_queues")
+    .insert({
+      class_id: class_id,
+      name: name,
+      description: "This is a test office hours queue for E2E testing",
+      depth: 1,
+      queue_type: "video"
+    })
+    .select("id")
+    .single();
+  if (officeHoursQueueError) {
+    throw new Error(`Failed to create office hours queue: ${officeHoursQueueError.message}`);
+  }
+  return officeHoursQueueData;
+}
 const assignmentIdx = {
   lab: 1,
   assignment: 1
@@ -451,7 +480,7 @@ export async function insertAssignment({
       description: "This is a test assignment for E2E testing",
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
-      template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+      template_repo: TEST_HANDOUT_REPO,
       autograder_points: 100,
       total_points: 100,
       max_late_tokens: 10,
@@ -919,4 +948,774 @@ export async function gradeSubmission(
   }
 
   return reviewResult;
+}
+
+/**
+ * Creates assignments and gradebook columns for testing purposes
+ * @param options Configuration options for creating assignments and gradebook columns
+ * @returns Object containing created assignments, gradebook columns, and other relevant data
+ */
+export async function createAssignmentsAndGradebookColumns({
+  class_id,
+  numAssignments = 5,
+  numManualGradedColumns = 2,
+  manualGradedColumnSlugs = [],
+  assignmentDateRange = { start: new Date(), end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
+  rubricConfig = {
+    minPartsPerAssignment: 2,
+    maxPartsPerAssignment: 3,
+    minCriteriaPerPart: 1,
+    maxCriteriaPerPart: 2,
+    minChecksPerCriteria: 2,
+    maxChecksPerCriteria: 3
+  },
+  groupConfig = "individual" as "individual" | "groups" | "both"
+}: {
+  class_id: number;
+  numAssignments?: number;
+  numManualGradedColumns?: number;
+  manualGradedColumnSlugs?: string[];
+  assignmentDateRange?: { start: Date; end: Date };
+  rubricConfig?: {
+    minPartsPerAssignment: number;
+    maxPartsPerAssignment: number;
+    minCriteriaPerPart: number;
+    maxCriteriaPerPart: number;
+    minChecksPerCriteria: number;
+    maxChecksPerCriteria: number;
+  };
+  groupConfig?: "individual" | "groups" | "both";
+}): Promise<{
+  assignments: Array<{
+    id: number;
+    title: string;
+    slug: string;
+    due_date: string;
+    group_config: string;
+    rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
+    rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
+    [key: string]: unknown;
+  }>;
+  gradebookColumns: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    max_score: number | null;
+    score_expression: string | null;
+    sort_order: number | null;
+  }>;
+  manualGradedColumns: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    max_score: number | null;
+    score_expression: string | null;
+    sort_order: number | null;
+  }>;
+}> {
+  // Import required dependencies
+  const { addDays } = await import("date-fns");
+  const { all, ConstantNode, create, FunctionNode } = await import("mathjs");
+  const { minimatch } = await import("minimatch");
+
+  // Helper function to extract dependencies from score expressions
+  function extractDependenciesFromExpression(
+    expr: string,
+    availableAssignments: Array<{ id: number; slug: string }>,
+    availableColumns: Array<{ id: number; slug: string }>
+  ): { assignments?: number[]; gradebook_columns?: number[] } | null {
+    if (!expr) return null;
+
+    const math = create(all);
+    const dependencies: Record<string, Set<number>> = {};
+    const errors: string[] = [];
+
+    try {
+      const exprNode = math.parse(expr);
+      const availableDependencies = {
+        assignments: availableAssignments,
+        gradebook_columns: availableColumns
+      };
+
+      exprNode.traverse((node) => {
+        if (node.type === "FunctionNode") {
+          const functionNode = node as any;
+          const functionName = functionNode.fn.name;
+          if (functionName in availableDependencies) {
+            const args = functionNode.args;
+            const argType = args[0].type;
+            if (argType === "ConstantNode") {
+              const argName = (args[0] as any).value;
+              if (typeof argName === "string") {
+                const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
+                  minimatch(d.slug!, argName)
+                );
+                if (matching.length > 0) {
+                  if (!(functionName in dependencies)) {
+                    dependencies[functionName] = new Set();
+                  }
+                  matching.forEach((d) => dependencies[functionName].add(d.id));
+                } else {
+                  errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (errors.length > 0) {
+        console.warn(`Dependency extraction warnings for expression "${expr}": ${errors.join(", ")}`);
+      }
+
+      // Flatten the dependencies
+      const flattenedDependencies: Record<string, number[]> = {};
+      for (const [functionName, ids] of Object.entries(dependencies)) {
+        flattenedDependencies[functionName] = Array.from(ids);
+      }
+
+      if (Object.keys(flattenedDependencies).length === 0) {
+        return null;
+      }
+      return flattenedDependencies;
+    } catch (error) {
+      console.warn(`Failed to parse expression "${expr}": ${error}`);
+      throw error;
+    }
+  }
+
+  // Helper function to create gradebook column
+  async function createGradebookColumn({
+    class_id,
+    name,
+    description,
+    slug,
+    max_score,
+    score_expression,
+    dependencies,
+    released = false,
+    sort_order
+  }: {
+    class_id: number;
+    name: string;
+    description?: string;
+    slug: string;
+    max_score?: number;
+    score_expression?: string;
+    dependencies?: { assignments?: number[]; gradebook_columns?: number[] };
+    released?: boolean;
+    sort_order?: number;
+  }): Promise<{
+    id: number;
+    name: string;
+    slug: string;
+    max_score: number | null;
+    score_expression: string | null;
+    sort_order: number | null;
+  }> {
+    // Get the gradebook for this class
+    const { data: gradebook, error: gradebookError } = await supabase
+      .from("gradebooks")
+      .select("id")
+      .eq("class_id", class_id)
+      .single();
+
+    if (gradebookError || !gradebook) {
+      throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
+    }
+
+    // Get available assignments and columns for dependency extraction
+    const { data: assignments } = await supabase.from("assignments").select("id, slug").eq("class_id", class_id);
+
+    const { data: existingColumns } = await supabase
+      .from("gradebook_columns")
+      .select("id, slug")
+      .eq("class_id", class_id);
+
+    // Filter out items with null slugs and cast to proper types
+    const validAssignments = (assignments || []).filter((a) => a.slug !== null) as Array<{ id: number; slug: string }>;
+    const validColumns = (existingColumns || []).filter((c) => c.slug !== null) as Array<{ id: number; slug: string }>;
+
+    // Extract dependencies from score expression if not provided
+    let finalDependencies = dependencies;
+    if (score_expression && !dependencies) {
+      const extractedDeps = extractDependenciesFromExpression(score_expression, validAssignments, validColumns);
+      if (extractedDeps) {
+        finalDependencies = extractedDeps;
+      }
+    }
+
+    // Create the gradebook column
+    const { data: column, error: columnError } = await supabase
+      .from("gradebook_columns")
+      .insert({
+        class_id,
+        gradebook_id: gradebook.id,
+        name,
+        description,
+        slug,
+        max_score,
+        score_expression,
+        dependencies: finalDependencies ? JSON.stringify(finalDependencies) : null,
+        released,
+        sort_order
+      })
+      .select("id, name, slug, max_score, score_expression, sort_order")
+      .single();
+
+    if (columnError) {
+      throw new Error(`Failed to create gradebook column ${name}: ${columnError.message}`);
+    }
+
+    return column;
+  }
+
+  // Rubric part templates for generating diverse rubrics
+  const RUBRIC_PART_TEMPLATES = [
+    {
+      name: "Code Quality",
+      description: "Assessment of code structure, style, and best practices",
+      criteria: [
+        {
+          name: "Code Style & Formatting",
+          description: "Proper indentation, naming conventions, and formatting",
+          points: [3, 5, 8],
+          checks: [
+            { name: "Consistent Indentation", points: [1, 2], isAnnotation: true },
+            { name: "Meaningful Variable Names", points: [2, 3], isAnnotation: true },
+            { name: "Proper Code Comments", points: [1, 2, 3], isAnnotation: false }
+          ]
+        },
+        {
+          name: "Code Organization",
+          description: "Logical structure and separation of concerns",
+          points: [5, 8, 10],
+          checks: [
+            { name: "Function Decomposition", points: [2, 3, 4], isAnnotation: true },
+            { name: "Class Structure", points: [2, 3], isAnnotation: true },
+            { name: "Code Modularity", points: [1, 2, 3], isAnnotation: false }
+          ]
+        }
+      ]
+    },
+    {
+      name: "Algorithm Implementation",
+      description: "Correctness and efficiency of algorithmic solutions",
+      criteria: [
+        {
+          name: "Correctness",
+          description: "Implementation correctly solves the problem",
+          points: [15, 20, 25],
+          checks: [
+            { name: "Handles Base Cases", points: [3, 5], isAnnotation: true },
+            { name: "Correct Logic Flow", points: [5, 8, 10], isAnnotation: true },
+            { name: "Edge Case Handling", points: [2, 4, 5], isAnnotation: false }
+          ]
+        },
+        {
+          name: "Efficiency",
+          description: "Time and space complexity considerations",
+          points: [8, 12, 15],
+          checks: [
+            { name: "Optimal Time Complexity", points: [3, 5, 7], isAnnotation: false },
+            { name: "Memory Usage", points: [2, 3, 4], isAnnotation: true },
+            { name: "Algorithm Choice", points: [2, 3, 4], isAnnotation: false }
+          ]
+        }
+      ]
+    },
+    {
+      name: "Testing & Documentation",
+      description: "Quality of tests and documentation provided",
+      criteria: [
+        {
+          name: "Test Coverage",
+          description: "Comprehensive testing of functionality",
+          points: [10, 15],
+          checks: [
+            { name: "Unit Tests Present", points: [3, 5], isAnnotation: false },
+            { name: "Test Edge Cases", points: [2, 4], isAnnotation: true },
+            { name: "Test Documentation", points: [2, 3], isAnnotation: false }
+          ]
+        },
+        {
+          name: "Documentation Quality",
+          description: "Clear and comprehensive documentation",
+          points: [8, 12],
+          checks: [
+            { name: "README Completeness", points: [2, 4], isAnnotation: false },
+            { name: "API Documentation", points: [2, 3, 4], isAnnotation: true },
+            { name: "Usage Examples", points: [1, 2, 3], isAnnotation: false }
+          ]
+        }
+      ]
+    }
+  ];
+
+  // Helper function to generate random rubric structure (deterministic based on assignment index)
+  function generateRubricStructure(assignmentIndex: number, config: typeof rubricConfig) {
+    // Use assignment index to seed a deterministic random number generator
+    let seed = assignmentIndex * 12345 + 67890;
+    const random = (min: number, max: number) => {
+      const x = Math.sin(seed++) * 10000;
+      return Math.floor((x - Math.floor(x)) * (max - min + 1)) + min;
+    };
+
+    const numParts = random(config.minPartsPerAssignment, config.maxPartsPerAssignment);
+
+    // Shuffle and select random rubric parts deterministically
+    const shuffledTemplates = [...RUBRIC_PART_TEMPLATES].sort((a, b) => {
+      const aHash = a.name.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      const bHash = b.name.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      return (
+        ((aHash + assignmentIndex) % RUBRIC_PART_TEMPLATES.length) -
+        ((bHash + assignmentIndex) % RUBRIC_PART_TEMPLATES.length)
+      );
+    });
+    const selectedParts = shuffledTemplates.slice(0, Math.min(numParts, RUBRIC_PART_TEMPLATES.length));
+
+    return selectedParts.map((partTemplate, partIndex) => {
+      const numCriteria = random(config.minCriteriaPerPart, config.maxCriteriaPerPart);
+      const selectedCriteria = partTemplate.criteria.slice(0, Math.min(numCriteria, partTemplate.criteria.length));
+
+      return {
+        ...partTemplate,
+        ordinal: partIndex,
+        criteria: selectedCriteria.map((criteriaTemplate, criteriaIndex) => {
+          const numChecks = random(config.minChecksPerCriteria, config.maxChecksPerCriteria);
+          const selectedChecks = criteriaTemplate.checks.slice(0, Math.min(numChecks, criteriaTemplate.checks.length));
+
+          // Deterministically select points from the available options
+          const criteriaPoints = criteriaTemplate.points[assignmentIndex % criteriaTemplate.points.length];
+
+          return {
+            ...criteriaTemplate,
+            ordinal: criteriaIndex,
+            total_points: criteriaPoints,
+            checks: selectedChecks.map((checkTemplate, checkIndex) => {
+              const checkPoints = checkTemplate.points[(assignmentIndex + checkIndex) % checkTemplate.points.length];
+              return {
+                ...checkTemplate,
+                ordinal: checkIndex,
+                points: checkPoints,
+                is_annotation: checkTemplate.isAnnotation,
+                is_comment_required: (assignmentIndex + checkIndex) % 3 === 0, // 33% chance
+                is_required: (assignmentIndex + checkIndex) % 3 !== 0 // 67% chance
+              };
+            })
+          };
+        })
+      };
+    });
+  }
+
+  // Helper function to create assignment with rubric
+  async function createAssignmentWithRubric({
+    assignmentIndex,
+    due_date,
+    class_id,
+    groupConfig
+  }: {
+    assignmentIndex: number;
+    due_date: string;
+    class_id: number;
+    groupConfig: "individual" | "groups" | "both";
+  }): Promise<{
+    id: number;
+    title: string;
+    slug: string;
+    due_date: string;
+    group_config: string;
+    rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
+    rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
+    [key: string]: unknown;
+  }> {
+    const title = `Test Assignment ${assignmentIndex + 1}${groupConfig !== "individual" ? " (Group)" : ""}`;
+    const slug = `assignment-${assignmentIndex + 1}`;
+
+    // Create self review setting
+    const { data: selfReviewSettingData, error: selfReviewSettingError } = await supabase
+      .from("assignment_self_review_settings")
+      .insert({
+        class_id: class_id,
+        enabled: true,
+        deadline_offset: 2,
+        allow_early: true
+      })
+      .select("id")
+      .single();
+
+    if (selfReviewSettingError) {
+      throw new Error(`Failed to create self review setting: ${selfReviewSettingError.message}`);
+    }
+
+    const self_review_setting_id = selfReviewSettingData.id;
+
+    // Create assignment
+    const { data: insertedAssignmentData, error: assignmentError } = await supabase
+      .from("assignments")
+      .insert({
+        title: title,
+        description: `Test assignment ${assignmentIndex + 1} with rubric`,
+        due_date: due_date,
+        template_repo: "pawtograder-playground/test-e2e-handout-repo-java",
+        autograder_points: 100,
+        total_points: 100,
+        max_late_tokens: 10,
+        release_date: addDays(new Date(), -1).toUTCString(),
+        class_id: class_id,
+        slug: slug,
+        group_config: groupConfig,
+        allow_not_graded_submissions: false,
+        self_review_setting_id: self_review_setting_id,
+        max_group_size: 6,
+        group_formation_deadline: addDays(new Date(), -1).toUTCString()
+      })
+      .select("id")
+      .single();
+
+    if (assignmentError) {
+      throw new Error(`Failed to create assignment: ${assignmentError.message}`);
+    }
+
+    // Get assignment data
+    const { data: assignmentData } = await supabase
+      .from("assignments")
+      .select("*")
+      .eq("id", insertedAssignmentData.id)
+      .single();
+
+    if (!assignmentData) {
+      throw new Error("Failed to get assignment");
+    }
+
+    // Update autograder config
+    await supabase
+      .from("autograder")
+      .update({
+        config: { submissionFiles: { files: ["**/*.java", "**/*.py", "**/*.arr", "**/*.ts"], testFiles: [] } }
+      })
+      .eq("id", assignmentData.id);
+
+    // Generate rubric structure deterministically
+    const rubricStructure = generateRubricStructure(assignmentIndex, rubricConfig);
+
+    // Create self-review rubric parts
+    const selfReviewPart = {
+      name: "Self Review",
+      description: "Student self-assessment of their work",
+      ordinal: 0,
+      criteria: [
+        {
+          name: "Self Reflection",
+          description: "Quality of self-assessment and reflection",
+          ordinal: 0,
+          total_points: 10,
+          checks: [
+            {
+              name: "Completeness of Self Review",
+              ordinal: 0,
+              points: 5,
+              is_annotation: false,
+              is_comment_required: false,
+              is_required: true
+            },
+            {
+              name: "Depth of Reflection",
+              ordinal: 1,
+              points: 5,
+              is_annotation: false,
+              is_comment_required: true,
+              is_required: true
+            }
+          ]
+        }
+      ]
+    };
+
+    // Combine self-review with generated structure for grading rubric
+    const allParts = [selfReviewPart, ...rubricStructure.map((part) => ({ ...part, ordinal: part.ordinal + 1 }))];
+
+    // Create rubric parts
+    const createdParts = [];
+    const allRubricChecks = [];
+
+    for (const partTemplate of allParts) {
+      const isGradingPart = partTemplate.name !== "Self Review";
+      const rubricId = isGradingPart ? assignmentData.grading_rubric_id : assignmentData.self_review_rubric_id;
+
+      const { data: partData, error: partError } = await supabase
+        .from("rubric_parts")
+        .insert({
+          class_id: class_id,
+          name: partTemplate.name,
+          description: partTemplate.description,
+          ordinal: partTemplate.ordinal,
+          rubric_id: rubricId || 0
+        })
+        .select("id")
+        .single();
+
+      if (partError) {
+        throw new Error(`Failed to create rubric part: ${partError.message}`);
+      }
+
+      createdParts.push({ ...partTemplate, id: partData.id, rubric_id: rubricId });
+
+      // Create criteria for this part
+      for (const criteriaTemplate of partTemplate.criteria) {
+        const { data: criteriaData, error: criteriaError } = await supabase
+          .from("rubric_criteria")
+          .insert({
+            class_id: class_id,
+            name: criteriaTemplate.name,
+            description: criteriaTemplate.description,
+            ordinal: criteriaTemplate.ordinal,
+            total_points: criteriaTemplate.total_points,
+            is_additive: true,
+            rubric_part_id: partData.id,
+            rubric_id: rubricId || 0
+          })
+          .select("id")
+          .single();
+
+        if (criteriaError) {
+          throw new Error(`Failed to create rubric criteria: ${criteriaError.message}`);
+        }
+
+        // Create checks for this criteria
+        for (const checkTemplate of criteriaTemplate.checks) {
+          const { data: checkData, error: checkError } = await supabase
+            .from("rubric_checks")
+            .insert({
+              rubric_criteria_id: criteriaData.id,
+              name: checkTemplate.name,
+              description: `${checkTemplate.name} evaluation`,
+              ordinal: checkTemplate.ordinal,
+              points: checkTemplate.points,
+              is_annotation: checkTemplate.is_annotation,
+              is_comment_required: checkTemplate.is_comment_required,
+              class_id: class_id,
+              is_required: checkTemplate.is_required
+            })
+            .select("*")
+            .single();
+
+          if (checkError) {
+            throw new Error(`Failed to create rubric check: ${checkError.message}`);
+          }
+
+          allRubricChecks.push(checkData);
+        }
+      }
+    }
+
+    return {
+      ...assignmentData,
+      rubricChecks: allRubricChecks,
+      rubricParts: createdParts,
+      due_date: assignmentData.due_date,
+      slug: assignmentData.slug || `assignment-${assignmentIndex + 1}`
+    } as {
+      id: number;
+      title: string;
+      slug: string;
+      due_date: string;
+      group_config: string;
+      rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
+      rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
+      [key: string]: unknown;
+    };
+  }
+
+  // Helper function to set deterministic scores for gradebook columns
+  async function setGradebookColumnScores({
+    class_id,
+    gradebook_column_id,
+    students,
+    baseScore,
+    variation = 10
+  }: {
+    class_id: number;
+    gradebook_column_id: number;
+    students: TestingUser[];
+    baseScore: number;
+    variation?: number;
+  }): Promise<void> {
+    // Get the gradebook_id for this class
+    const { data: gradebook, error: gradebookError } = await supabase
+      .from("gradebooks")
+      .select("id")
+      .eq("class_id", class_id)
+      .single();
+
+    if (gradebookError || !gradebook) {
+      throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
+    }
+
+    // Get existing gradebook column student records
+    const { data: existingRecords, error: fetchError } = await supabase
+      .from("gradebook_column_students")
+      .select("id, student_id")
+      .eq("gradebook_column_id", gradebook_column_id)
+      .eq("is_private", true);
+
+    if (fetchError) {
+      throw new Error(`Failed to fetch existing gradebook column students: ${fetchError.message}`);
+    }
+
+    if (!existingRecords || existingRecords.length === 0) {
+      throw new Error(`No existing gradebook column student records found for column ${gradebook_column_id}`);
+    }
+
+    // Generate deterministic scores for each student
+    const updatePromises = students.map(async (student, index) => {
+      const existingRecord = existingRecords.find((record) => record.student_id === student.private_profile_id);
+      if (!existingRecord) {
+        console.warn(`No gradebook column student record found for student ${student.email}`);
+        return;
+      }
+
+      // Generate deterministic score based on student index and base score
+      const score = Math.max(0, Math.min(100, baseScore + (index % variation) - variation / 2));
+
+      const { error: updateError } = await supabase
+        .from("gradebook_column_students")
+        .update({ score: score })
+        .eq("id", existingRecord.id);
+
+      if (updateError) {
+        throw new Error(`Failed to update score for student ${student.email}: ${updateError.message}`);
+      }
+    });
+
+    await Promise.all(updatePromises);
+  }
+
+  // Calculate evenly spaced dates between start and end
+  const timeDiff = assignmentDateRange.end.getTime() - assignmentDateRange.start.getTime();
+  const timeStep = timeDiff / (numAssignments - 1);
+
+  // Create assignments
+  const assignments = [];
+  for (let i = 0; i < numAssignments; i++) {
+    const assignmentDate = new Date(assignmentDateRange.start.getTime() + timeStep * i);
+
+    const assignment = await createAssignmentWithRubric({
+      assignmentIndex: i,
+      due_date: assignmentDate.toISOString(),
+      class_id,
+      groupConfig
+    });
+
+    assignments.push(assignment);
+  }
+
+  // Create gradebook columns
+  const gradebookColumns = [];
+  const manualGradedColumns = [];
+
+  // Create manual graded columns
+  for (let i = 1; i <= numManualGradedColumns; i++) {
+    const columnName = `Manual Grade ${i}`;
+    const columnSlug = `manual-grade-${i}`;
+
+    const manualColumn = await createGradebookColumn({
+      class_id,
+      name: columnName,
+      description: `Manual grading column ${i}`,
+      slug: columnSlug,
+      max_score: 100,
+      sort_order: 1000 + i
+    });
+
+    manualGradedColumns.push(manualColumn);
+    gradebookColumns.push(manualColumn);
+  }
+
+  // Create standard gradebook columns
+  const participationColumn = await createGradebookColumn({
+    class_id,
+    name: "Participation",
+    description: "Overall class participation score",
+    slug: "participation",
+    max_score: 100,
+    sort_order: 1000
+  });
+
+  const averageAssignmentsColumn = await createGradebookColumn({
+    class_id,
+    name: "Average Assignments",
+    description: "Average of all assignments",
+    slug: "average-assignments",
+    score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
+    max_score: 100,
+    sort_order: 2
+  });
+
+  const averageLabAssignmentsColumn = await createGradebookColumn({
+    class_id,
+    name: "Average Lab Assignments",
+    description: "Average of all lab assignments",
+    slug: "average-lab-assignments",
+    score_expression: "mean(gradebook_columns('assignment-lab-*'))",
+    max_score: 100,
+    sort_order: 3
+  });
+
+  const finalGradeColumn = await createGradebookColumn({
+    class_id,
+    name: "Final Grade",
+    description: "Calculated final grade",
+    slug: "final-grade",
+    score_expression:
+      "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
+    max_score: 100,
+    sort_order: 999
+  });
+
+  gradebookColumns.push(participationColumn, averageAssignmentsColumn, averageLabAssignmentsColumn, finalGradeColumn);
+
+  // Get students for manual grading
+  const { data: students } = await supabase
+    .from("user_roles")
+    .select("private_profile_id, public_profile_id, user_id")
+    .eq("class_id", class_id)
+    .eq("role", "student");
+
+  if (students && students.length > 0) {
+    // Transform the data to match TestingUser structure
+    const transformedStudents: TestingUser[] = students.map((student) => ({
+      private_profile_name: `Student ${student.user_id}`,
+      public_profile_name: `Pseudonym ${student.user_id}`,
+      email: `student-${student.user_id}@pawtograder.net`,
+      password: process.env.TEST_PASSWORD || "change-it",
+      user_id: student.user_id,
+      private_profile_id: student.private_profile_id,
+      public_profile_id: student.public_profile_id,
+      class_id: class_id
+    }));
+
+    // Set scores for columns that should have manual grades
+    const columnsToGrade = gradebookColumns.filter((col) => manualGradedColumnSlugs.includes(col.slug));
+
+    for (const column of columnsToGrade) {
+      // Generate deterministic base score based on column slug
+      const baseScore = (column.slug.split("-").reduce((acc, part) => acc + part.charCodeAt(0), 0) % 40) + 60; // 60-100 range
+
+      await setGradebookColumnScores({
+        class_id,
+        gradebook_column_id: column.id,
+        students: transformedStudents,
+        baseScore,
+        variation: 15
+      });
+    }
+  }
+
+  return {
+    assignments,
+    gradebookColumns,
+    manualGradedColumns
+  };
 }

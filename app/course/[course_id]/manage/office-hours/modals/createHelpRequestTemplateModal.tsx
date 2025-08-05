@@ -2,13 +2,12 @@
 
 import { Box, Dialog, Field, HStack, Icon, Input, Stack, NativeSelect, Textarea } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
-import { useCreate } from "@refinedev/core";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
+import { useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import { toaster } from "@/components/ui/toaster";
-import type { HelpRequestTemplate } from "@/utils/supabase/DatabaseTypes";
 
 type HelpRequestTemplateFormData = {
   name: string;
@@ -52,7 +51,9 @@ export default function CreateHelpRequestTemplateModal({
     }
   });
 
-  const { mutateAsync: createTemplate } = useCreate<HelpRequestTemplate>();
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpRequestTemplates } = controller;
 
   const handleClose = () => {
     reset();
@@ -69,26 +70,20 @@ export default function CreateHelpRequestTemplateModal({
     }
 
     try {
-      await createTemplate({
-        resource: "help_request_templates",
-        values: {
-          class_id: Number(course_id),
-          name: data.name,
-          description: data.description || null,
-          category: data.category,
-          template_content: data.template_content,
-          is_active: data.is_active,
-          created_by_id: user.id,
-          usage_count: 0
-        },
-        successNotification: {
-          message: "Help request template created successfully",
-          type: "success"
-        },
-        errorNotification: {
-          message: "Failed to create help request template",
-          type: "error"
-        }
+      await helpRequestTemplates.create({
+        class_id: Number(course_id),
+        name: data.name,
+        description: data.description || null,
+        category: data.category,
+        template_content: data.template_content,
+        is_active: data.is_active,
+        created_by_id: user.id,
+        usage_count: 0
+      });
+
+      toaster.success({
+        title: "Success",
+        description: "Help request template created successfully"
       });
       handleClose();
       onSuccess();

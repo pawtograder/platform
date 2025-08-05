@@ -19,7 +19,7 @@ import {
   OfficeHoursRealTimeController,
   ConnectionStatus as OfficeHoursConnectionStatus
 } from "@/lib/OfficeHoursRealTimeController";
-import { useOfficeHoursRealtime } from "./useOfficeHoursRealtime";
+import { useConnectionStatus } from "./useOfficeHoursRealtime";
 
 /**
  * Combined connection status that includes both class and office hours realtime connections
@@ -54,9 +54,8 @@ export interface UseRealtimeConnectionStatusOptions {
    *
    * Example usage:
    * ```tsx
-   * // In an office hours component
-   * const { controller: officeHoursController } = useOfficeHoursRealtime({ classId: 123 });
-   * const status = useRealtimeConnectionStatus({ officeHoursController });
+   * // Connection status is automatically detected based on current page context
+   * const status = useAutomaticRealtimeConnectionStatus();
    * ```
    */
   officeHoursController?: OfficeHoursRealTimeController | null;
@@ -192,15 +191,36 @@ export function useAutomaticRealtimeConnectionStatus(): CombinedConnectionStatus
   const courseId = params?.course_id ? parseInt(params.course_id as string, 10) : undefined;
   const shouldEnableOfficeHours = isInOfficeHours && courseId && !isNaN(courseId) && courseId > 0;
 
-  // Initialize office hours controller only when in office hours context with valid course ID
-  const { controller: officeHoursController } = useOfficeHoursRealtime({
-    classId: courseId || 0,
-    enableGlobalQueues: shouldEnableOfficeHours ? true : undefined,
-    enableActiveRequests: shouldEnableOfficeHours ? true : undefined
-  });
+  // Get connection status from our individual hook when in office hours context
+  const { connectionStatus: officeHoursConnectionStatus } = useConnectionStatus();
 
-  // Use the base hook with conditional office hours controller
-  return useRealtimeConnectionStatus({
-    officeHoursController: shouldEnableOfficeHours ? officeHoursController : undefined
-  });
+  // Use the base hook with class controller only
+  const classConnectionStatus = useRealtimeConnectionStatus({});
+
+  // If not in office hours context, just return class status
+  if (!shouldEnableOfficeHours) {
+    return classConnectionStatus;
+  }
+
+  // Combine class and office hours connection status manually
+  const combinedStatus: CombinedConnectionStatus = {
+    overall:
+      classConnectionStatus?.overall === "connected" && officeHoursConnectionStatus?.overall === "connected"
+        ? "connected"
+        : classConnectionStatus?.overall === "disconnected" || officeHoursConnectionStatus?.overall === "disconnected"
+          ? "disconnected"
+          : "partial",
+    channels: [
+      ...(classConnectionStatus?.channels || []),
+      // Add a synthetic office hours channel status
+      {
+        name: "office-hours",
+        state: officeHoursConnectionStatus?.overall === "connected" ? "joined" : "closed",
+        type: "help_queues" as const
+      }
+    ],
+    lastUpdate: new Date()
+  };
+
+  return combinedStatus;
 }

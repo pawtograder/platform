@@ -1,34 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useForm } from "@refinedev/react-hook-form";
-import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
-import { Fieldset, Button, Heading, Text, Box, Stack, Input, IconButton, Textarea } from "@chakra-ui/react";
-import {
-  HelpRequest,
-  HelpRequestTemplate,
-  Submission,
-  SubmissionFile,
-  HelpRequestLocationType,
-  HelpRequestFormFileReference,
-  HelpRequestWithStudentCount,
-  Assignment
-} from "@/utils/supabase/DatabaseTypes";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field } from "@/components/ui/field";
-import { Controller } from "react-hook-form";
+import StudentGroupPicker from "@/components/ui/student-group-picker";
+import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
-  useOfficeHoursRealtime,
   useHelpRequests,
   useHelpRequestStudents,
-  useHelpRequestTemplates
+  useHelpRequestTemplates,
+  useHelpQueues,
+  useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
-import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Assignment,
+  HelpRequest,
+  HelpRequestLocationType,
+  HelpRequestTemplate,
+  HelpRequestWithStudentCount,
+  Submission,
+  SubmissionFile
+} from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Fieldset, Heading, IconButton, Input, Stack, Text, Textarea } from "@chakra-ui/react";
+import { useList } from "@refinedev/core";
+import { useForm } from "@refinedev/react-hook-form";
 import { Select } from "chakra-react-select";
-import { toaster } from "@/components/ui/toaster";
-import StudentGroupPicker from "@/components/ui/student-group-picker";
 import { X } from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Controller } from "react-hook-form";
+import { HelpRequestFormFileReference } from "@/components/help-queue/help-request-chat";
 
 const locationTypeOptions: HelpRequestLocationType[] = ["remote", "in_person", "hybrid"];
 
@@ -54,15 +55,14 @@ export default function HelpRequestForm() {
   }, [selectedStudents]);
 
   const {
-    refineCore: { formLoading, query },
+    refineCore: { query },
     setValue,
     control,
     getValues,
     watch,
     reset,
     formState: { errors, isSubmitting },
-    handleSubmit,
-    refineCore: { onFinish }
+    handleSubmit
   } = useForm<HelpRequest & { file_references?: HelpRequestFormFileReference[] }>({
     defaultValues: async () => {
       return {
@@ -93,195 +93,21 @@ export default function HelpRequestForm() {
             description: `Failed to create help request: ${error instanceof Error ? error.message : "Unknown error"}`
           });
         }
-      },
-      onMutationSuccess: async (data) => {
-        try {
-          // Get current selected students from ref to avoid closure issues
-          const currentSelectedStudents = selectedStudentsRef.current;
-
-          if (!data?.data?.id) {
-            throw new Error("Help request ID not found in response data");
-          }
-
-          // Add all selected students to help_request_students
-          if (currentSelectedStudents.length > 0) {
-            for (const studentId of currentSelectedStudents) {
-              try {
-                await createStudentAssociation({
-                  values: {
-                    help_request_id: data.data.id,
-                    profile_id: studentId,
-                    class_id: Number.parseInt(course_id as string)
-                  }
-                });
-              } catch (error) {
-                toaster.error({
-                  title: "Error",
-                  description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
-                });
-                throw new Error(
-                  `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
-                );
-              }
-            }
-
-            // Log activity for all students in the help request
-            for (const studentId of currentSelectedStudents) {
-              try {
-                await createStudentActivity({
-                  values: {
-                    student_profile_id: studentId,
-                    class_id: Number.parseInt(course_id as string),
-                    help_request_id: data.data.id,
-                    activity_type: "request_created",
-                    activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === data.data.help_queue)?.name || "Unknown"}`
-                  }
-                });
-              } catch (error) {
-                console.error(`Failed to log activity for student:`, error);
-                // Don't throw here - activity logging shouldn't block request creation
-              }
-            }
-          } else {
-            toaster.error({
-              title: "Error",
-              description: "No students selected for help request"
-            });
-            throw new Error("No students selected for help request");
-          }
-
-          // Check if we need to update the help request to private
-          const intendedPrivacy = getValues("_intended_privacy");
-          if (intendedPrivacy) {
-            try {
-              await updateHelpRequest({
-                id: data.data.id,
-                values: { is_private: true }
-              });
-              toaster.success({
-                title: "Success",
-                description: "Private help request successfully created."
-              });
-            } catch {
-              try {
-                await deleteHelpRequest({
-                  id: data.data.id,
-                  resource: "help_requests"
-                });
-              } catch {
-                throw new Error("Failed to update help request to private");
-              }
-              toaster.error({
-                title: "Error",
-                description:
-                  "Failed to update help request to private, please manually delete the request to avoid leaking private information."
-              });
-            }
-          }
-
-          // Create file references if any
-          const fileReferences = getValues("file_references") || [];
-          if (fileReferences.length > 0) {
-            // Get assignment_id from the selected submission
-            const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
-            if (!selectedSubmission?.assignment_id) {
-              throw new Error("Assignment ID not found for the selected submission");
-            }
-
-            for (const ref of fileReferences) {
-              try {
-                await createFileReference({
-                  values: {
-                    help_request_id: data.data.id,
-                    class_id: Number.parseInt(course_id as string),
-                    assignment_id: selectedSubmission.assignment_id,
-                    submission_file_id: ref.submission_file_id,
-                    submission_id: getValues("referenced_submission_id"),
-                    line_number: ref.line_number
-                  }
-                });
-              } catch (error) {
-                toaster.error({
-                  title: "Error",
-                  description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                });
-                throw new Error(
-                  `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                );
-              }
-            }
-          }
-
-          toaster.success({
-            title: "Success",
-            description: "Help request successfully created. Redirecting to queue view..."
-          });
-
-          // Reset form state after successful submission
-          reset({
-            help_queue: Number.parseInt(queue_id as string),
-            file_references: [],
-            location_type: "remote" as HelpRequestLocationType,
-            request: "",
-            is_private: false,
-            template_id: undefined,
-            referenced_submission_id: undefined,
-            followup_to: undefined
-          });
-
-          // Reset local state variables
-          setSelectedStudents(private_profile_id ? [private_profile_id] : []);
-          setSelectedAssignmentId(null);
-          setSelectedSubmissionId(null);
-
-          // Navigate to queue view
-          router.push(`/course/${course_id}/office-hours/${queue_id}?tab=queue`);
-        } catch (error) {
-          toaster.error({
-            title: "Error",
-            description: error instanceof Error ? error.message : "Failed to complete help request creation"
-          });
-        }
       }
     }
   });
 
   const { private_profile_id } = useClassProfiles();
 
-  // Refine mutation hooks for creating related data
-  const { mutateAsync: createStudentAssociation } = useCreate({
-    resource: "help_request_students"
-  });
+  // Get table controllers from office hours controller
+  const controller = useOfficeHoursController();
+  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity } = controller;
 
-  const { mutateAsync: updateHelpRequest } = useUpdate({
-    resource: "help_requests"
-  });
-
-  const { mutateAsync: deleteHelpRequest } = useDelete();
-
-  const { mutateAsync: createFileReference } = useCreate({
-    resource: "help_request_file_references"
-  });
-
-  // Hook for logging student activity
-  const { mutateAsync: createStudentActivity } = useCreate({
-    resource: "student_help_activity"
-  });
-
-  // Use realtime hook to get available help queues with proper error handling
-  const {
-    data: realtimeData,
-    isLoading: isLoadingQueues,
-    connectionError
-  } = useOfficeHoursRealtime({
-    classId: Number(course_id),
-    enableGlobalQueues: true,
-    onlyAvailableQueues: true,
-    enableActiveRequests: false,
-    enableStaffData: false
-  });
-
-  const { helpQueues } = realtimeData;
+  // Get available help queues using individual hook
+  const allHelpQueues = useHelpQueues();
+  const helpQueues = allHelpQueues.filter((queue) => queue.available);
+  const isLoadingQueues = false; // Individual hooks don't expose loading state
+  const connectionError = null; // Will be handled by connection status if needed
 
   // Get all help requests and students data from realtime
   const allHelpRequests = useHelpRequests();
@@ -297,15 +123,10 @@ export default function HelpRequestForm() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<number | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<number | null>(null);
 
-  const currentDate = useMemo(() => new Date().toISOString(), []);
-
   // Fetch assignments for the class
   const { data: assignments } = useList<Assignment>({
     resource: "assignments",
-    filters: [
-      { field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) },
-      { field: "release_date", operator: "lte", value: currentDate }
-    ],
+    filters: [{ field: "class_id", operator: "eq", value: Number.parseInt(course_id as string) }],
     sorters: [{ field: "due_date", order: "desc" }],
     pagination: { pageSize: 1000 }
   });
@@ -362,28 +183,16 @@ export default function HelpRequestForm() {
     if (!private_profile_id) return;
 
     try {
-      // Get user's help request associations from realtime data
-      const userRequestStudents = allHelpRequestStudents.filter(
-        (student) =>
-          student.profile_id === private_profile_id && student.class_id === Number.parseInt(course_id as string)
+      const classId = Number.parseInt(course_id as string);
+
+      // Get user's requests directly by created_by field for more reliable data
+      const userRequests = allHelpRequests.filter(
+        (request) => request.class_id === classId && request.created_by === private_profile_id
       );
 
-      if (userRequestStudents.length === 0) {
-        setUserPreviousRequests([]);
-        setUserActiveRequests([]);
-        return;
-      }
-
-      const requestIds = userRequestStudents.map((item) => item.help_request_id);
-
       // Get previous requests (resolved/closed) from realtime data
-      const previousRequestsData = allHelpRequests
-        .filter(
-          (request) =>
-            request.class_id === Number.parseInt(course_id as string) &&
-            (request.status === "resolved" || request.status === "closed") &&
-            requestIds.includes(request.id)
-        )
+      const previousRequestsData = userRequests
+        .filter((request) => request.status === "resolved" || request.status === "closed")
         .sort((a, b) => {
           const aTime = a.resolved_at ? new Date(a.resolved_at).getTime() : 0;
           const bTime = b.resolved_at ? new Date(b.resolved_at).getTime() : 0;
@@ -394,14 +203,11 @@ export default function HelpRequestForm() {
       setUserPreviousRequests(previousRequestsData);
 
       // Get active requests from realtime data
-      const activeRequestsData = allHelpRequests.filter(
-        (request) =>
-          request.class_id === Number.parseInt(course_id as string) &&
-          (request.status === "open" || request.status === "in_progress") &&
-          requestIds.includes(request.id)
+      const activeRequestsData = userRequests.filter(
+        (request) => request.status === "open" || request.status === "in_progress"
       );
 
-      // Get student counts for each active request
+      // Get student counts for each active request from help request students associations
       const activeRequestsWithCount: HelpRequestWithStudentCount[] = activeRequestsData.map((request) => {
         const studentCount = allHelpRequestStudents.filter((student) => student.help_request_id === request.id).length;
 
@@ -467,18 +273,20 @@ export default function HelpRequestForm() {
       // Check for conflicts based on solo vs group request rules
       const selectedQueueId = getValues("help_queue");
       const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
-
+      const is_private = getValues("is_private");
       if (isCreatingSoloRequest) {
-        // For solo requests, check if user already has a solo request in this queue
+        // For solo requests, check if user already has a solo request in this queue with the same privacy setting
         const hasSoloRequestInQueue = userActiveRequests.some(
-          (request) => request.help_queue === selectedQueueId && request.student_count === 1
+          (request) =>
+            Number(request.help_queue) === Number(selectedQueueId) &&
+            request.student_count === 1 &&
+            Boolean(request.is_private) === Boolean(is_private)
         );
 
         if (hasSoloRequestInQueue) {
           toaster.error({
             title: "Error",
-            description:
-              "You already have a solo help request in this queue. Please resolve your current request before submitting a new solo request."
+            description: `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`
           });
           return;
         }
@@ -486,40 +294,156 @@ export default function HelpRequestForm() {
       // Group requests are always allowed - no validation needed
 
       // Create a custom onFinish function that excludes file_references and adds required fields
-      const customOnFinish = (values: Record<string, unknown>) => {
+      const customOnFinish = async (values: Record<string, unknown>) => {
         // Exclude file_references from the submission data since it's not a column in help_requests table
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { file_references, ...helpRequestData } = values;
-        const intendedPrivacy = selectedSubmissionId ? true : values.is_private || false;
+        const { _intended_privacy, file_references, ...helpRequestData } = values;
+
         // Add required fields that may not be set in the form
         const finalData = {
           ...helpRequestData,
           assignee: null,
           class_id: Number.parseInt(course_id as string),
+          created_by: private_profile_id, // Set the created_by field
           // Ensure these fields have proper defaults
           status: "open" as const,
           is_video_live: false,
-          // WORKAROUND: Always create as public first to avoid RLS issues
-          is_private: false
+          is_private: values.is_private || false
         };
 
-        // Store intended privacy separately (not in database data)
-        setValue("_intended_privacy", intendedPrivacy);
-        return onFinish(finalData);
+        try {
+          const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
+          // Get current selected students from ref to avoid closure issues
+          const currentSelectedStudents = selectedStudentsRef.current;
+
+          if (!createdHelpRequest.id) {
+            throw new Error("Help request ID not found in response data");
+          }
+
+          // Add all selected students to help_request_students
+          if (currentSelectedStudents.length > 0) {
+            for (const studentId of currentSelectedStudents) {
+              try {
+                await helpRequestStudents.create({
+                  help_request_id: createdHelpRequest.id,
+                  profile_id: studentId,
+                  class_id: Number.parseInt(course_id as string)
+                });
+              } catch (error) {
+                toaster.error({
+                  title: "Error",
+                  description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
+                });
+                throw new Error(
+                  `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
+                );
+              }
+            }
+
+            // Log activity for all students in the help request
+            for (const studentId of currentSelectedStudents) {
+              try {
+                await studentHelpActivity.create({
+                  student_profile_id: studentId,
+                  class_id: Number.parseInt(course_id as string),
+                  help_request_id: createdHelpRequest.id,
+                  activity_type: "request_created",
+                  activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown"}`
+                });
+              } catch (error) {
+                console.error(`Failed to log activity for student:`, error);
+                // Don't throw here - activity logging shouldn't block request creation
+              }
+            }
+          } else {
+            toaster.error({
+              title: "Error",
+              description: "No students selected for help request"
+            });
+            throw new Error("No students selected for help request");
+          }
+
+          // Create file references if any
+          const fileReferences = getValues("file_references") || [];
+          if (fileReferences.length > 0) {
+            // Get assignment_id from the selected submission
+            const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
+            if (!selectedSubmission?.assignment_id) {
+              throw new Error("Assignment ID not found for the selected submission");
+            }
+
+            for (const ref of fileReferences) {
+              try {
+                await helpRequestFileReferences.create({
+                  help_request_id: createdHelpRequest.id,
+                  class_id: Number.parseInt(course_id as string),
+                  assignment_id: selectedSubmission.assignment_id,
+                  submission_file_id: ref.submission_file_id,
+                  submission_id: getValues("referenced_submission_id"),
+                  line_number: ref.line_number
+                });
+              } catch (error) {
+                toaster.error({
+                  title: "Error",
+                  description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                });
+                throw new Error(
+                  `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                );
+              }
+            }
+          }
+
+          toaster.success({
+            title: "Success",
+            description: "Help request successfully created. Redirecting to queue view..."
+          });
+
+          // Reset form state after successful submission
+          reset({
+            help_queue: Number.parseInt(queue_id as string),
+            file_references: [],
+            location_type: "remote" as HelpRequestLocationType,
+            request: "",
+            is_private: false,
+            template_id: undefined,
+            referenced_submission_id: undefined,
+            followup_to: undefined
+          });
+
+          // Reset local state variables
+          setSelectedStudents(private_profile_id ? [private_profile_id] : []);
+          setSelectedAssignmentId(null);
+          setSelectedSubmissionId(null);
+
+          // Navigate to queue view
+          router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
+        } catch (error) {
+          toaster.error({
+            title: "Error",
+            description: error instanceof Error ? error.message : "Failed to complete help request creation"
+          });
+        }
       };
 
       handleSubmit(customOnFinish)();
     },
     [
       handleSubmit,
-      onFinish,
       private_profile_id,
       course_id,
       userActiveRequests,
       getValues,
       selectedStudents,
-      setValue,
-      selectedSubmissionId
+      helpQueues,
+      helpRequestFileReferences,
+      helpRequests,
+      helpRequestStudents,
+      queue_id,
+      router,
+      reset,
+      submissions?.data,
+      studentHelpActivity
     ]
   );
 
@@ -527,7 +451,7 @@ export default function HelpRequestForm() {
   if (query?.error) {
     return <div>Error: {query.error.message}</div>;
   }
-  if (!query || formLoading || isLoadingQueues) {
+  if (!query || isLoadingQueues) {
     return (
       <Box textAlign="center" py={8}>
         <Text>Loading form data...</Text>
@@ -546,24 +470,32 @@ export default function HelpRequestForm() {
       </Box>
     );
   }
+  const is_private = watch("is_private");
 
   // Check if the selected queue would conflict with current requests
   const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
   const wouldConflict = Boolean(
     selectedHelpQueue &&
       isCreatingSoloRequest &&
-      userActiveRequests.some((request) => request.help_queue === selectedHelpQueue && request.student_count === 1)
+      userActiveRequests.some(
+        (request) =>
+          Number(request.help_queue) === Number(selectedHelpQueue) &&
+          request.student_count === 1 &&
+          Boolean(request.is_private) === Boolean(is_private)
+      )
   );
 
   return (
-    <form onSubmit={onSubmit}>
+    <form onSubmit={onSubmit} aria-label="New Help Request Form">
+      <Toaster />
       <Heading>Request Live Help</Heading>
       <Text>Submit a request to get help synchronously from a TA via text or video chat.</Text>
 
       {wouldConflict && (
         <Text color="orange.500" mb={4}>
-          ⚠️ You already have a solo help request in this queue. Please resolve your current request before submitting a
-          new solo request, or add other students to create a group request.
+          ⚠️ You already have a {is_private ? "private" : "public"} solo help request in this queue. You can have up to
+          2 solo requests per queue (1 private + 1 public). Please resolve or close your current request, switch privacy
+          settings, or add other students to create a group request.
         </Text>
       )}
 
@@ -946,7 +878,7 @@ export default function HelpRequestForm() {
 
         {userPreviousRequests.length > 0 && (
           <Fieldset.Content>
-            <Field label="Follow-up to previous request " optionalText="(Optional)">
+            <Field label="Follow-Up to Previous Request " optionalText="(Optional)">
               <Controller
                 name="followup_to"
                 control={control}
