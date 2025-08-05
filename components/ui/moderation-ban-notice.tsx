@@ -190,7 +190,7 @@ export default function ModerationBanNotice({ classId, children }: ModerationBan
   // Show warnings if user has recent warnings but is not banned
   if (moderationStatus.recentWarnings.length > 0) {
     return (
-      <VStack gap={6} align="stretch">
+      <VStack gap={6} align="stretch" mt={8}>
         <Container maxW="3xl">
           <Box borderRadius="xl" borderWidth="2px" shadow="lg" overflow="hidden">
             {/* Warning header */}

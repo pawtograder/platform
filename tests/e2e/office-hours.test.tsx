@@ -131,18 +131,60 @@ test.describe("Office Hours", () => {
     // Wait for the popup to load
     await popup.waitForLoadState();
 
+    // Check that the details and controls are visible
     await expect(popup.getByText("Meeting Roster")).toBeVisible();
     await expect(popup.getByText(instructor!.private_profile_name)).toBeVisible();
+    await expect(popup.getByRole("button", { name: "Leave" }).first()).toBeVisible();
+    await expect(popup.getByRole("button", { name: "Speaker" }).first()).toBeVisible();
+    await expect(popup.getByRole("button", { name: "Content" }).first()).toBeVisible();
+    await expect(popup.getByRole("button", { name: "Video" }).first()).toBeVisible();
+    await expect(popup.getByRole("button", { name: "Mute" }).first()).toBeVisible();
     await percySnapshot(popup, "Office Hours - Instructor alone in a call");
 
-    // Close the popup when done
-    await popup.close();
+    // Test controls
+    await popup.getByRole("button", { name: "Mute" }).first().click();
+    await expect(popup.getByRole("button", { name: "Unmute" }).first()).toBeVisible();
+    await popup.getByRole("button", { name: "Unmute" }).first().click();
+    await expect(popup.getByRole("button", { name: "Mute" }).first()).toBeVisible();
+    await popup.getByRole("button", { name: "Content" }).first().click();
+    await popup.getByRole("button", { name: "Leave" }).first().click();
+    await expect(popup.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await expect(popup.getByRole("button", { name: "Leave Meeting" })).toBeVisible();
+    await expect(popup.getByRole("button", { name: "End meeting for all" })).toBeVisible();
+
+    // Test Leave Meeting button
+    await popup.getByRole("button", { name: "Leave Meeting" }).click();
 
     // Verify the original page shows "Join Video Call" button after popup closes
     await expect(page.getByRole("button", { name: "Join Video Call" })).toBeVisible();
     await expect(page.getByRole("button", { name: "End Call" })).toBeVisible();
 
-    // Test end call button
+    const popupPromise2 = page.waitForEvent("popup");
+
+    // Test Join Video Call button
+    await page.getByRole("button", { name: "Join Video Call" }).click();
+
+    const popup2 = await popupPromise2;
+    await popup2.waitForLoadState();
+
+    // The same stuff should be visible
+    await expect(popup2.getByText("Meeting Roster")).toBeVisible();
+    await expect(popup2.getByText(instructor!.private_profile_name)).toBeVisible();
+    await expect(popup2.getByRole("button", { name: "Leave" }).first()).toBeVisible();
+    await expect(popup2.getByRole("button", { name: "Speaker" }).first()).toBeVisible();
+    await expect(popup2.getByRole("button", { name: "Content" }).first()).toBeVisible();
+    await expect(popup2.getByRole("button", { name: "Video" }).first()).toBeVisible();
+    await expect(popup2.getByRole("button", { name: "Mute" }).first()).toBeVisible();
+
+    // Test End meeting for all button
+    await popup2.getByRole("button", { name: "Leave" }).first().click();
+    await popup2.getByRole("button", { name: "End meeting for all" }).click();
+    await expect(page.getByRole("button", { name: "Join Video Call" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "End Call" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Start Video Call" })).toBeVisible();
+
+    // Test End Call button on the original page
+    await page.getByRole("button", { name: "Start Video Call" }).click();
     await page.getByRole("button", { name: "End Call" }).click();
     await expect(page.getByRole("button", { name: "Join Video Call" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "End Call" })).not.toBeVisible();

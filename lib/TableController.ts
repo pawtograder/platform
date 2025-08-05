@@ -213,10 +213,6 @@ export default class TableController<
 
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
-        let page = 0;
-        const pageSize = 1000;
-        let nRows: number | undefined;
-
         const messageHandler = (message: BroadcastMessage) => {
           // Filter by table name
           if (message.table !== table) {
@@ -259,27 +255,11 @@ export default class TableController<
         if (this._officeHoursRealTimeController) {
           this._realtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(table, messageHandler);
         }
-        //Load initial data, do all of the pages.
-        while (page * pageSize < (nRows ?? 1000)) {
-          const { data, error } = await this._query.range(page * pageSize, (page + 1) * pageSize);
-          if (error) {
-            reject(error);
-          }
-          if (!data) {
-            break;
-          }
-          this._rows = [
-            ...this._rows,
-            ...data.map((row) => ({
-              ...row,
-              __db_pending: false
-            }))
-          ];
-          if (data.length < pageSize) {
-            break;
-          }
-          page++;
-        }
+        const initialData = await this._fetchInitialData();
+        this._rows = initialData.map((row) => ({
+          ...row,
+          __db_pending: false
+        }));
         this._ready = true;
         //Emit a change event
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered: this._rows, left: [] }));
