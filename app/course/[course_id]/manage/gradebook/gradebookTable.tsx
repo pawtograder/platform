@@ -385,9 +385,10 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   const scoreExpression = watch("scoreExpression");
 
   const onSubmit = async (data: FieldValues) => {
-    toaster.info({
+    toaster.create({
       title: "Saving...",
-      description: "This may take a few seconds to recalculate..."
+      description: "This may take a few seconds to recalculate...",
+      type: "info"
     });
     setIsLoading(true);
     try {

@@ -5,13 +5,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { App, Endpoints, Octokit, RequestError } from "https://esm.sh/octokit?dts";
 import Bottleneck from "https://esm.sh/bottleneck?target=deno";
 import { Redis } from "https://esm.sh/ioredis?target=deno";
+import * as Sentry from "npm:@sentry/deno";
 
 import { Buffer } from "node:buffer";
 import { Database } from "./SupabaseTypes.d.ts";
 
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";
-import { UserVisibleError } from "./HandlerUtils.ts";
+import { UserVisibleError, tagApiCall, tagDatabaseOperation } from "./HandlerUtils.ts";
 
 export type ListCommitsResponse = Endpoints["GET /repos/{owner}/{repo}/commits"]["response"];
 export type GitHubOIDCToken = {
@@ -68,8 +69,13 @@ const installations: {
 }[] = [];
 const MyOctokit = Octokit.plugin(throttling);
 
-export async function getOctoKit(repoOrOrgName: string) {
+export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
   const org = repoOrOrgName.includes("/") ? repoOrOrgName.split("/")[0] : repoOrOrgName;
+  scope?.addBreadcrumb({
+    message: `Getting Octokit for ${org}`,
+    category: "github",
+    level: "info"
+  });
   if (installations.length === 0) {
     let connection: Bottleneck.IORedisConnection | undefined;
     if (Deno.env.get("UPSTASH_REDIS_REST_URL") && Deno.env.get("UPSTASH_REDIS_REST_TOKEN")) {
@@ -130,8 +136,12 @@ export async function getOctoKit(repoOrOrgName: string) {
   }
   return undefined;
 }
-export async function resolveRef(action_repository: string, action_ref: string) {
-  const octokit = await getOctoKit(action_repository);
+export async function resolveRef(action_repository: string, action_ref: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "resolve_ref");
+  scope?.setTag("repository", action_repository);
+  scope?.setTag("ref", action_ref);
+
+  const octokit = await getOctoKit(action_repository, scope);
   if (!octokit) {
     throw new Error(`Resolve ref failed: No octokit found for ${action_repository}`);
   }
@@ -167,8 +177,12 @@ export async function resolveRef(action_repository: string, action_ref: string) 
   }
   throw new UserVisibleError(`Ref not found: ${action_ref} in ${action_repository}`);
 }
-export async function getRepoTarballURL(repo: string, sha?: string) {
-  const octokit = await getOctoKit(repo);
+export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "get_tarball_url");
+  scope?.setTag("repository", repo);
+  if (sha) scope?.setTag("sha", sha);
+
+  const octokit = await getOctoKit(repo, scope);
   if (!octokit) {
     throw new Error(`Get repo tarball URL failed: No octokit found for ${repo}`);
   }
@@ -227,8 +241,8 @@ export async function getRepoTarballURL(repo: string, sha?: string) {
     };
   }
 }
-export async function cloneRepository(repoName: string, ref: string) {
-  const octokit = await getOctoKit(repoName);
+export async function cloneRepository(repoName: string, ref: string, scope?: Sentry.Scope) {
+  const octokit = await getOctoKit(repoName, scope);
   if (!octokit) {
     throw new Error(`Clone repository failed: No octokit found for ${repoName}`);
   }
@@ -245,8 +259,16 @@ export async function cloneRepository(repoName: string, ref: string) {
   }
 }
 
-export async function addPushWebhook(repoName: string, type: "grader_solution" | "template_repo") {
-  const octokit = await getOctoKit(repoName);
+export async function addPushWebhook(
+  repoName: string,
+  type: "grader_solution" | "template_repo",
+  scope?: Sentry.Scope
+) {
+  scope?.setTag("github_operation", "add_webhook");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("webhook_type", type);
+
+  const octokit = await getOctoKit(repoName, scope);
   if (!octokit) {
     throw new Error(`Add push webhook failed: No octokit found for ${repoName}`);
   }
@@ -267,8 +289,12 @@ export async function addPushWebhook(repoName: string, type: "grader_solution" |
   });
   console.log("webhook added", webhook.data);
 }
-export async function removePushWebhook(repoName: string, webhookId: number) {
-  const octokit = await getOctoKit(repoName);
+export async function removePushWebhook(repoName: string, webhookId: number, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "remove_webhook");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("webhook_id", webhookId.toString());
+
+  const octokit = await getOctoKit(repoName, scope);
   if (!octokit) {
     throw new Error(`Remove push webhook failed: No octokit found for ${repoName}`);
   }
@@ -313,9 +339,13 @@ export async function updateAutograderWorkflowHash(repoName: string) {
   }
   return hash;
 }
-export async function getFileFromRepo(repoName: string, path: string) {
+export async function getFileFromRepo(repoName: string, path: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "get_file");
+  scope?.setTag("repository", repoName);
+  scope?.setTag("file_path", path);
+
   console.log("getting file from repo", repoName, path);
-  const octokit = await getOctoKit(repoName);
+  const octokit = await getOctoKit(repoName, scope);
   if (!octokit) {
     throw new Error(`Get file from repo failed: No octokit found for ${repoName}`);
   }
@@ -362,8 +392,11 @@ export async function validateOIDCToken(token: string): Promise<GitHubOIDCToken>
   return verified as GitHubOIDCToken;
 }
 
-export async function getRepos(org: string) {
-  const octokit = await getOctoKit(org);
+export async function getRepos(org: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "get_repos");
+  scope?.setTag("org", org);
+
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
@@ -378,10 +411,17 @@ export async function createRepo(
   org: string,
   repoName: string,
   template_repo: string,
-  { is_template_repo }: { is_template_repo?: boolean } = {}
+  { is_template_repo }: { is_template_repo?: boolean } = {},
+  scope?: Sentry.Scope
 ): Promise<string> {
+  scope?.setTag("github_operation", "create_repo");
+  scope?.setTag("org", org);
+  scope?.setTag("repo_name", repoName);
+  scope?.setTag("template_repo", template_repo);
+  scope?.setTag("is_template", is_template_repo?.toString() || "false");
+
   console.log("Creating repo", org, repoName, template_repo);
-  const octokit = await getOctoKit(org);
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new UserVisibleError("No GitHub installation found for organization " + org);
   }
@@ -463,21 +503,29 @@ async function listFilesInRepoDirectory(
   }
   throw new UserVisibleError(`Failed to list files in repo directory: not an array, in ${repoName} at ${path}`);
 }
-export async function listFilesInRepo(org: string, repo: string) {
-  const octokit = await getOctoKit(org);
+export async function listFilesInRepo(org: string, repo: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "list_files");
+  scope?.setTag("org", org);
+  scope?.setTag("repo", repo);
+
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
   return await listFilesInRepoDirectory(octokit, org, repo, "");
 }
 
-export async function archiveRepoAndLock(org: string, repo: string) {
+export async function archiveRepoAndLock(org: string, repo: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "archive_repo");
+  scope?.setTag("org", org);
+  scope?.setTag("repo", repo);
+
   if (repo.includes("/")) {
     const [owner, repoName] = repo.split("/");
     org = owner;
     repo = repoName;
   }
-  const octokit = await getOctoKit(org);
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
@@ -515,8 +563,13 @@ export async function archiveRepoAndLock(org: string, repo: string) {
  *     This function should be idempotent, and should not throw an error if the team already exists (or not).
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
-export async function syncStaffTeam(org: string, courseSlug: string, githubUsernamesFetcher: () => Promise<string[]>) {
-  await syncTeam(`${courseSlug}-staff`, org, githubUsernamesFetcher);
+export async function syncStaffTeam(
+  org: string,
+  courseSlug: string,
+  githubUsernamesFetcher: () => Promise<string[]>,
+  scope?: Sentry.Scope
+) {
+  await syncTeam(`${courseSlug}-staff`, org, githubUsernamesFetcher, scope);
 }
 /**
  * Syncs the student team for a course.
@@ -530,9 +583,10 @@ export async function syncStaffTeam(org: string, courseSlug: string, githubUsern
 export async function syncStudentTeam(
   org: string,
   courseSlug: string,
-  githubUsernamesFetcher: () => Promise<string[]>
+  githubUsernamesFetcher: () => Promise<string[]>,
+  scope?: Sentry.Scope
 ) {
-  await syncTeam(`${courseSlug}-students`, org, githubUsernamesFetcher);
+  await syncTeam(`${courseSlug}-students`, org, githubUsernamesFetcher, scope);
 }
 /**
  * Syncs a team for a course.
@@ -546,12 +600,21 @@ export async function syncStudentTeam(
  *     This function should be idempotent, and should not throw an error if the team already exists (or not).
  *     The intended members are fetched AFTER fetching the current members of the team to avoid race conditions.
  */
-export async function syncTeam(team_slug: string, org: string, githubUsernamesFetcher: () => Promise<string[]>) {
+export async function syncTeam(
+  team_slug: string,
+  org: string,
+  githubUsernamesFetcher: () => Promise<string[]>,
+  scope?: Sentry.Scope
+) {
+  scope?.setTag("github_operation", "sync_team");
+  scope?.setTag("org", org);
+  scope?.setTag("team_slug", team_slug);
+
   if (!org || !team_slug) {
     console.warn("Invalid org or team_slug", org, team_slug);
     return;
   }
-  const octokit = await getOctoKit(org);
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     console.warn("No octokit found for organization " + org);
     return;
@@ -619,8 +682,13 @@ export async function syncTeam(team_slug: string, org: string, githubUsernamesFe
     });
   }
 }
-export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string) {
-  const octokit = await getOctoKit(org);
+export async function reinviteToOrgTeam(org: string, team_slug: string, githubUsername: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "reinvite_to_team");
+  scope?.setTag("org", org);
+  scope?.setTag("team_slug", team_slug);
+  scope?.setTag("github_username", githubUsername);
+
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
@@ -667,14 +735,26 @@ export async function reinviteToOrgTeam(org: string, team_slug: string, githubUs
 }
 const staffTeamCache = new Map<string, string[]>();
 const orgMembershipCache = new Map<string, string[]>();
-export async function syncRepoPermissions(org: string, repo: string, courseSlug: string, githubUsernames: string[]) {
+export async function syncRepoPermissions(
+  org: string,
+  repo: string,
+  courseSlug: string,
+  githubUsernames: string[],
+  scope?: Sentry.Scope
+) {
+  scope?.setTag("github_operation", "sync_repo_permissions");
+  scope?.setTag("org", org);
+  scope?.setTag("repo", repo);
+  scope?.setTag("course_slug", courseSlug);
+  scope?.setTag("user_count", githubUsernames.length.toString());
+
   console.log("syncing repo permissions", org, repo, courseSlug, githubUsernames);
   if (repo.includes("/")) {
     const [owner, repoName] = repo.split("/");
     org = owner;
     repo = repoName;
   }
-  const octokit = await getOctoKit(org);
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
@@ -776,13 +856,18 @@ export async function syncRepoPermissions(org: string, repo: string, courseSlug:
 
 export async function listCommits(
   repo_full_name: string,
-  page: number
+  page: number,
+  scope?: Sentry.Scope
 ): Promise<{
   commits: ListCommitsResponse["data"];
   has_more: boolean;
 }> {
+  scope?.setTag("github_operation", "list_commits");
+  scope?.setTag("repository", repo_full_name);
+  scope?.setTag("page", page.toString());
+
   const [org, repo] = repo_full_name.split("/");
-  const octokit = await getOctoKit(org);
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
@@ -804,9 +889,19 @@ export async function listCommits(
   };
 }
 
-export async function triggerWorkflow(repo_full_name: string, sha: string, workflow_name: string) {
+export async function triggerWorkflow(
+  repo_full_name: string,
+  sha: string,
+  workflow_name: string,
+  scope?: Sentry.Scope
+) {
+  scope?.setTag("github_operation", "trigger_workflow");
+  scope?.setTag("repository", repo_full_name);
+  scope?.setTag("sha", sha);
+  scope?.setTag("workflow_name", workflow_name);
+
   const [org, repo] = repo_full_name.split("/");
-  const octokit = await getOctoKit(org);
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }
@@ -852,17 +947,26 @@ export async function triggerWorkflow(repo_full_name: string, sha: string, workf
 }
 
 export type CheckRunUpdateProps = Endpoints["PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}"]["parameters"];
-export async function updateCheckRun(props: CheckRunUpdateProps) {
-  const octokit = await getOctoKit(props.owner);
+export async function updateCheckRun(props: CheckRunUpdateProps, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "update_check_run");
+  scope?.setTag("org", props.owner);
+  scope?.setTag("repo", props.repo);
+  scope?.setTag("check_run_id", props.check_run_id.toString());
+
+  const octokit = await getOctoKit(props.owner, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + props.owner);
   }
   await octokit.request("PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}", props);
 }
 
-export async function createCheckRun(repo_full_name: string, sha: string, details_url: string) {
+export async function createCheckRun(repo_full_name: string, sha: string, details_url: string, scope?: Sentry.Scope) {
+  scope?.setTag("github_operation", "create_check_run");
+  scope?.setTag("repository", repo_full_name);
+  scope?.setTag("sha", sha);
+
   const [org, repo] = repo_full_name.split("/");
-  const octokit = await getOctoKit(org);
+  const octokit = await getOctoKit(org, scope);
   if (!octokit) {
     throw new Error("No octokit found for organization " + org);
   }

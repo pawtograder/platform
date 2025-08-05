@@ -114,6 +114,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("workflow_ref", workflow_ref);
   scope?.setTag("run_id", run_id);
   scope?.setTag("run_attempt", run_attempt);
+  scope?.setTag("is_e2e_run", isE2ERun.toString());
   // Find the corresponding student and assignment
   console.log("Creating submission for", repository, sha, workflow_ref);
   // const checkRunID = await GitHubController.getInstance().createCheckRun(repository, sha, workflow_ref);
@@ -127,7 +128,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("repository", repository)
     .single();
   if (repoError) {
+    scope?.setTag("db_error", "repository_lookup_failed");
+    scope?.setTag("db_error_message", repoError.message);
     throw new UserVisibleError(`Failed to find repository: ${repoError.message}`);
+  }
+
+  if (repoData) {
+    scope?.setTag("assignment_id", repoData.assignment_id.toString());
+    scope?.setTag("class_id", repoData.assignments.class_id?.toString() || "unknown");
+    scope?.setTag("profile_id", repoData.profile_id || "none");
+    scope?.setTag("assignment_group_id", repoData.assignment_group_id?.toString() || "none");
   }
 
   // Begin code where we might report an error to the user.
@@ -193,6 +203,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       // Check if this is a NOT-GRADED submission
       const isNotGradedSubmission =
         (checkRun.commit_message && checkRun.commit_message.includes("#NOT-GRADED")) || false;
+
+      scope?.setTag("time_zone", timeZone);
+      scope?.setTag("is_not_graded", isNotGradedSubmission.toString());
+      scope?.setTag("user_role", checkRun.user_roles?.role || "unknown");
 
       // Validate that the submission can be created
       if (
@@ -361,10 +375,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         .select("id")
         .single();
       if (error) {
+        scope?.setTag("db_error", "submission_creation_failed");
+        scope?.setTag("db_error_message", error.message);
         console.error(error);
         throw new UserVisibleError(`Failed to create submission for repository ${repository}: ${error.message}`);
       }
       submission_id = subID?.id;
+
+      if (submission_id) {
+        scope?.setTag("submission_id", submission_id.toString());
+      }
 
       console.log(`Created submission ${submission_id} for repository ${repository}`);
       if (checkRun && !isE2ERun) {

@@ -17,6 +17,47 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
 };
+
+/**
+ * Add comprehensive database operation tags to Sentry scope
+ */
+export function tagDatabaseOperation(
+  scope: Sentry.Scope,
+  operation: string,
+  table: string,
+  filters?: Record<string, string | number | boolean>
+) {
+  scope?.setTag("db_operation", operation);
+  scope?.setTag("db_table", table);
+  if (filters) {
+    Object.entries(filters).forEach(([key, value]) => {
+      scope?.setTag(`db_filter_${key}`, String(value));
+    });
+  }
+}
+
+/**
+ * Add user context tags to Sentry scope
+ */
+export function tagUserContext(scope: Sentry.Scope, userId: string, role?: string, courseId?: number) {
+  scope?.setTag("user_id", userId);
+  if (role) scope?.setTag("user_role", role);
+  if (courseId) scope?.setTag("course_id", courseId.toString());
+}
+
+/**
+ * Add API call tags to Sentry scope
+ */
+export function tagApiCall(
+  scope: Sentry.Scope,
+  service: "github" | "canvas" | "chime" | "supabase",
+  operation: string,
+  resource?: string
+) {
+  scope?.setTag("api_service", service);
+  scope?.setTag("api_operation", operation);
+  if (resource) scope?.setTag("api_resource", resource);
+}
 export async function assertUserIsInstructor(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {

@@ -1938,7 +1938,6 @@ async function createWorkflowErrors(
       `   Privacy breakdown: ${privateCount} private, ${workflowErrorsToCreate.length - privateCount} public`
     );
   }
-
 }
 
 // Sample help request messages for realistic data
@@ -2378,8 +2377,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const assignments: Array<{
       id: number;
       title: string;
-      rubricChecks: Array<{ id: number; name: string; points: number;[key: string]: unknown }>;
-      rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
+      rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
+      rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
       groups: Array<{ id: number; name: string; memberCount: number; members: string[] }>;
       [key: string]: unknown;
     }> = [];
@@ -2419,9 +2418,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       const isLabGroupAssignment =
         isLabAssignment &&
         i <
-        effectiveLabAssignmentConfig.numLabAssignments -
-        effectiveLabAssignmentConfig.numLabAssignments +
-        effectiveGroupAssignmentConfig.numLabGroupAssignments;
+          effectiveLabAssignmentConfig.numLabAssignments -
+            effectiveLabAssignmentConfig.numLabAssignments +
+            effectiveGroupAssignmentConfig.numLabGroupAssignments;
 
       // Determine assignment type and configuration
       let groupConfig: "individual" | "groups" | "both" = "individual";

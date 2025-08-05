@@ -13,13 +13,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("function", "live-meeting-for-help-request");
   scope?.setTag("courseId", courseId.toString());
   scope?.setTag("helpRequestId", helpRequestId.toString());
-  const supabase = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error("User not found");
-  }
+  const { enrollment } = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""

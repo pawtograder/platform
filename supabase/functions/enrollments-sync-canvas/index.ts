@@ -28,7 +28,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   const canvasEnrollments = (
     await Promise.all(
       course!.class_sections.map((section) => {
-        return canvas.getEnrollments(section);
+        return canvas.getEnrollments(section, scope);
       })
     )
   ).flat();
@@ -41,6 +41,10 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     (canvasEnrollment) =>
       !supabaseEnrollments.data!.find((supabaseEnrollment) => supabaseEnrollment.canvas_id === canvasEnrollment.user.id)
   );
+
+  scope?.setTag("canvas_enrollments_count", canvasEnrollments.length.toString());
+  scope?.setTag("supabase_enrollments_count", supabaseEnrollments.data?.length.toString() || "0");
+  scope?.setTag("new_enrollments_count", newEnrollments.length.toString());
   const allUsers = await adminSupabase.auth.admin.listUsers({
     perPage: 10000
   });
@@ -52,7 +56,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         return; //Wow I hope that nobody actually has a student named Test Student, great job, Canvas!
       }
       try {
-        const user = await canvas.getUser(course_id, enrollment.user.id);
+        const user = await canvas.getUser(course_id, enrollment.user.id, scope);
         // Does the user already exist in supabase?
         const existingUser = allUsers.data!.users.find((dbUser) => user.primary_email === dbUser.email);
         const dbRoleForCanvasRole = (role: string): Database["public"]["Enums"]["app_role"] => {
@@ -86,7 +90,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           dbRoleForCanvasRole(enrollment.role)
         );
       } catch (e) {
-        if ((e as any)?.response?.statusCode === 403) {
+        if ((e as { response?: { statusCode?: number } })?.response?.statusCode === 403) {
           console.log(
             `Unable to create account for user ${enrollment.user.name} (${enrollment.user.id}), Canvas refuses to give us their email.`
           );
@@ -105,6 +109,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       enrollment.canvas_id &&
       !canvasEnrollments.find((canvasEnrollment) => canvasEnrollment.user.id === enrollment.canvas_id)
   );
+
+  scope?.setTag("removed_profiles_count", removedProfiles.length.toString());
+  scope?.setTag("failure_messages_count", failureMessages.length.toString());
   await Promise.all(
     removedProfiles.map(async (enrollment) => {
       await adminSupabase.from("user_roles").delete().eq("id", enrollment.id);
