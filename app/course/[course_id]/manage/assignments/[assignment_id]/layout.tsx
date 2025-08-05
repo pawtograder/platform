@@ -1,5 +1,6 @@
 "use client";
 import { AssignmentProvider } from "@/hooks/useAssignment";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
@@ -9,6 +10,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
 import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
+import DeleteAssignmentButton from "./deleteAssignmentButton";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },
@@ -51,6 +53,7 @@ const LinkItems = (courseId: number, assignmentId: number) => [
  */
 export default function AssignmentLayout({ children }: { children: React.ReactNode }) {
   const { course_id, assignment_id } = useParams();
+  const isInstructor = useIsInstructor();
   const { data: assignment } = useOne<Assignment>({
     resource: "assignments",
     id: Number.parseInt(assignment_id as string)
@@ -88,6 +91,12 @@ export default function AssignmentLayout({ children }: { children: React.ReactNo
               assignmentId={Number.parseInt(assignment_id as string)}
               releaseDate={assignment?.data?.release_date}
             />
+            {isInstructor && (
+              <DeleteAssignmentButton
+                assignmentId={Number.parseInt(assignment_id as string)}
+                courseId={Number.parseInt(course_id as string)}
+              />
+            )}
           </VStack>
         </Box>
         <Box borderColor="border.muted" borderWidth="2px" borderRadius="md" p={4} flexGrow={1} minWidth="0">

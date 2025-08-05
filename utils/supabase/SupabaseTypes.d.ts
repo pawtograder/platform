@@ -6936,9 +6936,21 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      check_assignment_release_dates: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
+      check_gradebook_realtime_authorization: {
+        Args: { topic_text: string };
+        Returns: boolean;
+      };
       check_unified_realtime_authorization: {
         Args: { topic_text: string };
         Returns: boolean;
+      };
+      create_all_repos_for_assignment: {
+        Args: { course_id: number; assignment_id: number };
+        Returns: undefined;
       };
       create_regrade_request: {
         Args: {
@@ -6949,8 +6961,16 @@ export type Database = {
         };
         Returns: number;
       };
+      create_repos_for_student: {
+        Args: { user_id: string; class_id?: number };
+        Returns: undefined;
+      };
       custom_access_token_hook: {
         Args: { event: Json };
+        Returns: Json;
+      };
+      delete_assignment_with_all_data: {
+        Args: { p_assignment_id: number; p_class_id: number };
         Returns: Json;
       };
       finalize_submission_early: {
@@ -6970,6 +6990,10 @@ export type Database = {
       intval: {
         Args: { "": string };
         Returns: number;
+      };
+      invoke_gradebook_recalculation_background_task: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       is_allowed_grader_key: {
         Args: { graderkey: string; class: number };

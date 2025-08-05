@@ -250,6 +250,17 @@ export async function resendOrgInvitation(
     throw new EdgeFunctionError(error);
   }
 }
+export async function assignmentDelete(
+  params: FunctionTypes.AssignmentDeleteRequest,
+  supabase: SupabaseClient<Database>
+) {
+  const { data } = await supabase.functions.invoke("assignment-delete", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+  return data as FunctionTypes.AssignmentDeleteResponse;
+}
 export class EdgeFunctionError extends Error {
   details: string;
   recoverable: boolean;
