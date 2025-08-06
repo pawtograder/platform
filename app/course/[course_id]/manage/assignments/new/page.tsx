@@ -14,6 +14,7 @@ import { useForm } from "@refinedev/react-hook-form";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback } from "react";
 import CreateAssignment from "./form";
+import { Box, Heading, Text } from "@chakra-ui/react";
 
 export default function NewAssignmentPage() {
   const { course_id } = useParams();
@@ -145,5 +146,16 @@ export default function NewAssignmentPage() {
     }
     await create();
   }, [course_id, getValues, router, mutateAsync, timezone]);
-  return <CreateAssignment form={form} onSubmit={onSubmit} />;
+  return (
+    <Box p={4}>
+      <Heading size="lg">Create New Assignment</Heading>
+      <Text fontSize="sm" color="fg.muted" maxW="4xl">
+        Create a new programming assignment for your course. Each student will automatically have a GitHub repository
+        created for them to submit their work, and a new gradebook column will be created to track grades. After
+        creating the assignment, you will be able to customize the grading configuration further and edit the handout
+        and grader repositories.
+      </Text>
+      <CreateAssignment form={form} onSubmit={onSubmit} />
+    </Box>
+  );
 }
