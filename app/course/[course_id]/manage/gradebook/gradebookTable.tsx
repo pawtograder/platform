@@ -101,9 +101,8 @@ function RenderExprDocs() {
   return (
     <Text fontSize="sm" color="fg.muted">
       Refers to the score as variable <Code>score</Code>. Convert to letter with <Code>letter(score)</Code>
-      See{" "}
-      <Link href="https://mathjs.org/examples/index.html" target="_blank">
-        mathjs documentation
+      <Link href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation" target="_blank" colorPalette="green">
+        Read the docs
       </Link>
     </Text>
   );
@@ -111,10 +110,8 @@ function RenderExprDocs() {
 function ScoreExprDocs() {
   return (
     <Text fontSize="sm" color="fg.muted">
-      Reference a gradebook column or assignment with <Code>gradebook_columns(&quot;slug&quot;)</Code> or{" "}
-      <Code>assignments(&quot;slug&quot;)</Code>, globs supported See{" "}
-      <Link href="https://mathjs.org/examples/index.html" target="_blank">
-        mathjs documentation
+      Reference a gradebook column or assignment with <Code>gradebook_columns(&quot;slug&quot;)</Code>, globs supported.      <Link href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation" target="_blank" colorPalette="green">
+        Read the docs
       </Link>
     </Text>
   );
@@ -383,6 +380,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
   if (!column) throw new Error(`Column ${columnId} not found`);
 
   const scoreExpression = watch("scoreExpression");
+  const canEditScoreExpression = scoreExpression && scoreExpression.startsWith("assignments(") ? false : true;
 
   const onSubmit = async (data: FieldValues) => {
     toaster.create({
@@ -419,9 +417,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       }
       setError("root", { message });
     }
-  };
+      };
 
-  return (
+    return (
     <Dialog.Root open={true} size={"md"} placement={"center"} lazyMount unmountOnExit>
       <Portal>
         <Dialog.Backdrop />
@@ -501,6 +499,7 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
                   <Label htmlFor="scoreExpression">Score Expression</Label>
                   <Textarea
                     id="scoreExpression"
+                    disabled={!canEditScoreExpression}
                     {...register("scoreExpression")}
                     placeholder="Score Expression"
                     rows={4}
@@ -860,19 +859,19 @@ function SectionFilter({
   const currentValue = columnModel.getFilterValue() as string | string[];
   const selectedOptions = Array.isArray(currentValue)
     ? currentValue.map((val) => {
-        const section = sections.find((s) => String(s.id) === val);
-        return {
-          label: section ? (type === "class" ? section.name : `${section.name}`) : val,
-          value: val
-        };
-      })
+      const section = sections.find((s) => String(s.id) === val);
+      return {
+        label: section ? (type === "class" ? section.name : `${section.name}`) : val,
+        value: val
+      };
+    })
     : currentValue
       ? [
-          {
-            label: sections.find((s) => String(s.id) === currentValue)?.name || currentValue,
-            value: currentValue
-          }
-        ]
+        {
+          label: sections.find((s) => String(s.id) === currentValue)?.name || currentValue,
+          value: currentValue
+        }
+      ]
       : [];
 
   return (
@@ -1705,7 +1704,23 @@ export default function GradebookTable() {
     [students, gradebookController]
   );
 
-  // Build columns with header groups
+  /**
+   * Build columns with header groups
+   * 
+   * Header groups are created from gradebook columns that share the same slug prefix
+   * (everything before the first hyphen). Groups are only created when multiple 
+   * contiguous columns share the same prefix.
+   * 
+   * Header Group Behavior:
+   * - When EXPANDED: The group header spans all child columns using colSpan,
+   *   and all individual column headers are shown below it
+   * - When COLLAPSED: Only one representative column is shown (the one with
+   *   the most recent non-missing data), and the group header covers just that column
+   * 
+   * The width calculation ensures proper rendering:
+   * - Collapsed: 120px (single column width)
+   * - Expanded: 120px * number_of_columns_in_group
+   */
   const columns: ColumnDef<UserProfile, unknown>[] = useMemo(() => {
     const cols: ColumnDef<UserProfile, unknown>[] = [
       {
@@ -1961,24 +1976,24 @@ export default function GradebookTable() {
                 style={{
                   ...(colIdx === 0
                     ? {
-                        position: "sticky",
-                        left: 0,
-                        zIndex: 18,
-                        borderRight: "1px solid var(--chakra-colors-border-muted)",
-                        width: `${firstColumnWidth}px`,
-                        maxWidth: `${firstColumnWidth}px`,
-                        minWidth: `${firstColumnWidth}px`
-                      }
+                      position: "sticky",
+                      left: 0,
+                      zIndex: 18,
+                      borderRight: "1px solid var(--chakra-colors-border-muted)",
+                      width: `${firstColumnWidth}px`,
+                      maxWidth: `${firstColumnWidth}px`,
+                      minWidth: `${firstColumnWidth}px`
+                    }
                     : {
-                        width: "120px",
-                        maxWidth: "120px",
-                        minWidth: "120px",
-                        zIndex: 1
-                      }),
+                      width: "120px",
+                      maxWidth: "120px",
+                      minWidth: "120px",
+                      zIndex: 1
+                    }),
                   ...(isCollapsedColumn
                     ? {
-                        borderLeft: "2px solid var(--chakra-colors-border-warning)"
-                      }
+                      borderLeft: "2px solid var(--chakra-colors-border-warning)"
+                    }
                     : {}),
                   height: `${virtualRow.size}px`,
                   verticalAlign: "middle",
@@ -2024,7 +2039,7 @@ export default function GradebookTable() {
         </Table.Row>
       );
     },
-    [rowModel.rows, toggleGroup, firstColumnWidth]
+    [rowModel.rows, toggleGroup, firstColumnWidth, headerHeight, isSafari]
   );
 
   if (!students) {
@@ -2040,48 +2055,7 @@ export default function GradebookTable() {
       `}</style>
       <Toaster />
       <StudentDetailDialog />
-      {isInstructor && (
-        <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              const csv = gradebookController.exportGradebook(courseController);
-              const blob = new Blob(
-                [
-                  csv
-                    .map((row) =>
-                      row.map((cell) => (typeof cell === "string" ? `"${cell.replace(/"/g, "")}"` : cell)).join(",")
-                    )
-                    .join("\n")
-                ],
-                { type: "text/csv" }
-              );
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = "gradebook.csv";
-              a.click();
-            }}
-          >
-            <Icon as={FiDownload} mr={2} /> Download Gradebook
-          </Button>
-          <ImportGradebookColumn />
-          <AddColumnDialog />
-        </HStack>
-      )}
-      <Box ref={parentRef} overflowX="auto" overflowY="auto" maxW="100%" maxH="80vh" height="80vh" position="relative">
-        {/* Expand/Collapse All Buttons */}
-        {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
-          <HStack gap={2} justifyContent="flex-end" px={4} py={2}>
-            <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
-              <Icon as={LuChevronDown} mr={2} /> Expand All
-            </Button>
-            <Button variant="ghost" size="sm" onClick={collapseAll} colorPalette="blue">
-              <Icon as={LuChevronRight} mr={2} /> Collapse All
-            </Button>
-          </HStack>
-        )}
+              <Box ref={parentRef} overflowX="auto" overflowY="auto" maxW="100%" maxH="80vh" height="80vh" position="relative">
         <Table.Root
           minW="100%"
           w="100%"
@@ -2098,7 +2072,17 @@ export default function GradebookTable() {
               boxShadow: "0 2px 4px rgba(0,0,0,0.1)"
             }}
           >
-            {/* Single row with all grouped headers */}
+            {/* 
+              Group Header Row - This row contains the collapsible group headers
+              
+              Key behaviors:
+              1. Each group header uses colSpan to span across all its child columns when expanded
+              2. When collapsed, only shows one representative column with colSpan=1
+              3. Width is calculated as 120px * colSpan to ensure proper visual alignment
+              4. Clicking the header toggles the group's collapsed state
+              5. Expanded groups have emphasized styling for clear visual grouping
+              6. Expand/collapse all buttons are positioned discretely above the Student Name header
+            */}
             <Table.Row>
               {headerGroups[0].headers
                 .filter((header) => {
@@ -2159,25 +2143,33 @@ export default function GradebookTable() {
 
                         // Show group header for first column when expanded, or for the visible column when collapsed
                         if (isFirstInGroup || (isCollapsed && isVisibleInCollapsedGroup)) {
+                          // Calculate the number of columns this header should span
+                          // - When collapsed: span only 1 column (the representative column)
+                          // - When expanded: span all columns in the group for proper visual grouping
+                          const colSpan = isCollapsed ? 1 : groupColumns.length;
+
                           return (
                             <Table.ColumnHeader
                               key={header.id}
-                              bg={isCollapsed ? "bg.warning" : "bg.subtle"}
+                              colSpan={colSpan}
+                              bg={isCollapsed ? "bg.warning" : "bg.emphasized"}
                               cursor="pointer"
                               onClick={() => toggleGroup(groupEntry[1].groupName)}
                               _hover={{ bg: "bg.info" }}
                               style={{
                                 position: "sticky",
+                                // Add emphasized border when expanded to show clear grouping
                                 borderBottom: "1px solid var(--chakra-colors-border-emphasized)",
                                 top: 0,
                                 zIndex: 19,
                                 textAlign: "center",
-                                width: "120px",
-                                minWidth: "120px",
-                                maxWidth: "120px",
+                                // When expanded, width should span all columns; when collapsed, just one column
+                                width: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
+                                minWidth: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
+                                maxWidth: isCollapsed ? "120px" : `${120 * groupColumns.length}px`,
                                 backgroundColor: isCollapsed
                                   ? "var(--chakra-colors-bg-warning)"
-                                  : "var(--chakra-colors-bg-subtle)"
+                                  : "var(--chakra-colors-bg-emphasized)"
                               }}
                             >
                               <HStack gap={2} justifyContent="center" alignItems="center" py={1}>
@@ -2196,8 +2188,11 @@ export default function GradebookTable() {
                               </HStack>
                             </Table.ColumnHeader>
                           );
+                        } else if (!isCollapsed) {
+                          // When expanded, skip non-first columns as they're covered by the group header's colspan
+                          return null;
                         } else {
-                          // Skip this column as it's covered by the group header
+                          // When collapsed, this column should not be rendered at all (filtered out earlier)
                           return null;
                         }
                       }
@@ -2217,7 +2212,35 @@ export default function GradebookTable() {
                         width: colIdx === 0 ? firstColumnWidth : 120,
                         backgroundColor: "var(--chakra-colors-bg-subtle)"
                       }}
-                    ></Table.ColumnHeader>
+                    >
+                      {/* Add expand/collapse buttons in the space above Student Name */}
+                      {colIdx === 0 && Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
+                        <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                          <WrappedTooltip content="Expand all groups">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={expandAll}
+                              colorPalette="blue"
+                              aria-label="Expand all groups"
+                            >
+                              <Icon as={LuChevronDown} boxSize={3} />
+                            </IconButton>
+                          </WrappedTooltip>
+                          <WrappedTooltip content="Collapse all groups">
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={collapseAll}
+                              colorPalette="blue"
+                              aria-label="Collapse all groups"
+                            >
+                              <Icon as={LuChevronRight} boxSize={3} />
+                            </IconButton>
+                          </WrappedTooltip>
+                        </HStack>
+                      )}
+                    </Table.ColumnHeader>
                   );
                 })}
             </Table.Row>
@@ -2317,10 +2340,40 @@ export default function GradebookTable() {
         </Table.Root>
       </Box>
       {/* Show row count info */}
-      <HStack mt={4} gap={2} justifyContent="center" alignItems="center" width="100%">
+      <HStack mt={4} gap={2} justifyContent="space-between" alignItems="center" width="100%">
         <Text fontSize="sm" color="fg.muted">
           Showing {rowModel.rows.length} {pluralize("student", rowModel.rows.length)}
         </Text>
+        {isInstructor && (
+          <HStack gap={2} justifyContent="flex-end" px={4} py={0}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const csv = gradebookController.exportGradebook(courseController);
+                const blob = new Blob(
+                  [
+                    csv
+                      .map((row) =>
+                        row.map((cell) => (typeof cell === "string" ? `"${cell.replace(/"/g, "")}"` : cell)).join(",")
+                      )
+                      .join("\n")
+                  ],
+                  { type: "text/csv" }
+                );
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "gradebook.csv";
+                a.click();
+              }}
+            >
+              <Icon as={FiDownload} mr={2} /> Download Gradebook
+            </Button>
+            <ImportGradebookColumn />
+            <AddColumnDialog />
+          </HStack>
+        )}
       </HStack>
     </VStack>
   );
