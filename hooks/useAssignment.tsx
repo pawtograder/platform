@@ -39,6 +39,19 @@ export function useSubmission(submission_id: number | null | undefined) {
   return submission;
 }
 
+export function useAssignmentGroups() {
+  const controller = useAssignmentController();
+  const [assignmentGroups, setAssignmentGroups] = useState<AssignmentGroup[]>(controller.assignmentGroups.rows);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.assignmentGroups.list((data) => {
+      setAssignmentGroups(data);
+    });
+    setAssignmentGroups(data);
+    return () => unsubscribe();
+  }, [controller]);
+  return assignmentGroups;
+}
+
 export function useAssignmentGroup(assignment_group_id: number | null | undefined) {
   const controller = useAssignmentController();
   const [assignmentGroup, setAssignmentGroup] = useState<AssignmentGroup | undefined>(undefined);

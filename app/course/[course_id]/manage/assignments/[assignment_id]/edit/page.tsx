@@ -115,9 +115,6 @@ export default function EditAssignment() {
     [form.refineCore, assignment_id, course_id, data?.data.self_review_setting_id, update]
   );
 
-  if (form.refineCore.query?.isLoading || form.refineCore.formLoading) {
-    return <Skeleton height="100vh" />;
-  }
   if (form.refineCore.query?.error) {
     return <div>Error: {form.refineCore.query.error.message}</div>;
   }

@@ -149,19 +149,25 @@ async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise
 
   //Create the repo for the group
   const repoName = `${profile.classes!.slug}-${assignment.slug}-group-${trimmedName}`;
-  const headSha = await createRepo(profile.classes!.github_org!, repoName, assignment.template_repo!);
-  const { error } = await adminSupabase.from("repositories").insert({
+  const { data: repo, error: repoError } = await adminSupabase.from("repositories").insert({
     class_id: assignment.class_id!,
     assignment_group_id: newGroup.id,
     assignment_id: assignment.id,
     repository: `${profile.classes!.github_org}/${repoName}`,
-    synced_repo_sha: headSha,
     synced_handout_sha: assignment.latest_template_sha
   });
-  if (error) {
-    console.error(error);
-    throw new UserVisibleError(`Error creating repo: ${error}`);
+  if (repoError) {
+    console.error(repoError);
+    throw new UserVisibleError(`Error creating repo: ${repoError}`);
   }
+  const headSha = await createRepo(profile.classes!.github_org!, repoName, assignment.template_repo!);
+  await adminSupabase
+    .from("repositories")
+    .update({
+      synced_repo_sha: headSha
+    })
+    .eq("assignment_group_id", newGroup.id);
+
   if (profile.users.github_username) {
     await syncRepoPermissions(profile.classes!.github_org!, repoName, profile.classes!.slug!, [
       profile.users.github_username!
