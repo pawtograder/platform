@@ -19,7 +19,7 @@ import {
   BsBoxArrowUpRight
 } from "react-icons/bs";
 import { Select } from "chakra-react-select";
-import { HelpRequestFeedback, HelpRequest, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequestFeedback, HelpRequest, UserProfile } from "@/utils/supabase/DatabaseTypes";
 
 type FeedbackWithDetails = HelpRequestFeedback & {
   help_request?: HelpRequest;
@@ -33,7 +33,7 @@ type FeedbackWithDetails = HelpRequestFeedback & {
  */
 export default function HelpRequestFeedbackComponent() {
   const params = useParams();
-  const classId = parseInt(params.course_id as string, 10);
+  const classId = parseInt(params["course_id"] as string, 10);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterRating, setFilterRating] = useState<"all" | "positive" | "negative">("all");

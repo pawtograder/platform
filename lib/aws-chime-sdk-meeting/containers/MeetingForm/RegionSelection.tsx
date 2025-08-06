@@ -1,11 +1,12 @@
 // Copyright 2020-2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
 
-import React, { useEffect, ChangeEvent } from "react";
+import React, { useEffect, type ChangeEvent } from "react";
 import { Select, FormField } from "amazon-chime-sdk-component-library-react";
 
 import { AVAILABLE_AWS_REGIONS } from "../../constants";
 import getFormattedOptionsForSelect from "../../utils/select-options-format";
+import { toaster } from "@/components/ui/toaster";
 
 const regionalOptions = [
   { value: "", label: "Select a region" },
@@ -40,7 +41,10 @@ const RegionSelection: React.FC<Props> = ({ setRegion, region }) => {
           setRegion((region: string) => region || nearestRegion);
         }
       } catch (e) {
-        console.error("Could not fetch nearest region: ", (e as Error).message);
+        toaster.error({
+          title: "Could not fetch nearest region",
+          description: e instanceof Error ? e.message : "Unknown error"
+        });
       }
     }
 

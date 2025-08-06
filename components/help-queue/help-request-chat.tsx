@@ -1,4 +1,5 @@
 "use client";
+
 import { useCallback, useState, useMemo } from "react";
 import type { HelpRequest, Assignment, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
 import { Flex, HStack, Stack, Text, AvatarGroup, Box, Icon, IconButton, Card, Badge, Input } from "@chakra-ui/react";
@@ -20,7 +21,6 @@ import {
   BsTrash
 } from "react-icons/bs";
 import { useRouter, useParams, usePathname, useSearchParams } from "next/navigation";
-
 import { useList } from "@refinedev/core";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
@@ -33,7 +33,6 @@ import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-
 import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
 import HelpRequestFeedbackModal from "./help-request-feedback-modal";
 import { Select } from "chakra-react-select";
-
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
 import Link from "next/link";
@@ -911,7 +910,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
    * - Student context: go back to help queue page
    */
   const handleBackNavigation = useCallback(() => {
-    const courseId = params.course_id;
+    const courseId = params["course_id"];
 
     // Check if we're in the TA/Instructor context
     if (pathname.includes("/manage/office-hours/request/")) {
@@ -946,11 +945,11 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     if (students.length === 0) {
       return "Help Request"; // Fallback if no students found
     } else if (students.length === 1) {
-      return `${students[0].name}'s Help Request`;
+      return `${students[0]!.name}'s Help Request`;
     } else if (students.length === 2) {
-      return `${students[0].name} & ${students[1].name}'s Help Request`;
+      return `${students[0]!.name} & ${students[1]!.name}'s Help Request`;
     } else {
-      return `${students[0].name} + ${students.length - 1} others' Help Request`;
+      return `${students[0]!.name} + ${students.length - 1} others' Help Request`;
     }
   }, [students]);
 
@@ -1056,7 +1055,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
    * Pop out the chat into a separate window
    */
   const popOutChat = useCallback(() => {
-    const courseId = params.course_id;
+    const courseId = params["course_id"];
     const requestId = request.id;
 
     // Construct the URL for the popped out chat
@@ -1083,7 +1082,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
         description: "Please allow pop-ups for this site to use the pop-out feature."
       });
     }
-  }, [params.course_id, request.id, requestTitle]);
+  }, [params, request.id, requestTitle]);
 
   return (
     <Flex

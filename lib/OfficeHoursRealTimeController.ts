@@ -1,8 +1,7 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
-import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
+import type { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 
 type MessageFilter = {
   type?: OfficeHoursBroadcastMessage["type"];
@@ -105,15 +104,9 @@ export class OfficeHoursRealTimeController {
    * Initialize global channels (help_queues and class staff channel)
    */
   private async _initializeGlobalChannels() {
-    console.log(
-      `Initializing global channels for class ${this._classId} with profile ${this._profileId} (Staff: ${this._isStaff})`
-    );
-
     if (this._closed) {
       return;
     }
-
-    // Session refresh is now handled by the channel manager
 
     // Initialize global help_queues channel
     const helpQueuesUnsubscriber = await this._channelManager.subscribe(
@@ -121,8 +114,7 @@ export class OfficeHoursRealTimeController {
       (message: OfficeHoursBroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
-      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-        console.log(`Help queues channel status: help_queues`, status, err);
+      async () => {
         this._notifyStatusChange();
       }
     );
@@ -138,8 +130,7 @@ export class OfficeHoursRealTimeController {
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
-        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-          console.log(`Class staff channel status: ${staffChannelTopic}`, status, err);
+        async () => {
           this._notifyStatusChange();
         }
       );
@@ -164,8 +155,7 @@ export class OfficeHoursRealTimeController {
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
-        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-          console.log(`Help request channel status: ${mainChannelName}`, status, err);
+        async () => {
           this._notifyStatusChange();
         }
       );
@@ -182,8 +172,7 @@ export class OfficeHoursRealTimeController {
           (message: OfficeHoursBroadcastMessage) => {
             this._handleBroadcastMessage(message);
           },
-          async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-            console.log(`Help request staff channel status: ${staffChannelName}`, status, err);
+          async () => {
             this._notifyStatusChange();
           }
         );
@@ -208,8 +197,7 @@ export class OfficeHoursRealTimeController {
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
-        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-          console.log(`Help queue channel status: ${channelName}`, status, err);
+        async () => {
           this._notifyStatusChange();
         }
       );
@@ -222,8 +210,6 @@ export class OfficeHoursRealTimeController {
    * Handle incoming broadcast messages and route them to relevant subscriptions
    */
   private _handleBroadcastMessage(message: OfficeHoursBroadcastMessage) {
-    console.log("Received office hours broadcast message:", message);
-
     // Skip system messages like channel_created
     if (message.type === "channel_created" || message.type === "system") {
       return;
@@ -373,13 +359,13 @@ export class OfficeHoursRealTimeController {
         type = "class_staff";
       } else if (topic.startsWith("help_request:") && topic.includes(":staff") && this._isStaff) {
         type = "help_request_staff";
-        help_request_id = parseInt(topic.split(":")[1]);
+        help_request_id = parseInt(topic.split(":")[1]!);
       } else if (topic.startsWith("help_request:") && !topic.includes(":staff")) {
         type = "help_request";
-        help_request_id = parseInt(topic.split(":")[1]);
+        help_request_id = parseInt(topic.split(":")[1]!);
       } else if (topic.startsWith("help_queue:")) {
         type = "help_queue";
-        help_queue_id = parseInt(topic.split(":")[1]);
+        help_queue_id = parseInt(topic.split(":")[1]!);
       } else {
         continue; // Skip channels that don't belong to this controller
       }

@@ -5,6 +5,7 @@ import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import NextLink from "next/link";
 import SyncStaffTeamButton from "./syncStaffTeamButton";
+import { toaster } from "@/components/ui/toaster";
 
 /**
  * Renders the assignment management page for a specific course, displaying a table of assignments with relevant actions and statistics.
@@ -25,7 +26,12 @@ export default async function ManageAssignmentsPage({ params }: { params: Promis
     .order("due_date", { ascending: false });
 
   if (assignments.error) {
-    console.error(assignments.error);
+    toaster.error({
+      title: "Error",
+      description:
+        "Failed to fetch assignments. Error: " +
+        (assignments.error instanceof Error ? assignments.error.message : "Unknown error")
+    });
   }
 
   let actions = <></>;

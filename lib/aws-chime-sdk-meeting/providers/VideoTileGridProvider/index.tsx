@@ -9,11 +9,11 @@ import {
   useMeetingManager,
   useRosterState
 } from "amazon-chime-sdk-component-library-react";
-import { AudioVideoObserver, VideoDownlinkObserver, VideoSource } from "amazon-chime-sdk-js";
-import React, { PropsWithChildren, createContext, useContext, useEffect, useReducer } from "react";
+import { type AudioVideoObserver, type VideoDownlinkObserver, VideoSource } from "amazon-chime-sdk-js";
+import React, { type PropsWithChildren, createContext, useContext, useEffect, useReducer } from "react";
 import { Layout } from "../../types";
 import { useAppState } from "../AppStateProvider";
-import { Controls, initialState, reducer, State, VideoTileGridAction } from "./state";
+import { type Controls, initialState, reducer, type State, VideoTileGridAction } from "./state";
 
 const VideoTileGridStateContext = createContext<State | undefined>(undefined);
 const VideoTileGridControlContext = createContext<Controls | undefined>(undefined);

@@ -1,8 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
-import { Notification } from "../_shared/FunctionTypes.d.ts";
+import type { Notification } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
 
 export type QueueMessage<T> = {

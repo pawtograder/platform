@@ -1,4 +1,4 @@
-import { RosterAttendeeType } from "amazon-chime-sdk-component-library-react";
+import type { RosterAttendeeType } from "amazon-chime-sdk-component-library-react";
 import { VideoPriorityBasedPolicy, VideoSource } from "amazon-chime-sdk-js";
 import { Layout } from "../../types";
 import { isContentShare, updateDownlinkPreferences } from "./Utils";
@@ -173,7 +173,7 @@ export function reducer(state: State, { type, payload }: Action): State {
         const name = roster[attendeeId]?.name || "";
 
         if (attendeeId in attendeeStates) {
-          attendeeStates[attendeeId].name = name;
+          attendeeStates[attendeeId]!.name = name;
         } else {
           attendeeStates[attendeeId] = {
             attendeeId,
@@ -187,7 +187,7 @@ export function reducer(state: State, { type, payload }: Action): State {
       // Ensure the state of `videoEnabled` in the racing condition of UpdateAttendeeStates and UpdateVideoSources
       for (const attendeeId of videoSourceState.cameraSources) {
         if (attendeeId in attendeeStates) {
-          attendeeStates[attendeeId].videoEnabled = true;
+          attendeeStates[attendeeId]!.videoEnabled = true;
         }
       }
 
@@ -208,7 +208,7 @@ export function reducer(state: State, { type, payload }: Action): State {
       for (const attendeeId in attendeeStates) {
         // Reset the `videoEnabled` for all remote attendees
         if (!localAttendeeId || attendeeId !== localAttendeeId) {
-          attendeeStates[attendeeId].videoEnabled = false;
+          attendeeStates[attendeeId]!.videoEnabled = false;
         }
 
         // Remove content share from attendeeStates,
@@ -236,12 +236,12 @@ export function reducer(state: State, { type, payload }: Action): State {
           }
         }
 
-        attendeeStates[attendeeId].videoEnabled = true;
+        attendeeStates[attendeeId]!.videoEnabled = true;
       }
 
       // Populate the `cameraSources` based on the order of `attendeeStates`
       for (const attendeeId in attendeeStates) {
-        const attendee = attendeeStates[attendeeId];
+        const attendee = attendeeStates[attendeeId]!;
 
         if (attendee.videoEnabled && !isContentShare(attendee.attendeeId) && attendee.attendeeId !== localAttendeeId) {
           cameraSources.push(attendee.attendeeId);
@@ -294,7 +294,7 @@ export function reducer(state: State, { type, payload }: Action): State {
       videoSourceState.contentShareId = sharingAttendeeId;
 
       if (localAttendeeId && localAttendeeId in attendeeStates) {
-        attendeeStates[localAttendeeId].videoEnabled = isVideoEnabled;
+        attendeeStates[localAttendeeId]!.videoEnabled = isVideoEnabled;
       }
 
       updateDownlinkPreferences(gridState, videoSourceState, attendeeStates, priorityBasedPolicy);
@@ -320,7 +320,7 @@ export function reducer(state: State, { type, payload }: Action): State {
     case VideoTileGridAction.PauseVideoTile: {
       const { attendeeId } = payload;
       if (attendeeId in attendeeStates) {
-        attendeeStates[attendeeId].bandwidthConstrained = true;
+        attendeeStates[attendeeId]!.bandwidthConstrained = true;
       }
 
       return {
@@ -332,7 +332,7 @@ export function reducer(state: State, { type, payload }: Action): State {
     case VideoTileGridAction.UnpauseVideoTile: {
       const { attendeeId } = payload;
       if (attendeeId in attendeeStates) {
-        attendeeStates[attendeeId].bandwidthConstrained = false;
+        attendeeStates[attendeeId]!.bandwidthConstrained = false;
       }
 
       return {

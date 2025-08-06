@@ -2,7 +2,7 @@
 
 import { DataList, Flex, HStack, Badge, Icon, Text } from "@chakra-ui/react";
 import { Box } from "@chakra-ui/react";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import HelpRequestChat from "@/components/help-queue/help-request-chat";
 import { BsPersonCheck, BsPersonDash } from "react-icons/bs";

@@ -14,9 +14,9 @@ import {
 import { Field } from "@/components/ui/field";
 import { toaster } from "@/components/ui/toaster";
 import useAuthState from "@/hooks/useAuthState";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, HStack, Text, Textarea, VStack } from "@chakra-ui/react";
-import Editor, { Monaco } from "@monaco-editor/react";
+import Editor, { type Monaco } from "@monaco-editor/react";
 import { useCreate, useDelete, useList, useOne, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { useParams } from "next/navigation";
@@ -197,7 +197,7 @@ cards: []`;
  */
 export default function EditDeckModal({ isOpen, onClose, deckId, onSuccess }: EditDeckModalProps) {
   const params = useParams();
-  const course_id = params.course_id as string;
+  const course_id = params["course_id"] as string;
   const { colorMode } = useColorMode();
   const [yamlValue, setYamlValue] = useState("");
   const { user } = useAuthState();

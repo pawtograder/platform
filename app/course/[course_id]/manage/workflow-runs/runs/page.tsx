@@ -9,19 +9,19 @@ import PersonName from "@/components/ui/person-name";
 import { Table } from "@chakra-ui/react";
 import {
   flexRender,
-  ColumnDef,
-  CellContext,
+  type ColumnDef,
+  type CellContext,
   useReactTable,
   getCoreRowModel,
   getFilteredRowModel,
   getSortedRowModel,
   getPaginationRowModel,
-  ColumnFiltersState,
-  SortingState,
-  PaginationState
+  type ColumnFiltersState,
+  type SortingState,
+  type PaginationState
 } from "@tanstack/react-table";
 import { Select, CreatableSelect } from "chakra-react-select";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 export default function WorkflowRunsPage() {
   return (

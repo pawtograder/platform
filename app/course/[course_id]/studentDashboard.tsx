@@ -31,7 +31,7 @@ export default async function StudentDashboard({ course_id }: { course_id: numbe
     .order("due_date", { ascending: false })
     .limit(5);
   if (assignmentsError) {
-    console.error(assignmentsError);
+    throw new Error(`Error fetching assignments: ${assignmentsError.message}`);
   }
   const { data: topics } = await supabase.from("discussion_topics").select("*").eq("class_id", course_id);
 

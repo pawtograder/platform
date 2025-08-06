@@ -151,20 +151,26 @@ export default function AssignmentGradingToolbar() {
 
         // Search from current position forward
         for (let i = startIndex; i < options.length; i++) {
-          const review = myReviewAssignments.find((r) => r.submission_id === options[i].value);
-          if (review && !review.completed_at) {
-            nextUncompleted = review;
-            break;
+          const option = options[i];
+          if (option) {
+            const review = myReviewAssignments.find((r) => r.submission_id === option.value);
+            if (review && !review.completed_at) {
+              nextUncompleted = review;
+              break;
+            }
           }
         }
 
         // If nothing found, wrap around and search from beginning to current position
         if (!nextUncompleted && currentIndex > 0) {
           for (let i = 0; i < currentIndex; i++) {
-            const review = myReviewAssignments.find((r) => r.submission_id === options[i].value);
-            if (review && !review.completed_at) {
-              nextUncompleted = review;
-              break;
+            const option = options[i];
+            if (option) {
+              const review = myReviewAssignments.find((r) => r.submission_id === option.value);
+              if (review && !review.completed_at) {
+                nextUncompleted = review;
+                break;
+              }
             }
           }
         }

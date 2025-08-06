@@ -1,4 +1,4 @@
-import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
 import { clsx, type ClassValue } from "clsx";
 import { differenceInHours, formatDistance } from "date-fns";

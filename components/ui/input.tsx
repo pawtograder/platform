@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Input as ChakraInput, InputProps as ChakraInputProps } from "@chakra-ui/react";
+import { Input as ChakraInput, type InputProps as ChakraInputProps } from "@chakra-ui/react";
 
 const Input = React.forwardRef<HTMLInputElement, ChakraInputProps>(({ ...props }, ref) => {
   return (

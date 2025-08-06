@@ -2,7 +2,7 @@ import { useUserProfile } from "@/hooks/useUserProfiles";
 import { Avatar, Box, HStack, Stack, Text, Badge, Icon, AvatarGroup } from "@chakra-ui/react";
 import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "react-markdown";
-import { HelpQueue } from "@/utils/supabase/DatabaseTypes";
+import type { HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { getQueueTypeColor } from "@/lib/utils";
 import { formatRelative } from "date-fns";
 

@@ -6,7 +6,7 @@ import { createClient } from "@/utils/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
-import {
+import type {
   HelpQueue,
   HelpQueueAssignment,
   HelpRequest,
@@ -20,7 +20,7 @@ import {
   StudentHelpActivity,
   StudentKarmaNotes
 } from "@/utils/supabase/DatabaseTypes";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
 
 // Type for broadcast messages from the database trigger

@@ -1,13 +1,16 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local.prod" });
 
-const courseID = parseInt(process.argv[2]);
+const courseID = parseInt(process.argv[2] || "0");
 const userEmail = process.argv[3];
 console.log(process.argv);
 
-const supabase = createClient<Database>(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+const supabase = createClient<Database>(
+  process.env["NEXT_PUBLIC_SUPABASE_URL"]!,
+  process.env["SUPABASE_SERVICE_ROLE_KEY"]!
+);
 async function main() {
   if (!userEmail) {
     console.error("No user email provided");
@@ -19,6 +22,7 @@ async function main() {
   }
   const { data: user } = await supabase.from("users").select("*").eq("email", userEmail).single();
   if (!user) {
+    // eslint-disable-next-line no-console
     console.error("User not found");
     return;
   }
@@ -34,6 +38,7 @@ async function main() {
     .select("id")
     .single();
   if (privateProfileError) {
+    // eslint-disable-next-line no-console
     console.error("Error creating private profile", privateProfileError);
   }
   //Create public profile
@@ -48,6 +53,7 @@ async function main() {
     .select("id")
     .single();
   if (publicProfileError) {
+    // eslint-disable-next-line no-console
     console.error("Error creating public profile", publicProfileError);
   }
   //Enroll user in class
@@ -59,6 +65,7 @@ async function main() {
     public_profile_id: publicProfile!.id
   });
   if (enrollmentError) {
+    // eslint-disable-next-line no-console
     console.error("Error enrolling user", enrollmentError);
   }
 }

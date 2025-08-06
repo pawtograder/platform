@@ -6,6 +6,8 @@ import { createBrowserClient } from "@supabase/ssr";
 import { BsGithub, BsInfoCircle } from "react-icons/bs";
 import { PopoverBody, PopoverContent, PopoverHeader, PopoverRoot } from "../ui/popover";
 import { useIdentity } from "@/hooks/useIdentities";
+import { toaster } from "../ui/toaster";
+
 function HelpDialog() {
   return (
     <PopoverRoot>
@@ -57,8 +59,8 @@ function HelpDialog() {
 }
 export default function LinkAccount() {
   const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+    process.env["NEXT_PUBLIC_SUPABASE_URL"] || "",
+    process.env["NEXT_PUBLIC_SUPABASE_ANON_KEY"] || ""
   );
   const course = useCourse();
   const { identities } = useIdentity();
@@ -107,7 +109,10 @@ export default function LinkAccount() {
               }
             });
             if (error) {
-              console.error(error);
+              toaster.error({
+                title: "Error linking GitHub account",
+                description: error.message
+              });
             }
           }}
         >

@@ -8,7 +8,7 @@ import useDiscussionThreadChildren, {
 } from "@/hooks/useDiscussionThreadRootController";
 import { useDiscussionThreadWatchStatus } from "@/hooks/useDiscussionThreadWatches";
 import { useUserProfile } from "@/hooks/useUserProfiles";
-import { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
+import type { DiscussionThread as DiscussionThreadType, DiscussionTopic } from "@/utils/supabase/DatabaseTypes";
 import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, Text, VStack } from "@chakra-ui/react";
 import { useList, useOne, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";

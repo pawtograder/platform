@@ -3,9 +3,9 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import CodeFile, {
   formatPoints,
-  RubricCheckSelectOption,
-  RubricCheckSubOptions,
-  RubricCriteriaSelectGroupOption
+  type RubricCheckSelectOption,
+  type RubricCheckSubOptions,
+  type RubricCriteriaSelectGroupOption
 } from "@/components/ui/code-file";
 import Link from "@/components/ui/link";
 import Markdown from "@/components/ui/markdown";
@@ -40,7 +40,7 @@ import {
 } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   HydratedRubricCheck,
   HydratedRubricCriteria,
   RubricChecksDataType,
@@ -49,7 +49,7 @@ import {
   SubmissionFile,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { Tables } from "@/utils/supabase/SupabaseTypes";
+import type { Tables } from "@/utils/supabase/SupabaseTypes";
 import {
   Box,
   Button,
@@ -66,7 +66,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useUpdate } from "@refinedev/core";
-import { chakraComponents, Select, SelectComponentsConfig } from "chakra-react-select";
+import { chakraComponents, Select, type SelectComponentsConfig } from "chakra-react-select";
 import { format } from "date-fns";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";

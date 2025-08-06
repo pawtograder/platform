@@ -11,8 +11,8 @@ import {
   useGradebookController,
   useLinkToAssignment
 } from "@/hooks/useGradebook";
-import { IncompleteValuesAdvice } from "@/hooks/useGradebookWhatIf";
-import { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
+import type { IncompleteValuesAdvice } from "@/hooks/useGradebookWhatIf";
+import type { GradebookColumnStudent } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Button,
@@ -90,7 +90,6 @@ export function OverrideScoreForm({
       score: values.is_missing && !forceMissingOff ? null : values.score,
       is_missing: forceMissingOff ? false : values.is_missing
     });
-    console.log("updated");
     if (onSuccess) onSuccess();
   };
 

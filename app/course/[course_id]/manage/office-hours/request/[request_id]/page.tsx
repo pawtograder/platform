@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { HelpRequest } from "@/utils/supabase/DatabaseTypes";
+import type { HelpRequest } from "@/utils/supabase/DatabaseTypes";
 import { BsClipboardCheck, BsClipboardCheckFill, BsCheckCircle, BsXCircle } from "react-icons/bs";
 import { Icon, Skeleton, Text, Box, Badge, VStack, HStack } from "@chakra-ui/react";
 import { Alert } from "@/components/ui/alert";

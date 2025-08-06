@@ -1,6 +1,7 @@
-import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
+import type { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import { toaster } from "@/components/ui/toaster";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -129,7 +130,10 @@ export class RealtimeChannelManager {
         try {
           subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
         } catch (error) {
-          console.error("Error notifying subscription of offline event:", error);
+          toaster.error({
+            title: "Error",
+            description: "Error notifying subscription of offline event: " + (error as Error).message
+          });
         }
       }
     }
@@ -286,7 +290,7 @@ export class RealtimeChannelManager {
 
       // Set up broadcast message handler
       channel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._routeMessage(topic, message.payload as BroadcastMessage);
+        this._routeMessage(topic, message["payload"] as BroadcastMessage);
       });
 
       // Subscribe to the channel (this should only happen once per topic)
@@ -335,7 +339,10 @@ export class RealtimeChannelManager {
       try {
         subscription.callback(message);
       } catch (error) {
-        console.error("Error routing message to subscription:", error);
+        toaster.error({
+          title: "Error",
+          description: "Error routing message to subscription: " + (error as Error).message
+        });
       }
     }
   }
@@ -375,7 +382,10 @@ export class RealtimeChannelManager {
       try {
         subscription.statusCallback(managedChannel.channel, status, err);
       } catch (error) {
-        console.error("Error handling status event for subscription:", error);
+        toaster.error({
+          title: "Error",
+          description: "Error handling status event for subscription: " + (error as Error).message
+        });
       }
     }
   }
@@ -483,7 +493,10 @@ export class RealtimeChannelManager {
 
         await Promise.race([reconnectionPromise, timeoutPromise]);
       } catch (error) {
-        console.error("Reconnection failed:", error);
+        toaster.error({
+          title: "Error",
+          description: "Reconnection failed: " + (error as Error).message
+        });
 
         // CRITICAL: Reset reconnecting state so future attempts can be made
         const channel = this._channels.get(topic);
@@ -526,7 +539,7 @@ export class RealtimeChannelManager {
 
       // Set up broadcast message handler
       newChannel.on("broadcast", { event: "broadcast" }, (message) => {
-        this._routeMessage(topic, message.payload as BroadcastMessage);
+        this._routeMessage(topic, message["payload"] as BroadcastMessage);
       });
 
       // Subscribe to the new channel with improved error handling
@@ -541,7 +554,10 @@ export class RealtimeChannelManager {
       // Note: Don't reset isReconnecting here - let the SUBSCRIBED event handler do it
       // This prevents race conditions
     } catch (error) {
-      console.error("Error during resubscription:", error);
+      toaster.error({
+        title: "Error",
+        description: "Error during resubscription: " + (error as Error).message
+      });
 
       // CRITICAL: Always reset isReconnecting on failure so future attempts can be made
       managedChannel.isReconnecting = false;
@@ -584,7 +600,10 @@ export class RealtimeChannelManager {
       try {
         subscription.statusCallback(managedChannel.channel, status, err);
       } catch (error) {
-        console.error("Error handling reconnection status event for subscription:", error);
+        toaster.error({
+          title: "Error",
+          description: "Error handling reconnection status event for subscription: " + (error as Error).message
+        });
       }
     }
   }
@@ -610,7 +629,10 @@ export class RealtimeChannelManager {
         }
       }
     } catch (error) {
-      console.error("Error resubscribing to all channels:", error);
+      toaster.error({
+        title: "Error",
+        description: "Error resubscribing to all channels: " + (error as Error).message
+      });
     }
   }
 
@@ -635,7 +657,10 @@ export class RealtimeChannelManager {
         try {
           subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
         } catch (error) {
-          console.error("Error notifying subscription of disconnection:", error);
+          toaster.error({
+            title: "Error",
+            description: "Error notifying subscription of disconnection: " + (error as Error).message
+          });
         }
       }
     }

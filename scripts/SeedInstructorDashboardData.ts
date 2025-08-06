@@ -32,7 +32,7 @@ let repoCounter = 0;
 function getTestRunPrefix(randomSuffix?: string) {
   const suffix = randomSuffix ?? Math.random().toString(36).substring(2, 6);
   const test_run_batch = new Date().toISOString().split("T")[0] + "#" + suffix;
-  const workerIndex = process.env.TEST_WORKER_INDEX || "";
+  const workerIndex = process.env["TEST_WORKER_INDEX"] || "";
   return `e2e-${test_run_batch}-${workerIndex}`;
 }
 
@@ -131,12 +131,12 @@ async function batchCreateSubmissions(
             profile_id: item.student?.private_profile_id,
             assignment_group_id: item.group?.id,
             sha: "none",
-            repository: repositoryInserts[index].repository,
+            repository: repositoryInserts[index]!.repository,
             run_attempt: 1,
             run_number: 1,
             class_id: class_id,
-            repository_check_run_id: checkRunData[index].id,
-            repository_id: repositoryData[index].id
+            repository_check_run_id: checkRunData[index]!.id,
+            repository_id: repositoryData[index]!.id
           }));
 
           // Batch insert submissions for this chunk
@@ -183,8 +183,8 @@ public class Entrypoint {
             contents: sampleJavaCode,
             class_id: class_id,
             submission_id: submission.id,
-            profile_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id
+            profile_id: chunk[index]!.student?.private_profile_id,
+            assignment_group_id: chunk[index]!.group?.id
           }));
 
           // Batch insert submission files for this chunk
@@ -201,8 +201,8 @@ public class Entrypoint {
             submission_id: submission.id,
             score: 5,
             class_id: class_id,
-            profile_id: chunk[index].student?.private_profile_id,
-            assignment_group_id: chunk[index].group?.id,
+            profile_id: chunk[index]!.student?.private_profile_id,
+            assignment_group_id: chunk[index]!.group?.id,
             lint_passed: true,
             lint_output: "no lint output",
             lint_output_format: "markdown",
@@ -231,8 +231,8 @@ public class Entrypoint {
               output: "here is a bunch of output\n**wow**",
               output_format: "markdown",
               class_id: class_id,
-              student_id: chunk[index].student?.private_profile_id,
-              assignment_group_id: chunk[index].group?.id,
+              student_id: chunk[index]!.student?.private_profile_id,
+              assignment_group_id: chunk[index]!.group?.id,
               grader_result_id: graderResult.id,
               is_released: true
             },
@@ -244,8 +244,8 @@ public class Entrypoint {
               output: "here is a bunch of output\n**wow**",
               output_format: "markdown",
               class_id: class_id,
-              student_id: chunk[index].student?.private_profile_id,
-              assignment_group_id: chunk[index].group?.id,
+              student_id: chunk[index]!.student?.private_profile_id,
+              assignment_group_id: chunk[index]!.group?.id,
               grader_result_id: graderResult.id,
               is_released: true
             }
@@ -265,14 +265,18 @@ public class Entrypoint {
           console.log(`Completed batch ${chunkIndex + 1}/${submissionChunks.length} (${chunk.length} submissions)`);
 
           // Return the results from this chunk
-          return submissionData.map((submission, index) => ({
-            submission_id: submission.id,
-            assignment: chunk[index].assignment,
-            student: chunk[index].student,
-            group: chunk[index].group,
-            isRecentlyDue: chunk[index].isRecentlyDue,
-            repository_id: repositoryData[index].id
-          }));
+          return submissionData.map((submission, index) => {
+            const chunkItem = chunk[index]!;
+            const repoItem = repositoryData[index]!;
+            return {
+              submission_id: submission.id,
+              assignment: chunkItem.assignment,
+              student: chunkItem.student,
+              group: chunkItem.group,
+              isRecentlyDue: chunkItem.isRecentlyDue,
+              repository_id: repoItem.id
+            };
+          });
         }),
       { concurrency: 10 }
     )
@@ -364,7 +368,7 @@ async function batchGradeSubmissions(
 
   rubricCheckResults.forEach((result, index) => {
     const rubricId = Array.from(reviewsByRubric.keys())[index];
-    if (result.data) {
+    if (rubricId && result.data) {
       rubricChecksMap.set(rubricId, result.data);
     }
   });
@@ -440,8 +444,8 @@ async function batchGradeSubmissions(
 
             submissionFileComments.push({
               submission_id: review.submission_id,
-              submission_file_id: file.id,
-              author: grader.private_profile_id,
+              submission_file_id: file!.id,
+              author: grader!.private_profile_id,
               comment: `${check.name}: Grading comment for this check`,
               points: pointsAwarded,
               line: lineNumber,
@@ -454,7 +458,7 @@ async function batchGradeSubmissions(
             // Create submission comment (general comment)
             submissionComments.push({
               submission_id: review.submission_id,
-              author: grader.private_profile_id,
+              author: grader!.private_profile_id,
               comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
               points: pointsAwarded,
               class_id: review.class_id,
@@ -472,10 +476,10 @@ async function batchGradeSubmissions(
     const totalAutogradeScore = Math.floor(Math.random() * 100);
 
     reviewUpdates.set(review.id, {
-      grader: grader.private_profile_id,
+      grader: grader!.private_profile_id,
       total_score: totalScore,
       released: isCompleted,
-      completed_by: isCompleted ? grader.private_profile_id : null,
+      completed_by: isCompleted ? grader!.private_profile_id : null,
       completed_at: isCompleted ? new Date().toISOString() : null,
       total_autograde_score: totalAutogradeScore
     });
@@ -543,7 +547,7 @@ function extractDependenciesFromExpression(
 ): { assignments?: number[]; gradebook_columns?: number[] } | null {
   if (!expr) return null;
 
-  const math = create(all);
+  const math = create(all!);
   const dependencies: Record<string, Set<number>> = {};
   const errors: string[] = [];
 
@@ -559,9 +563,9 @@ function extractDependenciesFromExpression(
         const functionName = (node as FunctionNode).fn.name;
         if (functionName in availableDependencies) {
           const args = (node as FunctionNode).args;
-          const argType = args[0].type;
+          const argType = args[0]!.type;
           if (argType === "ConstantNode") {
-            const argName = (args[0] as ConstantNode).value;
+            const argName = (args[0]! as ConstantNode).value;
             if (typeof argName === "string") {
               const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
                 minimatch(d.slug!, argName)
@@ -570,7 +574,7 @@ function extractDependenciesFromExpression(
                 if (!(functionName in dependencies)) {
                   dependencies[functionName] = new Set();
                 }
-                matching.forEach((d) => dependencies[functionName].add(d.id));
+                matching.forEach((d) => dependencies[functionName]!.add(d.id));
               } else {
                 errors.push(`Invalid dependency: ${argName} for function ${functionName}`);
               }
@@ -1164,15 +1168,15 @@ async function insertEnhancedAssignment({
       const { data: criteriaData, error: criteriaError } = await supabase
         .from("rubric_criteria")
         .insert({
-          class_id: class_id,
           name: criteriaTemplate.name,
           description: criteriaTemplate.description,
-          ordinal: criteriaTemplate.ordinal,
+          ordinal: criteriaTemplate.ordinal ?? 0,
           total_points: criteriaTemplate.total_points,
           is_additive: true,
           rubric_part_id: partData.id,
-          rubric_id: rubricId || 0
-        })
+          rubric_id: rubricId ?? 0,
+          class_id: class_id
+        } as Database["public"]["Tables"]["rubric_criteria"]["Insert"])
         .select("id")
         .single();
 
@@ -1185,16 +1189,16 @@ async function insertEnhancedAssignment({
         const { data: checkData, error: checkError } = await supabase
           .from("rubric_checks")
           .insert({
-            rubric_criteria_id: criteriaData.id,
+            rubric_criteria_id: criteriaData!.id,
             name: checkTemplate.name,
             description: `${checkTemplate.name} evaluation`,
-            ordinal: checkTemplate.ordinal,
+            ordinal: checkTemplate.ordinal ?? 0,
             points: checkTemplate.points,
             is_annotation: checkTemplate.is_annotation,
             is_comment_required: checkTemplate.is_comment_required,
             class_id: class_id,
             is_required: checkTemplate.is_required
-          })
+          } as Database["public"]["Tables"]["rubric_checks"]["Insert"])
           .select("*")
           .single();
 
@@ -1245,20 +1249,20 @@ async function createLabSections(class_id: number, numSections: number, instruct
     const dayIndex = i % daysOfWeek.length;
     const timeIndex = Math.floor(i / daysOfWeek.length) % times.length;
     const startTime = times[timeIndex];
-    const endTime = `${String(parseInt(startTime.split(":")[0]) + 1).padStart(2, "0")}:${startTime.split(":")[1]}`;
+    const endTime = `${String(parseInt(startTime!.split(":")[0]!) + 1).padStart(2, "0")}:${startTime!.split(":")[1]!}`;
 
     // Distribute instructors among lab sections
     const instructorIndex = i % instructors.length;
-    const instructorId = instructors[instructorIndex].private_profile_id;
+    const instructorId = instructors[instructorIndex]!.private_profile_id;
 
     return {
       class_id: class_id,
       name: `Lab ${String.fromCharCode(65 + i)}`, // Lab A, Lab B, etc.
-      day_of_week: daysOfWeek[dayIndex],
-      start_time: startTime,
+      day_of_week: daysOfWeek[dayIndex]!,
+      start_time: startTime!,
       end_time: endTime,
       lab_leader_id: instructorId,
-      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime} (led by ${instructors[instructorIndex].private_profile_name})`
+      description: `Lab section ${String.fromCharCode(65 + i)} - ${daysOfWeek[dayIndex]} ${startTime}-${endTime} (led by ${instructors[instructorIndex]!.private_profile_name})`
     };
   });
 
@@ -1294,7 +1298,7 @@ function defineTagTypes(prefix: string, numTagTypes: number) {
     const colorIndex = (i - 1) % colors.length;
     tagTypes.push({
       name: `${prefix} ${String(i).padStart(2, "0")}`,
-      color: colors[colorIndex]
+      color: colors[colorIndex]!
     });
   }
 
@@ -1370,7 +1374,7 @@ async function createAssignmentGroups(
 
     groupStudents.forEach((student) => {
       membersData.push({
-        assignment_group_id: groups[i].id,
+        assignment_group_id: groups[i]!.id,
         profile_id: student.private_profile_id,
         assignment_id: assignment_id,
         class_id: class_id,
@@ -1430,7 +1434,7 @@ async function assignUsersToSectionsAndTags(
       const { error: updateError } = await supabase
         .from("user_roles")
         .update({
-          class_section_id: classSection.id,
+          class_section_id: classSection!.id,
           lab_section_id: labSection?.id || null
         })
         .eq("class_id", class_id)
@@ -1469,7 +1473,7 @@ async function assignUsersToSectionsAndTags(
 
       return {
         user: user.email,
-        classSection: classSection.name,
+        classSection: classSection!.name,
         labSection: labSection?.name || null,
         tags: userTags.map((t) => t.name)
       };
@@ -1503,7 +1507,7 @@ async function insertGraderConflicts(
   function extractUserNumber(user: TestingUser): number | null {
     // Extract from private_profile_name which follows pattern: "Student #1Test", "Grader #2Test", etc.
     const match = user.private_profile_name.match(/#(\d+)/);
-    return match ? parseInt(match[1], 10) : null;
+    return match ? parseInt(match[1]!, 10) : null;
   }
 
   // For each conflict pattern (grader numbers 2, 3, 5)
@@ -1755,7 +1759,7 @@ async function createWorkflowEvents(
     const chunks = chunkArray(workflowEventsToCreate, BATCH_SIZE);
 
     for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
+      const chunk = chunks[i]!;
       const { error: workflowEventsError } = await supabase.from("workflow_events").insert(chunk);
 
       if (workflowEventsError) {
@@ -1884,19 +1888,19 @@ async function createWorkflowErrors(
       if (errorTypeIndex === 0) {
         // User visible error
         const messageIndex = (submission.submission_id + i) % userVisibleErrors.length;
-        errorMessage = userVisibleErrors[messageIndex];
+        errorMessage = userVisibleErrors[messageIndex]!;
         isPrivate = Math.random() < 0.3; // 30% chance to be private
         errorType = "user_visible_error";
       } else if (errorTypeIndex === 1) {
         // Security error (always private)
         const messageIndex = (submission.submission_id + i) % securityErrors.length;
-        errorMessage = securityErrors[messageIndex];
+        errorMessage = securityErrors[messageIndex]!;
         isPrivate = true;
         errorType = "security_error";
       } else {
         // Instructor config error
         const messageIndex = (submission.submission_id + i) % instructorConfigErrors.length;
-        errorMessage = instructorConfigErrors[messageIndex];
+        errorMessage = instructorConfigErrors[messageIndex]!;
         isPrivate = Math.random() < 0.5; // 50% chance to be private
         errorType = "config_error";
       }
@@ -2050,12 +2054,15 @@ async function createHelpRequests({
     const batchPromises = batch.map(async () => {
       // Select a random student as the creator
       const creator = students[Math.floor(Math.random() * students.length)];
+      if (!creator) return; // Skip if no creator found
+
       const isPrivate = Math.random() < 0.3; // 30% chance of being private
       const isResolved = Math.random() < 0.8; // 80% chance of being resolved
       const status = isResolved ? (Math.random() < 0.5 ? "resolved" : "closed") : "open";
 
       // Select a random help request template
       const messageTemplate = HELP_REQUEST_TEMPLATES[Math.floor(Math.random() * HELP_REQUEST_TEMPLATES.length)];
+      if (!messageTemplate) return; // Skip if no template found
 
       // Create the help request
       const { data: helpRequestData, error: helpRequestError } = await supabase
@@ -2067,7 +2074,7 @@ async function createHelpRequests({
           is_private: isPrivate,
           status: status,
           created_by: creator.private_profile_id,
-          assignee: isResolved ? instructors[Math.floor(Math.random() * instructors.length)].private_profile_id : null,
+          assignee: isResolved ? instructors[Math.floor(Math.random() * instructors.length)]?.private_profile_id : null,
           resolved_at: isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString() : null // Random time in last 7 days
         })
         .select("id")
@@ -2122,14 +2129,16 @@ async function createHelpRequests({
           const replyTemplate = HELP_REQUEST_REPLIES[Math.floor(Math.random() * HELP_REQUEST_REPLIES.length)];
           const messageTime = new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000); // Random time in last 7 days
 
-          messageInserts.push({
-            help_request_id: helpRequestId,
-            author: sender.private_profile_id,
-            message: replyTemplate,
-            class_id: class_id,
-            instructors_only: isPrivate && Math.random() < 0.2, // 20% of private request messages are instructor-only
-            created_at: messageTime.toISOString()
-          });
+          if (sender && replyTemplate) {
+            messageInserts.push({
+              help_request_id: helpRequestId,
+              author: sender.private_profile_id,
+              message: replyTemplate,
+              class_id: class_id,
+              instructors_only: isPrivate && Math.random() < 0.2, // 20% of private request messages are instructor-only
+              created_at: messageTime.toISOString()
+            });
+          }
         }
 
         if (messageInserts.length > 0) {
@@ -2324,7 +2333,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const instructorLabCounts = new Map<string, number>();
     labSections.forEach((section, index) => {
       const instructorIndex = index % instructors.length;
-      const instructorName = instructors[instructorIndex].private_profile_name;
+      const instructorName = instructors[instructorIndex]!.private_profile_name;
       instructorLabCounts.set(instructorName, (instructorLabCounts.get(instructorName) || 0) + 1);
     });
     instructorLabCounts.forEach((count, name) => {
@@ -2348,7 +2357,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         studentTagTypes,
         class_id,
         "student",
-        instructors[0].user_id
+        instructors[0]!.user_id
       ),
       assignUsersToSectionsAndTags(
         graders,
@@ -2357,14 +2366,14 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         graderTagTypes,
         class_id,
         "grader",
-        instructors[0].user_id
+        instructors[0]!.user_id
       )
     ]);
     console.log(`✓ Assigned ${students.length} students and ${graders.length} graders to sections and tags`);
 
     // Create grader conflicts based on specified patterns
     console.log("\n⚔️ Creating grader conflicts based on specified patterns...");
-    await insertGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
+    await insertGraderConflicts(graders, students, class_id, instructors[0]!.private_profile_id);
 
     // Create assignments with enhanced rubric generation
     console.log("\n📚 Creating test assignments with diverse rubrics...");
@@ -2553,7 +2562,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const numStudentsForExtensions = Math.floor(students.length * 0.1); // 10% of students get extensions
     const shuffledStudents = [...students].sort(() => Math.random() - 0.5);
     for (let i = 0; i < Math.min(numStudentsForExtensions, shuffledStudents.length); i++) {
-      studentsWithExtensions.add(shuffledStudents[i].private_profile_id);
+      studentsWithExtensions.add(shuffledStudents[i]!.private_profile_id);
     }
     console.log(`✓ Selected ${studentsWithExtensions.size} students for extensions`);
 
@@ -2566,14 +2575,14 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     }> = [];
 
     assignments.forEach((assignment) => {
-      const isRecentlyDue = new Date(assignment.due_date as string) < now;
-      if (assignment.group_config !== "individual") {
+      const isRecentlyDue = new Date(assignment["due_date"] as string) < now;
+      if (assignment["group_config"] !== "individual") {
         // 75% chance to create a group submission
         if (Math.random() < 0.75) {
           assignment.groups.forEach((group) => {
             // Create a group submission
             submissionsToCreate.push({
-              assignment: { ...assignment, due_date: assignment.due_date as string },
+              assignment: { ...assignment, due_date: assignment["due_date"] as string },
               group,
               isRecentlyDue
             });
@@ -2584,7 +2593,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
           // 95% chance student submitted
           if (Math.random() < 0.95) {
             submissionsToCreate.push({
-              assignment: { ...assignment, due_date: assignment.due_date as string },
+              assignment: { ...assignment, due_date: assignment["due_date"] as string },
               student,
               isRecentlyDue
             });
@@ -2622,7 +2631,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       ({ isRecentlyDue, student, group }) =>
         isRecentlyDue &&
         (!student || !studentsWithExtensions.has(student.private_profile_id)) &&
-        (!group || !studentsWithExtensions.has(group.members[0]))
+        (!group || !studentsWithExtensions.has(group.members[0]!))
     );
 
     if (submissionsToGrade.length > 0) {
@@ -2676,9 +2685,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       .slice(0, numRegradeRequests);
 
     const regradePromises = shuffledSubmissions.map(({ submission_id, assignment, student, group }) => {
-      const status = statuses[Math.floor(Math.random() * statuses.length)];
+      const status = statuses[Math.floor(Math.random() * statuses.length)]!;
       const grader = graders[Math.floor(Math.random() * graders.length)];
-      const rubric_check_id = assignment.rubricChecks[Math.random() < 0.5 ? 2 : 3].id;
+      const rubric_check_id = assignment.rubricChecks[Math.random() < 0.5 ? 2 : 3]!.id;
       if (!student && !group) {
         console.log("No student or group found for submission", submission_id);
         return;
@@ -2687,8 +2696,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         createRegradeRequest(
           submission_id,
           assignment.id,
-          student ? student.private_profile_id : group ? group.members[0] : "",
-          grader.private_profile_id,
+          student ? student.private_profile_id : group ? group.members[0]! : "",
+          grader!.private_profile_id,
           rubric_check_id,
           class_id,
           status
@@ -2820,7 +2829,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       await createHelpRequests({
         class_id,
         students,
-        instructors: [instructors[0], ...graders],
+        instructors: [...instructors, ...graders],
         numHelpRequests: helpRequestConfig.numHelpRequests,
         minRepliesPerRequest: helpRequestConfig.minRepliesPerRequest,
         maxRepliesPerRequest: helpRequestConfig.maxRepliesPerRequest,
@@ -2867,20 +2876,20 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     console.log(`\n🔐 Login Credentials:`);
     console.log(`\n   Instructor:`);
-    console.log(`     Email: ${instructors[0].email}`);
-    console.log(`     Password: ${instructors[0].password}`);
+    console.log(`     Email: ${instructors[0]?.email}`);
+    console.log(`     Password: ${instructors[0]?.password}`);
 
     console.log(`\n   Graders (${graders.length} total):`);
     if (graders.length > 0) {
-      console.log(`     Email Template: ${graders[0].email.replace(/#\d+/, "#N")}`);
-      console.log(`     Password: ${graders[0].password}`);
+      console.log(`     Email Template: ${graders[0]?.email.replace(/#\d+/, "#N")}`);
+      console.log(`     Password: ${graders[0]?.password}`);
       console.log(`     Available Numbers: 1-${graders.length} `);
     }
 
     console.log(`\n   Students (${students.length} total):`);
     if (students.length > 0) {
-      console.log(`     Email Template: ${students[0].email.replace(/#\d+/, "#N")}`);
-      console.log(`     Password: ${students[0].password}`);
+      console.log(`     Email Template: ${students[0]?.email.replace(/#\d+/, "#N")}`);
+      console.log(`     Password: ${students[0]?.password}`);
       console.log(`     Available Numbers: 1-${students.length}`);
     }
 
@@ -2937,6 +2946,7 @@ export async function runLargeScale() {
 }
 
 // Small-scale example for testing
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function runSmallScale() {
   const now = new Date();
 

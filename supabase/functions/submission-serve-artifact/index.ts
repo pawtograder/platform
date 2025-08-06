@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Open as openZip } from "npm:unzipper";
 import { create, verify } from "https://deno.land/x/djwt@v3.0.1/mod.ts";
 import { assertUserIsInstructorOrGrader, SecurityError, UserVisibleError } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

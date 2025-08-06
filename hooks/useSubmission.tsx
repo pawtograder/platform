@@ -8,11 +8,11 @@ import {
   useRubrics
 } from "@/hooks/useAssignment";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import TableController, { PossiblyTentativeResult } from "@/lib/TableController";
+import TableController, { type PossiblyTentativeResult } from "@/lib/TableController";
 import { useCourseController } from "@/hooks/useCourseController";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import { createClient } from "@/utils/supabase/client";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -28,7 +28,7 @@ import {
   SubmissionReview,
   SubmissionWithFilesGraderResultsOutputTestsAndRubric
 } from "@/utils/supabase/DatabaseTypes";
-import { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
+import type { Database, Enums, Tables } from "@/utils/supabase/SupabaseTypes";
 import { Spinner, Text } from "@chakra-ui/react";
 import { useShow } from "@refinedev/core";
 import { SupabaseClient } from "@supabase/supabase-js";
@@ -149,8 +149,8 @@ export function SubmissionProvider({
   children: React.ReactNode;
 }) {
   const params = useParams();
-  const submission_id = initial_submission_id ?? Number(params.submissions_id);
-  const class_id = Number(params.course_id);
+  const submission_id = initial_submission_id ?? Number(params["submissions_id"]);
+  const class_id = Number(params["course_id"]);
   const controller = useRef<SubmissionController | null>(null);
   const [ready, setReady] = useState(false);
   const [newControllersReady, setNewControllersReady] = useState(false);

@@ -4,7 +4,7 @@ import { useColorMode } from "@/components/ui/color-mode";
 import { RubricSidebar } from "@/components/ui/rubric-sidebar";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useAssignmentController, useRubric } from "@/hooks/useAssignment";
-import {
+import type {
   HydratedRubric,
   HydratedRubricCheck,
   HydratedRubricCriteria,
@@ -17,7 +17,7 @@ import {
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Center, Flex, Heading, HStack, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
-import Editor, { Monaco } from "@monaco-editor/react";
+import Editor, { type Monaco } from "@monaco-editor/react";
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -327,7 +327,7 @@ function InnerRubricPage() {
   const [activeRubric, setActiveRubric] = useState<HydratedRubric | undefined>(undefined);
   const [initialActiveRubricSnapshot, setInitialActiveRubricSnapshot] = useState<HydratedRubric | undefined>(undefined);
   const [activeReviewRound, setActiveReviewRound] = useState<NonNullable<HydratedRubric["review_round"]>>(
-    REVIEW_ROUNDS_AVAILABLE[1] // Default to 'grading-review'
+    REVIEW_ROUNDS_AVAILABLE[1]! // Default to 'grading-review' – non-null assertion avoids undefined in strict mode
   );
   const [isLoadingCurrentRubric, setIsLoadingCurrentRubric] = useState<boolean>(true);
 
@@ -415,7 +415,7 @@ function InnerRubricPage() {
       if (assignmentDetails?.title) {
         newRubricBase.name = `${assignmentDetails.title} - ${reviewRound
           ?.split("-")
-          .map((w) => w[0].toUpperCase() + w.slice(1))
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
           .join(" ")} Rubric`;
       }
 
@@ -476,7 +476,7 @@ function InnerRubricPage() {
       // hasUnsavedChanges will be updated by useEffect or stash restoration
 
       if (stashedEditorStates[newReviewRound!]) {
-        const stashed = stashedEditorStates[newReviewRound!];
+        const stashed = stashedEditorStates[newReviewRound!]!;
         setValue(stashed.value);
         setInitialActiveRubricSnapshot(stashed.initialSnapshot);
         setRubricForSidebar(stashed.activeRubricForSidebar);
@@ -1165,7 +1165,7 @@ function InnerRubricPage() {
               {rr
                 ? rr
                     .split("-")
-                    .map((w) => w[0].toUpperCase() + w.slice(1))
+                    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
                     .join(" ")
                 : "Select Round"}
               {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}

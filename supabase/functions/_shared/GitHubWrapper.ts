@@ -8,7 +8,7 @@ import { Redis } from "https://esm.sh/ioredis?target=deno";
 import * as Sentry from "npm:@sentry/deno";
 
 import { Buffer } from "node:buffer";
-import { Database } from "./SupabaseTypes.d.ts";
+import type { Database } from "./SupabaseTypes.d.ts";
 
 import { createHash } from "node:crypto";
 import { FileListing } from "./FunctionTypes.d.ts";

@@ -1,11 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import {
-  AssignmentGroupCreateRequest,
-  AssignmentGroupInstructorCreateRequest,
-  GenericResponse
-} from "../_shared/FunctionTypes.d.ts";
+import type { AssignmentGroupInstructorCreateRequest } from "../_shared/FunctionTypes.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
   SecurityError,
   UserVisibleError,

@@ -5,7 +5,11 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import useModalManager from "@/hooks/useModalManager";
-import { DayOfWeek, LabSectionWithLeader, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type {
+  DayOfWeek,
+  LabSectionWithLeader,
+  UserRoleWithPrivateProfileAndUser
+} from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
   Container,
