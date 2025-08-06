@@ -6,11 +6,15 @@ import { AssignmentCreateSolutionRepoRequest } from "../_shared/FunctionTypes.d.
 import { createRepo, getFileFromRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { parse } from "jsr:@std/yaml";
 import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
 const TEMPLATE_SOLUTION_REPO_NAME = "pawtograder/template-assignment-grader";
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id } = (await req.json()) as AssignmentCreateSolutionRepoRequest;
+  scope?.setTag("function", "assignment-create-solution-repo");
+  scope?.setTag("assignment_id", assignment_id.toString());
+  scope?.setTag("class_id", class_id.toString());
   await assertUserIsInstructor(class_id, req.headers.get("Authorization")!);
 
   const adminSupabase = createClient<Database>(
@@ -31,7 +35,7 @@ async function handleRequest(req: Request) {
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug");
   }
-  const solutionRepoName = `${assignment.classes.slug}-${assignment.slug}-solution`;
+  const solutionRepoName = `${assignment.classes.slug}-solution-${assignment.slug}`;
   const solutionRepoOrg = assignment.classes.github_org;
   if (!solutionRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");

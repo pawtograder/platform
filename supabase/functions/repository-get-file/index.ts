@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import * as FunctionTypes from "../_shared/FunctionTypes.d.ts";
-
+import * as Sentry from "npm:@sentry/deno";
 // Rate limiting storage: Map<fileKey, timestamp[]>
 const rateLimitStore = new Map<string, number[]>();
 const RATE_LIMIT_MAX_REQUESTS = 3;
@@ -47,8 +47,13 @@ function checkRateLimit(orgName: string, repoName: string, path: string): void {
   }
 }
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { courseId, orgName, repoName, path } = (await req.json()) as FunctionTypes.GetFileRequest;
+  scope?.setTag("function", "repository-get-file");
+  scope?.setTag("courseId", courseId.toString());
+  scope?.setTag("orgName", orgName);
+  scope?.setTag("repoName", repoName);
+  scope?.setTag("path", path);
   const { supabase } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
   const courseOrgName = await supabase.from("classes").select("github_org").eq("id", courseId).single();
   if (courseOrgName.data?.github_org != orgName && orgName != "pawtograder") {
@@ -64,6 +69,8 @@ async function handleRequest(req: Request) {
     return await github.getFileFromRepo(orgName + "/" + repoName, path);
   } catch (error) {
     if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
+      //Add a random delay to help clients get over racing with repo creation
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 3000));
       throw new NotFoundError(`File ${path} not found in ${orgName}/${repoName}`);
     }
     throw error;

@@ -6594,6 +6594,208 @@ export type Database = {
         };
         Relationships: [];
       };
+      workflow_events: {
+        Row: {
+          actor_login: string | null;
+          class_id: number | null;
+          conclusion: string | null;
+          created_at: string | null;
+          event_type: string;
+          github_repository_id: number | null;
+          head_branch: string | null;
+          head_sha: string | null;
+          id: number;
+          payload: Json | null;
+          pull_requests: Json | null;
+          repository_id: number | null;
+          repository_name: string;
+          run_attempt: number | null;
+          run_number: number | null;
+          run_started_at: string | null;
+          run_updated_at: string | null;
+          started_at: string | null;
+          status: string | null;
+          triggering_actor_login: string | null;
+          updated_at: string | null;
+          workflow_name: string | null;
+          workflow_path: string | null;
+          workflow_run_id: number;
+        };
+        Insert: {
+          actor_login?: string | null;
+          class_id?: number | null;
+          conclusion?: string | null;
+          created_at?: string | null;
+          event_type: string;
+          github_repository_id?: number | null;
+          head_branch?: string | null;
+          head_sha?: string | null;
+          id?: number;
+          payload?: Json | null;
+          pull_requests?: Json | null;
+          repository_id?: number | null;
+          repository_name: string;
+          run_attempt?: number | null;
+          run_number?: number | null;
+          run_started_at?: string | null;
+          run_updated_at?: string | null;
+          started_at?: string | null;
+          status?: string | null;
+          triggering_actor_login?: string | null;
+          updated_at?: string | null;
+          workflow_name?: string | null;
+          workflow_path?: string | null;
+          workflow_run_id: number;
+        };
+        Update: {
+          actor_login?: string | null;
+          class_id?: number | null;
+          conclusion?: string | null;
+          created_at?: string | null;
+          event_type?: string;
+          github_repository_id?: number | null;
+          head_branch?: string | null;
+          head_sha?: string | null;
+          id?: number;
+          payload?: Json | null;
+          pull_requests?: Json | null;
+          repository_id?: number | null;
+          repository_name?: string;
+          run_attempt?: number | null;
+          run_number?: number | null;
+          run_started_at?: string | null;
+          run_updated_at?: string | null;
+          started_at?: string | null;
+          status?: string | null;
+          triggering_actor_login?: string | null;
+          updated_at?: string | null;
+          workflow_name?: string | null;
+          workflow_path?: string | null;
+          workflow_run_id?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "workflow_events_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_events_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      workflow_run_error: {
+        Row: {
+          autograder_regression_test_id: number | null;
+          class_id: number;
+          created_at: string;
+          data: Json | null;
+          id: string;
+          is_private: boolean;
+          name: string;
+          repository_id: number;
+          run_attempt: number | null;
+          run_number: number | null;
+          submission_id: number | null;
+        };
+        Insert: {
+          autograder_regression_test_id?: number | null;
+          class_id: number;
+          created_at?: string;
+          data?: Json | null;
+          id?: string;
+          is_private?: boolean;
+          name: string;
+          repository_id: number;
+          run_attempt?: number | null;
+          run_number?: number | null;
+          submission_id?: number | null;
+        };
+        Update: {
+          autograder_regression_test_id?: number | null;
+          class_id?: number;
+          created_at?: string;
+          data?: Json | null;
+          id?: string;
+          is_private?: boolean;
+          name?: string;
+          repository_id?: number;
+          run_attempt?: number | null;
+          run_number?: number | null;
+          submission_id?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "workflow_run_error_autograder_regression_test_id_fkey";
+            columns: ["autograder_regression_test_id"];
+            isOneToOne: false;
+            referencedRelation: "autograder_regression_test";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_autograder_regression_test_id_fkey";
+            columns: ["autograder_regression_test_id"];
+            isOneToOne: false;
+            referencedRelation: "autograder_regression_test_by_grader";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_repository_id_fkey";
+            columns: ["repository_id"];
+            isOneToOne: false;
+            referencedRelation: "repositories";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["submission_id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["activesubmissionid"];
+          },
+          {
+            foreignKeyName: "workflow_run_error_submission_id_fkey";
+            columns: ["submission_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["activesubmissionid"];
+          }
+        ];
+      };
     };
     Views: {
       assignment_overview: {
@@ -7321,6 +7523,113 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "user_roles_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      workflow_events_summary: {
+        Row: {
+          actor_login: string | null;
+          assignment_id: number | null;
+          class_id: number | null;
+          completed_at: string | null;
+          head_branch: string | null;
+          head_sha: string | null;
+          in_progress_at: string | null;
+          profile_id: string | null;
+          queue_time_seconds: number | null;
+          requested_at: string | null;
+          run_attempt: number | null;
+          run_number: number | null;
+          run_time_seconds: number | null;
+          triggering_actor_login: string | null;
+          workflow_name: string | null;
+          workflow_path: string | null;
+          workflow_run_id: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["student_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["student_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_agg";
+            referencedColumns: ["profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_profile_id_fkey";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "user_roles";
+            referencedColumns: ["private_profile_id"];
+          },
+          {
+            foreignKeyName: "repositories_user_id_fkey1";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "repositories_user_id_fkey1";
+            columns: ["profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "workflow_events_class_id_fkey";
             columns: ["class_id"];
             isOneToOne: false;
             referencedRelation: "classes";

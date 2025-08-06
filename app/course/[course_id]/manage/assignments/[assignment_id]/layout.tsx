@@ -1,4 +1,6 @@
 "use client";
+import { AssignmentProvider } from "@/hooks/useAssignment";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, Heading, HStack, VStack } from "@chakra-ui/react";
 import { useOne } from "@refinedev/core";
@@ -8,9 +10,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import React, { useState } from "react";
 import { FaCalendar, FaCode, FaEdit, FaHome, FaPen, FaPlay, FaPooStorm, FaSearch, FaUsers } from "react-icons/fa";
 import { CreateGitHubRepos } from "./CreateGitHubRepos";
-import { AssignmentProvider } from "@/hooks/useAssignment";
 import DeleteAssignmentButton from "./deleteAssignmentButton";
-import { useIsInstructor } from "@/hooks/useClassProfiles";
 
 const LinkItems = (courseId: number, assignmentId: number) => [
   { label: "Assignment Home", href: `/course/${courseId}/manage/assignments/${assignmentId}`, icon: FaHome },

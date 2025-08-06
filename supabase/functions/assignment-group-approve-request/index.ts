@@ -3,9 +3,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { TZDate } from "npm:@date-fns/tz";
 import { SecurityError, assertUserIsInCourse, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
-async function handleAssignmentGroupApproveRequest(req: Request): Promise<{ message: string }> {
+async function handleAssignmentGroupApproveRequest(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   const { join_request_id, course_id } = (await req.json()) as { join_request_id: number; course_id: number };
+  scope?.setTag("function", "assignment-group-approve-request");
+  scope?.setTag("join_request_id", join_request_id.toString());
+  scope?.setTag("course_id", course_id.toString());
   const { enrollment } = await assertUserIsInCourse(course_id, req.headers.get("Authorization") || "");
 
   const adminSupabase = createClient<Database>(

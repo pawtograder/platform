@@ -13,10 +13,17 @@ import {
   IllegalArgumentError,
   assertUserIsInstructor
 } from "../_shared/HandlerUtils.ts";
-async function instructorCreateAutograderGroup(req: Request): Promise<{ message: string; id: number }> {
+import * as Sentry from "npm:@sentry/deno";
+async function instructorCreateAutograderGroup(
+  req: Request,
+  scope: Sentry.Scope
+): Promise<{ message: string; id: number }> {
   //Get the user
   const { course_id, assignment_id, name } = (await req.json()) as AssignmentGroupInstructorCreateRequest;
-
+  scope?.setTag("function", "assignment-group-instructor-create");
+  scope?.setTag("course_id", course_id.toString());
+  scope?.setTag("assignment_id", assignment_id.toString());
+  scope?.setTag("name", name);
   const { supabase, enrollment } = await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
   const trimmedName = name.trim();
   if (trimmedName.length === 0) {

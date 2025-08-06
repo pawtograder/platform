@@ -1,20 +1,17 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { AssignmentGroupInstructorMoveStudentRequest } from "../_shared/FunctionTypes.d.ts";
-import {
-  IllegalArgumentError,
-  SecurityError,
-  assertUserIsInCourse,
-  assertUserIsInstructor,
-  wrapRequestHandler
-} from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
+import * as Sentry from "npm:@sentry/deno";
 import { AssignmentGroupCopyGroupsFromAssignmentRequest } from "../_shared/FunctionTypes.d.ts";
+import { IllegalArgumentError, assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
 
-async function copyGroupsFromAssignment(req: Request): Promise<void> {
+async function copyGroupsFromAssignment(req: Request, scope: Sentry.Scope): Promise<void> {
   const { source_assignment_id, class_id, target_assignment_id } =
     (await req.json()) as AssignmentGroupCopyGroupsFromAssignmentRequest;
+  scope?.setTag("function", "assignment-group-copy-groups-from-assignment");
+  scope?.setTag("source_assignment_id", source_assignment_id.toString());
+  scope?.setTag("class_id", class_id.toString());
+  scope?.setTag("target_assignment_id", target_assignment_id.toString());
   const { supabase, enrollment } = await assertUserIsInstructor(class_id, req.headers.get("Authorization")!);
   const { data: sourceAssignmentGroups } = await supabase
     .from("assignment_groups")
