@@ -1,7 +1,12 @@
 "use client";
 
 import Link from "@/components/ui/link";
-import { useActiveSubmissions, useMyReviewAssignments, useReviewAssignment } from "@/hooks/useAssignment";
+import {
+  useActiveSubmissions,
+  useAssignmentGroups,
+  useMyReviewAssignments,
+  useReviewAssignment
+} from "@/hooks/useAssignment";
 import { HStack, Text, Box } from "@chakra-ui/react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo } from "react";
@@ -9,6 +14,7 @@ import { FaArrowLeft, FaArrowRight, FaCheckCircle, FaClock, FaChartBar } from "r
 import { Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/submission-author-names";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 interface SubmissionOptionRendererProps {
   submissionId: number;
@@ -48,35 +54,125 @@ interface SubmissionSelectOption {
   label: string;
 }
 
-interface AllSubmissionSelectOption {
+// Data types for grouped submission selector
+interface SubmissionOption {
   value: number;
   label: string;
+  authorName: string;
+  isStudent: boolean;
+}
+
+interface SubmissionGroup {
+  label: string;
+  options: SubmissionOption[];
+}
+
+interface GroupedSubmissionData {
+  groups: SubmissionGroup[];
+  selectedOption: SubmissionOption | null;
+  placeholder: string;
+}
+
+// Hook that returns grouped submission data for the selector
+function useGroupedSubmissionData(): GroupedSubmissionData {
+  const submissions = useActiveSubmissions();
+  const classProfiles = useClassProfiles();
+  const assignmentGroups = useAssignmentGroups();
+  const { submissions_id } = useParams();
+
+  return useMemo(() => {
+    const studentSubmissions: SubmissionOption[] = [];
+    const staffSubmissions: SubmissionOption[] = [];
+
+    // Process each submission
+    submissions.forEach((submission) => {
+      // Get author name
+      let authorName = "";
+      if (submission.profile_id) {
+        // Individual submission - get profile name
+        const profile = classProfiles.profiles.find((p) => p.id === submission.profile_id);
+        authorName = profile?.name || `Submission ${submission.id}`;
+      } else if (submission.assignment_group_id) {
+        // Group submission - get group name
+        const group = assignmentGroups.find((g) => g.id === submission.assignment_group_id);
+        authorName = group?.name || `Group ${submission.assignment_group_id}`;
+      } else {
+        authorName = `Submission ${submission.id}`;
+      }
+
+      // Determine if author is a student
+      let isStudent = true; // Default to student
+      if (submission.profile_id) {
+        // Check if the profile belongs to a student role
+        const userRole = classProfiles.allVisibleRoles.find(
+          (role) => role.private_profile_id === submission.profile_id
+        );
+        isStudent = userRole?.role === "student";
+      }
+
+      const option: SubmissionOption = {
+        value: submission.id,
+        label: authorName,
+        authorName,
+        isStudent
+      };
+
+      if (isStudent) {
+        studentSubmissions.push(option);
+      } else {
+        staffSubmissions.push(option);
+      }
+    });
+
+    // Create grouped options
+    const groups: SubmissionGroup[] = [];
+
+    // Add students group
+    if (studentSubmissions.length > 0) {
+      groups.push({
+        label: "Students",
+        options: studentSubmissions
+      });
+    }
+
+    // Add staff group if there are any staff submissions
+    if (staffSubmissions.length > 0) {
+      groups.push({
+        label: "Instructors & Graders",
+        options: staffSubmissions
+      });
+    }
+
+    // Find the currently selected option
+    let selectedOption: SubmissionOption | null = null;
+    const currentSubmissionId = submissions_id ? parseInt(submissions_id as string) : null;
+
+    if (currentSubmissionId) {
+      // Search through all groups to find the selected option
+      for (const group of groups) {
+        const found = group.options.find((option) => option.value === currentSubmissionId);
+        if (found) {
+          selectedOption = found;
+          break;
+        }
+      }
+    }
+
+    return {
+      groups,
+      selectedOption,
+      placeholder: "Select any submission to view..."
+    };
+  }, [submissions, classProfiles, assignmentGroups, submissions_id]);
 }
 
 function SubmissionSelector() {
-  const { course_id, assignment_id, submissions_id } = useParams();
+  const { course_id, assignment_id } = useParams();
   const router = useRouter();
-  const submissions = useActiveSubmissions();
-
-  const { selectOptions, currentlySelected } = useMemo(() => {
-    // Create select options for all submissions
-    const options: AllSubmissionSelectOption[] = submissions.map((submission) => ({
-      value: submission.id,
-      label: `Submission ${submission.id}`
-    }));
-
-    // Find the currently selected option based on the submissions_id from URL
-    const currentSubmissionId = submissions_id ? parseInt(submissions_id as string) : null;
-    const selected = currentSubmissionId ? options.find((option) => option.value === currentSubmissionId) : null;
-
-    return {
-      selectOptions: options,
-      currentlySelected: selected || null
-    };
-  }, [submissions, submissions_id]);
+  const { groups, selectedOption, placeholder } = useGroupedSubmissionData();
 
   const handleSubmissionSelect = useCallback(
-    (option: AllSubmissionSelectOption | null) => {
+    (option: SubmissionOption | null) => {
       if (option) {
         const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files`;
         router.push(url);
@@ -85,7 +181,7 @@ function SubmissionSelector() {
     [course_id, assignment_id, router]
   );
 
-  if (submissions.length === 0) {
+  if (groups.length === 0) {
     return (
       <Box flex="1" maxW="400px">
         <Text fontSize="sm" color="fg.muted">
@@ -97,14 +193,14 @@ function SubmissionSelector() {
 
   return (
     <Box flex="1" maxW="400px">
-      <Select<AllSubmissionSelectOption>
-        placeholder="Select any submission to view..."
-        options={selectOptions}
-        value={currentlySelected}
+      <Select<SubmissionOption>
+        placeholder={placeholder}
+        options={groups}
+        value={selectedOption}
         onChange={handleSubmissionSelect}
         size="sm"
-        isSearchable={false}
-        formatOptionLabel={(option: AllSubmissionSelectOption) => (
+        isSearchable={true}
+        formatOptionLabel={(option: SubmissionOption) => (
           <HStack justifyContent="space-between" w="100%">
             <HStack>
               <SubmissionAuthorNames submission_id={option.value} />

@@ -1,11 +1,23 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@supabase/functions-js@*": "2.4.4"
+    "jsr:@supabase/functions-js@*": "2.4.4",
+    "npm:@sentry/deno@*": "10.1.0"
   },
   "jsr": {
     "@supabase/functions-js@2.4.4": {
       "integrity": "38456509a6e22fb116b118464cbb36357256f9048d3580632b63af91f63769f7"
+    }
+  },
+  "npm": {
+    "@sentry/core@10.1.0": {
+      "integrity": "sha512-sda76pKjgEgh6VNRNJa9P0WG2egA7N85dTQ8wS/QZ6rD/dNXQZ+ITfL99Jb0b6WhTgvzspJq8bNSl/nRUdbwbQ=="
+    },
+    "@sentry/deno@10.1.0": {
+      "integrity": "sha512-f0Jnh07HPr/pYwmE4t3zhYkNxG6sIQyQU2rRI/d5Pq4ESSszzOr5Y+mMjc+eP9A7TEzEDoRWH4hA7cKMW6jcTg==",
+      "dependencies": [
+        "@sentry/core"
+      ]
     }
   },
   "redirects": {

@@ -589,10 +589,10 @@ export default function SubmissionReviewToolbar() {
   }
   return (
     <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
-      <SelfReviewDueDateInformation /> {/* TODO: This is not working */}
+      <SelfReviewDueDateInformation />
       <HStack w="100%" justifyContent="space-between">
         {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
-        <ReviewAssignmentActions /> {/* TODO: This is not showing up */}
+        <ReviewAssignmentActions />
       </HStack>
       <CompletedReviewHistory />
     </Box>
