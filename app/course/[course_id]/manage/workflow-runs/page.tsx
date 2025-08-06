@@ -4,6 +4,7 @@ import { Box, Heading, Text, HStack, Spinner } from "@chakra-ui/react";
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
+import { toaster } from "@/components/ui/toaster";
 
 export default function WorkflowRunsOverviewPage() {
   return (
@@ -71,11 +72,17 @@ function WorkflowRunStats() {
               .gte("created_at", period.start.toISOString());
 
             if (workflowError) {
-              console.error(`Error fetching workflow stats for ${period.name}:`, workflowError);
+              toaster.error({
+                title: `Error fetching workflow stats for ${period.name}`,
+                description: workflowError.message
+              });
             }
 
             if (errorError) {
-              console.error(`Error fetching error stats for ${period.name}:`, errorError);
+              toaster.error({
+                title: `Error fetching error stats for ${period.name}`,
+                description: errorError.message
+              });
             }
 
             const runs = workflowData || [];
@@ -103,7 +110,10 @@ function WorkflowRunStats() {
 
         setStats(statsData);
       } catch (error) {
-        console.error("Error fetching workflow stats:", error);
+        toaster.error({
+          title: "Error fetching workflow stats",
+          description: error instanceof Error ? error.message : String(error)
+        });
       } finally {
         setIsLoading(false);
       }

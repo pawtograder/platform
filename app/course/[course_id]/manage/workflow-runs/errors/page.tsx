@@ -7,11 +7,11 @@ import { useParams } from "next/navigation";
 import PersonName from "@/components/ui/person-name";
 import { Table } from "@chakra-ui/react";
 import NextLink from "next/link";
-import { flexRender, ColumnDef, CellContext } from "@tanstack/react-table";
+import { flexRender, type ColumnDef, type CellContext } from "@tanstack/react-table";
 import { useCustomTable } from "@/hooks/useCustomTable";
 import { Select, CreatableSelect } from "chakra-react-select";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 
 export default function GradingErrorsPage() {
   return (

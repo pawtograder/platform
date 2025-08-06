@@ -265,14 +265,18 @@ public class Entrypoint {
           console.log(`Completed batch ${chunkIndex + 1}/${submissionChunks.length} (${chunk.length} submissions)`);
 
           // Return the results from this chunk
-          return submissionData.map((submission, index) => ({
-            submission_id: submission.id,
-            assignment: chunk[index].assignment,
-            student: chunk[index].student,
-            group: chunk[index].group,
-            isRecentlyDue: chunk[index].isRecentlyDue,
-            repository_id: repositoryData[index].id
-          }));
+          return submissionData.map((submission, index) => {
+            const chunkItem = chunk[index]!;
+            const repoItem = repositoryData[index]!;
+            return {
+              submission_id: submission.id,
+              assignment: chunkItem.assignment,
+              student: chunkItem.student,
+              group: chunkItem.group,
+              isRecentlyDue: chunkItem.isRecentlyDue,
+              repository_id: repoItem.id
+            };
+          });
         }),
       { concurrency: 10 }
     )
@@ -1755,7 +1759,7 @@ async function createWorkflowEvents(
     const chunks = chunkArray(workflowEventsToCreate, BATCH_SIZE);
 
     for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
+      const chunk = chunks[i]!;
       const { error: workflowEventsError } = await supabase.from("workflow_events").insert(chunk);
 
       if (workflowEventsError) {
@@ -1884,19 +1888,19 @@ async function createWorkflowErrors(
       if (errorTypeIndex === 0) {
         // User visible error
         const messageIndex = (submission.submission_id + i) % userVisibleErrors.length;
-        errorMessage = userVisibleErrors[messageIndex];
+        errorMessage = userVisibleErrors[messageIndex]!;
         isPrivate = Math.random() < 0.3; // 30% chance to be private
         errorType = "user_visible_error";
       } else if (errorTypeIndex === 1) {
         // Security error (always private)
         const messageIndex = (submission.submission_id + i) % securityErrors.length;
-        errorMessage = securityErrors[messageIndex];
+        errorMessage = securityErrors[messageIndex]!;
         isPrivate = true;
         errorType = "security_error";
       } else {
         // Instructor config error
         const messageIndex = (submission.submission_id + i) % instructorConfigErrors.length;
-        errorMessage = instructorConfigErrors[messageIndex];
+        errorMessage = instructorConfigErrors[messageIndex]!;
         isPrivate = Math.random() < 0.5; // 50% chance to be private
         errorType = "config_error";
       }
