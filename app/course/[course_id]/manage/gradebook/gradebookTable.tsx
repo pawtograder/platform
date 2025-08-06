@@ -101,7 +101,11 @@ function RenderExprDocs() {
   return (
     <Text fontSize="sm" color="fg.muted">
       Refers to the score as variable <Code>score</Code>. Convert to letter with <Code>letter(score)</Code>
-      <Link href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation" target="_blank" colorPalette="green">
+      <Link
+        href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation"
+        target="_blank"
+        colorPalette="green"
+      >
         Read the docs
       </Link>
     </Text>
@@ -110,7 +114,12 @@ function RenderExprDocs() {
 function ScoreExprDocs() {
   return (
     <Text fontSize="sm" color="fg.muted">
-      Reference a gradebook column or assignment with <Code>gradebook_columns(&quot;slug&quot;)</Code>, globs supported.      <Link href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation" target="_blank" colorPalette="green">
+      Reference a gradebook column or assignment with <Code>gradebook_columns(&quot;slug&quot;)</Code>, globs supported.{" "}
+      <Link
+        href="https://docs.pawtograder.com/staff/gradebook#gradebook-expression-syntax-documentation"
+        target="_blank"
+        colorPalette="green"
+      >
         Read the docs
       </Link>
     </Text>
@@ -417,9 +426,9 @@ function EditColumnDialog({ columnId, onClose }: { columnId: number; onClose: ()
       }
       setError("root", { message });
     }
-      };
+  };
 
-    return (
+  return (
     <Dialog.Root open={true} size={"md"} placement={"center"} lazyMount unmountOnExit>
       <Portal>
         <Dialog.Backdrop />
@@ -859,19 +868,19 @@ function SectionFilter({
   const currentValue = columnModel.getFilterValue() as string | string[];
   const selectedOptions = Array.isArray(currentValue)
     ? currentValue.map((val) => {
-      const section = sections.find((s) => String(s.id) === val);
-      return {
-        label: section ? (type === "class" ? section.name : `${section.name}`) : val,
-        value: val
-      };
-    })
+        const section = sections.find((s) => String(s.id) === val);
+        return {
+          label: section ? (type === "class" ? section.name : `${section.name}`) : val,
+          value: val
+        };
+      })
     : currentValue
       ? [
-        {
-          label: sections.find((s) => String(s.id) === currentValue)?.name || currentValue,
-          value: currentValue
-        }
-      ]
+          {
+            label: sections.find((s) => String(s.id) === currentValue)?.name || currentValue,
+            value: currentValue
+          }
+        ]
       : [];
 
   return (
@@ -1706,17 +1715,17 @@ export default function GradebookTable() {
 
   /**
    * Build columns with header groups
-   * 
+   *
    * Header groups are created from gradebook columns that share the same slug prefix
-   * (everything before the first hyphen). Groups are only created when multiple 
+   * (everything before the first hyphen). Groups are only created when multiple
    * contiguous columns share the same prefix.
-   * 
+   *
    * Header Group Behavior:
    * - When EXPANDED: The group header spans all child columns using colSpan,
    *   and all individual column headers are shown below it
    * - When COLLAPSED: Only one representative column is shown (the one with
    *   the most recent non-missing data), and the group header covers just that column
-   * 
+   *
    * The width calculation ensures proper rendering:
    * - Collapsed: 120px (single column width)
    * - Expanded: 120px * number_of_columns_in_group
@@ -1976,24 +1985,24 @@ export default function GradebookTable() {
                 style={{
                   ...(colIdx === 0
                     ? {
-                      position: "sticky",
-                      left: 0,
-                      zIndex: 18,
-                      borderRight: "1px solid var(--chakra-colors-border-muted)",
-                      width: `${firstColumnWidth}px`,
-                      maxWidth: `${firstColumnWidth}px`,
-                      minWidth: `${firstColumnWidth}px`
-                    }
+                        position: "sticky",
+                        left: 0,
+                        zIndex: 18,
+                        borderRight: "1px solid var(--chakra-colors-border-muted)",
+                        width: `${firstColumnWidth}px`,
+                        maxWidth: `${firstColumnWidth}px`,
+                        minWidth: `${firstColumnWidth}px`
+                      }
                     : {
-                      width: "120px",
-                      maxWidth: "120px",
-                      minWidth: "120px",
-                      zIndex: 1
-                    }),
+                        width: "120px",
+                        maxWidth: "120px",
+                        minWidth: "120px",
+                        zIndex: 1
+                      }),
                   ...(isCollapsedColumn
                     ? {
-                      borderLeft: "2px solid var(--chakra-colors-border-warning)"
-                    }
+                        borderLeft: "2px solid var(--chakra-colors-border-warning)"
+                      }
                     : {}),
                   height: `${virtualRow.size}px`,
                   verticalAlign: "middle",
@@ -2055,7 +2064,7 @@ export default function GradebookTable() {
       `}</style>
       <Toaster />
       <StudentDetailDialog />
-              <Box ref={parentRef} overflowX="auto" overflowY="auto" maxW="100%" maxH="80vh" height="80vh" position="relative">
+      <Box ref={parentRef} overflowX="auto" overflowY="auto" maxW="100%" maxH="80vh" height="80vh" position="relative">
         <Table.Root
           minW="100%"
           w="100%"
@@ -2214,32 +2223,34 @@ export default function GradebookTable() {
                       }}
                     >
                       {/* Add expand/collapse buttons in the space above Student Name */}
-                      {colIdx === 0 && Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
-                        <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
-                          <WrappedTooltip content="Expand all groups">
-                            <IconButton
-                              variant="ghost"
-                              size="sm"
-                              onClick={expandAll}
-                              colorPalette="blue"
-                              aria-label="Expand all groups"
-                            >
-                              <Icon as={LuChevronDown} boxSize={3} />
-                            </IconButton>
-                          </WrappedTooltip>
-                          <WrappedTooltip content="Collapse all groups">
-                            <IconButton
-                              variant="ghost"
-                              size="sm"
-                              onClick={collapseAll}
-                              colorPalette="blue"
-                              aria-label="Collapse all groups"
-                            >
-                              <Icon as={LuChevronRight} boxSize={3} />
-                            </IconButton>
-                          </WrappedTooltip>
-                        </HStack>
-                      )}
+                      {colIdx === 0 &&
+                        Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
+                          0 && (
+                          <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                            <WrappedTooltip content="Expand all groups">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={expandAll}
+                                colorPalette="blue"
+                                aria-label="Expand all groups"
+                              >
+                                <Icon as={LuChevronDown} boxSize={3} />
+                              </IconButton>
+                            </WrappedTooltip>
+                            <WrappedTooltip content="Collapse all groups">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={collapseAll}
+                                colorPalette="blue"
+                                aria-label="Collapse all groups"
+                              >
+                                <Icon as={LuChevronRight} boxSize={3} />
+                              </IconButton>
+                            </WrappedTooltip>
+                          </HStack>
+                        )}
                     </Table.ColumnHeader>
                   );
                 })}

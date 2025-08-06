@@ -2,9 +2,6 @@
 -- to also delete workflow_events and workflow_run_error records that reference repository_id
 -- before deleting repositories
 
--- Drop the existing function
-DROP FUNCTION IF EXISTS public.delete_assignment_with_all_data(bigint, bigint);
-
 -- Recreate the function with workflow cleanup
 CREATE OR REPLACE FUNCTION public.delete_assignment_with_all_data(
     p_assignment_id bigint,
