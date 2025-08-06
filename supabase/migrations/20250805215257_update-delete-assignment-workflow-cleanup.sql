@@ -278,8 +278,6 @@ GRANT EXECUTE ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint)
 COMMENT ON FUNCTION public.delete_assignment_with_all_data(bigint, bigint) IS 'Deletes an assignment and all its associated data. Performs safety checks and handles all related tables in the correct order. Now includes cleanup of workflow_events and workflow_run_error records. Only callable by postgres service role.';
 
 -- Update the assignment repo creation trigger function to handle template repo addition
--- Drop the existing function
-DROP FUNCTION IF EXISTS public.check_assignment_for_repo_creation();
 
 -- Recreate the function with improved logic for template repo changes
 CREATE OR REPLACE FUNCTION public.check_assignment_for_repo_creation()
