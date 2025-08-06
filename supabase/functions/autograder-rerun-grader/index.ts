@@ -4,9 +4,13 @@ import { AutograderRerunGraderRequest } from "../_shared/FunctionTypes.d.ts";
 import { triggerWorkflow } from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructorOrGrader, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { submission_ids, class_id } = (await req.json()) as AutograderRerunGraderRequest;
+  scope?.setTag("function", "autograder-rerun-grader");
+  scope?.setTag("class_id", class_id.toString());
+  scope?.setTag("submission_ids", submission_ids.join(","));
   const { supabase, enrollment } = await assertUserIsInstructorOrGrader(
     class_id,
     req.headers.get("Authorization") || ""

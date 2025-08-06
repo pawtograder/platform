@@ -8,15 +8,17 @@ import {
 } from "../_shared/HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.3/dist/module/index.js";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
 //See also autograder-sync-student-team
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  scope?.setTag("function", "autograder-sync-staff-team");
   const secret = req.headers.get("x-edge-function-secret");
   if (secret) {
     // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
     const url = new URL(req.url);
     const course_id = Number.parseInt(url.searchParams.get("course_id")!);
-    console.log("course_id", course_id);
+    scope?.setTag("course_id", course_id.toString());
 
     const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
     if (secret !== expectedSecret) {
@@ -39,6 +41,8 @@ async function handleRequest(req: Request) {
     if (!classData) {
       throw new UserVisibleError("No class found for course");
     }
+    scope?.setTag("github_org", classData.github_org!);
+    scope?.setTag("slug", classData.slug!);
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
       const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
         adminSupabase
@@ -55,7 +59,7 @@ async function handleRequest(req: Request) {
     });
   } else {
     const { course_id } = (await req.json()) as { course_id: number };
-
+    scope?.setTag("course_id", course_id.toString());
     const { supabase } = await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
     const { data: classData, error: classError } = await supabase
       .from("classes")
@@ -68,6 +72,8 @@ async function handleRequest(req: Request) {
     if (!classData) {
       throw new UserVisibleError("No class found for course");
     }
+    scope?.setTag("github_org", classData.github_org!);
+    scope?.setTag("slug", classData.slug!);
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
       const { data: staff, error: staffError } = await fetchAllPages<{ users: { github_username: string | null } }>(
         supabase

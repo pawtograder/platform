@@ -13,6 +13,7 @@ import {
   TEST_HANDOUT_REPO,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
+import { Database } from "@/utils/supabase/SupabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
@@ -269,7 +270,8 @@ public class Entrypoint {
             assignment: chunk[index].assignment,
             student: chunk[index].student,
             group: chunk[index].group,
-            isRecentlyDue: chunk[index].isRecentlyDue
+            isRecentlyDue: chunk[index].isRecentlyDue,
+            repository_id: repositoryData[index].id
           }));
         }),
       { concurrency: 10 }
@@ -650,7 +652,6 @@ async function createGradebookColumn({
   const validAssignments = (assignments || []).filter((a) => a.slug !== null) as Array<{ id: number; slug: string }>;
   const validColumns = (existingColumns || []).filter((c) => c.slug !== null) as Array<{ id: number; slug: string }>;
 
-  console.log(validAssignments, validColumns);
   // Extract dependencies from score expression if not provided
   let finalDependencies = dependencies;
   if (score_expression && !dependencies) {
@@ -660,7 +661,6 @@ async function createGradebookColumn({
     }
   }
 
-  console.log(`Creating gradebook column ${name} with dependencies ${finalDependencies}`);
   // Create the gradebook column
   const { data: column, error: columnError } = await supabase
     .from("gradebook_columns")
@@ -1576,6 +1576,370 @@ async function insertGraderConflicts(
   console.log(`   Summary: ${conflictSummary}`);
 }
 
+// Helper function to create workflow events for submissions (for statistics)
+async function createWorkflowEvents(
+  submissions: Array<{
+    submission_id: number;
+    assignment: { id: number; due_date: string } & Record<string, unknown>;
+    student?: TestingUser;
+    group?: { id: number; name: string; memberCount: number; members: string[] };
+    repository_id?: number;
+  }>,
+  class_id: number
+): Promise<void> {
+  if (submissions.length === 0) {
+    console.log("   No submissions to create workflow events for");
+    return;
+  }
+
+  console.log(`   Creating workflow events for ${submissions.length} submissions`);
+
+  const workflowEventsToCreate: Database["public"]["Tables"]["workflow_events"]["Insert"][] = [];
+  const now = new Date();
+
+  for (const submission of submissions) {
+    if (!submission.repository_id) {
+      console.warn(`Skipping submission ${submission.submission_id} - no repository_id`);
+      continue;
+    }
+
+    // Create 1-3 workflow runs per submission (representing multiple attempts)
+    const numRuns = Math.floor(Math.random() * 3) + 1;
+
+    for (let runIndex = 0; runIndex < numRuns; runIndex++) {
+      const workflowRunId = 1000000 + submission.submission_id * 10 + runIndex;
+      const runNumber = runIndex + 1;
+      const runAttempt = 1;
+
+      // Generate realistic repository name based on submission
+      const repositoryName = `student-repo-${submission.submission_id}`;
+      const headSha = `abc123${submission.submission_id.toString().padStart(6, "0")}${runIndex.toString()}ef`;
+      const actorLogin = submission.student?.email.split("@")[0] || `group-${submission.group?.id}`;
+
+      // Create realistic timing patterns
+      // Recent submissions have faster queue times, older ones have varied patterns
+      const submissionAge =
+        Math.abs(now.getTime() - new Date(submission.assignment.due_date).getTime()) / (1000 * 60 * 60 * 24); // days
+
+      let baseQueueTime: number;
+      let baseRunTime: number;
+
+      if (submissionAge < 1) {
+        // Very recent - fast processing (last 24 hours)
+        baseQueueTime = 15 + Math.random() * 45; // 15-60 seconds
+        baseRunTime = 45 + Math.random() * 75; // 45-120 seconds
+      } else if (submissionAge < 7) {
+        // Recent week - moderate processing
+        baseQueueTime = 30 + Math.random() * 120; // 30-150 seconds
+        baseRunTime = 60 + Math.random() * 120; // 60-180 seconds
+      } else if (submissionAge < 30) {
+        // Last month - varied processing
+        baseQueueTime = 60 + Math.random() * 300; // 1-6 minutes
+        baseRunTime = 90 + Math.random() * 210; // 90-300 seconds
+      } else {
+        // Older - potentially slower processing
+        baseQueueTime = 120 + Math.random() * 600; // 2-12 minutes
+        baseRunTime = 120 + Math.random() * 480; // 2-10 minutes
+      }
+
+      // Add some variance for retry attempts
+      if (runIndex > 0) {
+        baseQueueTime *= 1 + runIndex * 0.3; // Subsequent runs take longer to queue
+        baseRunTime *= 0.8 + Math.random() * 0.4; // But might run faster/slower
+      }
+
+      const queueTimeSeconds = Math.round(baseQueueTime);
+      const runTimeSeconds = Math.round(baseRunTime);
+
+      // Calculate realistic timestamps
+      const dueDate = new Date(submission.assignment.due_date);
+      const submissionTime = new Date(dueDate.getTime() - Math.random() * 24 * 60 * 60 * 1000); // Up to 24h before due
+      const requestedAt = new Date(submissionTime.getTime() + runIndex * 10 * 60 * 1000); // 10 minutes between attempts
+      const inProgressAt = new Date(requestedAt.getTime() + queueTimeSeconds * 1000);
+      const completedAt = new Date(inProgressAt.getTime() + runTimeSeconds * 1000);
+
+      // Determine final outcome based on patterns
+      const isCompleted = Math.random() < 0.95; // 95% completion rate
+      const isSuccess = isCompleted && Math.random() < 0.85; // 85% success rate when completed
+
+      // Create base workflow event data
+      const baseWorkflowEvent = {
+        workflow_run_id: workflowRunId,
+        repository_name: repositoryName,
+        class_id: class_id,
+        workflow_name: "Grade Assignment",
+        workflow_path: ".github/workflows/grade.yml",
+        head_sha: headSha,
+        head_branch: "main",
+        run_number: runNumber,
+        repository_id: submission.repository_id || null,
+        run_attempt: runAttempt,
+        actor_login: actorLogin,
+        triggering_actor_login: actorLogin,
+        pull_requests: null
+      };
+
+      // ALWAYS create events in chronological order: queued → in_progress → completed (if completed)
+
+      // 1. QUEUED/REQUESTED event
+      workflowEventsToCreate.push({
+        ...baseWorkflowEvent,
+        event_type: "requested",
+        status: "queued",
+        conclusion: null,
+        created_at: requestedAt.toISOString(),
+        started_at: requestedAt.toISOString(),
+        updated_at: requestedAt.toISOString(),
+        run_started_at: requestedAt.toISOString(),
+        run_updated_at: requestedAt.toISOString(),
+        payload: JSON.stringify({
+          action: "requested",
+          workflow_run: {
+            id: workflowRunId,
+            status: "queued",
+            conclusion: null
+          }
+        })
+      });
+
+      // 2. IN_PROGRESS event
+      workflowEventsToCreate.push({
+        ...baseWorkflowEvent,
+        event_type: "in_progress",
+        status: "in_progress",
+        conclusion: null,
+        created_at: requestedAt.toISOString(),
+        started_at: inProgressAt.toISOString(),
+        updated_at: inProgressAt.toISOString(),
+        run_started_at: inProgressAt.toISOString(),
+        run_updated_at: inProgressAt.toISOString(),
+        payload: JSON.stringify({
+          action: "in_progress",
+          workflow_run: {
+            id: workflowRunId,
+            status: "in_progress",
+            conclusion: null
+          }
+        })
+      });
+
+      // 3. COMPLETED event (if the workflow completed)
+      if (isCompleted) {
+        const finalConclusion = isSuccess ? "success" : "failure";
+        workflowEventsToCreate.push({
+          ...baseWorkflowEvent,
+          event_type: "completed",
+          status: "completed",
+          conclusion: finalConclusion,
+          created_at: requestedAt.toISOString(),
+          started_at: inProgressAt.toISOString(),
+          updated_at: completedAt.toISOString(),
+          run_started_at: inProgressAt.toISOString(),
+          run_updated_at: completedAt.toISOString(),
+          payload: JSON.stringify({
+            action: "completed",
+            workflow_run: {
+              id: workflowRunId,
+              status: "completed",
+              conclusion: finalConclusion
+            }
+          })
+        });
+      }
+    }
+  }
+
+  // Batch insert workflow events
+  if (workflowEventsToCreate.length > 0) {
+    const BATCH_SIZE = 500;
+    const chunks = chunkArray(workflowEventsToCreate, BATCH_SIZE);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const { error: workflowEventsError } = await supabase.from("workflow_events").insert(chunk);
+
+      if (workflowEventsError) {
+        throw new Error(`Failed to create workflow events (batch ${i + 1}): ${workflowEventsError.message}`);
+      }
+
+      console.log(`   ✓ Created batch ${i + 1}/${chunks.length} (${chunk.length} events)`);
+    }
+
+    console.log(`   ✓ Created ${workflowEventsToCreate.length} workflow events total`);
+
+    // Log statistics
+    const completedEvents = workflowEventsToCreate.filter((e) => e.status === "completed");
+    const successRate = completedEvents.filter((e) => e.conclusion === "success").length / completedEvents.length;
+
+    console.log(`   Statistics: ${completedEvents.length} completed, success: ${Math.round(successRate * 100)}%`);
+  }
+}
+
+// Helper function to create workflow errors for submissions
+async function createWorkflowErrors(
+  submissions: Array<{
+    submission_id: number;
+    assignment: { id: number; due_date: string } & Record<string, unknown>;
+    student?: TestingUser;
+    group?: { id: number; name: string; memberCount: number; members: string[] };
+    repository_id?: number;
+  }>,
+  class_id: number
+): Promise<void> {
+  // Select 20% of submissions to have errors
+  const submissionsWithErrors = submissions
+    .filter(() => Math.random() < 0.2)
+    .slice(0, Math.floor(submissions.length * 0.2));
+
+  if (submissionsWithErrors.length === 0) {
+    console.log("   No submissions selected for workflow errors");
+    return;
+  }
+
+  console.log(`   Creating errors for ${submissionsWithErrors.length} submissions (20% of ${submissions.length})`);
+
+  // Define clever and deterministic error messages
+  const userVisibleErrors = [
+    "Submission is late by 2 hours - late penalty applied",
+    "Missing required file: README.md - please add documentation",
+    "File size exceeds limit: main.java is 15MB, max allowed is 10MB",
+    "Invalid file format: .docx files not allowed, use .txt or .md",
+    "Compilation failed: syntax error on line 42 in Calculator.java",
+    "Missing dependencies: package.json not found in submission",
+    "Test timeout: unit tests took longer than 30 seconds to complete",
+    "Memory limit exceeded: program used 2GB, limit is 1GB",
+    "Duplicate submission detected: previous submission at 14:32 will be used",
+    "Branch mismatch: submitted from 'develop' branch, expected 'main'",
+    "Commit message too short: minimum 10 characters required",
+    "Binary files detected: .exe files are not allowed in submissions",
+    "Plagiarism check failed: 85% similarity with another submission",
+    "Missing unit tests: no test files found in src/test/ directory",
+    "Code quality issue: cyclomatic complexity exceeds threshold",
+    "Forbidden keyword usage: 'System.exit()' not allowed in submissions",
+    "File encoding error: non-UTF-8 characters detected in source code",
+    "Missing required method: 'main()' method not found in entry class",
+    "Import restrictions violated: java.io.File package not permitted",
+    "Submission format error: expected .zip file, received .rar"
+  ];
+
+  const securityErrors = [
+    "Security scan failed: potential SQL injection vulnerability detected",
+    "Unsafe file operations: direct file system access not permitted",
+    "Network access violation: HTTP requests blocked in sandbox environment",
+    "Privilege escalation attempt: sudo commands detected in script",
+    "Malicious pattern found: base64 encoded payload in comments",
+    "Cryptographic weakness: hardcoded encryption keys discovered",
+    "Path traversal vulnerability: '../' sequences found in file operations",
+    "Command injection risk: user input directly passed to shell",
+    "Buffer overflow potential: unsafe string operations detected",
+    "Cross-site scripting vector: unescaped user data in HTML output",
+    "Deserialization vulnerability: unsafe object deserialization found",
+    "Information disclosure: database credentials exposed in code",
+    "Insecure random generation: predictable seed values used",
+    "Authentication bypass: hardcoded admin credentials detected",
+    "Race condition vulnerability: unsynchronized shared resource access"
+  ];
+
+  const instructorConfigErrors = [
+    "Instructor action required: update autograder timeout to 45 seconds",
+    "Configuration mismatch: expected Java 11, but runner uses Java 8",
+    "Grading rubric incomplete: missing criteria for code style section",
+    "Test suite outdated: unit tests need update for new requirements",
+    "Resource allocation error: increase memory limit to 2GB for this assignment",
+    "Docker image misconfigured: missing required build tools in container",
+    "Assignment template error: starter code has compilation errors",
+    "Deadline configuration issue: due date conflicts with university holiday",
+    "GitHub webhook failure: repository permissions need instructor review",
+    "Plagiarism detector offline: manual review required for submissions",
+    "Grade export blocked: Canvas integration credentials expired",
+    "Autograder script error: contact TA to fix grading pipeline issue",
+    "Class repository locked: instructor needs to update access permissions",
+    "Feedback template missing: add comment templates for common issues",
+    "Extension policy undefined: set clear rules for late submission handling"
+  ];
+
+  // Create workflow errors using repository_id reference
+  const workflowErrorsToCreate = [];
+
+  for (const submission of submissionsWithErrors) {
+    // Skip submissions without repository_id
+    if (!submission.repository_id) {
+      console.warn(`Skipping submission ${submission.submission_id} - no repository_id`);
+      continue;
+    }
+
+    const runAttempt = 1;
+    const runNumber = Math.floor(Math.random() * 100) + 1;
+
+    // Generate 1-5 errors per submission
+    const numErrors = Math.floor(Math.random() * 5) + 1;
+
+    for (let i = 0; i < numErrors; i++) {
+      // Use submission ID and error index to deterministically select error type
+      const errorTypeIndex = (submission.submission_id + i) % 3;
+      let errorMessage: string;
+      let isPrivate: boolean;
+      let errorType: string;
+
+      if (errorTypeIndex === 0) {
+        // User visible error
+        const messageIndex = (submission.submission_id + i) % userVisibleErrors.length;
+        errorMessage = userVisibleErrors[messageIndex];
+        isPrivate = Math.random() < 0.3; // 30% chance to be private
+        errorType = "user_visible_error";
+      } else if (errorTypeIndex === 1) {
+        // Security error (always private)
+        const messageIndex = (submission.submission_id + i) % securityErrors.length;
+        errorMessage = securityErrors[messageIndex];
+        isPrivate = true;
+        errorType = "security_error";
+      } else {
+        // Instructor config error
+        const messageIndex = (submission.submission_id + i) % instructorConfigErrors.length;
+        errorMessage = instructorConfigErrors[messageIndex];
+        isPrivate = Math.random() < 0.5; // 50% chance to be private
+        errorType = "config_error";
+      }
+
+      workflowErrorsToCreate.push({
+        submission_id: submission.submission_id,
+        class_id: class_id,
+        repository_id: submission.repository_id,
+        run_number: runNumber,
+        run_attempt: runAttempt,
+        name: errorMessage,
+        data: JSON.stringify({ type: errorType }),
+        is_private: isPrivate,
+        created_at: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString()
+      });
+    }
+  }
+
+  // Batch insert workflow errors
+  if (workflowErrorsToCreate.length > 0) {
+    const { error: workflowErrorsError } = await supabase.from("workflow_run_error").insert(workflowErrorsToCreate);
+
+    if (workflowErrorsError) {
+      throw new Error(`Failed to create workflow errors: ${workflowErrorsError.message}`);
+    }
+
+    console.log(`   ✓ Created ${workflowErrorsToCreate.length} workflow errors`);
+
+    // Log breakdown by type
+    const userVisibleCount = workflowErrorsToCreate.filter((e) => e.data.includes("user_visible_error")).length;
+    const securityCount = workflowErrorsToCreate.filter((e) => e.data.includes("security_error")).length;
+    const configCount = workflowErrorsToCreate.filter((e) => e.data.includes("config_error")).length;
+    const privateCount = workflowErrorsToCreate.filter((e) => e.is_private).length;
+
+    console.log(
+      `   Error breakdown: ${userVisibleCount} user-visible, ${securityCount} security, ${configCount} config`
+    );
+    console.log(
+      `   Privacy breakdown: ${privateCount} private, ${workflowErrorsToCreate.length - privateCount} public`
+    );
+  }
+}
+
 // Sample help request messages for realistic data
 const HELP_REQUEST_TEMPLATES = [
   "My algorithm keeps timing out on large datasets - any optimization tips?",
@@ -1786,7 +2150,6 @@ async function createHelpRequests({
     `✓ Created ${totalCreated} help requests (${totalResolved} resolved/closed, ${totalCreated - totalResolved} open)`
   );
 }
-
 interface SeedingOptions {
   numStudents: number;
   numGraders: number;
@@ -2245,6 +2608,14 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         group: s.group
       }))
     );
+
+    // Create workflow events for submissions (for statistics)
+    console.log("\n⚡ Creating workflow events...");
+    await createWorkflowEvents(createdSubmissions, class_id);
+
+    // Create workflow errors for 20% of submissions
+    console.log("\n🚨 Creating workflow errors...");
+    await createWorkflowErrors(createdSubmissions, class_id);
 
     // Batch grade recently due submissions
     const submissionsToGrade = createdSubmissions.filter(

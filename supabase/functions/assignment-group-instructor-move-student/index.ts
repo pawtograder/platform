@@ -4,10 +4,16 @@ import { AssignmentGroupInstructorMoveStudentRequest } from "../_shared/Function
 import { syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { IllegalArgumentError, assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
-async function handleAssignmentGroupInstructorMoveStudent(req: Request): Promise<void> {
+async function handleAssignmentGroupInstructorMoveStudent(req: Request, scope: Sentry.Scope): Promise<void> {
   const { new_assignment_group_id, old_assignment_group_id, profile_id, class_id } =
     (await req.json()) as AssignmentGroupInstructorMoveStudentRequest;
+  scope?.setTag("function", "assignment-group-instructor-move-student");
+  scope?.setTag("new_assignment_group_id", new_assignment_group_id?.toString() || "(null)");
+  scope?.setTag("old_assignment_group_id", old_assignment_group_id?.toString() || "(null)");
+  scope?.setTag("profile_id", profile_id.toString());
+  scope?.setTag("class_id", class_id.toString());
   const { supabase, enrollment } = await assertUserIsInstructor(class_id, req.headers.get("Authorization")!);
 
   const adminSupabase = createClient<Database>(

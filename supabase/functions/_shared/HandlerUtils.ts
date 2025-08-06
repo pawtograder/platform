@@ -1,13 +1,63 @@
-import { GetResult } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/result.d.ts";
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { PostgrestFilterBuilder } from "https://esm.sh/@supabase/postgrest-js@1.19.2";
-import { RepositoryCheckRun } from "./FunctionTypes.d.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import * as Sentry from "npm:@sentry/deno";
 import { Database } from "./SupabaseTypes.d.ts";
+
+if (Deno.env.get("SENTRY_DSN")) {
+  Sentry.init({
+    dsn: Deno.env.get("SENTRY_DSN")!,
+    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
+    sendDefaultPii: true,
+    integrations: [],
+    tracesSampleRate: 0
+  });
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
 };
+
+/**
+ * Add comprehensive database operation tags to Sentry scope
+ */
+export function tagDatabaseOperation(
+  scope: Sentry.Scope,
+  operation: string,
+  table: string,
+  filters?: Record<string, string | number | boolean>
+) {
+  scope?.setTag("db_operation", operation);
+  scope?.setTag("db_table", table);
+  if (filters) {
+    Object.entries(filters).forEach(([key, value]) => {
+      scope?.setTag(`db_filter_${key}`, String(value));
+    });
+  }
+}
+
+/**
+ * Add user context tags to Sentry scope
+ */
+export function tagUserContext(scope: Sentry.Scope, userId: string, role?: string, courseId?: number) {
+  scope?.setTag("user_id", userId);
+  if (role) scope?.setTag("user_role", role);
+  if (courseId) scope?.setTag("course_id", courseId.toString());
+}
+
+/**
+ * Add API call tags to Sentry scope
+ */
+export function tagApiCall(
+  scope: Sentry.Scope,
+  service: "github" | "canvas" | "chime" | "supabase",
+  operation: string,
+  resource?: string
+) {
+  scope?.setTag("api_service", service);
+  scope?.setTag("api_operation", operation);
+  if (resource) scope?.setTag("api_resource", resource);
+}
 export async function assertUserIsInstructor(courseId: number, authHeader: string) {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
@@ -91,55 +141,28 @@ export async function assertUserIsInCourse(courseId: number, authHeader: string)
   return { supabase, enrollment };
 }
 
-type RepositoryWithAssignmentAndAutograder = GetResult<
-  Database["public"],
-  Database["public"]["Tables"]["repositories"]["Row"],
-  "repositories",
-  Database["public"]["Tables"]["repositories"]["Relationships"],
-  "*, assignments(submission_files, class_id, autograders(*))"
->;
-export async function userCanCreateSubmission({
-  checkRun,
-  repoData,
-  adminSupabase
-}: {
-  checkRun: RepositoryCheckRun;
-  repoData: RepositoryWithAssignmentAndAutograder;
-  adminSupabase: SupabaseClient<Database>;
-}) {
-  //If the check run was created by a grader or instructor, then we can always create a submission
-  if (checkRun.status.created_by && checkRun.status.created_by !== "github") {
-    const { data: profile, error: profileError } = await adminSupabase
-      .from("user_roles")
-      .select("*")
-      .eq("private_profile_id", checkRun.status.created_by)
-      .eq("class_id", checkRun.class_id)
-      .maybeSingle();
-    if (profileError) {
-      throw new UserVisibleError(`Failed to find profile: ${profileError.message}`);
-    }
-    if (profile?.role === "instructor" || profile?.role === "grader") {
-      return true;
-    }
-  }
-  //Check due date vs late date
-
-  const { data: submission, error: submissionError } = await adminSupabase
-    .from("submissions")
-    .select("*")
-    .eq("repository_id", checkRun.repository_id)
-    .eq("sha", checkRun.sha)
-    .maybeSingle();
-  if (submissionError) {
-    throw new UserVisibleError(`Failed to find submission: ${submissionError.message}`);
-  }
-}
-export async function wrapRequestHandler(req: Request, handler: (req: Request) => Promise<any>) {
+export async function wrapRequestHandler(
+  req: Request,
+  handler: (req: Request, scope: Sentry.Scope) => Promise<unknown>,
+  {
+    recordUserVisibleErrors,
+    recordSecurityErrors
+  }:
+    | {
+        recordUserVisibleErrors?: boolean;
+        recordSecurityErrors?: boolean;
+      }
+    | undefined = { recordUserVisibleErrors: true, recordSecurityErrors: true }
+) {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+  const scope = new Sentry.Scope();
+  scope.setTag("URL", req.url);
+  scope.setTag("Method", req.method);
+  scope.setTag("Headers", JSON.stringify(Object.fromEntries(req.headers)));
   try {
-    let data = await handler(req);
+    let data = await handler(req, scope);
     if (!data) {
       data = {};
     }
@@ -152,6 +175,17 @@ export async function wrapRequestHandler(req: Request, handler: (req: Request) =
     });
   } catch (e) {
     console.error(e);
+    if (e instanceof UserVisibleError) {
+      if (recordUserVisibleErrors) {
+        Sentry.captureException(e, scope);
+      }
+    } else if (e instanceof SecurityError) {
+      if (recordSecurityErrors) {
+        Sentry.captureException(e, scope);
+      }
+    } else {
+      Sentry.captureException(e, scope);
+    }
     const genericErrorHeaders = {
       "Content-Type": "application/json",
       ...corsHeaders
@@ -239,7 +273,7 @@ export class UserVisibleError extends Error {
   details: string;
   status: number = 500;
   constructor(details: string) {
-    super("Error");
+    super(details);
     this.details = details;
   }
 }
@@ -256,7 +290,7 @@ export class NotFoundError extends Error {
   details: string;
   status: number = 404;
   constructor(details: string) {
-    super("Not Found");
+    super(details);
     this.details = details;
   }
 }
