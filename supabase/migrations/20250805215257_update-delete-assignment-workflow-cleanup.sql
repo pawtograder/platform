@@ -23,7 +23,7 @@ BEGIN
     -- Check if assignment exists and belongs to the specified class
     SELECT title INTO v_assignment_title
     FROM public.assignments
-    WHERE id = p_assignment_id AND class_id = p_class_id;
+    WHERE id = p_assignment_id AND class_id = p_class_id FOR UPDATE; -- Lock the assignment row
     
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Assignment not found or does not belong to this class'
