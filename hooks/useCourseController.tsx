@@ -1,4 +1,5 @@
 "use client";
+
 import {
   Assignment,
   AssignmentDueDateException,
@@ -13,7 +14,6 @@ import {
   Tag,
   UserProfile
 } from "@/utils/supabase/DatabaseTypes";
-
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
@@ -199,6 +199,19 @@ export type UserProfileWithPrivateProfile = UserProfile & {
 };
 
 /**
+ * Type for roster data with user information from joins
+ */
+export type RosterWithUserInfo = {
+  user_id: string;
+  private_profile_id: string;
+  canvas_id: string | null;
+  users: {
+    name: string;
+    email: string;
+  };
+};
+
+/**
  * This class is responsible for managing realtime course data.
  */
 export class CourseController {
@@ -217,6 +230,7 @@ export class CourseController {
   readonly tags: TableController<"tags">;
   readonly labSections: TableController<"lab_sections">;
   readonly labSectionMeetings: TableController<"lab_section_meetings">;
+  readonly rosterWithUserInfo: TableController<"user_roles">;
 
   constructor(
     public courseId: number,
@@ -274,6 +288,17 @@ export class CourseController {
       query: client.from("lab_section_meetings").select("*").eq("class_id", courseId),
       classRealTimeController
     });
+
+    this.rosterWithUserInfo = new TableController({
+      client,
+      table: "user_roles",
+      query: client
+        .from("user_roles")
+        .select("user_id, private_profile_id, canvas_id, users!inner(name, email)")
+        .eq("class_id", courseId)
+        .eq("role", "student"),
+      classRealTimeController
+    }) as unknown as TableController<"user_roles">; // Type assertion needed for joined query TableController
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -521,6 +546,29 @@ export class CourseController {
     return result.data.filter((role) => role.role === "student");
   }
 
+  getRosterWithUserInfo(callback?: UpdateCallback<RosterWithUserInfo[]>): {
+    unsubscribe: Unsubscribe;
+    data: RosterWithUserInfo[];
+  } {
+    // Note: We use type assertion here because the joined query returns a different shape
+    // than the base user_roles table, but TableController typing assumes full table structure
+    if (callback) {
+      const result = this.rosterWithUserInfo.list((data) => {
+        callback(data as unknown as RosterWithUserInfo[]);
+      });
+      return {
+        unsubscribe: result.unsubscribe,
+        data: result.data as unknown as RosterWithUserInfo[]
+      };
+    }
+
+    const result = this.rosterWithUserInfo.list();
+    return {
+      unsubscribe: result.unsubscribe,
+      data: result.data as unknown as RosterWithUserInfo[]
+    };
+  }
+
   getProfileBySisId(sis_id: string) {
     const result = this.profiles.list();
     return result.data.find((profile) => profile.sis_user_id === sis_id);
@@ -659,6 +707,7 @@ export class CourseController {
     this.tags.close();
     this.labSections.close();
     this.labSectionMeetings.close();
+    this.rosterWithUserInfo.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -785,6 +834,7 @@ function CourseControllerProviderImpl({ controller, course_id }: { controller: C
   return <></>;
 }
 const CourseControllerContext = createContext<CourseController | null>(null);
+
 export function CourseControllerProvider({
   course_id,
   profile_id,
@@ -1049,4 +1099,20 @@ export function useCanShowGradeFor(userId: string): boolean {
   }, [controller]);
   if (!isObfuscated) return true;
   return onlyShowFor === userId;
+}
+
+/**
+ * Hook to get student roster with user information including email
+ */
+export function useRosterWithUserInfo() {
+  const controller = useCourseController();
+  const [roster, setRoster] = useState<RosterWithUserInfo[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.getRosterWithUserInfo((updatedRoster) => setRoster(updatedRoster));
+    setRoster(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return roster;
 }

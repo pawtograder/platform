@@ -862,7 +862,7 @@ export class GradebookController {
     return this.gradebook_columns.ready && this.gradebook_column_students.ready && this.assignments_table.ready;
   }
   exportGradebook(courseController: CourseController) {
-    const roster = courseController.getRoster();
+    const roster = courseController.getRosterWithUserInfo().data;
     const columns = [...this.gradebook_columns.rows];
     columns.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
     const result = [];
@@ -872,8 +872,8 @@ export class GradebookController {
       const userProfile = courseController.getUserProfile(student.private_profile_id);
       const gradesForStudent = columns.map((col) => getScore(studentGradebookController.getGradesForStudent(col.id)));
       const row = [
-        student.users.name,
-        student.users.email,
+        student.users.name ?? "Unknown",
+        student.users.email ?? "Unknown",
         student.canvas_id,
         userProfile?.data?.sis_user_id,
         ...gradesForStudent
