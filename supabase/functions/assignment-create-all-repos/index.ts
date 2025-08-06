@@ -14,7 +14,7 @@ type RepoToCreate = {
   student_github_usernames: string[];
 };
 
-async function ensureRepoCreated({org, repo, scope}: {org: string, repo: string, scope: Sentry.Scope}) {
+async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: string; scope: Sentry.Scope }) {
   let repoExists = false;
   let attempts = 0;
   const maxAttempts = 10;
@@ -124,8 +124,8 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
   scope?.setTag("assignment_groups_count", assignment.assignment_groups?.length.toString() || "0");
 
   //Before creating repos, check to make sure template repo exists in GitHub, wait for it to exist
-  await ensureRepoCreated({org: assignment.classes!.github_org!, repo: assignment.template_repo!, scope});
-  
+  await ensureRepoCreated({ org: assignment.classes!.github_org!, repo: assignment.template_repo!, scope });
+
   const createRepo = async (
     name: string,
     github_username: string[],
@@ -235,7 +235,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     courseId = course_id;
     assignmentId = assignment_id;
     scope?.setTag("Source", "edge-function-secret");
-    
+
     const handler = async () => {
       try {
         await createAllRepos(courseId, assignmentId, scope);
@@ -243,17 +243,20 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         console.error("Background task failed:", error);
         Sentry.captureException(error, scope);
       }
-    }
+    };
     EdgeRuntime.waitUntil(handler());
-    
-    return new Response(JSON.stringify({ 
-      message: "Repository creation started in background",
-      courseId,
-      assignmentId
-    }), {
-      status: 202,
-      headers: { "Content-Type": "application/json" }
-    });
+
+    return new Response(
+      JSON.stringify({
+        message: "Repository creation started in background",
+        courseId,
+        assignmentId
+      }),
+      {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
   } else {
     // JWT authentication - get parameters from request body and validate instructor permissions
     const { courseId: cId, assignmentId: aId } = (await req.json()) as AssignmentCreateAllReposRequest;
@@ -261,18 +264,21 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     assignmentId = aId;
     await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
     scope?.setTag("Source", "jwt");
-    
+
     // Await the task completion
     await createAllRepos(courseId, assignmentId, scope);
-    
-    return new Response(JSON.stringify({ 
-      message: "All repositories created successfully",
-      courseId,
-      assignmentId
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
+
+    return new Response(
+      JSON.stringify({
+        message: "All repositories created successfully",
+        courseId,
+        assignmentId
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
   }
 }
 
