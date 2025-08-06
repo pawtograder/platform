@@ -150,6 +150,8 @@ export async function resolveRef(action_repository: string, action_ref: string, 
       return undefined;
     }
     try {
+      scope?.setTag("github_operation", "get_ref_or_undefined");
+      scope?.setTag("ref", ref);
       const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
         owner: action_repository.split("/")[0],
         repo: action_repository.split("/")[1],
@@ -190,6 +192,8 @@ export async function getRepoTarballURL(repo: string, sha?: string, scope?: Sent
   if (sha) {
     resolved_sha = sha;
   } else {
+    scope?.setTag("github_operation", "get_ref_or_undefined");
+    scope?.setTag("ref", "heads/main");
     const head = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
       owner: repo.split("/")[0],
       repo: repo.split("/")[1]
@@ -430,6 +434,7 @@ export async function createRepo(
   const repo = template_repo.split("/")[1];
 
   try {
+    scope?.setTag("github_operation", "create_repo_request");
     await octokit.request("POST /repos/{template_owner}/{template_repo}/generate", {
       template_repo: repo,
       template_owner: owner,
@@ -437,6 +442,7 @@ export async function createRepo(
       name: repoName,
       private: true
     });
+    scope?.setTag("github_operation", "create_repo_request_done");
     //Disable squash merging, make template
     await octokit.request("PATCH /repos/{owner}/{repo}", {
       owner: org,
@@ -445,10 +451,13 @@ export async function createRepo(
       is_template: is_template_repo ? true : false
     });
     //Get the head SHA
+    scope?.setTag("github_operation", "get_head_sha");
+    scope?.setTag("ref", "heads/main");
     const heads = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/main", {
       owner: org,
       repo: repoName
     });
+    scope?.setTag("head_sha", heads.data.object.sha);
     console.log(`Created repo ${org}/${repoName} with head SHA ${heads.data.object.sha}`);
     console.log(`Heads: ${JSON.stringify(heads.data)}`);
     return heads.data.object.sha as string;
@@ -992,4 +1001,15 @@ export async function createCheckRun(repo_full_name: string, sha: string, detail
     ]
   });
   return res.data.id;
+}
+export async function getRepo(org: string, repo: string, scope?: Sentry.Scope) {
+  const octokit = await getOctoKit(org, scope);
+  if (!octokit) {
+    throw new Error("No octokit found for organization " + org);
+  }
+  const repoData = await octokit.request("GET /repos/{owner}/{repo}", {
+    owner: org,
+    repo
+  });
+  return repoData.data;
 }

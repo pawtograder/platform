@@ -14,34 +14,38 @@ type RepoToCreate = {
   student_github_usernames: string[];
 };
 
-async function handleRequest(req: Request, scope: Sentry.Scope) {
-  scope?.setTag("function", "assignment-create-all-repos");
-  // Check for edge function secret authentication
-  const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
-  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
-
-  let courseId: number;
-  let assignmentId: number;
-
-  if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
-    // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
-    const url = new URL(req.url);
-    const course_id = Number.parseInt(url.searchParams.get("courseId")!);
-    const assignment_id = Number.parseInt(url.searchParams.get("assignmentId")!);
-    // Edge function secret authentication - get parameters from request body
-    courseId = course_id;
-    assignmentId = assignment_id;
-    scope?.setTag("Source", "edge-function-secret");
-  } else {
-    // JWT authentication - get parameters from request body and validate instructor permissions
-    const { courseId: cId, assignmentId: aId } = (await req.json()) as AssignmentCreateAllReposRequest;
-    courseId = cId;
-    assignmentId = aId;
-    await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
-    scope?.setTag("Source", "jwt");
+async function ensureRepoCreated({ org, repo, scope }: { org: string; repo: string; scope: Sentry.Scope }) {
+  let repoExists = false;
+  let attempts = 0;
+  const maxAttempts = 10;
+  while (!repoExists && attempts < maxAttempts) {
+    try {
+      scope?.setTag("ensure_repo_created_attempt", attempts.toString());
+      const repoName = repo.split("/")[1];
+      const repoData = await github.getRepo(org, repoName, scope);
+      if (repoData && repoData.size > 0) {
+        repoExists = true;
+        scope?.setTag("ensure_repo_created_repo_data", JSON.stringify(repoData));
+      } else {
+        scope?.setTag("ensure_repo_created_repo_data", JSON.stringify(repoData));
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        attempts++;
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("Not Found")) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        attempts++;
+      } else {
+        throw e;
+      }
+      throw e;
+    }
   }
-  scope?.setTag("assignment_id", assignmentId.toString());
-  scope?.setTag("course_id", courseId.toString());
+}
+
+async function createAllRepos(courseId: number, assignmentId: number, scope: Sentry.Scope) {
+  scope.setTag("assignment_id", assignmentId.toString());
+  scope.setTag("course_id", courseId.toString());
 
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -60,19 +64,19 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("class_id", courseId)
     .single();
   if (assignmentError) {
-    scope?.setTag("db_error", "assignment_fetch_failed");
-    scope?.setTag("db_error_message", assignmentError.message);
+    scope.setTag("db_error", "assignment_fetch_failed");
+    scope.setTag("db_error_message", assignmentError.message);
     throw new UserVisibleError("Error fetching assignment: " + assignmentError.message);
   }
   if (!assignment) {
-    scope?.setTag("assignment_error", "not_found_or_not_released");
+    scope.setTag("assignment_error", "not_found_or_not_released");
     throw new UserVisibleError("Assignment not found. Please be sure that the release date has passed.");
   }
 
-  scope?.setTag("assignment_slug", assignment.slug || "unknown");
-  scope?.setTag("assignment_group_config", assignment.group_config || "unknown");
-  scope?.setTag("github_org", assignment.classes?.github_org || "unknown");
-  scope?.setTag("template_repo", assignment.template_repo || "none");
+  scope.setTag("assignment_slug", assignment.slug || "unknown");
+  scope.setTag("assignment_group_config", assignment.group_config || "unknown");
+  scope.setTag("github_org", assignment.classes?.github_org || "unknown");
+  scope.setTag("template_repo", assignment.template_repo || "none");
   // Select all existing repos for the assignment
   const { data: existingRepos } = await adminSupabase
     .from("repositories")
@@ -119,6 +123,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   scope?.setTag("students_in_groups_count", studentsInAGroup?.length.toString() || "0");
   scope?.setTag("assignment_groups_count", assignment.assignment_groups?.length.toString() || "0");
 
+  //Before creating repos, check to make sure template repo exists in GitHub, wait for it to exist
+  await ensureRepoCreated({ org: assignment.classes!.github_org!, repo: assignment.template_repo!, scope });
+
   const createRepo = async (
     name: string,
     github_username: string[],
@@ -145,7 +152,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
       .single();
     if (error) {
       console.error(error);
-      throw new UserVisibleError(`Error creating repo: ${error}`);
+      Sentry.captureException(error, scope);
+      throw new UserVisibleError(`Error creating repo, repo not created: ${error}`);
     }
     if (!dbRepo) {
       throw new UserVisibleError(
@@ -208,6 +216,72 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     );
   }
 }
+
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  scope?.setTag("function", "assignment-create-all-repos");
+  // Check for edge function secret authentication
+  const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
+  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
+
+  let courseId: number;
+  let assignmentId: number;
+
+  if (edgeFunctionSecret && expectedSecret && edgeFunctionSecret === expectedSecret) {
+    // For reasons that are not clear, we set it up so call_edge_function_internal will send params as GET, even on a POST?
+    const url = new URL(req.url);
+    const course_id = Number.parseInt(url.searchParams.get("courseId")!);
+    const assignment_id = Number.parseInt(url.searchParams.get("assignmentId")!);
+    // Edge function secret authentication - get parameters from request body
+    courseId = course_id;
+    assignmentId = assignment_id;
+    scope?.setTag("Source", "edge-function-secret");
+
+    const handler = async () => {
+      try {
+        await createAllRepos(courseId, assignmentId, scope);
+      } catch (error) {
+        console.error("Background task failed:", error);
+        Sentry.captureException(error, scope);
+      }
+    };
+    EdgeRuntime.waitUntil(handler());
+
+    return new Response(
+      JSON.stringify({
+        message: "Repository creation started in background",
+        courseId,
+        assignmentId
+      }),
+      {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+  } else {
+    // JWT authentication - get parameters from request body and validate instructor permissions
+    const { courseId: cId, assignmentId: aId } = (await req.json()) as AssignmentCreateAllReposRequest;
+    courseId = cId;
+    assignmentId = aId;
+    await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
+    scope?.setTag("Source", "jwt");
+
+    // Await the task completion
+    await createAllRepos(courseId, assignmentId, scope);
+
+    return new Response(
+      JSON.stringify({
+        message: "All repositories created successfully",
+        courseId,
+        assignmentId
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+  }
+}
+
 Deno.serve(async (req) => {
   return await wrapRequestHandler(req, handleRequest);
 });

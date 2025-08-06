@@ -15,7 +15,8 @@ import {
   VStack,
   Badge,
   Flex,
-  Text
+  Text,
+  HStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
@@ -202,6 +203,86 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const { data: course } = await supabase.from("classes").select("time_zone").eq("id", course_id).single();
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
+
+  // Get workflow run statistics for the last hour and day
+  const now = new Date();
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  const { data: workflowStatsHour } = await supabase
+    .from("workflow_events_summary")
+    .select("queue_time_seconds, run_time_seconds")
+    .eq("class_id", course_id)
+    .gte("requested_at", oneHourAgo.toISOString());
+
+  const { data: workflowStatsDay } = await supabase
+    .from("workflow_events_summary")
+    .select("queue_time_seconds, run_time_seconds")
+    .eq("class_id", course_id)
+    .gte("requested_at", oneDayAgo.toISOString());
+
+  const { data: workflowErrorsHour } = await supabase
+    .from("workflow_run_error")
+    .select("id")
+    .eq("class_id", course_id)
+    .gte("created_at", oneHourAgo.toISOString());
+
+  const { data: workflowErrorsDay } = await supabase
+    .from("workflow_run_error")
+    .select("id")
+    .eq("class_id", course_id)
+    .gte("created_at", oneDayAgo.toISOString());
+
+  // Get the 5 most recent errors with details
+  const { data: recentErrors } = await supabase
+    .from("workflow_run_error")
+    .select(
+      `
+      id,
+      name,
+      created_at,
+      submissions!submission_id(
+        profiles!profile_id(name, id),
+        assignments!assignment_id(title),
+        assignment_groups!assignment_group_id(name)
+      )
+    `
+    )
+    .eq("class_id", course_id)
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  // Calculate workflow statistics
+  const calculateWorkflowStats = (
+    runs: Array<{ queue_time_seconds: number | null; run_time_seconds: number | null }>,
+    errors: Array<{ id: string }>
+  ) => {
+    const total = runs.length;
+    const errorCount = errors.length;
+
+    const queueTimes = runs.map((r) => r.queue_time_seconds).filter((t) => t !== null) as number[];
+    const runTimes = runs.map((r) => r.run_time_seconds).filter((t) => t !== null) as number[];
+
+    const avgQueue = queueTimes.length > 0 ? queueTimes.reduce((sum, time) => sum + time, 0) / queueTimes.length : 0;
+    const avgRun = runTimes.length > 0 ? runTimes.reduce((sum, time) => sum + time, 0) / runTimes.length : 0;
+
+    return {
+      total,
+      errorCount,
+      avgQueue: Math.round(avgQueue),
+      avgRun: Math.round(avgRun),
+      errorRate: total > 0 ? (errorCount / total) * 100 : 0
+    };
+  };
+
+  const formatTime = (seconds: number) => {
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    return `${Math.round(seconds / 3600)}h`;
+  };
+
+  const hourStats = calculateWorkflowStats(workflowStatsHour || [], workflowErrorsHour || []);
+  const dayStats = calculateWorkflowStats(workflowStatsDay || [], workflowErrorsDay || []);
 
   return (
     <VStack spaceY={0} align="stretch" p={2}>
@@ -453,6 +534,178 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
               <CardBody>Requested: {new Date(request.created_at).toLocaleString()}</CardBody>
             </CardRoot>
           ))}
+        </Stack>
+      </Box>
+
+      <Box>
+        <Heading size="lg" mb={4}>
+          Workflow Runs Summary
+        </Heading>
+        <Stack spaceY={4}>
+          <CompactCardRoot>
+            <CardHeader>
+              <Flex justify="space-between" align="center">
+                <Link prefetch={true} href={`/course/${course_id}/manage/workflow-runs`}>
+                  <Text fontWeight="semibold">Last Hour</Text>
+                </Link>
+                <Badge colorScheme={hourStats.errorCount > 0 ? "red" : "green"} size="sm">
+                  {hourStats.errorCount > 0 ? `${hourStats.errorCount} errors` : "No errors"}
+                </Badge>
+              </Flex>
+            </CardHeader>
+            <CardBody>
+              <CompactDataListRoot orientation="horizontal">
+                <DataListItem>
+                  <DataListItemLabel>Total Runs</DataListItemLabel>
+                  <DataListItemValue>{hourStats.total}</DataListItemValue>
+                </DataListItem>
+                <DataListItem>
+                  <DataListItemLabel>Avg Queue Time</DataListItemLabel>
+                  <DataListItemValue>
+                    <Text
+                      color={
+                        hourStats.avgQueue > 300 ? "red.600" : hourStats.avgQueue > 60 ? "orange.600" : "green.600"
+                      }
+                    >
+                      {formatTime(hourStats.avgQueue)}
+                    </Text>
+                  </DataListItemValue>
+                </DataListItem>
+                <DataListItem>
+                  <DataListItemLabel>Avg Run Time</DataListItemLabel>
+                  <DataListItemValue>
+                    <Text
+                      color={hourStats.avgRun > 600 ? "red.600" : hourStats.avgRun > 120 ? "orange.600" : "green.600"}
+                    >
+                      {formatTime(hourStats.avgRun)}
+                    </Text>
+                  </DataListItemValue>
+                </DataListItem>
+                <DataListItem>
+                  <DataListItemLabel>Error Rate</DataListItemLabel>
+                  <DataListItemValue>
+                    <Text
+                      color={
+                        hourStats.errorRate > 10 ? "red.600" : hourStats.errorRate > 5 ? "orange.600" : "green.600"
+                      }
+                    >
+                      {hourStats.errorRate.toFixed(1)}%
+                    </Text>
+                  </DataListItemValue>
+                </DataListItem>
+              </CompactDataListRoot>
+            </CardBody>
+          </CompactCardRoot>
+
+          <CompactCardRoot>
+            <CardHeader>
+              <Flex justify="space-between" align="center">
+                <Link prefetch={true} href={`/course/${course_id}/manage/workflow-runs`}>
+                  <Text fontWeight="semibold">Last 24 Hours</Text>
+                </Link>
+                <Badge colorScheme={dayStats.errorCount > 0 ? "red" : "green"} size="sm">
+                  {dayStats.errorCount > 0 ? `${dayStats.errorCount} errors` : "No errors"}
+                </Badge>
+              </Flex>
+            </CardHeader>
+            <CardBody>
+              <CompactDataListRoot orientation="horizontal">
+                <DataListItem>
+                  <DataListItemLabel>Total Runs</DataListItemLabel>
+                  <DataListItemValue>{dayStats.total}</DataListItemValue>
+                </DataListItem>
+                <DataListItem>
+                  <DataListItemLabel>Avg Queue Time</DataListItemLabel>
+                  <DataListItemValue>
+                    <Text
+                      color={dayStats.avgQueue > 300 ? "red.600" : dayStats.avgQueue > 60 ? "orange.600" : "green.600"}
+                    >
+                      {formatTime(dayStats.avgQueue)}
+                    </Text>
+                  </DataListItemValue>
+                </DataListItem>
+                <DataListItem>
+                  <DataListItemLabel>Avg Run Time</DataListItemLabel>
+                  <DataListItemValue>
+                    <Text
+                      color={dayStats.avgRun > 600 ? "red.600" : dayStats.avgRun > 120 ? "orange.600" : "green.600"}
+                    >
+                      {formatTime(dayStats.avgRun)}
+                    </Text>
+                  </DataListItemValue>
+                </DataListItem>
+                <DataListItem>
+                  <DataListItemLabel>Error Rate</DataListItemLabel>
+                  <DataListItemValue>
+                    <Text
+                      color={dayStats.errorRate > 10 ? "red.600" : dayStats.errorRate > 5 ? "orange.600" : "green.600"}
+                    >
+                      {dayStats.errorRate.toFixed(1)}%
+                    </Text>
+                  </DataListItemValue>
+                </DataListItem>
+              </CompactDataListRoot>
+            </CardBody>
+          </CompactCardRoot>
+
+          {/* Summary message */}
+          {hourStats.errorCount === 0 && dayStats.errorCount === 0 ? (
+            <CompactCardRoot>
+              <CardBody>
+                <HStack justify="center" align="center" py={2}>
+                  <Text color="green.600" fontWeight="medium">
+                    ✓ All workflows running smoothly with no errors in the last 24 hours
+                  </Text>
+                </HStack>
+              </CardBody>
+            </CompactCardRoot>
+          ) : (
+            <CompactCardRoot>
+              <CardHeader>
+                <Flex justify="space-between" align="center">
+                  <Text fontWeight="semibold">Recent Errors</Text>
+                  <Link prefetch={true} href={`/course/${course_id}/manage/workflow-runs/errors`}>
+                    <Badge colorScheme="orange" size="sm">
+                      View All
+                    </Badge>
+                  </Link>
+                </Flex>
+              </CardHeader>
+              <CardBody>
+                <Stack spaceY={2}>
+                  {recentErrors && recentErrors.length > 0 ? (
+                    recentErrors.map((error) => {
+                      const submission = error.submissions;
+                      const studentName =
+                        submission?.profiles?.name || submission?.assignment_groups?.name || "Unknown";
+                      const assignmentTitle = submission?.assignments?.title || "Unknown Assignment";
+                      const timeAgo = new Date(error.created_at).toLocaleString();
+
+                      return (
+                        <Box key={error.id} p={2} border="1px solid" borderColor="border.subtle" borderRadius="md">
+                          <Flex justify="space-between" align="start" mb={1}>
+                            <Text fontSize="sm" fontWeight="medium" color="red.600">
+                              {error.name}
+                            </Text>
+                            <Text fontSize="xs" color="fg.muted">
+                              {timeAgo}
+                            </Text>
+                          </Flex>
+                          <Text fontSize="sm" color="fg.muted">
+                            {studentName} • {assignmentTitle}
+                          </Text>
+                        </Box>
+                      );
+                    })
+                  ) : (
+                    <Text fontSize="sm" color="fg.muted" textAlign="center">
+                      No recent errors to display
+                    </Text>
+                  )}
+                </Stack>
+              </CardBody>
+            </CompactCardRoot>
+          )}
         </Stack>
       </Box>
     </VStack>

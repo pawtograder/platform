@@ -1,6 +1,7 @@
 "use client";
 import { Tooltip } from "@/components/ui/tooltip";
 import { AuditEvent, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { useCustomTable } from "@/hooks/useCustomTable";
 import {
   Box,
   Button,
@@ -17,16 +18,9 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { useList } from "@refinedev/core";
-import { useTable } from "@refinedev/react-table";
-import {
-  ColumnDef,
-  flexRender,
-  getPaginationRowModel,
-  getCoreRowModel,
-  getFilteredRowModel
-} from "@tanstack/react-table";
+import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { FaSort, FaSortUp, FaSortDown } from "react-icons/fa";
 
 type JsonPrimitive = string | number | boolean | null;
@@ -153,20 +147,15 @@ function AuditTable() {
       }
     ]
   });
-  const [pageCount, setPageCount] = useState(0);
+
+  // Memoize server filters to prevent unnecessary re-fetching
+  const serverFilters = useMemo(
+    () => [{ field: "class_id", operator: "eq" as const, value: Number(course_id) }],
+    [course_id]
+  );
 
   const columns = useMemo<ColumnDef<AuditEvent>[]>(
     () => [
-      {
-        id: "class_id",
-        accessorKey: "class_id",
-        header: "Class ID",
-        enableColumnFilter: true,
-        enableHiding: true,
-        filterFn: (row, id, filterValue) => {
-          return String(row.original.class_id) === String(filterValue);
-        }
-      },
       {
         id: "created_at",
         accessorKey: "created_at",
@@ -275,6 +264,7 @@ function AuditTable() {
     ],
     [roster.data?.data]
   );
+
   const {
     getHeaderGroups,
     getRowModel,
@@ -287,47 +277,41 @@ function AuditTable() {
     previousPage,
     setPageSize,
     getPrePaginationRowModel,
-    refineCore: {}
-  } = useTable({
+    isLoading,
+    error
+  } = useCustomTable({
     columns,
+    resource: "audit",
+    serverFilters,
+    select: "*",
     initialState: {
-      columnFilters: [{ id: "class_id", value: course_id as string }],
       pagination: {
         pageIndex: 0,
         pageSize: 50
       },
       sorting: [{ id: "created_at", desc: true }]
-    },
-    getPaginationRowModel: getPaginationRowModel(),
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    refineCoreProps: {
-      resource: "audit",
-      pagination: {
-        mode: "off"
-      },
-      filters: {
-        mode: "off"
-      },
-      sorters: {
-        mode: "off"
-      },
-      meta: {
-        select: "*"
-      }
-    },
-    manualPagination: false,
-    manualFiltering: false,
-    manualSorting: false,
-    pageCount,
-    filterFromLeafRows: true
+    }
   });
 
   const nRows = getRowCount();
   const pageSize = getState().pagination.pageSize;
-  useEffect(() => {
-    setPageCount(Math.ceil(nRows / pageSize));
-  }, [nRows, pageSize]);
+  const pageCount = Math.ceil(nRows / pageSize);
+
+  if (isLoading) {
+    return (
+      <VStack>
+        <Text>Loading audit data...</Text>
+      </VStack>
+    );
+  }
+
+  if (error) {
+    return (
+      <VStack>
+        <Text color="red.500">Error loading audit data: {error.message}</Text>
+      </VStack>
+    );
+  }
 
   return (
     <VStack>
@@ -336,44 +320,42 @@ function AuditTable() {
           <Table.Header>
             {getHeaderGroups().map((headerGroup) => (
               <Table.Row bg="bg.subtle" key={headerGroup.id}>
-                {headerGroup.headers
-                  .filter((h) => h.id !== "class_id")
-                  .map((header) => {
-                    return (
-                      <Table.ColumnHeader key={header.id}>
-                        {header.isPlaceholder ? null : (
-                          <>
-                            <Text onClick={header.column.getToggleSortingHandler()}>
-                              {flexRender(header.column.columnDef.header, header.getContext())}
-                              {{
-                                asc: (
-                                  <Icon size="md">
-                                    <FaSortUp />
-                                  </Icon>
-                                ),
-                                desc: (
-                                  <Icon size="md">
-                                    <FaSortDown />
-                                  </Icon>
-                                )
-                              }[header.column.getIsSorted() as string] ?? (
+                {headerGroup.headers.map((header) => {
+                  return (
+                    <Table.ColumnHeader key={header.id}>
+                      {header.isPlaceholder ? null : (
+                        <>
+                          <Text onClick={header.column.getToggleSortingHandler()}>
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                            {{
+                              asc: (
                                 <Icon size="md">
-                                  <FaSort />
+                                  <FaSortUp />
                                 </Icon>
-                              )}
-                            </Text>
-                            <Input
-                              id={header.id}
-                              value={(header.column.getFilterValue() as string) ?? ""}
-                              onChange={(e) => {
-                                header.column.setFilterValue(e.target.value);
-                              }}
-                            />
-                          </>
-                        )}
-                      </Table.ColumnHeader>
-                    );
-                  })}
+                              ),
+                              desc: (
+                                <Icon size="md">
+                                  <FaSortDown />
+                                </Icon>
+                              )
+                            }[header.column.getIsSorted() as string] ?? (
+                              <Icon size="md">
+                                <FaSort />
+                              </Icon>
+                            )}
+                          </Text>
+                          <Input
+                            id={header.id}
+                            value={(header.column.getFilterValue() as string) ?? ""}
+                            onChange={(e) => {
+                              header.column.setFilterValue(e.target.value);
+                            }}
+                          />
+                        </>
+                      )}
+                    </Table.ColumnHeader>
+                  );
+                })}
               </Table.Row>
             ))}
           </Table.Header>
@@ -381,16 +363,11 @@ function AuditTable() {
             {getRowModel().rows.map((row) => {
               return (
                 <Table.Row key={row.id}>
-                  {row
-                    .getVisibleCells()
-                    .filter((c) => c.column.id !== "class_id")
-                    .map((cell) => {
-                      return (
-                        <Table.Cell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </Table.Cell>
-                      );
-                    })}
+                  {row.getVisibleCells().map((cell) => {
+                    return (
+                      <Table.Cell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Table.Cell>
+                    );
+                  })}
                 </Table.Row>
               );
             })}

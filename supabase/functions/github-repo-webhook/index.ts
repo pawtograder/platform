@@ -271,7 +271,7 @@ async function handlePushToTemplateRepo(
 function tagScopeWithGenericPayload(scope: Sentry.Scope, name: string, payload: any) {
   scope.setTag("webhook_handler", name);
   scope.setTag("action", payload.action);
-  scope.setTag("repository", payload.repository.full_name);
+  scope.setTag("repository", payload.repository?.full_name);
   scope.setTag("ref", payload.ref);
   scope.setTag("check_run_id", payload.check_run?.id?.toString() || "");
   scope.setTag("id", payload.id);
@@ -640,7 +640,8 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload: payloadB
       scope?.setTag("repository_id", repositoryId.toString());
       scope?.setTag("class_id", classId.toString());
     } else {
-      Sentry.captureMessage(`No matching repository found for ${repository.full_name}`, scope);
+      // We don't capture events for handout or solution repos, do we need to?
+      // Sentry.captureMessage(`No matching repository found for ${repository.full_name}`, scope);
     }
 
     // Extract pull request information if available

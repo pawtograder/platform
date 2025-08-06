@@ -68,10 +68,27 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
   try {
     return await github.getFileFromRepo(orgName + "/" + repoName, path);
   } catch (error) {
+    scope?.setTag("get_file_error", JSON.stringify(error));
     if (error && typeof error === "object" && "status" in error && (error as { status: number }).status === 404) {
-      //Add a random delay to help clients get over racing with repo creation
-      await new Promise((resolve) => setTimeout(resolve, Math.random() * 3000));
-      throw new NotFoundError(`File ${path} not found in ${orgName}/${repoName}`);
+      scope?.setTag("get_file_error_status", (error as { status: number }).status.toString());
+      // Add a delay to help clients get over racing with repo creation
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+
+      // Retry the request once after the delay
+      try {
+        return await github.getFileFromRepo(orgName + "/" + repoName, path);
+      } catch (retryError) {
+        if (
+          retryError &&
+          typeof retryError === "object" &&
+          "status" in retryError &&
+          (retryError as { status: number }).status === 404
+        ) {
+          scope?.setTag("get_file_retry_error", JSON.stringify(retryError));
+          throw new NotFoundError(`File ${path} not found in ${orgName}/${repoName}`);
+        }
+        throw retryError;
+      }
     }
     throw error;
   }
