@@ -8,8 +8,10 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 import { getRepoTarballURL, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import type { Database } from "../_shared/SupabaseTypes.d.ts";
-async function handleRequest(req: Request) {
+import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  scope?.setTag("function", "autograder-create-regression-test-run");
   const url = req.url;
   const lastURLPart = url.split("/").pop();
   if (!lastURLPart) {
@@ -19,7 +21,7 @@ async function handleRequest(req: Request) {
   if (isNaN(regression_test_id)) {
     throw new UserVisibleError("Invalid regression test ID");
   }
-
+  scope?.setTag("regression_test_id", regression_test_id.toString());
   const decoded = await validateOIDCToken(req.headers.get("Authorization")!);
   const { repository, sha, workflow_ref } = decoded;
   console.log("Creating regression test run for", repository, sha, workflow_ref, regression_test_id);

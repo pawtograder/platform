@@ -1,7 +1,9 @@
 import { ChimeSDKMeetings } from "npm:@aws-sdk/client-chime-sdk-meetings";
-import type { Database } from "./SupabaseTypes.d.ts";
+import { Database } from "./SupabaseTypes.d.ts";
+// import { jwtDecode } from "npm:jwt-decode"; // Currently unused
 import { UserVisibleError } from "./HandlerUtils.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import * as Sentry from "npm:@sentry/deno";
 function uuid() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
     const r = (Math.random() * 16) | 0,
@@ -9,6 +11,10 @@ function uuid() {
     return v.toString(16);
   });
 }
+// type JoinMeetingResponse = { // Currently unused
+//   Meeting: CreateMeetingCommandOutput;
+//   Attendee: CreateAttendeeCommandOutput;
+// };
 
 type VideoMeetingSession = Database["public"]["Tables"]["video_meeting_sessions"]["Row"];
 type HelpRequest = Database["public"]["Tables"]["help_requests"]["Row"];
@@ -35,7 +41,13 @@ export type ChimeSNSMessage = {
   };
 };
 
-export async function processSNSMessage(message: ChimeSNSMessage): Promise<void> {
+export async function processSNSMessage(message: ChimeSNSMessage, scope?: Sentry.Scope): Promise<void> {
+  scope?.setTag("chime_operation", "process_sns_message");
+  scope?.setTag("chime_event_type", message.detail.eventType);
+  scope?.setTag("chime_meeting_id", message.detail.meetingId);
+  scope?.setTag("chime_attendee_count", message.detail.attendeeCount.toString());
+
+  console.log(JSON.stringify(message, null, 2));
   if (message.detail.eventType === "chime:AttendeeLeft") {
     const remainingAttendees = message.detail.attendeeCount;
     if (remainingAttendees === 0) {
@@ -87,7 +99,11 @@ export async function processSNSMessage(message: ChimeSNSMessage): Promise<void>
       .eq("id", parseInt(match[2]));
   }
 }
-export async function getActiveMeeting(helpRequest: HelpRequest): Promise<VideoMeetingSession> {
+export async function getActiveMeeting(helpRequest: HelpRequest, scope?: Sentry.Scope): Promise<VideoMeetingSession> {
+  scope?.setTag("chime_operation", "get_active_meeting");
+  scope?.setTag("help_request_id", helpRequest.id.toString());
+  scope?.setTag("class_id", helpRequest.class_id.toString());
+
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -155,7 +171,7 @@ export async function getActiveMeeting(helpRequest: HelpRequest): Promise<VideoM
     if (updateError) {
       throw new UserVisibleError("Video Meeting Session Update Failed" + updateError?.message);
     }
-    newSession.chime_meeting_id = newMeeting.Meeting?.MeetingId!;
+    newSession.chime_meeting_id = newMeeting.Meeting?.MeetingId || null; //MUST be string or null
     return newSession;
   } else {
     return activeMeeting.data;

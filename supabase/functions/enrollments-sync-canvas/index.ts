@@ -7,11 +7,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 import { assertUserIsInstructor } from "../_shared/HandlerUtils.ts";
 import { createUserInClass } from "../_shared/EnrollmentUtils.ts";
-async function handleRequest(req: Request) {
+import * as Sentry from "npm:@sentry/deno";
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { course_id } = (await req.json()) as { course_id: number };
   if (!course_id) {
     throw new UserVisibleError("Course ID is required");
   }
+  scope?.setTag("function", "enrollments-sync-canvas");
+  scope?.setTag("course_id", course_id.toString());
   await assertUserIsInstructor(course_id, req.headers.get("Authorization")!);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
@@ -25,7 +28,7 @@ async function handleRequest(req: Request) {
   const canvasEnrollments = (
     await Promise.all(
       course!.class_sections.map((section) => {
-        return canvas.getEnrollments(section);
+        return canvas.getEnrollments(section, scope);
       })
     )
   ).flat();
@@ -38,10 +41,14 @@ async function handleRequest(req: Request) {
     (canvasEnrollment) =>
       !supabaseEnrollments.data!.find((supabaseEnrollment) => supabaseEnrollment.canvas_id === canvasEnrollment.user.id)
   );
+
+  scope?.setTag("canvas_enrollments_count", canvasEnrollments.length.toString());
+  scope?.setTag("supabase_enrollments_count", supabaseEnrollments.data?.length.toString() || "0");
+  scope?.setTag("new_enrollments_count", newEnrollments.length.toString());
   const allUsers = await adminSupabase.auth.admin.listUsers({
     perPage: 10000
   });
-  console.log(`Retrieved ${allUsers.data!.users.length} users from supabase`);
+  scope?.setTag("supabase_users_length", allUsers.data!.users.length.toString());
   const failureMessages: string[] = [];
   await Promise.all(
     newEnrollments.map(async (enrollment) => {
@@ -49,7 +56,7 @@ async function handleRequest(req: Request) {
         return; //Wow I hope that nobody actually has a student named Test Student, great job, Canvas!
       }
       try {
-        const user = await canvas.getUser(course_id, enrollment.user.id);
+        const user = await canvas.getUser(course_id, enrollment.user.id, scope);
         // Does the user already exist in supabase?
         const existingUser = allUsers.data!.users.find((dbUser) => user.primary_email === dbUser.email);
         const dbRoleForCanvasRole = (role: string): Database["public"]["Enums"]["app_role"] => {
@@ -83,7 +90,7 @@ async function handleRequest(req: Request) {
           dbRoleForCanvasRole(enrollment.role)
         );
       } catch (e) {
-        if ((e as any)?.response?.statusCode === 403) {
+        if ((e as { response?: { statusCode?: number } })?.response?.statusCode === 403) {
           console.log(
             `Unable to create account for user ${enrollment.user.name} (${enrollment.user.id}), Canvas refuses to give us their email.`
           );
@@ -102,6 +109,9 @@ async function handleRequest(req: Request) {
       enrollment.canvas_id &&
       !canvasEnrollments.find((canvasEnrollment) => canvasEnrollment.user.id === enrollment.canvas_id)
   );
+
+  scope?.setTag("removed_profiles_count", removedProfiles.length.toString());
+  scope?.setTag("failure_messages_count", failureMessages.length.toString());
   await Promise.all(
     removedProfiles.map(async (enrollment) => {
       await adminSupabase.from("user_roles").delete().eq("id", enrollment.id);

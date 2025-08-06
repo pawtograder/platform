@@ -3,13 +3,14 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { getOctoKit, listCommits } from "../_shared/GitHubWrapper.ts";
+import * as Sentry from "npm:@sentry/deno";
 
 interface AssignmentDeleteRequest {
   assignment_id: number;
   class_id: number;
 }
 
-async function deleteAssignment(req: Request): Promise<{ message: string }> {
+async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
       headers: { Authorization: req.headers.get("Authorization")! }
@@ -17,8 +18,9 @@ async function deleteAssignment(req: Request): Promise<{ message: string }> {
   });
 
   const { assignment_id, class_id } = (await req.json()) as AssignmentDeleteRequest;
-
-  console.log(`Request to delete assignment ${assignment_id} in course ${class_id}`);
+  scope?.setTag("function", "assignment-delete");
+  scope?.setTag("assignment_id", assignment_id.toString());
+  scope?.setTag("class_id", class_id.toString());
 
   if (!assignment_id || !class_id) {
     throw new IllegalArgumentError("assignment_id and class_id are required");

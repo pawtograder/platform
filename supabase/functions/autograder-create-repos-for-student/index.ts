@@ -3,13 +3,14 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
 import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
+  scope?.setTag("function", "autograder-create-repos-for-student");
   // Check for edge function secret authentication
   const edgeFunctionSecret = req.headers.get("x-edge-function-secret");
   const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
-
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -48,6 +49,7 @@ async function handleRequest(req: Request) {
       throw new SecurityError(`Invalid user: ${userId}`);
     }
     githubUsername = userData.github_username;
+    scope?.setTag("Source", "edge-function-secret");
   } else {
     const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
       global: {
@@ -76,8 +78,11 @@ async function handleRequest(req: Request) {
       throw new SecurityError(`Invalid user: ${userId}`);
     }
     githubUsername = userData.github_username;
+    scope?.setTag("Source", "jwt");
   }
-
+  scope?.setTag("class_id", classId?.toString() || "(null)");
+  scope?.setTag("user_id", userId);
+  scope?.setTag("github_username", githubUsername);
   if (!githubUsername) {
     throw new UserVisibleError(`User ${userId} has no Github username linked`);
   }

@@ -4,8 +4,9 @@ import { TZDate } from "npm:@date-fns/tz";
 import type { AssignmentGroupCreateRequest } from "../_shared/FunctionTypes.d.ts";
 import { createRepo, syncRepoPermissions } from "../_shared/GitHubWrapper.ts";
 import { IllegalArgumentError, SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import type { Database } from "../_shared/SupabaseTypes.d.ts";
-async function createAutograderGroup(req: Request): Promise<{ message: string }> {
+import { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
+async function createAutograderGroup(req: Request, scope: Sentry.Scope): Promise<{ message: string }> {
   //Get the user
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {
@@ -13,10 +14,12 @@ async function createAutograderGroup(req: Request): Promise<{ message: string }>
     }
   });
   const { course_id, assignment_id, name, invitees } = (await req.json()) as AssignmentGroupCreateRequest;
+  scope?.setTag("function", "assignment-group-create");
+  scope?.setTag("course_id", course_id.toString());
+  scope?.setTag("assignment_id", assignment_id.toString());
+  scope?.setTag("name", name);
+  scope?.setTag("invitees", invitees.join(","));
   const trimmedName = name.trim();
-  console.log(
-    `Request to create group ${trimmedName} for assignment ${assignment_id} in course ${course_id} with invitees ${invitees}`
-  );
   if (trimmedName.length === 0) {
     throw new IllegalArgumentError("Group name cannot be empty");
   }

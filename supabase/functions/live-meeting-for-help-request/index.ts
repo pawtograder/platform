@@ -4,18 +4,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ChimeSDKMeetings, CreateMeetingCommandOutput } from "npm:@aws-sdk/client-chime-sdk-meetings";
 import * as chimeUtils from "../_shared/ChimeWrapper.ts";
 import { assertUserIsInCourse, NotFoundError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import type { Database } from "../_shared/SupabaseTypes.d.ts";
-import type { LiveMeetingForHelpRequestRequest } from "../_shared/FunctionTypes.d.ts";
+import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { LiveMeetingForHelpRequestRequest } from "../_shared/FunctionTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { courseId, helpRequestId } = (await req.json()) as LiveMeetingForHelpRequestRequest;
-  const { supabase, enrollment } = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
-  const {
-    data: { user }
-  } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error("User not found");
-  }
+  scope?.setTag("function", "live-meeting-for-help-request");
+  scope?.setTag("courseId", courseId.toString());
+  scope?.setTag("helpRequestId", helpRequestId.toString());
+  const { enrollment } = await assertUserIsInCourse(courseId, req.headers.get("Authorization")!);
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""

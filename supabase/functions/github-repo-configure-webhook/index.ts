@@ -7,14 +7,20 @@ import { getFileFromRepo, updateAutograderWorkflowHash } from "../_shared/GitHub
 import { UserVisibleError, SecurityError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { parse } from "jsr:@std/yaml";
-import type { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
+import { PawtograderConfig } from "../_shared/PawtograderYml.d.ts";
+import { Json } from "https://esm.sh/@supabase/postgrest-js@1.19.2/dist/cjs/select-query-parser/types.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 type RequestBody = {
   new_repo: string;
   assignment_id: number;
   watch_type: "grader_solution" | "template_repo";
 };
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, new_repo, watch_type }: RequestBody = await req.json();
+  scope?.setTag("function", "github-repo-configure-webhook");
+  scope?.setTag("assignment_id", assignment_id.toString());
+  scope?.setTag("new_repo", new_repo);
+  scope?.setTag("watch_type", watch_type);
   //Validate that the user is an instructor
   const supabase = createClient<Database>(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: {

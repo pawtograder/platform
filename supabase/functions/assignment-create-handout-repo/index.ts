@@ -3,12 +3,21 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
+import {
+  createRepo,
+  getFileFromRepo,
+  syncRepoPermissions,
+  updateAutograderWorkflowHash
+} from "../_shared/GitHubWrapper.ts";
+import * as Sentry from "npm:@sentry/deno";
 
 const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
 
-async function handleRequest(req: Request) {
+async function handleRequest(req: Request, scope: Sentry.Scope) {
   const { assignment_id, class_id } = (await req.json()) as AssignmentCreateHandoutRepoRequest;
+  scope?.setTag("function", "assignment-create-handout-repo");
+  scope?.setTag("assignment_id", assignment_id.toString());
+  scope?.setTag("class_id", class_id.toString());
   await assertUserIsInstructor(class_id, req.headers.get("Authorization")!);
 
   const adminSupabase = createClient<Database>(
@@ -29,7 +38,7 @@ async function handleRequest(req: Request) {
   if (!assignment.classes.slug) {
     throw new UserVisibleError("Class does not have a slug");
   }
-  const handoutRepoName = `${assignment.classes.slug}-${assignment.slug}-handout`;
+  const handoutRepoName = `${assignment.classes.slug}-handout-${assignment.slug}`;
   const handoutRepoOrg = assignment.classes.github_org;
   if (!handoutRepoOrg) {
     throw new UserVisibleError("Class does not have a GitHub organization");
