@@ -279,8 +279,7 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
                 }
                 confirmHeader="Delete Flashcard Deck"
                 confirmText={`Are you sure you want to delete the deck "${deck.name}"? This action cannot be undone.`}
-                                  onConfirm={async () => await handleDeleteDeck(deck.id, deck.name)}
-
+                onConfirm={async () => await handleDeleteDeck(deck.id, deck.name)}
               />
             </HStack>
           );

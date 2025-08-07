@@ -119,7 +119,7 @@ export default function FlashcardDeckPage() {
   };
 
   const handleDeleteFlashcard = async (cardId: number) => {
-  await deleteFlashcard(
+    await deleteFlashcard(
       {
         resource: "flashcards",
         id: cardId
@@ -301,8 +301,7 @@ export default function FlashcardDeckPage() {
                       }
                       confirmHeader="Delete Flashcard"
                       confirmText="Are you sure you want to delete this flashcard? This action cannot be undone."
-                                              onConfirm={async () => await handleDeleteFlashcard(card.id)}
-
+                      onConfirm={async () => await handleDeleteFlashcard(card.id)}
                     />
                   </HStack>
                 </HStack>

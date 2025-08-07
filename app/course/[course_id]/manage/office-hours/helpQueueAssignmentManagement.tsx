@@ -207,7 +207,6 @@ export default function HelpQueueAssignmentManagement() {
               confirmHeader="Delete Assignment"
               confirmText="Are you sure you want to delete this assignment? This action cannot be undone."
               onConfirm={async () => await handleDeleteAssignment(assignment.id)}
-
             />
           </HStack>
         )}

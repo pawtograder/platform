@@ -129,7 +129,9 @@ export async function createUserInClass({
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
   const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const resolvedName = name ? name : `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
-  const public_profile_name = name ? `Pseudonym #${userIdx[role]}` : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
+  const public_profile_name = name
+    ? `Pseudonym #${userIdx[role]}`
+    : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
   const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
   const { data: userData, error: userError } = await supabase.auth.admin.createUser({

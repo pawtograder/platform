@@ -395,8 +395,7 @@ function LabSectionsTable() {
                         }
                         confirmHeader="Delete Lab Section"
                         confirmText={`Are you sure you want to delete "${labSection.name}"? This action cannot be undone.`}
-                                                  onConfirm={async () => await handleDelete(labSection.id)}
-
+                        onConfirm={async () => await handleDelete(labSection.id)}
                       />
                     </HStack>
                   </Table.Cell>

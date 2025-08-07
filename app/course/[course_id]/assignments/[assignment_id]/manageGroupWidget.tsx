@@ -708,7 +708,6 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
         triggerLabel="Approve"
         confirmHeader="Approve Join Request"
         confirmText="Are you sure you want to approve this join request?"
-
       />
       <PopConfirm
         onConfirm={async () => {

@@ -197,8 +197,9 @@ export default function StudentKarmaManagement() {
             }
             confirmHeader="Delete Karma Entry"
             confirmText={`Are you sure you want to delete the karma entry for ${entry.student_profile?.name || "this student"}? This action cannot be undone.`}
-                          onConfirm={async () => await handleDeleteKarmaEntry(entry.id, entry.student_profile?.name || "Unknown Student")}
-
+            onConfirm={async () =>
+              await handleDeleteKarmaEntry(entry.id, entry.student_profile?.name || "Unknown Student")
+            }
           />
         </HStack>
       </Flex>

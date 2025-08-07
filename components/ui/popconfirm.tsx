@@ -24,76 +24,78 @@ export const PopConfirm = ({
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
 
-  const handleConfirm = useCallback((e: React.MouseEvent) => {
-    // Safari-specific: Prevent default and stop propagation immediately
-    e.preventDefault();
-    e.stopPropagation();
-    e.nativeEvent.preventDefault();
-    e.nativeEvent.stopImmediatePropagation();
-    
-    // Prevent double-clicks
-    if (isLoading || isExecutingRef.current) return;
-    
-    isExecutingRef.current = true;
-    setIsLoading(true);
-    
-    // Use setTimeout to break out of the current call stack - Safari friendly
-    setTimeout(async () => {
-      try {
-        await onConfirm();
-        // Close with a delay to ensure Safari processes the action
-        setTimeout(() => {
-          setIsOpen(false);
-          setIsLoading(false);
-          isExecutingRef.current = false;
-        }, 50);
-      } catch (error) {
-        console.error('Error in confirm action:', error);
-        setIsLoading(false);
-        isExecutingRef.current = false;
-      }
-    }, 0);
-  }, [onConfirm, isLoading]);
+  const handleConfirm = useCallback(
+    (e: React.MouseEvent) => {
+      // Safari-specific: Prevent default and stop propagation immediately
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.preventDefault();
+      e.nativeEvent.stopImmediatePropagation();
 
-  const handleCancel = useCallback((e: React.MouseEvent) => {
-    // Safari-specific: Prevent default and stop propagation immediately
-    e.preventDefault();
-    e.stopPropagation();
-    e.nativeEvent.preventDefault();
-    e.nativeEvent.stopImmediatePropagation();
-    
-    // Prevent double-clicks
-    if (isLoading || isExecutingRef.current) return;
-    
-    isExecutingRef.current = true;
-    setIsLoading(true);
-    
-    // Use setTimeout to break out of the current call stack - Safari friendly
-    setTimeout(async () => {
-      try {
-        if (onCancel) {
-          await onCancel();
-        }
-        // Close with a delay to ensure Safari processes the action
-        setTimeout(() => {
-          setIsOpen(false);
+      // Prevent double-clicks
+      if (isLoading || isExecutingRef.current) return;
+
+      isExecutingRef.current = true;
+      setIsLoading(true);
+
+      // Use setTimeout to break out of the current call stack - Safari friendly
+      setTimeout(async () => {
+        try {
+          await onConfirm();
+          // Close with a delay to ensure Safari processes the action
+          setTimeout(() => {
+            setIsOpen(false);
+            setIsLoading(false);
+            isExecutingRef.current = false;
+          }, 50);
+        } catch (error) {
+          console.error("Error in confirm action:", error);
           setIsLoading(false);
           isExecutingRef.current = false;
-        }, 50);
-      } catch (error) {
-        console.error('Error in cancel action:', error);
-        setIsLoading(false);
-        isExecutingRef.current = false;
-      }
-    }, 0);
-  }, [onCancel, isLoading]);
+        }
+      }, 0);
+    },
+    [onConfirm, isLoading]
+  );
+
+  const handleCancel = useCallback(
+    (e: React.MouseEvent) => {
+      // Safari-specific: Prevent default and stop propagation immediately
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.preventDefault();
+      e.nativeEvent.stopImmediatePropagation();
+
+      // Prevent double-clicks
+      if (isLoading || isExecutingRef.current) return;
+
+      isExecutingRef.current = true;
+      setIsLoading(true);
+
+      // Use setTimeout to break out of the current call stack - Safari friendly
+      setTimeout(async () => {
+        try {
+          if (onCancel) {
+            await onCancel();
+          }
+          // Close with a delay to ensure Safari processes the action
+          setTimeout(() => {
+            setIsOpen(false);
+            setIsLoading(false);
+            isExecutingRef.current = false;
+          }, 50);
+        } catch (error) {
+          console.error("Error in cancel action:", error);
+          setIsLoading(false);
+          isExecutingRef.current = false;
+        }
+      }, 0);
+    },
+    [onCancel, isLoading]
+  );
 
   return (
-    <PopoverRoot 
-      closeOnInteractOutside={true} 
-      open={isOpen} 
-      onOpenChange={(details) => setIsOpen(details.open)}
-    >
+    <PopoverRoot closeOnInteractOutside={true} open={isOpen} onOpenChange={(details) => setIsOpen(details.open)}>
       <PopoverTrigger aria-label={triggerLabel} asChild>
         {trigger}
       </PopoverTrigger>
@@ -112,10 +114,10 @@ export const PopConfirm = ({
               disabled={isLoading}
               style={{
                 // Safari-specific fixes
-                WebkitTouchCallout: 'none',
-                WebkitUserSelect: 'none',
-                WebkitTapHighlightColor: 'transparent',
-                cursor: 'pointer'
+                WebkitTouchCallout: "none",
+                WebkitUserSelect: "none",
+                WebkitTapHighlightColor: "transparent",
+                cursor: "pointer"
               }}
             >
               <Icon as={BsX} boxSize={5} />
@@ -130,10 +132,10 @@ export const PopConfirm = ({
               loading={isLoading}
               style={{
                 // Safari-specific fixes
-                WebkitTouchCallout: 'none',
-                WebkitUserSelect: 'none',
-                WebkitTapHighlightColor: 'transparent',
-                cursor: 'pointer'
+                WebkitTouchCallout: "none",
+                WebkitUserSelect: "none",
+                WebkitTapHighlightColor: "transparent",
+                cursor: "pointer"
               }}
             >
               <Icon as={BsCheck} boxSize={5} />

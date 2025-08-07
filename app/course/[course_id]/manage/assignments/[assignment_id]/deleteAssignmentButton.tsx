@@ -147,7 +147,6 @@ export default function DeleteAssignmentButton({ assignmentId, courseId }: Delet
                         setIsLoading(false);
                       }
                     }}
-
                   />
                 </HStack>
               </Dialog.Footer>

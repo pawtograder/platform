@@ -187,8 +187,7 @@ export default function HelpRequestTemplateManagement() {
             }
             confirmHeader="Delete Template"
             confirmText={`Are you sure you want to delete the template "${template.name}"? This action cannot be undone.`}
-                          onConfirm={async () => await handleDeleteTemplate(template.id)}
-
+            onConfirm={async () => await handleDeleteTemplate(template.id)}
           />
         </HStack>
       </Flex>

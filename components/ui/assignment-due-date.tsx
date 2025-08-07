@@ -148,11 +148,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
               <Text>
                 Once you consume a late token, it is consumed immediately. You will not be able to undo this action.
               </Text>
-              {assignment_group_id && (
-                <Text fontWeight="bold">
-                  All group members will have a token deducted.
-                </Text>
-              )}
+              {assignment_group_id && <Text fontWeight="bold">All group members will have a token deducted.</Text>}
             </Alert>
             <Button
               variant="solid"

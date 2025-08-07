@@ -517,7 +517,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
                 confirmHeader="Delete Review Assignment"
                 confirmText="Are you sure you want to delete this review assignment?"
                 onConfirm={async () => await handleDelete(row.original.id)}
-
                 trigger={
                   <IconButton aria-label="Delete review assignment" colorPalette="red" variant="ghost" size="sm">
                     <FaTrash />

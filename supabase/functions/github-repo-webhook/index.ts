@@ -75,7 +75,10 @@ async function handlePushToStudentRepo(
     });
     if (checkRunError) {
       console.error(checkRunError);
-      throw new Error(`Could not create repository_check_run`);
+      scope.setTag("error_source", "repository_check_run_insert_failed");
+      scope.setTag("error_context", "Could not create repository_check_run");
+      Sentry.captureException(checkRunError, scope);
+      throw checkRunError;
     }
   }
   if (payload.head_commit.message.includes("#submit")) {
@@ -185,9 +188,11 @@ async function handlePushToGraderSolution(
       }))
     );
     if (error) {
+      scope.setTag("error_source", "autograder_commits_insert_failed");
+      scope.setTag("error_context", "Failed to store autograder commits");
       Sentry.captureException(error, scope);
       console.error(error);
-      throw new Error("Failed to store autograder commits");
+      throw error;
     }
   }
 }
@@ -235,8 +240,10 @@ async function handlePushToTemplateRepo(
         })
         .eq("id", assignment.id);
       if (error) {
+        scope.setTag("error_source", "autograder_workflow_hash_update_failed");
+        scope.setTag("error_context", "Failed to update autograder workflow hash");
         Sentry.captureException(error, scope);
-        throw new Error("Failed to update autograder workflow hash");
+        throw error;
       }
     }
   }
@@ -248,8 +255,10 @@ async function handlePushToTemplateRepo(
       })
       .eq("id", assignment.id);
     if (assignmentUpdateError) {
+      scope.setTag("error_source", "assignment_template_sha_update_failed");
+      scope.setTag("error_context", "Failed to update assignment");
       Sentry.captureException(assignmentUpdateError, scope);
-      throw new Error("Failed to update assignment");
+      throw assignmentUpdateError;
     }
     //Store the commit for the template repo
     const { error } = await adminSupabase.from("assignment_handout_commits").insert(
@@ -262,8 +271,10 @@ async function handlePushToTemplateRepo(
       }))
     );
     if (error) {
+      scope.setTag("error_source", "assignment_handout_commits_insert_failed");
+      scope.setTag("error_context", "Failed to store assignment handout commit");
       Sentry.captureException(error, scope);
-      throw new Error("Failed to store assignment handout commit");
+      throw error;
     }
   }
 }
@@ -295,8 +306,10 @@ eventHandler.on("push", async ({ name, payload }) => {
         .maybeSingle();
       if (studentRepoError) {
         console.error(studentRepoError);
+        scope.setTag("error_source", "student_repo_lookup_failed");
+        scope.setTag("error_context", "Error getting student repo");
         Sentry.captureException(studentRepoError, scope);
-        throw new Error("Error getting student repo");
+        throw studentRepoError;
       }
       if (studentRepo) {
         scope.setTag("student_repo", studentRepo.id.toString());
@@ -310,8 +323,10 @@ eventHandler.on("push", async ({ name, payload }) => {
         .eq("grader_repo", repoName);
       if (graderSolutionError) {
         console.error(graderSolutionError);
+        scope.setTag("error_source", "grader_solution_lookup_failed");
+        scope.setTag("error_context", "Error getting grader solution");
         Sentry.captureException(graderSolutionError, scope);
-        throw new Error("Error getting grader solution");
+        throw graderSolutionError;
       }
       if (graderSolution.length > 0) {
         scope.setTag("grader_solution", graderSolution[0].id.toString());
@@ -324,7 +339,10 @@ eventHandler.on("push", async ({ name, payload }) => {
         .eq("template_repo", repoName);
       if (templateRepoError) {
         console.error(templateRepoError);
-        throw new Error("Error getting template repo");
+        scope.setTag("error_source", "template_repo_lookup_failed");
+        scope.setTag("error_context", "Error getting template repo");
+        Sentry.captureException(templateRepoError, scope);
+        throw templateRepoError;
       }
       if (templateRepo.length > 0) {
         await handlePushToTemplateRepo(adminSupabase, payload, templateRepo, scope);
@@ -689,8 +707,10 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload: payloadB
     });
 
     if (insertError) {
+      scope.setTag("error_source", "workflow_events_insert_failed");
+      scope.setTag("error_context", "Failed to store workflow event");
       Sentry.captureException(insertError, scope);
-      throw new Error("Failed to store workflow event");
+      throw insertError;
     }
 
     scope?.setTag("workflow_event_logged", "true");

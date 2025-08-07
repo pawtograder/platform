@@ -3,8 +3,7 @@ import dotenv from "dotenv";
 import { all, ConstantNode, create, FunctionNode } from "mathjs";
 import { minimatch } from "minimatch";
 import Bottleneck from "bottleneck";
-import { faker } from '@faker-js/faker';
-
+import { faker } from "@faker-js/faker";
 
 import {
   createClass,
@@ -2297,30 +2296,36 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`  Creating ${numInstructors} instructors`);
     const instructorItems = Array.from({ length: numInstructors }, (_, i) => ({ index: i }));
     const instructors = await Promise.all(
-      instructorItems.map(async () => limiter.schedule(async () => {
-        const name = faker.person.fullName();
-        return createUserInClass({ role: "instructor", class_id, name });
-      }))
+      instructorItems.map(async () =>
+        limiter.schedule(async () => {
+          const name = faker.person.fullName();
+          return createUserInClass({ role: "instructor", class_id, name });
+        })
+      )
     );
     console.log(`✓ Created ${instructors.length} instructors`);
 
     console.log(`  Creating ${numGraders} graders`);
     const graderItems = Array.from({ length: numGraders }, (_, i) => ({ index: i }));
     const graders = await Promise.all(
-      graderItems.map(async () => limiter.schedule(async () => {
-        const name = faker.person.fullName();
-        return createUserInClass({ role: "grader", class_id, name });
-      }))
+      graderItems.map(async () =>
+        limiter.schedule(async () => {
+          const name = faker.person.fullName();
+          return createUserInClass({ role: "grader", class_id, name });
+        })
+      )
     );
     console.log(`✓ Created ${graders.length} graders`);
 
     console.log(`  Creating ${numStudents} students`);
     const studentItems = Array.from({ length: numStudents }, (_, i) => ({ index: i }));
     const students = await Promise.all(
-      studentItems.map(async () => limiter.schedule(async () => {
-        const name = faker.person.fullName();
-        return createUserInClass({ role: "student", class_id, name });
-      }))
+      studentItems.map(async () =>
+        limiter.schedule(async () => {
+          const name = faker.person.fullName();
+          return createUserInClass({ role: "student", class_id, name });
+        })
+      )
     );
     console.log(`✓ Created ${students.length} students, ${instructors.length} instructors, ${graders.length} graders`);
 
@@ -2977,7 +2982,7 @@ async function runSmallScale() {
       numGraderTags: 4
     },
     labAssignmentConfig: {
-      numLabAssignments: 25, 
+      numLabAssignments: 25,
       minutesDueAfterLab: 60 // 1 hour
     },
     groupAssignmentConfig: {

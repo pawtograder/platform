@@ -170,8 +170,7 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
               triggerLabel="Delete"
               confirmHeader="Delete Grading Conflict"
               confirmText="Are you sure you want to delete this grading conflict?"
-                              onConfirm={async () => await handleDelete(conflictId)}
-
+              onConfirm={async () => await handleDelete(conflictId)}
               trigger={deleteButton}
             />
           );

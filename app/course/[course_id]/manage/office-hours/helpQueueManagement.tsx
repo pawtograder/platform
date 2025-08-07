@@ -172,7 +172,6 @@ export default function HelpQueueManagement() {
                     confirmHeader="Delete Queue"
                     confirmText={`Are you sure you want to delete the queue "${queue.name}"? This action cannot be undone.`}
                     onConfirm={async () => await handleDeleteQueue(queue.id)}
-
                   />
                 </HStack>
               </Flex>

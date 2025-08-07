@@ -245,8 +245,7 @@ export default function ModerationManagement() {
             }
             confirmHeader="Delete Moderation Action"
             confirmText="Are you sure you want to delete this moderation action? This action cannot be undone."
-                          onConfirm={async () => await handleDeleteModerationAction(action.id)}
-
+            onConfirm={async () => await handleDeleteModerationAction(action.id)}
           />
         )}
       </Flex>
