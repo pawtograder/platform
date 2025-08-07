@@ -418,7 +418,6 @@ function JoinGroupButton({
                                 }
                                 invalidateInvites();
                               }}
-                              onCancel={() => {}}
                             />
                           </HStack>
                         </VStack>
@@ -565,7 +564,6 @@ function LeaveGroupButton({ assignment }: { assignment: Assignment }) {
   const invalidate = useInvalidate();
   return (
     <PopConfirm
-      onCancel={() => {}}
       trigger={
         <Button variant="ghost" colorPalette="red">
           Leave group
@@ -710,10 +708,8 @@ function AssignmentGroupJoinRequestView({ join_request }: { join_request: Assign
         triggerLabel="Approve"
         confirmHeader="Approve Join Request"
         confirmText="Are you sure you want to approve this join request?"
-        onCancel={() => {}}
       />
       <PopConfirm
-        onCancel={() => {}}
         onConfirm={async () => {
           try {
             const { error } = await supabase

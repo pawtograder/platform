@@ -75,7 +75,10 @@ async function handlePushToStudentRepo(
     });
     if (checkRunError) {
       console.error(checkRunError);
-      throw new Error(`Could not create repository_check_run`);
+      scope.setTag("error_source", "repository_check_run_insert_failed");
+      scope.setTag("error_context", "Could not create repository_check_run");
+      Sentry.captureException(checkRunError, scope);
+      throw checkRunError;
     }
   }
   if (payload.head_commit.message.includes("#submit")) {
@@ -185,9 +188,11 @@ async function handlePushToGraderSolution(
       }))
     );
     if (error) {
+      scope.setTag("error_source", "autograder_commits_insert_failed");
+      scope.setTag("error_context", "Failed to store autograder commits");
       Sentry.captureException(error, scope);
       console.error(error);
-      throw new Error("Failed to store autograder commits");
+      throw error;
     }
   }
 }
@@ -235,8 +240,10 @@ async function handlePushToTemplateRepo(
         })
         .eq("id", assignment.id);
       if (error) {
+        scope.setTag("error_source", "autograder_workflow_hash_update_failed");
+        scope.setTag("error_context", "Failed to update autograder workflow hash");
         Sentry.captureException(error, scope);
-        throw new Error("Failed to update autograder workflow hash");
+        throw error;
       }
     }
   }
@@ -248,8 +255,10 @@ async function handlePushToTemplateRepo(
       })
       .eq("id", assignment.id);
     if (assignmentUpdateError) {
+      scope.setTag("error_source", "assignment_template_sha_update_failed");
+      scope.setTag("error_context", "Failed to update assignment");
       Sentry.captureException(assignmentUpdateError, scope);
-      throw new Error("Failed to update assignment");
+      throw assignmentUpdateError;
     }
     //Store the commit for the template repo
     const { error } = await adminSupabase.from("assignment_handout_commits").insert(
@@ -262,8 +271,10 @@ async function handlePushToTemplateRepo(
       }))
     );
     if (error) {
+      scope.setTag("error_source", "assignment_handout_commits_insert_failed");
+      scope.setTag("error_context", "Failed to store assignment handout commit");
       Sentry.captureException(error, scope);
-      throw new Error("Failed to store assignment handout commit");
+      throw error;
     }
   }
 }
@@ -295,8 +306,10 @@ eventHandler.on("push", async ({ name, payload }) => {
         .maybeSingle();
       if (studentRepoError) {
         console.error(studentRepoError);
+        scope.setTag("error_source", "student_repo_lookup_failed");
+        scope.setTag("error_context", "Error getting student repo");
         Sentry.captureException(studentRepoError, scope);
-        throw new Error("Error getting student repo");
+        throw studentRepoError;
       }
       if (studentRepo) {
         scope.setTag("student_repo", studentRepo.id.toString());
@@ -310,8 +323,10 @@ eventHandler.on("push", async ({ name, payload }) => {
         .eq("grader_repo", repoName);
       if (graderSolutionError) {
         console.error(graderSolutionError);
+        scope.setTag("error_source", "grader_solution_lookup_failed");
+        scope.setTag("error_context", "Error getting grader solution");
         Sentry.captureException(graderSolutionError, scope);
-        throw new Error("Error getting grader solution");
+        throw graderSolutionError;
       }
       if (graderSolution.length > 0) {
         scope.setTag("grader_solution", graderSolution[0].id.toString());
@@ -324,7 +339,10 @@ eventHandler.on("push", async ({ name, payload }) => {
         .eq("template_repo", repoName);
       if (templateRepoError) {
         console.error(templateRepoError);
-        throw new Error("Error getting template repo");
+        scope.setTag("error_source", "template_repo_lookup_failed");
+        scope.setTag("error_context", "Error getting template repo");
+        Sentry.captureException(templateRepoError, scope);
+        throw templateRepoError;
       }
       if (templateRepo.length > 0) {
         await handlePushToTemplateRepo(adminSupabase, payload, templateRepo, scope);
@@ -439,6 +457,9 @@ eventHandler.on("membership", async ({ payload }) => {
       .single();
 
     if (classError) {
+      if (courseSlug === "pawtograder-playground") {
+        return; // Don't bother logging this - we intentionally share this org across instances.
+      }
       Sentry.captureMessage(`Class not found for slug ${courseSlug}:`, scope);
       return;
     }
@@ -540,6 +561,9 @@ eventHandler.on("organization", async ({ payload }) => {
     const userError = result.error;
 
     if (userError || !userData) {
+      if (organizationName === "pawtograder-playground") {
+        return; // Don't bother logging this - we intentionally share this org across instances.
+      }
       if (userError) {
         Sentry.captureException(userError, scope);
       }
@@ -686,8 +710,10 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload: payloadB
     });
 
     if (insertError) {
+      scope.setTag("error_source", "workflow_events_insert_failed");
+      scope.setTag("error_context", "Failed to store workflow event");
       Sentry.captureException(insertError, scope);
-      throw new Error("Failed to store workflow event");
+      throw insertError;
     }
 
     scope?.setTag("workflow_event_logged", "true");
@@ -804,92 +830,6 @@ eventHandler.on("membership", async ({ payload }) => {
     }
   } catch (error) {
     console.error("Error processing membership event:", error);
-  }
-});
-
-// Handle organization invitation events
-eventHandler.on("organization", async ({ payload }) => {
-  const payloadAny = payload as any;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-  console.log(
-    `Received organization event: ${payload.action} for user: ${payloadAny.invitation?.login || payloadAny.membership?.user?.login}`
-  );
-
-  try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-
-    // Only process member invitation events
-    if (payload.action !== "member_invited") {
-      console.log(`Skipping organization action: ${payload.action}`);
-      return;
-    }
-
-    // Extract invitation information
-    const invitedUserLogin = payloadAny.invitation?.login;
-
-    if (!invitedUserLogin) {
-      console.log("Missing invitation login, skipping");
-      return;
-    }
-
-    // Extract organization from the payload
-    const organizationName = payloadAny.organization?.login;
-
-    if (!organizationName) {
-      console.log("Missing organization name, skipping");
-      return;
-    }
-
-    console.log(`Processing organization invitation for login: ${invitedUserLogin} in org: ${organizationName}`);
-
-    // Find the user by GitHub username
-    const result = await adminSupabase.from("users").select("user_id").eq("github_username", invitedUserLogin).single();
-
-    const userData = result.data;
-    const userError = result.error;
-
-    if (userError || !userData) {
-      console.log(`User not found for GitHub username ${invitedUserLogin}:`, userError);
-      return;
-    }
-
-    const userId = userData.user_id;
-
-    // First, find classes that match this GitHub organization
-    const { data: classesData, error: classesError } = await adminSupabase
-      .from("classes")
-      .select("id")
-      .eq("github_org", organizationName);
-
-    if (classesError) {
-      console.error(`Error finding classes for organization ${organizationName}:`, classesError);
-      return;
-    }
-
-    if (!classesData || classesData.length === 0) {
-      console.log(`No classes found for GitHub organization: ${organizationName}`);
-      return;
-    }
-
-    const classIds = classesData.map((c) => c.id);
-    console.log(`Found ${classIds.length} classes for organization ${organizationName}: ${classIds.join(", ")}`);
-
-    // Update user_roles only for classes that match this GitHub organization
-    const { error: updateError, count } = await adminSupabase
-      .from("user_roles")
-      .update({ invitation_date: new Date().toISOString() })
-      .eq("user_id", userId)
-      .in("class_id", classIds);
-
-    if (updateError) {
-      console.error(`Failed to update invitation_date for user ${userId}:`, updateError);
-    } else {
-      console.log(
-        `Successfully updated invitation_date for ${count} user roles for user ${userId} (${invitedUserLogin}) in organization ${organizationName}`
-      );
-    }
-  } catch (error) {
-    console.error("Error processing organization invitation event:", error);
   }
 });
 

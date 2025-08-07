@@ -232,12 +232,11 @@ function AdjustDueDateDialog({
                                   <Icon as={FaTrash} />
                                 </Button>
                               }
-                              confirmText="Are you sure you want to delete this extension?"
-                              onConfirm={() =>
-                                deleteException({ id: extension.id, resource: "assignment_due_date_exceptions" })
-                              }
-                              onCancel={() => {}}
                               confirmHeader="Delete extension"
+                              confirmText="Are you sure you want to delete this extension?"
+                              onConfirm={async () => {
+                                await deleteException({ id: extension.id, resource: "assignment_due_date_exceptions" });
+                              }}
                             />
                           }
                         </Table.Cell>
