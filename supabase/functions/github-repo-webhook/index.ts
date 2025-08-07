@@ -457,6 +457,9 @@ eventHandler.on("membership", async ({ payload }) => {
       .single();
 
     if (classError) {
+      if (courseSlug === "pawtograder-playground") {
+        return; // Don't bother logging this - we intentionally share this org across instances.
+      }
       Sentry.captureMessage(`Class not found for slug ${courseSlug}:`, scope);
       return;
     }
