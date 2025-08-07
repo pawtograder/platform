@@ -8,6 +8,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
 import useModalManager from "@/hooks/useModalManager";
 import useTags from "@/hooks/useTags";
+import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { ClassSection, Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
@@ -30,8 +31,15 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { ColumnDef, flexRender } from "@tanstack/react-table";
-import { useCustomTable } from "@/hooks/useCustomTable";
+import {
+  ColumnDef,
+  flexRender,
+  useReactTable,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel
+} from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import Link from "next/link";
@@ -60,16 +68,14 @@ type RemoveStudentModalData = {
 function EnrollmentsTable() {
   const { course_id } = useParams();
   const { user: currentUser } = useAuthState();
-  const [invalidationTrigger, setInvalidationTrigger] = useState(0);
   const supabase = createClient();
 
   const deleteUserRole = useCallback(
     async (userRoleId: string) => {
       const { error } = await supabase.from("user_roles").delete().eq("id", parseInt(userRoleId));
       if (error) throw error;
-      setInvalidationTrigger((prev) => prev + 1);
     },
-    [supabase, setInvalidationTrigger]
+    [supabase]
   );
 
   const [isDeletingUserRole, setIsDeletingUserRole] = useState(false);
@@ -153,7 +159,6 @@ function EnrollmentsTable() {
   const addTag = async (values: Omit<Tag, "id" | "created_at">) => {
     const { error } = await supabase.from("tags").insert(values);
     if (error) throw error;
-    setInvalidationTrigger((prev) => prev + 1);
   };
 
   useEffect(() => {
@@ -376,54 +381,36 @@ function EnrollmentsTable() {
     ]
   );
 
-  // Memoize server filters to prevent unnecessary API calls
-  const serverFilters = useMemo(
-    () => [
-      {
-        field: "class_id",
-        operator: "eq" as const,
-        value: course_id as string
-      }
-    ],
-    [course_id]
-  );
+  // Get user roles data from CourseController (realtime)
+  const userRolesData = useUserRolesWithProfiles();
 
-  // Memoize initial state to prevent table re-initialization
-  const initialState = useMemo(
-    () => ({
+  // Create local table using react-table
+  const table = useReactTable({
+    data: userRolesData,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    initialState: {
       pagination: {
         pageIndex: 0,
         pageSize: 50
       }
-    }),
-    []
-  );
-
-  //TODO: Refactor so that invalidate works, via TableController
-  const {
-    getHeaderGroups,
-    getRowModel,
-    getRowCount,
-    getState,
-    setPageIndex,
-    getCanPreviousPage,
-    getCanNextPage,
-    nextPage,
-    previousPage,
-    setPageSize,
-    getPrePaginationRowModel,
-    refetch
-  } = useCustomTable<UserRoleWithPrivateProfileAndUser>({
-    columns,
-    resource: "user_roles",
-    serverFilters,
-    select: "*,profiles!private_profile_id(*), users(*)",
-    initialState
+    }
   });
 
-  useEffect(() => {
-    refetch();
-  }, [invalidationTrigger, refetch]);
+  const getHeaderGroups = table.getHeaderGroups;
+  const getRowModel = table.getRowModel;
+  const getRowCount = () => table.getFilteredRowModel().rows.length;
+  const getState = table.getState;
+  const setPageIndex = table.setPageIndex;
+  const getCanPreviousPage = table.getCanPreviousPage;
+  const getCanNextPage = table.getCanNextPage;
+  const nextPage = table.nextPage;
+  const previousPage = table.previousPage;
+  const setPageSize = table.setPageSize;
+  const getPrePaginationRowModel = table.getPrePaginationRowModel;
 
   const nRows = getRowCount();
   const pageSize = getState().pagination.pageSize;
@@ -436,7 +423,6 @@ function EnrollmentsTable() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase as any).from(params.resource).delete().eq("id", params.id);
     if (error) throw error;
-    setInvalidationTrigger((prev) => prev + 1);
   };
 
   return (
@@ -649,7 +635,7 @@ function EnrollmentsTable() {
                         if (!findTag) {
                           toaster.error({
                             title: "Error removing tag",
-                            type: "Tag not found on profile " + profile.profiles.name
+                            type: "Tag not found on profile " + (profile.profiles?.name || "Unknown")
                           });
                           return;
                         }

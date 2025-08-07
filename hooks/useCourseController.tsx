@@ -12,7 +12,9 @@ import {
   LabSectionMeeting,
   Notification,
   Tag,
-  UserProfile
+  UserProfile,
+  UserRoleWithUser,
+  UserRoleWithPrivateProfileAndUser
 } from "@/utils/supabase/DatabaseTypes";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController from "@/lib/TableController";
@@ -199,19 +201,6 @@ export type UserProfileWithPrivateProfile = UserProfile & {
 };
 
 /**
- * Type for roster data with user information from joins
- */
-export type RosterWithUserInfo = {
-  user_id: string;
-  private_profile_id: string;
-  canvas_id: string | null;
-  users: {
-    name: string;
-    email: string;
-  };
-};
-
-/**
  * This class is responsible for managing realtime course data.
  */
 export class CourseController {
@@ -230,7 +219,8 @@ export class CourseController {
   readonly tags: TableController<"tags">;
   readonly labSections: TableController<"lab_sections">;
   readonly labSectionMeetings: TableController<"lab_section_meetings">;
-  readonly rosterWithUserInfo: TableController<"user_roles">;
+  readonly rosterWithUserInfo: TableController<"user_roles", "*, users(*)">;
+  readonly userRolesWithProfiles: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
 
   constructor(
     public courseId: number,
@@ -292,13 +282,16 @@ export class CourseController {
     this.rosterWithUserInfo = new TableController({
       client,
       table: "user_roles",
-      query: client
-        .from("user_roles")
-        .select("user_id, private_profile_id, canvas_id, users!inner(name, email)")
-        .eq("class_id", courseId)
-        .eq("role", "student"),
+      query: client.from("user_roles").select("*, users(*)").eq("class_id", courseId).eq("role", "student"),
       classRealTimeController
-    }) as unknown as TableController<"user_roles">; // Type assertion needed for joined query TableController
+    });
+
+    this.userRolesWithProfiles = new TableController({
+      client,
+      table: "user_roles",
+      query: client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", courseId),
+      classRealTimeController
+    });
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -546,26 +539,24 @@ export class CourseController {
     return result.data.filter((role) => role.role === "student");
   }
 
-  getRosterWithUserInfo(callback?: UpdateCallback<RosterWithUserInfo[]>): {
+  getRosterWithUserInfo(callback?: UpdateCallback<UserRoleWithUser[]>): {
     unsubscribe: Unsubscribe;
-    data: RosterWithUserInfo[];
+    data: UserRoleWithUser[];
   } {
-    // Note: We use type assertion here because the joined query returns a different shape
-    // than the base user_roles table, but TableController typing assumes full table structure
     if (callback) {
       const result = this.rosterWithUserInfo.list((data) => {
-        callback(data as unknown as RosterWithUserInfo[]);
+        callback(data);
       });
       return {
         unsubscribe: result.unsubscribe,
-        data: result.data as unknown as RosterWithUserInfo[]
+        data: result.data
       };
     }
 
     const result = this.rosterWithUserInfo.list();
     return {
       unsubscribe: result.unsubscribe,
-      data: result.data as unknown as RosterWithUserInfo[]
+      data: result.data
     };
   }
 
@@ -694,7 +685,8 @@ export class CourseController {
       this.discussionThreadReadStatus.ready &&
       this.tags.ready &&
       this.labSections.ready &&
-      this.labSectionMeetings.ready
+      this.labSectionMeetings.ready &&
+      this.userRolesWithProfiles.ready
     );
   }
 
@@ -708,6 +700,7 @@ export class CourseController {
     this.labSections.close();
     this.labSectionMeetings.close();
     this.rosterWithUserInfo.close();
+    this.userRolesWithProfiles.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1106,7 +1099,7 @@ export function useCanShowGradeFor(userId: string): boolean {
  */
 export function useRosterWithUserInfo() {
   const controller = useCourseController();
-  const [roster, setRoster] = useState<RosterWithUserInfo[]>([]);
+  const [roster, setRoster] = useState<UserRoleWithUser[]>([]);
 
   useEffect(() => {
     const { data, unsubscribe } = controller.getRosterWithUserInfo((updatedRoster) => setRoster(updatedRoster));
@@ -1115,4 +1108,22 @@ export function useRosterWithUserInfo() {
   }, [controller]);
 
   return roster;
+}
+
+/**
+ * Hook to get user roles with full profile and user information for enrollments management
+ */
+export function useUserRolesWithProfiles() {
+  const controller = useCourseController();
+  const [userRoles, setUserRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.userRolesWithProfiles.list((updatedUserRoles) => {
+      setUserRoles(updatedUserRoles as UserRoleWithPrivateProfileAndUser[]);
+    });
+    setUserRoles(data as UserRoleWithPrivateProfileAndUser[]);
+    return unsubscribe;
+  }, [controller]);
+
+  return userRoles;
 }

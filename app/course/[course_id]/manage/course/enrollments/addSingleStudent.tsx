@@ -4,7 +4,6 @@ import { Icon, Button, Input, Dialog, Field, NativeSelect, Text } from "@chakra-
 import { FaPlus } from "react-icons/fa";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
-import { useInvalidate } from "@refinedev/core";
 import { useCallback } from "react";
 import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
@@ -23,12 +22,11 @@ export default function AddSingleStudent() {
     handleSubmit,
     formState: { errors }
   } = useForm<FormData>();
-  const invalidate = useInvalidate();
   const onSubmit = useCallback(
     async (data: FormData) => {
       toaster.create({
-        title: "Adding student",
-        description: "Please wait while we add the student to the course",
+        title: "Adding course member",
+        description: "Please wait while we add the member to the course",
         type: "info"
       });
       const supabase = createClient();
@@ -38,19 +36,18 @@ export default function AddSingleStudent() {
           supabase
         );
         toaster.create({
-          title: "Student added",
-          description: "Refreshing user_roles",
-          type: "info"
+          title: "Course member added successfully",
+          description: "The new member will appear in the enrollments table automatically",
+          type: "success"
         });
-        invalidate({ resource: "user_roles", invalidates: ["list"] });
       } catch (error) {
         toaster.error({
-          title: "Error adding student",
+          title: "Error adding course member",
           description: error instanceof Error ? error.message : "An unexpected error occurred."
         });
       }
     },
-    [course_id, invalidate]
+    [course_id]
   );
   return (
     <Dialog.Root>
