@@ -456,147 +456,148 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
               errorMessage
             );
           }
-          const pawtograderConfig = config.config as unknown as PawtograderConfig;
-          if (!pawtograderConfig) {
-            throw new UserVisibleError(
-              `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`
-            );
-          }
-          if (!pawtograderConfig.submissionFiles) {
-            throw new UserVisibleError(
-              `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
-            );
-          }
-          const expectedFiles = [
-            ...(pawtograderConfig.submissionFiles.files || []),
-            ...(pawtograderConfig.submissionFiles.testFiles || [])
-          ];
-
-          if (expectedFiles.length === 0) {
-            throw new UserVisibleError(
-              `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
-            );
-          }
-          const submittedFiles = zip.files.filter(
-            (file: { path: string; type: string }) =>
-              file.type === "File" && // Do not submit directories
-              expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
-          );
-          // Make sure that all files that are NOT glob patterns are present
-          const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
-          const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
-            submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)
-          );
-          if (!allNonGlobFilesPresent) {
-            throw new UserVisibleError(
-              `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
-            );
-          }
-
-          const submittedFilesWithContents = await Promise.all(
-            submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
-              const contents = await file.buffer();
-              return { name: stripTopDir(file.path), contents };
-            })
-          );
-          // Add files to supabase
-          const { error: fileError } = await adminSupabase.from("submission_files").insert(
-            submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
-              submission_id: submission_id,
-              name: file.name,
-              profile_id: repoData.profile_id,
-              assignment_group_id: repoData.assignment_group_id,
-              contents: file.contents.toString("utf-8"),
-              class_id: repoData.assignments.class_id!
-            }))
-          );
-          if (fileError) {
-            throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
-          }
-          if (isE2ERun) {
-            return {
-              grader_url: "not-a-real-url",
-              grader_sha: "not-a-real-sha",
-              submission_id: submission_id
-            };
-          }
-          if (!config.grader_repo) {
-            throw new UserVisibleError(
-              "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment."
-            );
-          }
-          const { download_link: grader_url, sha: grader_sha } = await getRepoTarballURL(config.grader_repo!);
-          //Debug-only hack... TODO cleanup
-          const patchedURL = grader_url.replace("http://kong:8000", "https://khoury-classroom-dev.ngrok.pizza");
-          return {
-            grader_url: patchedURL,
-            grader_sha
-          };
-        } catch (err) {
-          //Do we still need this?
-          console.error(err);
-          await adminSupabase.from("grader_results").insert({
-            submission_id: submission_id,
-            errors:
-              err instanceof UserVisibleError
-                ? { user_visible_message: err.details }
-                : { error: JSON.parse(JSON.stringify(err)) },
-            grader_sha: "unknown",
-            score: 0,
-            ret_code: -1,
-            execution_time: 0,
-            class_id: repoData.assignments.class_id!,
-            lint_passed: true,
-            lint_output: "",
-            lint_output_format: "text",
-            max_score: 0,
-            grader_action_sha: "unknown",
-            profile_id: repoData.profile_id,
-            assignment_group_id: repoData.assignment_group_id
-          });
-
-          throw err;
         }
-      } else {
-        throw new SecurityError(`Repository not found: ${repository}`);
+        const pawtograderConfig = config.config as unknown as PawtograderConfig;
+        if (!pawtograderConfig) {
+          throw new UserVisibleError(
+            `Incorrect instructor setup for assignment: no pawtograder config found for grader repo ${config.grader_repo} at SHA ${config.grader_commit_sha}.`
+          );
+        }
+        if (!pawtograderConfig.submissionFiles) {
+          throw new UserVisibleError(
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+          );
+        }
+        const expectedFiles = [
+          ...(pawtograderConfig.submissionFiles.files || []),
+          ...(pawtograderConfig.submissionFiles.testFiles || [])
+        ];
+
+        if (expectedFiles.length === 0) {
+          throw new UserVisibleError(
+            `Incorrect instructor setup for assignment: no submission files set. Pawtograder.yml MUST include a submissionFiles section. Check grader repo: ${config.grader_repo} at SHA ${config.grader_commit_sha}. Include at least one file or glob pattern.`
+          );
+        }
+        const submittedFiles = zip.files.filter(
+          (file: { path: string; type: string }) =>
+            file.type === "File" && // Do not submit directories
+            expectedFiles.some((pattern) => micromatch.isMatch(stripTopDir(file.path), pattern))
+        );
+        // Make sure that all files that are NOT glob patterns are present
+        const nonGlobFiles = expectedFiles.filter((pattern) => !pattern.includes("*"));
+        const allNonGlobFilesPresent = nonGlobFiles.every((file) =>
+          submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)
+        );
+        if (!allNonGlobFilesPresent) {
+          throw new UserVisibleError(
+            `Missing required files: ${nonGlobFiles.filter((file) => !submittedFiles.some((submittedFile: { path: string }) => stripTopDir(submittedFile.path) === file)).join(", ")}`
+          );
+        }
+
+        const submittedFilesWithContents = await Promise.all(
+          submittedFiles.map(async (file: { path: string; buffer: () => Promise<Buffer> }) => {
+            const contents = await file.buffer();
+            return { name: stripTopDir(file.path), contents };
+          })
+        );
+        // Add files to supabase
+        const { error: fileError } = await adminSupabase.from("submission_files").insert(
+          submittedFilesWithContents.map((file: { name: string; contents: Buffer }) => ({
+            submission_id: submission_id,
+            name: file.name,
+            profile_id: repoData.profile_id,
+            assignment_group_id: repoData.assignment_group_id,
+            contents: file.contents.toString("utf-8"),
+            class_id: repoData.assignments.class_id!
+          }))
+        );
+        if (fileError) {
+          throw new UserVisibleError(`Internal error: Failed to insert submission files: ${fileError.message}`);
+        }
+        if (isE2ERun) {
+          return {
+            grader_url: "not-a-real-url",
+            grader_sha: "not-a-real-sha",
+            submission_id: submission_id
+          };
+        }
+        if (!config.grader_repo) {
+          throw new UserVisibleError(
+            "This assignment is not configured to use an autograder. Please let your instructor know that there is no grader repo configured for this assignment."
+          );
+        }
+        const { download_link: grader_url, sha: grader_sha } = await getRepoTarballURL(config.grader_repo!);
+        //Debug-only hack... TODO cleanup
+        const patchedURL = grader_url.replace("http://kong:8000", "https://khoury-classroom-dev.ngrok.pizza");
+        return {
+          grader_url: patchedURL,
+          grader_sha
+        };
+      } catch (err) {
+        //Do we still need this?
+        console.error(err);
+        await adminSupabase.from("grader_results").insert({
+          submission_id: submission_id,
+          errors:
+            err instanceof UserVisibleError
+              ? { user_visible_message: err.details }
+              : { error: JSON.parse(JSON.stringify(err)) },
+          grader_sha: "unknown",
+          score: 0,
+          ret_code: -1,
+          execution_time: 0,
+          class_id: repoData.assignments.class_id!,
+          lint_passed: true,
+          lint_output: "",
+          lint_output_format: "text",
+          max_score: 0,
+          grader_action_sha: "unknown",
+          profile_id: repoData.profile_id,
+          assignment_group_id: repoData.assignment_group_id
+        });
+
+        throw err;
       }
-    } catch (err) {
-      if (err instanceof UserVisibleError) {
+    } else {
+      throw new SecurityError(`Repository not found: ${repository}`);
+    }
+  } catch (err) {
+    if (err instanceof UserVisibleError) {
+      await recordWorkflowRunError({
+        name: err.details,
+        data: { type: "user_visible_error" },
+        is_private: false
+      });
+    } else {
+      if (err instanceof SecurityError) {
         await recordWorkflowRunError({
           name: err.details,
-          data: { type: "user_visible_error" },
-          is_private: false
+          data: { type: "security_error" },
+          is_private: true
         });
       } else {
-        if (err instanceof SecurityError) {
+        if (err instanceof Error) {
           await recordWorkflowRunError({
-            name: err.details,
-            data: { type: "security_error" },
+            name: err.message,
+            data: { error: JSON.parse(JSON.stringify(err)) },
             is_private: true
           });
         } else {
-          if (err instanceof Error) {
-            await recordWorkflowRunError({
-              name: err.message,
-              data: { error: JSON.parse(JSON.stringify(err)) },
-              is_private: true
-            });
-          } else {
-            await recordWorkflowRunError({
-              name: "Internal error",
-              data: { error: JSON.parse(JSON.stringify(err)) },
-              is_private: true
-            });
-          }
-          throw err;
+          await recordWorkflowRunError({
+            name: "Internal error",
+            data: { error: JSON.parse(JSON.stringify(err)) },
+            is_private: true
+          });
         }
+        throw err;
       }
-      throw err;
     }
+    throw err;
   }
+}
 Deno.serve(async (req) => {
-    return await wrapRequestHandler(req, handleRequest, {
-      recordUserVisibleErrors: false,
-      recordSecurityErrors: false
-    });
+  return await wrapRequestHandler(req, handleRequest, {
+    recordUserVisibleErrors: false,
+    recordSecurityErrors: false
   });
+});
