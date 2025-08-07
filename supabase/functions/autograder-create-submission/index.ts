@@ -445,16 +445,16 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
           const errorMessage = `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}.`;
           if (isGraderOrInstructor) {
             await recordWorkflowRunError({
-              name: errorMessage + `You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
+              name:
+                errorMessage +
+                `You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
               data: {
                 type: "security_error"
               },
               is_private: true
             });
           } else {
-            throw new SecurityError(
-              errorMessage
-            );
+            throw new SecurityError(errorMessage);
           }
         }
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
