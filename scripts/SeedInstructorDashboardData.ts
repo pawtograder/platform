@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { all, ConstantNode, create, FunctionNode } from "mathjs";
 import { minimatch } from "minimatch";
 import Bottleneck from "bottleneck";
+import { faker } from "@faker-js/faker";
 
 import {
   createClass,
@@ -17,12 +18,15 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
+export const RANDOM_SEED = 100;
+faker.seed(RANDOM_SEED);
+
 const limiter = new Bottleneck({
   maxConcurrent: 200
 });
 
 const smallLimiter = new Bottleneck({
-  maxConcurrent: 10 // Smaller limit for grading operations
+  maxConcurrent: 3 // Smaller limit for grading operations
 });
 
 // Global counter for repository naming
@@ -66,9 +70,9 @@ async function batchCreateSubmissions(
   if (submissionsToCreate.length === 0) return [];
 
   const test_run_prefix = getTestRunPrefix();
-  const BATCH_SIZE = 500;
+  const BATCH_SIZE = 100;
 
-  // Chunk submissions into batches of 500
+  // Chunk submissions into batches of 100
   const submissionChunks = chunkArray(submissionsToCreate, BATCH_SIZE);
 
   console.log(`Processing ${submissionChunks.length} batches in parallel...`);
@@ -1024,7 +1028,7 @@ async function insertEnhancedAssignment({
 }> {
   const assignmentIdx = Math.floor(Math.random() * 100000) + 1;
   const title =
-    (lab_due_date_offset ? `Enhanced Assignment ${assignmentIdx}` : `Enhanced Lab ${assignmentIdx}`) +
+    (lab_due_date_offset ? `Assignment ${assignmentIdx}` : `Lab ${assignmentIdx}`) +
     (groupConfig && groupConfig !== "individual" ? ` (Group)` : "");
 
   // Create self review setting
@@ -2292,21 +2296,36 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`  Creating ${numInstructors} instructors`);
     const instructorItems = Array.from({ length: numInstructors }, (_, i) => ({ index: i }));
     const instructors = await Promise.all(
-      instructorItems.map(async () => limiter.schedule(() => createUserInClass({ role: "instructor", class_id })))
+      instructorItems.map(async () =>
+        limiter.schedule(async () => {
+          const name = faker.person.fullName();
+          return createUserInClass({ role: "instructor", class_id, name });
+        })
+      )
     );
     console.log(`✓ Created ${instructors.length} instructors`);
 
     console.log(`  Creating ${numGraders} graders`);
     const graderItems = Array.from({ length: numGraders }, (_, i) => ({ index: i }));
     const graders = await Promise.all(
-      graderItems.map(async () => limiter.schedule(() => createUserInClass({ role: "grader", class_id })))
+      graderItems.map(async () =>
+        limiter.schedule(async () => {
+          const name = faker.person.fullName();
+          return createUserInClass({ role: "grader", class_id, name });
+        })
+      )
     );
     console.log(`✓ Created ${graders.length} graders`);
 
     console.log(`  Creating ${numStudents} students`);
     const studentItems = Array.from({ length: numStudents }, (_, i) => ({ index: i }));
     const students = await Promise.all(
-      studentItems.map(async () => limiter.schedule(() => createUserInClass({ role: "student", class_id })))
+      studentItems.map(async () =>
+        limiter.schedule(async () => {
+          const name = faker.person.fullName();
+          return createUserInClass({ role: "student", class_id, name });
+        })
+      )
     );
     console.log(`✓ Created ${students.length} students, ${instructors.length} instructors, ${graders.length} graders`);
 
@@ -2945,7 +2964,7 @@ async function runSmallScale() {
     numGraders: 5,
     numInstructors: 2,
     numAssignments: 20,
-    firstAssignmentDate: subDays(now, 5), // 30 days in the past
+    firstAssignmentDate: subDays(now, 30), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
     numManualGradedColumns: 5, // 5 manual graded columns for small scale
     rubricConfig: {
@@ -2963,12 +2982,12 @@ async function runSmallScale() {
       numGraderTags: 4
     },
     labAssignmentConfig: {
-      numLabAssignments: 2, // 40% of 5 assignments
+      numLabAssignments: 25,
       minutesDueAfterLab: 60 // 1 hour
     },
     groupAssignmentConfig: {
-      numGroupAssignments: 5, // 40% of regular assignments (3 * 0.4 ≈ 1)
-      numLabGroupAssignments: 2 // 50% of lab assignments (2 * 0.5 = 1)
+      numGroupAssignments: 10,
+      numLabGroupAssignments: 10
     },
     helpRequestConfig: {
       numHelpRequests: 40,

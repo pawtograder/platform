@@ -437,10 +437,25 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
         }
         hash.update(contentsStr);
         const hashStr = hash.digest("hex");
+
+        // Allow graders and instructors to submit even if the workflow SHA doesn't match, but show a warning.
+        const isGraderOrInstructor =
+          checkRun.user_roles?.role === "instructor" || checkRun.user_roles?.role === "grader";
         if (hashStr !== config.workflow_sha && !isE2ERun) {
-          throw new SecurityError(
-            `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}`
-          );
+          const errorMessage = `.github/workflows/grade.yml SHA does not match expected value. This file must be the same in student repos as in the grader repo for security reasons. SHA on student repo: ${hashStr} !== SHA in database: ${config.workflow_sha}.`;
+          if (isGraderOrInstructor) {
+            await recordWorkflowRunError({
+              name:
+                errorMessage +
+                `You are a grader or instructor, so this submission is permitted. But, if a student has this same workflow file, they will get a big nasty error. Please be sure to update the handout to match this repo's workflow, which will avoid this error.`,
+              data: {
+                type: "security_error"
+              },
+              is_private: true
+            });
+          } else {
+            throw new SecurityError(errorMessage);
+          }
         }
         const pawtograderConfig = config.config as unknown as PawtograderConfig;
         if (!pawtograderConfig) {

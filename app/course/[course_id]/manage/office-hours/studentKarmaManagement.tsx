@@ -37,7 +37,7 @@ export default function StudentKarmaManagement() {
   const karmaNotesData = useStudentKarmaNotes();
 
   // Delete mutation
-  const { mutate: deleteKarmaEntry } = useDelete();
+  const { mutateAsync: deleteKarmaEntry } = useDelete();
 
   // Set up real-time connection status monitoring
   const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
@@ -91,8 +91,8 @@ export default function StudentKarmaManagement() {
     // Real-time updates will automatically refresh the data
   };
 
-  const handleDeleteKarmaEntry = (entryId: number, studentName: string) => {
-    deleteKarmaEntry(
+  const handleDeleteKarmaEntry = async (entryId: number, studentName: string) => {
+    await deleteKarmaEntry(
       {
         resource: "student_karma_notes",
         id: entryId
@@ -197,8 +197,9 @@ export default function StudentKarmaManagement() {
             }
             confirmHeader="Delete Karma Entry"
             confirmText={`Are you sure you want to delete the karma entry for ${entry.student_profile?.name || "this student"}? This action cannot be undone.`}
-            onConfirm={() => handleDeleteKarmaEntry(entry.id, entry.student_profile?.name || "Unknown Student")}
-            onCancel={() => {}}
+            onConfirm={async () =>
+              await handleDeleteKarmaEntry(entry.id, entry.student_profile?.name || "Unknown Student")
+            }
           />
         </HStack>
       </Flex>

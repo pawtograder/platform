@@ -1174,7 +1174,6 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
                     confirmHeader="Resolve Request"
                     confirmText="Are you sure you want to resolve this request?"
                     onConfirm={resolveRequest}
-                    onCancel={() => {}}
                   />
                 )}
 
@@ -1197,7 +1196,6 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
                     confirmHeader="Close Request"
                     confirmText="Are you sure you want to close this request? This will mark it as closed without resolving it."
                     onConfirm={closeRequest}
-                    onCancel={() => {}}
                   />
                 )}
               </>

@@ -1,5 +1,4 @@
 {
   "typescript.tsdk": "node_modules/typescript/lib",
-  "deno.enablePaths": ["supabase/functions/"],
-  "deno.enable": false
+  "deno.enablePaths": ["supabase/functions/"]
 }
