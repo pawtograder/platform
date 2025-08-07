@@ -115,11 +115,11 @@ function UserName({ userId, courseId }: UserNameProps) {
 }
 
 export default function FlashCardDecksTable({ courseId, onDeckDeleted }: FlashcardDecksTableProps) {
-  const { mutate: deleteDeck, isLoading: isDeleting } = useDelete();
+  const { mutateAsync: deleteDeck, isLoading: isDeleting } = useDelete();
 
   const handleDeleteDeck = useCallback(
-    (deckId: number, deckName: string) => {
-      deleteDeck(
+    async (deckId: number, deckName: string) => {
+      await deleteDeck(
         {
           resource: "flashcard_decks",
           id: deckId
@@ -279,8 +279,8 @@ export default function FlashCardDecksTable({ courseId, onDeckDeleted }: Flashca
                 }
                 confirmHeader="Delete Flashcard Deck"
                 confirmText={`Are you sure you want to delete the deck "${deck.name}"? This action cannot be undone.`}
-                onConfirm={() => handleDeleteDeck(deck.id, deck.name)}
-                onCancel={() => {}}
+                                  onConfirm={async () => await handleDeleteDeck(deck.id, deck.name)}
+
               />
             </HStack>
           );

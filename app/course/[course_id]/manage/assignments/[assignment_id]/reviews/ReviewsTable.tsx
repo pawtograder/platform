@@ -52,8 +52,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   const supabase = createClient();
 
   const handleDelete = useCallback(
-    (id: number) => {
-      deleteReviewAssignment(
+    async (id: number) => {
+      await deleteReviewAssignment(
         {
           resource: "review_assignments",
           id: id
@@ -516,8 +516,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
                 triggerLabel="Delete review assignment"
                 confirmHeader="Delete Review Assignment"
                 confirmText="Are you sure you want to delete this review assignment?"
-                onConfirm={() => handleDelete(row.original.id)}
-                onCancel={() => {}}
+                onConfirm={async () => await handleDelete(row.original.id)}
+
                 trigger={
                   <IconButton aria-label="Delete review assignment" colorPalette="red" variant="ghost" size="sm">
                     <FaTrash />

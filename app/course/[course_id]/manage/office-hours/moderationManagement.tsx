@@ -47,7 +47,7 @@ export default function ModerationManagement() {
   const helpRequestsData = useHelpRequests();
   const controller = useOfficeHoursController();
 
-  const { mutate: deleteModerationAction, isPending: isDeleting } = useDelete();
+  const { mutateAsync: deleteModerationAction, isPending: isDeleting } = useDelete();
 
   // Create a map of profiles for efficient lookup
   const profilesMap = useMemo(() => {
@@ -82,8 +82,8 @@ export default function ModerationManagement() {
     // No need to refetch - realtime updates will handle this automatically
   };
 
-  const handleDeleteModerationAction = (actionId: number) => {
-    deleteModerationAction(
+  const handleDeleteModerationAction = async (actionId: number) => {
+    await deleteModerationAction(
       {
         resource: "help_request_moderation",
         id: actionId
@@ -245,8 +245,8 @@ export default function ModerationManagement() {
             }
             confirmHeader="Delete Moderation Action"
             confirmText="Are you sure you want to delete this moderation action? This action cannot be undone."
-            onConfirm={() => handleDeleteModerationAction(action.id)}
-            onCancel={() => {}}
+                          onConfirm={async () => await handleDeleteModerationAction(action.id)}
+
           />
         )}
       </Flex>

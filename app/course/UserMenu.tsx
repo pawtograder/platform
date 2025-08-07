@@ -573,10 +573,9 @@ function UserSettingsMenu() {
                       }
                       confirmHeader="Unlink GitHub"
                       confirmText="Are you sure you want to unlink your GitHub account? You should only do this if you have linked the wrong account. You will need to re-link your GitHub account to use Pawtograder."
-                      onConfirm={() => {
-                        unlinkGitHub();
+                      onConfirm={async () => {
+                        await unlinkGitHub();
                       }}
-                      onCancel={() => {}}
                     ></PopConfirm>
                   </>
                 )}

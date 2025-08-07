@@ -31,11 +31,11 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
   const { role } = useClassProfiles();
   const isGrader = role.role === "grader";
 
-  const { mutate: deleteConflict } = useDelete();
+  const { mutateAsync: deleteConflict } = useDelete();
 
   const handleDelete = useCallback(
-    (id: number) => {
-      deleteConflict(
+    async (id: number) => {
+      await deleteConflict(
         {
           resource: "grading_conflicts",
           id: id
@@ -170,8 +170,8 @@ export default function GradingConflictsTable({ courseId, onConflictDeleted }: G
               triggerLabel="Delete"
               confirmHeader="Delete Grading Conflict"
               confirmText="Are you sure you want to delete this grading conflict?"
-              onConfirm={() => handleDelete(conflictId)}
-              onCancel={() => {}}
+                              onConfirm={async () => await handleDelete(conflictId)}
+
               trigger={deleteButton}
             />
           );

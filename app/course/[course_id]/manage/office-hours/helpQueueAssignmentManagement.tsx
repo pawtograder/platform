@@ -35,8 +35,8 @@ export default function HelpQueueAssignmentManagement() {
   const { profiles } = useClassProfiles();
 
   // Mutations for assignment management - only use Refine for database operations
-  const { mutate: updateAssignment } = useUpdate();
-  const { mutate: deleteAssignment } = useDelete();
+  const { mutateAsync: updateAssignment } = useUpdate();
+  const { mutateAsync: deleteAssignment } = useDelete();
 
   // Combine assignment and queue data with profile data
   const assignments = useMemo((): AssignmentWithDetails[] => {
@@ -64,8 +64,8 @@ export default function HelpQueueAssignmentManagement() {
   // Loading state - wait for realtime data
   const isLoading = realtimeLoading;
 
-  const handleEndAssignment = (assignmentId: number) => {
-    updateAssignment({
+  const handleEndAssignment = async (assignmentId: number) => {
+    await updateAssignment({
       resource: "help_queue_assignments",
       id: assignmentId,
       values: {
@@ -83,8 +83,8 @@ export default function HelpQueueAssignmentManagement() {
     });
   };
 
-  const handleDeleteAssignment = (assignmentId: number) => {
-    deleteAssignment({
+  const handleDeleteAssignment = async (assignmentId: number) => {
+    await deleteAssignment({
       resource: "help_queue_assignments",
       id: assignmentId,
       successNotification: {
@@ -192,7 +192,7 @@ export default function HelpQueueAssignmentManagement() {
         {showActions && (
           <HStack spaceX={2}>
             {assignment.is_active && (
-              <Button size="sm" colorPalette="yellow" onClick={() => handleEndAssignment(assignment.id)}>
+              <Button size="sm" colorPalette="yellow" onClick={async () => await handleEndAssignment(assignment.id)}>
                 End Assignment
               </Button>
             )}
@@ -206,8 +206,8 @@ export default function HelpQueueAssignmentManagement() {
               }
               confirmHeader="Delete Assignment"
               confirmText="Are you sure you want to delete this assignment? This action cannot be undone."
-              onConfirm={() => handleDeleteAssignment(assignment.id)}
-              onCancel={() => {}}
+              onConfirm={async () => await handleDeleteAssignment(assignment.id)}
+
             />
           </HStack>
         )}

@@ -33,7 +33,7 @@ export default function HelpRequestTemplateManagement() {
   }, [allTemplates, course_id]);
 
   const { mutate: updateTemplate } = useUpdate();
-  const { mutate: deleteTemplate } = useDelete();
+  const { mutateAsync: deleteTemplate } = useDelete();
 
   const handleToggleActive = (templateId: number, currentState: boolean) => {
     updateTemplate({
@@ -53,8 +53,8 @@ export default function HelpRequestTemplateManagement() {
     });
   };
 
-  const handleDeleteTemplate = (templateId: number) => {
-    deleteTemplate({
+  const handleDeleteTemplate = async (templateId: number) => {
+    await deleteTemplate({
       resource: "help_request_templates",
       id: templateId,
       successNotification: {
@@ -187,8 +187,8 @@ export default function HelpRequestTemplateManagement() {
             }
             confirmHeader="Delete Template"
             confirmText={`Are you sure you want to delete the template "${template.name}"? This action cannot be undone.`}
-            onConfirm={() => handleDeleteTemplate(template.id)}
-            onCancel={() => {}}
+                          onConfirm={async () => await handleDeleteTemplate(template.id)}
+
           />
         </HStack>
       </Flex>

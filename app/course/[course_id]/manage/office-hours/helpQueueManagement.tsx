@@ -27,10 +27,10 @@ export default function HelpQueueManagement() {
   const queues = useHelpQueues();
   const { isConnected, connectionStatus, isLoading: realtimeLoading } = useConnectionStatus();
 
-  const { mutate: deleteQueue } = useDelete();
+  const { mutateAsync: deleteQueue } = useDelete();
 
-  const handleDeleteQueue = (queueId: number) => {
-    deleteQueue({
+  const handleDeleteQueue = async (queueId: number) => {
+    await deleteQueue({
       resource: "help_queues",
       id: queueId,
       successNotification: {
@@ -171,8 +171,8 @@ export default function HelpQueueManagement() {
                     }
                     confirmHeader="Delete Queue"
                     confirmText={`Are you sure you want to delete the queue "${queue.name}"? This action cannot be undone.`}
-                    onConfirm={() => handleDeleteQueue(queue.id)}
-                    onCancel={() => {}}
+                    onConfirm={async () => await handleDeleteQueue(queue.id)}
+
                   />
                 </HStack>
               </Flex>

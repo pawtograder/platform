@@ -37,7 +37,7 @@ export default function UnlinkAccount() {
             throw new Error(error.message);
           }
         }}
-        onCancel={() => {
+        onCancel={async () => {
           console.log("Canceled");
         }}
       ></PopConfirm>

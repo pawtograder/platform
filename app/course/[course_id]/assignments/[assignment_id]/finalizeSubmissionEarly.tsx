@@ -75,7 +75,6 @@ export default function FinalizeSubmissionEarly({
         confirmHeader="Finalize Submission Early"
         confirmText="Are you sure you want to finalize your submission early? You will not be able to change your submission after this."
         onConfirm={finalizeSubmission}
-        onCancel={() => {}}
       />
     </Box>
   );

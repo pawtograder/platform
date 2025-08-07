@@ -56,7 +56,7 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
   if (!lateTokens || !dueDate || !exceptionsForProfile) {
     return <Skeleton height="20px" width="80px" />;
   }
-  const lateTokensUsedByStudent = lateTokens.filter((e) => e.tokens_consumed > 0).length;
+  const lateTokensUsedByStudent = lateTokens.reduce((a, b) => a + (b.tokens_consumed > 0 ? b.tokens_consumed : 0), 0);
   const lateTokensAppliedToAssignment = lateTokens
     .filter((e) => e.assignment_id === assignment.id)
     .map((e) => e.tokens_consumed)
@@ -133,6 +133,12 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
             <Heading size="sm">Late Tokens</Heading>
             <Text>You have {course.late_tokens_per_student - lateTokensUsedByStudent} late tokens remaining.</Text>
             <Text>You have {lateTokensAppliedToAssignment} late tokens applied to this assignment.</Text>
+            {assignment_group_id && (
+              <Text>
+                This is a group assignment. You will extend the due date for your whole group, and it is OK if not all
+                group members have enough tokens. However, all group members will have a token deducted.
+              </Text>
+            )}
             <Text>
               You can extend the due date for this assignment by up to{" "}
               {assignment.max_late_tokens - lateTokensAppliedToAssignment} more tokens. Each token extends the due date
@@ -142,6 +148,11 @@ function LateTokenButton({ assignment }: { assignment: Assignment }) {
               <Text>
                 Once you consume a late token, it is consumed immediately. You will not be able to undo this action.
               </Text>
+              {assignment_group_id && (
+                <Text fontWeight="bold">
+                  All group members will have a token deducted.
+                </Text>
+              )}
             </Alert>
             <Button
               variant="solid"
