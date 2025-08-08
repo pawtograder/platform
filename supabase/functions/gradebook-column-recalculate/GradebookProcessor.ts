@@ -12,6 +12,7 @@ import {
   ExprDependencyInstance,
   ExpressionContext
 } from "./expression/DependencySource.ts";
+import * as Sentry from "npm:@sentry/deno";
 
 type GradebookColumn = GetResult<
   Database["public"],
@@ -35,18 +36,21 @@ type DependenciesType = {
 
 export async function processGradebookCellCalculation(
   cells: GradebookCellRequest[],
-  adminSupabase: SupabaseClient<Database>
+  adminSupabase: SupabaseClient<Database>,
+  scope: Sentry.Scope
 ) {
   if (cells.length === 0) {
     return;
   }
+  scope.setTag("cells", cells.length);
   const allColumns = await adminSupabase
     .from("gradebook_columns")
     .select("*, gradebooks!gradebook_columns_gradebook_id_fkey(expression_prefix)")
-    .in(
-      "id",
-      cells.map((s) => s.gradebook_column_id)
-    );
+    .in("id", Array.from(new Set(cells.map((s) => s.gradebook_column_id))));
+  if (allColumns.error) {
+    Sentry.captureException(allColumns.error, scope);
+    return;
+  }
   const columnMap = new Map<number, GradebookColumn>();
   for (const column of allColumns.data ?? []) {
     columnMap.set(column.id, column);
@@ -58,14 +62,21 @@ export async function processGradebookCellCalculation(
     }
     const dependencies = column.dependencies as DependenciesType;
     if (!dependencies) {
-      console.error(`Column ${cell.gradebook_column_id} has no dependencies, why is it being recalculated?`);
+      const newScope = scope.clone();
+      newScope.setContext("cell", cell);
+      Sentry.captureMessage(
+        `Column ${cell.gradebook_column_id} has no dependencies, why is it being recalculated?`,
+        newScope
+      );
       return [];
     }
     const ret: ExprDependencyInstance[] = [];
     for (const dependencyProvider of Object.keys(dependencies)) {
       // Validate that we have a dependency source for this provider
       if (!DependencySourceMap[dependencyProvider as keyof typeof DependencySourceMap]) {
-        console.error(`Dependency source ${dependencyProvider} not found`);
+        const newScope = scope.clone();
+        newScope.setContext("cell", cell);
+        Sentry.captureMessage(`Dependency source ${dependencyProvider} not found`, newScope);
         continue;
       }
       ret.push(
@@ -88,6 +99,12 @@ export async function processGradebookCellCalculation(
 
   const gradebookColumnToScoreExpression = new Map<number, EvalFunction>();
   const functionNameToDependencySource = new Map<string, DependencySource>();
+  scope.setTag(
+    "function_names",
+    Object.values(DependencySourceMap)
+      .flatMap((s) => s.getFunctionNames())
+      .join(",")
+  );
   for (const dependencySource of Object.values(DependencySourceMap)) {
     for (const functionName of dependencySource.getFunctionNames()) {
       functionNameToDependencySource.set(functionName, dependencySource);
@@ -144,6 +161,12 @@ export async function processGradebookCellCalculation(
   for (const cell of cells) {
     const column = allColumns.data?.find((c) => c.id === cell.gradebook_column_id);
     if (column) {
+      scope.setContext("cell", cell);
+      scope.setTag("score_expression", column.score_expression);
+      scope.setTag("column_id", column.id);
+      scope.setTag("student_id", cell.student_id);
+      scope.setTag("gradebook_column_student_id", cell.gradebook_column_student_id);
+      scope.setTag("is_private", cell.is_private);
       if (column.score_expression?.startsWith("importCSV")) {
         await cell.onComplete();
         continue;
@@ -152,7 +175,8 @@ export async function processGradebookCellCalculation(
         student_id: cell.student_id,
         incomplete_values: {},
         is_private_calculation: cell.is_private,
-        incomplete_values_policy: "report_only"
+        incomplete_values_policy: "report_only",
+        scope: scope
       };
       const compiled = gradebookColumnToScoreExpression.get(column.id);
       if (compiled) {
@@ -183,10 +207,11 @@ export async function processGradebookCellCalculation(
             .eq("id", cell.gradebook_column_student_id);
           cell.onComplete();
         } catch (e) {
-          console.error(
-            `Error processing cell ${cell.gradebook_column_id}, expression '${column.score_expression}' ${cell.student_id}: ${e}`
-          );
-          await adminSupabase
+          const newScope = scope.clone();
+          newScope.setTag("score_expression", column.score_expression);
+          newScope.setContext("cell", cell);
+          Sentry.captureException(e, newScope);
+          const { error } = await adminSupabase
             .from("gradebook_column_students")
             .update({
               is_missing: true,
@@ -195,6 +220,9 @@ export async function processGradebookCellCalculation(
               is_recalculating: false
             })
             .eq("id", cell.gradebook_column_student_id);
+          if (error) {
+            Sentry.captureException(error, newScope);
+          }
           cell.onComplete();
         }
         // updatePromises.push(updatePromise);

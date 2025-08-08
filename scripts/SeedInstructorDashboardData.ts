@@ -676,7 +676,7 @@ async function createGradebookColumn({
       slug,
       max_score,
       score_expression,
-      dependencies: finalDependencies ? JSON.stringify(finalDependencies) : null,
+      dependencies: finalDependencies,
       released,
       sort_order
     })
@@ -690,6 +690,439 @@ async function createGradebookColumn({
   return column;
 }
 
+// Helper function to find existing users with @pawtograder.net emails
+async function findExistingPawtograderUsers(): Promise<{
+  instructors: TestingUser[];
+  graders: TestingUser[];
+  students: TestingUser[];
+}> {
+  // Query public.users for existing @pawtograder.net users
+  const { data: existingUsers, error: usersError } = await supabase
+    .from("users")
+    .select(
+      "*, user_roles(role, private_profile_id, public_profile_id, profiles_private:profiles!private_profile_id(name), profiles_public:profiles!public_profile_id(name))"
+    )
+    .like("email", "%@pawtograder.net");
+
+  if (usersError) {
+    console.error(`Failed to fetch existing users: ${usersError.message}`);
+    throw new Error(`Failed to fetch existing users: ${usersError.message}`);
+  }
+
+  const pawtograderUsers = existingUsers;
+
+  if (pawtograderUsers.length === 0) {
+    console.log("No existing @pawtograder.net users found");
+    return { instructors: [], graders: [], students: [] };
+  }
+
+  console.log(`Found ${pawtograderUsers.length} existing @pawtograder.net users`);
+
+  // Convert to TestingUser format
+  const convertToTestingUser = (
+    user: { user_id: string; email?: string | null },
+    userRole: {
+      profiles_private?: { name: string | null };
+      profiles_public?: { name: string | null };
+      private_profile_id: string;
+      public_profile_id: string;
+    }
+  ): TestingUser => ({
+    private_profile_name: userRole.profiles_private?.name || "Unknown",
+    public_profile_name: userRole.profiles_public?.name || "Unknown",
+    email: user.email || "",
+    password: process.env.TEST_PASSWORD || "change-it",
+    user_id: user.user_id,
+    private_profile_id: userRole.private_profile_id,
+    public_profile_id: userRole.public_profile_id,
+    class_id: -1 // Will be updated when enrolled in class
+  });
+
+  const result = { instructors: [] as TestingUser[], graders: [] as TestingUser[], students: [] as TestingUser[] };
+
+  for (const user of pawtograderUsers) {
+    if (!user.user_roles || user.user_roles.length === 0) continue;
+
+    const testingUser = convertToTestingUser(user, user.user_roles[0]);
+
+    // Categorize by email pattern (instructor-, grader-, student-)
+    if (user.email && user.email.startsWith("instructor-")) {
+      result.instructors.push(testingUser);
+    } else if (user.email && user.email.startsWith("grader-")) {
+      result.graders.push(testingUser);
+    } else if (user.email && user.email.startsWith("student-")) {
+      result.students.push(testingUser);
+    }
+  }
+
+  return result;
+}
+
+// Helper function to enroll existing users in a class
+async function enrollExistingUserInClass(user: TestingUser, class_id: number): Promise<TestingUser> {
+  // Create new private profile
+  const { data: privateProfile, error: privateProfileError } = await supabase
+    .from("profiles")
+    .insert({
+      name: user.private_profile_name,
+      class_id: class_id,
+      is_private_profile: true
+    })
+    .select("id")
+    .single();
+
+  if (privateProfileError) {
+    throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
+  }
+
+  // Create new public profile
+  const { data: publicProfile, error: publicProfileError } = await supabase
+    .from("profiles")
+    .insert({
+      name: user.public_profile_name,
+      class_id: class_id,
+      is_private_profile: false
+    })
+    .select("id")
+    .single();
+
+  if (publicProfileError) {
+    throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
+  }
+
+  // Determine role based on email pattern
+  const role = user.email.startsWith("instructor-")
+    ? "instructor"
+    : user.email.startsWith("grader-")
+      ? "grader"
+      : "student";
+
+  // Insert user role with new profiles
+  const { error: userRoleError } = await supabase.from("user_roles").insert({
+    user_id: user.user_id,
+    role: role,
+    class_id: class_id,
+    private_profile_id: privateProfile.id,
+    public_profile_id: publicProfile.id
+  });
+
+  if (userRoleError) {
+    throw new Error(`Failed to create user role: ${userRoleError.message}`);
+  }
+
+  // Return updated user with new profile IDs and class_id
+  return {
+    ...user,
+    class_id,
+    private_profile_id: privateProfile.id,
+    public_profile_id: publicProfile.id
+  };
+}
+
+// Helper function to create specification grading scheme columns
+async function createSpecificationGradingColumns(
+  class_id: number,
+  students: TestingUser[],
+  assignments: { id: number }[],
+  labAssignments: { id: number }[]
+): Promise<void> {
+  console.log("\n📊 Creating specification grading scheme columns...");
+
+  // Create skill columns (12 skills)
+  const skillColumns = [];
+  for (let i = 1; i <= 12; i++) {
+    const skillColumn = await createGradebookColumn({
+      class_id,
+      name: `Skill #${i}`,
+      description: `Score for skill #${i}`,
+      slug: `skill-${i}`,
+      max_score: 2,
+      sort_order: 1 + i
+    });
+
+    // Update render expression separately
+    await supabase
+      .from("gradebook_columns")
+      .update({ render_expression: 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])' })
+      .eq("id", skillColumn.id);
+    skillColumns.push(skillColumn);
+  }
+
+  // Create expectation level columns
+  const skillColumnIds = skillColumns.map((col) => col.id);
+  await createGradebookColumn({
+    class_id,
+    name: "Skills Meeting Expectations",
+    description: "Total number of skills at meets expectations level",
+    slug: "meets-expectations",
+    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = x.score == 2)',
+    max_score: 12,
+    dependencies: { gradebook_columns: skillColumnIds },
+    sort_order: 14
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Skills Approaching Expectations",
+    description: "Total number of skills at approaching expectations level",
+    slug: "approaching-expectations",
+    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = x.score == 1)',
+    max_score: 12,
+    dependencies: { gradebook_columns: skillColumnIds },
+    sort_order: 15
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Skills Not Meeting Expectations",
+    description: "Total number of skills at does not meet expectations level",
+    slug: "does-not-meet-expectations",
+    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = x.score == 0)',
+    max_score: 12,
+    dependencies: { gradebook_columns: skillColumnIds },
+    sort_order: 16
+  });
+
+  // Find and rename assignment columns to HW #X or Lab #X
+  // Note: assignment_id column may not exist in current schema, so we'll handle it differently
+  const { data: existingColumns, error: columnsError } = await supabase
+    .from("gradebook_columns")
+    .select("id, name, slug")
+    .eq("class_id", class_id)
+    .like("slug", "assignment-%");
+
+  if (columnsError) {
+    console.warn(`Warning: Could not fetch existing assignment columns: ${columnsError.message}`);
+  } else if (existingColumns) {
+    const hwColumnIds = [];
+    const labColumnIds = [];
+
+    for (let i = 0; i < existingColumns.length; i++) {
+      const column = existingColumns[i];
+      // Since we don't have assignment_id, determine type by index and total counts
+      const isLab = column.slug.includes("lab-") || i >= assignments.length;
+      const assignmentIndex = isLab ? i - assignments.length + 1 : i + 1;
+
+      const newName = isLab ? `Lab #${assignmentIndex}` : `HW #${assignmentIndex}`;
+      const newSlug = isLab ? `lab-${assignmentIndex}` : `hw-${assignmentIndex}`;
+
+      await supabase
+        .from("gradebook_columns")
+        .update({
+          name: newName,
+          slug: newSlug,
+          description: isLab ? `Participation in ${newName}` : `Score for ${newName}`,
+          max_score: isLab ? 1 : 100
+        })
+        .eq("id", column.id);
+
+      // Update render expression separately for labs
+      if (isLab) {
+        await supabase.from("gradebook_columns").update({ render_expression: "checkOrX(score)" }).eq("id", column.id);
+        labColumnIds.push(column.id);
+      } else {
+        hwColumnIds.push(column.id);
+      }
+    }
+
+    // Create aggregate columns
+    if (hwColumnIds.length > 0) {
+      await createGradebookColumn({
+        class_id,
+        name: "Avg HW",
+        description: "Average of all homework assignments",
+        slug: "average.hw",
+        score_expression: 'mean(gradebook_columns("hw-*"))',
+        max_score: 100,
+        dependencies: { gradebook_columns: hwColumnIds },
+        sort_order: 22
+      });
+    }
+
+    if (labColumnIds.length > 0) {
+      await createGradebookColumn({
+        class_id,
+        name: "Total Labs",
+        description: "Total number of labs participated in",
+        slug: "total-labs",
+        score_expression: 'countif(gradebook_columns("lab-*"), f(x) = not x.is_missing and x.score>0)',
+        max_score: labColumnIds.length,
+        dependencies: { gradebook_columns: labColumnIds },
+        sort_order: 33
+      });
+    }
+  }
+
+  // Create final grade column
+  const finalColumn = await createGradebookColumn({
+    class_id,
+    name: "Final Score",
+    description: `Grades will be primarily assigned by achievement levels of the course Skills, with required grade thresholds on HW for each letter grade, and + (other than A) given for participation in 8 or more out of 10 labs, - given for participating in fewer than 6 out of ten labs.
+Grade | Skills Needed | HW Needed 
+-- | -- | --
+A | Meets expectations on 10+/12, Approaching expectations on remainder | 85% or better
+B | Meets expectations on 8+/12, Approaching expectations on remainder | 75% or better
+C | Meets expectations on 5+/12, Approaching expectations on remainder | 65% or better
+D | Approaching expectations or better on 9+/12 | 55% or better`,
+    slug: "final",
+    score_expression: `CriteriaA = gradebook_columns("meets-expectations") >= 10 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 85
+CriteriaB = gradebook_columns("meets-expectations") >= 8 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 75
+CriteriaC = gradebook_columns("meets-expectations") >= 5 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 65
+CriteriaD = gradebook_columns("approaching-expectations") >= 9 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 55
+CriteriaPlus = gradebook_columns("total-labs") >= 8
+CriteriaMinus = gradebook_columns("total-labs") < 6
+letter = case_when([CriteriaA, 95;
+CriteriaB, 85;
+CriteriaC, 75;
+CriteriaD, 65;
+true, 0])
+mod = case_when([CriteriaPlus, 3;
+CriteriaMinus, -3;
+true, 0])
+final = max(letter + mod, 0)
+final;`,
+    max_score: 100,
+    sort_order: 34
+  });
+
+  // Update render expression separately
+  await supabase.from("gradebook_columns").update({ render_expression: "letter(score)" }).eq("id", finalColumn.id);
+
+  // Set scores for skill columns using diverse patterns
+  for (let i = 0; i < skillColumns.length; i++) {
+    const skillColumn = skillColumns[i];
+    await setGradebookColumnScores({
+      class_id,
+      gradebook_column_id: skillColumn.id,
+      students,
+      averageScore: 1.2 + Math.random() * 0.6, // Average between 1.2-1.8 for realistic skill progression
+      standardDeviation: 0.7,
+      maxScore: 2,
+      useDiscreteValues: [0, 1, 2] // Only allow 0, 1, 2 scores
+    });
+  }
+
+  console.log(`✓ Created specification grading scheme with ${skillColumns.length} skills and aggregate columns`);
+}
+
+// Helper function to create current grading scheme columns
+async function createCurrentGradingColumns(
+  class_id: number,
+  students: TestingUser[],
+  effectiveNumManualGradedColumns: number
+): Promise<{ id: number; name: string; slug: string; max_score: number | null; score_expression: string | null }[]> {
+  console.log("\n📊 Creating current grading scheme columns...");
+
+  // Create manual graded columns if specified
+  const manualGradedColumns: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    max_score: number | null;
+    score_expression: string | null;
+  }> = [];
+
+  if (effectiveNumManualGradedColumns > 0) {
+    console.log(`\n📊 Creating ${effectiveNumManualGradedColumns} manual graded columns...`);
+
+    for (let i = 1; i <= effectiveNumManualGradedColumns; i++) {
+      const columnName = `Manual Grade ${i}`;
+      const columnSlug = `manual-grade-${i}`;
+
+      const manualColumn = await createGradebookColumn({
+        class_id,
+        name: columnName,
+        description: `Manual grading column ${i}`,
+        slug: columnSlug,
+        max_score: 100,
+        sort_order: 1000 + i
+      });
+
+      manualGradedColumns.push(manualColumn);
+    }
+
+    console.log(`✓ Created ${manualGradedColumns.length} manual graded columns`);
+  }
+
+  const participationColumn = await createGradebookColumn({
+    class_id,
+    name: "Participation",
+    description: "Overall class participation score",
+    slug: "participation",
+    max_score: 100,
+    sort_order: 1000
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Average Assignments",
+    description: "Average of all assignments",
+    slug: "average-assignments",
+    score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
+    max_score: 100,
+    sort_order: 2
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Average Lab Assignments",
+    description: "Average of all lab assignments",
+    slug: "average-lab-assignments",
+    score_expression: "mean(gradebook_columns('assignment-lab-*'))",
+    max_score: 100,
+    sort_order: 3
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Final Grade",
+    description: "Calculated final grade",
+    slug: "final-grade",
+    score_expression:
+      "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
+    max_score: 100,
+    sort_order: 999
+  });
+
+  console.log(
+    `✓ Created ${4 + manualGradedColumns.length} gradebook columns (${4} standard + ${manualGradedColumns.length} manual)`
+  );
+
+  // Set scores for the participation column using normal distribution
+  console.log("\n📊 Setting scores for gradebook columns...");
+  const participationStats = await setGradebookColumnScores({
+    class_id,
+    gradebook_column_id: participationColumn.id,
+    students,
+    averageScore: 85,
+    standardDeviation: 12,
+    maxScore: 100
+  });
+  console.log(
+    `✓ Set participation scores: avg=${participationStats.averageActual}, min=${participationStats.minScore}, max=${participationStats.maxScore}`
+  );
+
+  // Set scores for manual graded columns using normal distribution
+  if (manualGradedColumns.length > 0) {
+    console.log("\n📊 Setting scores for manual graded columns...");
+    for (const manualColumn of manualGradedColumns) {
+      const manualStats = await setGradebookColumnScores({
+        class_id,
+        gradebook_column_id: manualColumn.id,
+        students,
+        averageScore: 80 + Math.random() * 20, // Random average between 80-100
+        standardDeviation: 10 + Math.random() * 10, // Random deviation between 10-20
+        maxScore: 100
+      });
+      console.log(
+        `✓ Set ${manualColumn.name} scores: avg=${manualStats.averageActual}, min=${manualStats.minScore}, max=${manualStats.maxScore}`
+      );
+    }
+  }
+
+  return manualGradedColumns;
+}
+
 // Helper function to set scores for students in a gradebook column using normal distribution
 async function setGradebookColumnScores({
   class_id,
@@ -697,7 +1130,8 @@ async function setGradebookColumnScores({
   students,
   averageScore,
   standardDeviation = 15,
-  maxScore = 100
+  maxScore = 100,
+  useDiscreteValues
 }: {
   class_id: number;
   gradebook_column_id: number;
@@ -705,6 +1139,7 @@ async function setGradebookColumnScores({
   averageScore: number;
   standardDeviation?: number;
   maxScore?: number;
+  useDiscreteValues?: number[];
 }): Promise<{
   updatedCount: number;
   averageActual: number;
@@ -713,18 +1148,39 @@ async function setGradebookColumnScores({
 }> {
   // Generate scores using normal distribution
   const scores = students.map(() => {
-    // Generate normal distribution using Box-Muller transform
-    const u1 = Math.random();
-    const u2 = Math.random();
-    const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    if (useDiscreteValues) {
+      // For discrete values, use weighted random selection based on desired average
+      const weights = useDiscreteValues.map((value) => {
+        // Weight based on distance from average, with some randomness
+        const distance = Math.abs(value - averageScore);
+        return Math.exp(-distance * 2) + Math.random() * 0.3;
+      });
 
-    // Apply to our distribution
-    let score = averageScore + z0 * standardDeviation;
+      const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+      const normalizedWeights = weights.map((w) => w / totalWeight);
 
-    // Clamp to valid range (0 to maxScore)
-    score = Math.max(0, Math.min(maxScore, score));
+      let random = Math.random();
+      for (let i = 0; i < useDiscreteValues.length; i++) {
+        random -= normalizedWeights[i];
+        if (random <= 0) {
+          return useDiscreteValues[i];
+        }
+      }
+      return useDiscreteValues[useDiscreteValues.length - 1];
+    } else {
+      // Generate normal distribution using Box-Muller transform
+      const u1 = Math.random();
+      const u2 = Math.random();
+      const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
 
-    return Math.round(score * 100) / 100; // Round to 2 decimal places
+      // Apply to our distribution
+      let score = averageScore + z0 * standardDeviation;
+
+      // Clamp to valid range (0 to maxScore)
+      score = Math.max(0, Math.min(maxScore, score));
+
+      return Math.round(score * 100) / 100; // Round to 2 decimal places
+    }
   });
 
   // Get the gradebook_id for this class
@@ -761,10 +1217,9 @@ async function setGradebookColumnScores({
       return;
     }
 
-    const { error: updateError } = await supabase
-      .from("gradebook_column_students")
-      .update({ score: scores[index] })
-      .eq("id", existingRecord.id);
+    const { error: updateError } = await limiter.schedule(() =>
+      supabase.from("gradebook_column_students").update({ score: scores[index] }).eq("id", existingRecord.id)
+    );
 
     if (updateError) {
       throw new Error(`Failed to update score for student ${student.email}: ${updateError.message}`);
@@ -994,7 +1449,8 @@ function generateRubricStructure(config: NonNullable<SeedingOptions["rubricConfi
     };
   });
 }
-
+let assignmentIdx = 1;
+let labAssignmentIdx = 1;
 // Enhanced assignment creation function that generates diverse rubrics
 async function insertEnhancedAssignment({
   due_date,
@@ -1002,7 +1458,8 @@ async function insertEnhancedAssignment({
   allow_not_graded_submissions,
   class_id,
   rubricConfig,
-  groupConfig
+  groupConfig,
+  name
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -1010,6 +1467,7 @@ async function insertEnhancedAssignment({
   class_id: number;
   rubricConfig: NonNullable<SeedingOptions["rubricConfig"]>;
   groupConfig?: "individual" | "groups" | "both";
+  name?: string;
 }): Promise<{
   id: number;
   title: string;
@@ -1026,10 +1484,17 @@ async function insertEnhancedAssignment({
   }>;
   [key: string]: unknown;
 }> {
-  const assignmentIdx = Math.floor(Math.random() * 100000) + 1;
   const title =
-    (lab_due_date_offset ? `Assignment ${assignmentIdx}` : `Lab ${assignmentIdx}`) +
+    (name || (lab_due_date_offset ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`)) +
     (groupConfig && groupConfig !== "individual" ? ` (Group)` : "");
+  let ourAssignmentIdx;
+  if (lab_due_date_offset) {
+    ourAssignmentIdx = labAssignmentIdx;
+    labAssignmentIdx++;
+  } else {
+    ourAssignmentIdx = assignmentIdx;
+    assignmentIdx++;
+  }
 
   // Create self review setting
   const { data: selfReviewSettingData, error: selfReviewSettingError } = await supabase
@@ -1049,6 +1514,7 @@ async function insertEnhancedAssignment({
 
   const self_review_setting_id = selfReviewSettingData.id;
 
+  console.log(`Creating assignment ${title}`);
   // Create assignment
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
@@ -1063,7 +1529,7 @@ async function insertEnhancedAssignment({
       max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: lab_due_date_offset ? `lab-${assignmentIdx}` : `assignment-${assignmentIdx}`,
+      slug: lab_due_date_offset ? `lab-${ourAssignmentIdx}` : `assignment-${ourAssignmentIdx}`,
       group_config: groupConfig || "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       self_review_setting_id: self_review_setting_id,
@@ -1696,14 +2162,14 @@ async function createWorkflowEvents(
         updated_at: requestedAt.toISOString(),
         run_started_at: requestedAt.toISOString(),
         run_updated_at: requestedAt.toISOString(),
-        payload: JSON.stringify({
+        payload: {
           action: "requested",
           workflow_run: {
             id: workflowRunId,
             status: "queued",
             conclusion: null
           }
-        })
+        }
       });
 
       // 2. IN_PROGRESS event
@@ -1717,14 +2183,14 @@ async function createWorkflowEvents(
         updated_at: inProgressAt.toISOString(),
         run_started_at: inProgressAt.toISOString(),
         run_updated_at: inProgressAt.toISOString(),
-        payload: JSON.stringify({
+        payload: {
           action: "in_progress",
           workflow_run: {
             id: workflowRunId,
             status: "in_progress",
             conclusion: null
           }
-        })
+        }
       });
 
       // 3. COMPLETED event (if the workflow completed)
@@ -1740,14 +2206,14 @@ async function createWorkflowEvents(
           updated_at: completedAt.toISOString(),
           run_started_at: inProgressAt.toISOString(),
           run_updated_at: completedAt.toISOString(),
-          payload: JSON.stringify({
+          payload: {
             action: "completed",
             workflow_run: {
               id: workflowRunId,
               status: "completed",
               conclusion: finalConclusion
             }
-          })
+          }
         });
       }
     }
@@ -1912,7 +2378,7 @@ async function createWorkflowErrors(
         run_number: runNumber,
         run_attempt: runAttempt,
         name: errorMessage,
-        data: JSON.stringify({ type: errorType }),
+        data: { type: errorType },
         is_private: isPrivate,
         created_at: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString()
       });
@@ -1930,9 +2396,9 @@ async function createWorkflowErrors(
     console.log(`   ✓ Created ${workflowErrorsToCreate.length} workflow errors`);
 
     // Log breakdown by type
-    const userVisibleCount = workflowErrorsToCreate.filter((e) => e.data.includes("user_visible_error")).length;
-    const securityCount = workflowErrorsToCreate.filter((e) => e.data.includes("security_error")).length;
-    const configCount = workflowErrorsToCreate.filter((e) => e.data.includes("config_error")).length;
+    const userVisibleCount = workflowErrorsToCreate.filter((e) => e.data.type === "user_visible_error").length;
+    const securityCount = workflowErrorsToCreate.filter((e) => e.data.type === "security_error").length;
+    const configCount = workflowErrorsToCreate.filter((e) => e.data.type === "config_error").length;
     const privateCount = workflowErrorsToCreate.filter((e) => e.is_private).length;
 
     console.log(
@@ -2190,6 +2656,7 @@ interface SeedingOptions {
     maxRepliesPerRequest: number;
     maxMembersPerRequest: number;
   };
+  gradingScheme?: "current" | "specification";
 }
 
 async function seedInstructorDashboardData(options: SeedingOptions) {
@@ -2205,7 +2672,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     sectionsAndTagsConfig,
     labAssignmentConfig,
     groupAssignmentConfig,
-    helpRequestConfig
+    helpRequestConfig,
+    gradingScheme = "current"
   } = options;
 
   // Default rubric configuration if not provided
@@ -2290,44 +2758,83 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const class_id = testClass.id;
     console.log(`✓ Created test class: ${testClass.name} (ID: ${class_id})`);
 
-    // Create users using TestingUtils
-    console.log("\n👥 Creating test users...");
+    // Find existing users first, then create new ones as needed
+    console.log("\n👥 Finding existing @pawtograder.net users and creating test users...");
 
-    console.log(`  Creating ${numInstructors} instructors`);
-    const instructorItems = Array.from({ length: numInstructors }, (_, i) => ({ index: i }));
-    const instructors = await Promise.all(
-      instructorItems.map(async () =>
+    const existingUsers = await findExistingPawtograderUsers();
+    console.log(
+      `Found ${existingUsers.instructors.length} existing instructors, ${existingUsers.graders.length} existing graders, ${existingUsers.students.length} existing students`
+    );
+
+    // Enroll existing users in the class and create additional users as needed
+    console.log(
+      `  Processing ${numInstructors} instructors (${existingUsers.instructors.length} existing + ${Math.max(0, numInstructors - existingUsers.instructors.length)} new)`
+    );
+    const existingInstructors = await Promise.all(
+      existingUsers.instructors
+        .slice(0, numInstructors)
+        .map((user) => limiter.schedule(() => enrollExistingUserInClass(user, class_id)))
+    );
+
+    const newInstructorsNeeded = Math.max(0, numInstructors - existingInstructors.length);
+    const newInstructors = await Promise.all(
+      Array.from({ length: newInstructorsNeeded }).map(() =>
         limiter.schedule(async () => {
           const name = faker.person.fullName();
           return createUserInClass({ role: "instructor", class_id, name });
         })
       )
     );
-    console.log(`✓ Created ${instructors.length} instructors`);
+    const instructors = [...existingInstructors, ...newInstructors];
+    console.log(
+      `✓ Using ${existingInstructors.length} existing + created ${newInstructors.length} new instructors = ${instructors.length} total`
+    );
 
-    console.log(`  Creating ${numGraders} graders`);
-    const graderItems = Array.from({ length: numGraders }, (_, i) => ({ index: i }));
-    const graders = await Promise.all(
-      graderItems.map(async () =>
+    console.log(
+      `  Processing ${numGraders} graders (${existingUsers.graders.length} existing + ${Math.max(0, numGraders - existingUsers.graders.length)} new)`
+    );
+    const existingGraders = await Promise.all(
+      existingUsers.graders
+        .slice(0, numGraders)
+        .map((user) => limiter.schedule(() => enrollExistingUserInClass(user, class_id)))
+    );
+
+    const newGradersNeeded = Math.max(0, numGraders - existingGraders.length);
+    const newGraders = await Promise.all(
+      Array.from({ length: newGradersNeeded }).map(() =>
         limiter.schedule(async () => {
           const name = faker.person.fullName();
           return createUserInClass({ role: "grader", class_id, name });
         })
       )
     );
-    console.log(`✓ Created ${graders.length} graders`);
+    const graders = [...existingGraders, ...newGraders];
+    console.log(
+      `✓ Using ${existingGraders.length} existing + created ${newGraders.length} new graders = ${graders.length} total`
+    );
 
-    console.log(`  Creating ${numStudents} students`);
-    const studentItems = Array.from({ length: numStudents }, (_, i) => ({ index: i }));
-    const students = await Promise.all(
-      studentItems.map(async () =>
+    console.log(
+      `  Processing ${numStudents} students (${existingUsers.students.length} existing + ${Math.max(0, numStudents - existingUsers.students.length)} new)`
+    );
+    const existingStudents = await Promise.all(
+      existingUsers.students
+        .slice(0, numStudents)
+        .map((user) => limiter.schedule(() => enrollExistingUserInClass(user, class_id)))
+    );
+
+    const newStudentsNeeded = Math.max(0, numStudents - existingStudents.length);
+    const newStudents = await Promise.all(
+      Array.from({ length: newStudentsNeeded }).map(() =>
         limiter.schedule(async () => {
           const name = faker.person.fullName();
           return createUserInClass({ role: "student", class_id, name });
         })
       )
     );
-    console.log(`✓ Created ${students.length} students, ${instructors.length} instructors, ${graders.length} graders`);
+    const students = [...existingStudents, ...newStudents];
+    console.log(
+      `✓ Using ${existingStudents.length} existing + created ${newStudents.length} new students = ${students.length} total`
+    );
 
     // Create sections and tags
     console.log("\n🏫 Creating class and lab sections...");
@@ -2430,6 +2937,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`   Group size: ${groupSize} students per group`);
 
     // Create all assignments in parallel
+    let labAssignmentIdx = 1;
+    let assignmentIdx = 1;
     const assignmentPromises = Array.from({ length: numAssignments }, async (_, i) => {
       const assignmentDate = new Date(firstAssignmentDate.getTime() + timeStep * i);
       const isLabAssignment = i < effectiveLabAssignmentConfig.numLabAssignments;
@@ -2446,6 +2955,12 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       if (isGroupAssignment || isLabGroupAssignment) {
         groupConfig = "groups";
       }
+      const name = isLabAssignment ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`;
+      if (isLabAssignment) {
+        labAssignmentIdx++;
+      } else {
+        assignmentIdx++;
+      }
 
       const assignment = await insertEnhancedAssignment({
         due_date: assignmentDate.toISOString(),
@@ -2453,7 +2968,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         class_id,
         allow_not_graded_submissions: false,
         rubricConfig: effectiveRubricConfig,
-        groupConfig
+        groupConfig,
+        name
       });
 
       // Create assignment groups for group assignments
@@ -2720,117 +3236,13 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     // // Create gradebook columns after all other operations are complete
 
-    // Create simple columns first (without expressions)
-    console.log("\n📊 Creating gradebook columns...");
+    // Create gradebook columns based on selected scheme
+    console.log(`\n📊 Creating gradebook columns using ${gradingScheme} scheme...`);
 
-    // Create manual graded columns if specified
-    const manualGradedColumns: Array<{
-      id: number;
-      name: string;
-      slug: string;
-      max_score: number | null;
-      score_expression: string | null;
-    }> = [];
-
-    if (effectiveNumManualGradedColumns > 0) {
-      console.log(`\n📊 Creating ${effectiveNumManualGradedColumns} manual graded columns...`);
-
-      for (let i = 1; i <= effectiveNumManualGradedColumns; i++) {
-        const columnName = `Manual Grade ${i}`;
-        const columnSlug = `manual-grade-${i}`;
-
-        const manualColumn = await createGradebookColumn({
-          class_id,
-          name: columnName,
-          description: `Manual grading column ${i}`,
-          slug: columnSlug,
-          max_score: 100,
-          sort_order: 1000 + i
-        });
-
-        manualGradedColumns.push(manualColumn);
-      }
-
-      console.log(`✓ Created ${manualGradedColumns.length} manual graded columns`);
-    }
-
-    const participationColumn = await createGradebookColumn({
-      class_id,
-      name: "Participation",
-      description: "Overall class participation score",
-      slug: "participation",
-      max_score: 100,
-      sort_order: 1000
-    });
-
-    await createGradebookColumn({
-      class_id,
-      name: "Average Assignments",
-      description: "Average of all assignments",
-      slug: "average-assignments",
-      score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
-      max_score: 100,
-      sort_order: 2
-    });
-
-    await createGradebookColumn({
-      class_id,
-      name: "Average Lab Assignments",
-      description: "Average of all lab assignments",
-      slug: "average-lab-assignments",
-      score_expression: "mean(gradebook_columns('assignment-lab-*'))",
-      max_score: 100,
-      sort_order: 3
-    });
-
-    await createGradebookColumn({
-      class_id,
-      name: "Final Grade",
-      description: "Calculated final grade",
-      slug: "final-grade",
-      score_expression:
-        "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
-      max_score: 100,
-      sort_order: 999
-    });
-
-    console.log(
-      `✓ Created ${4 + manualGradedColumns.length} gradebook columns (${4} standard + ${manualGradedColumns.length} manual)`
-    );
-
-    // Now update the columns with score expressions one by one
-    console.log("📊 Adding score expressions to gradebook columns...");
-
-    // Set scores for the participation column using normal distribution
-    console.log("\n📊 Setting scores for gradebook columns...");
-    const participationStats = await setGradebookColumnScores({
-      class_id,
-      gradebook_column_id: participationColumn.id,
-      students,
-      averageScore: 85,
-      standardDeviation: 12,
-      maxScore: 100
-    });
-    console.log(
-      `✓ Set participation scores: avg=${participationStats.averageActual}, min=${participationStats.minScore}, max=${participationStats.maxScore}`
-    );
-
-    // Set scores for manual graded columns using normal distribution
-    if (manualGradedColumns.length > 0) {
-      console.log("\n📊 Setting scores for manual graded columns...");
-      for (const manualColumn of manualGradedColumns) {
-        const manualStats = await setGradebookColumnScores({
-          class_id,
-          gradebook_column_id: manualColumn.id,
-          students,
-          averageScore: 80 + Math.random() * 20, // Random average between 80-100
-          standardDeviation: 10 + Math.random() * 10, // Random deviation between 10-20
-          maxScore: 100
-        });
-        console.log(
-          `✓ Set ${manualColumn.name} scores: avg=${manualStats.averageActual}, min=${manualStats.minScore}, max=${manualStats.maxScore}`
-        );
-      }
+    if (gradingScheme === "specification") {
+      await createSpecificationGradingColumns(class_id, students, assignments, labAssignments);
+    } else {
+      await createCurrentGradingColumns(class_id, students, effectiveNumManualGradedColumns);
     }
 
     // Create help requests if configured
@@ -2856,7 +3268,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`   Lab Assignments: ${labAssignments.length}`);
     console.log(`   Group Assignments: ${groupAssignments.length}`);
     console.log(`   Lab Group Assignments: ${labGroupAssignments.length}`);
-    console.log(`   Manual Graded Columns: ${manualGradedColumns.length}`);
+    console.log(`   Grading Scheme: ${gradingScheme}`);
     console.log(`   Students: ${students.length}`);
     console.log(`   Graders: ${graders.length}`);
     console.log(`   Instructors: ${instructors.length}`);
@@ -2967,6 +3379,7 @@ async function runSmallScale() {
     firstAssignmentDate: subDays(now, 30), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
     numManualGradedColumns: 5, // 5 manual graded columns for small scale
+    gradingScheme: "specification", // Use specification grading scheme
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
@@ -3006,8 +3419,8 @@ async function runMicro() {
     numGraders: 1,
     numInstructors: 1,
     numAssignments: 5,
-    firstAssignmentDate: addDays(now, 5),
-    lastAssignmentDate: addDays(now, 10),
+    firstAssignmentDate: addDays(now, -5),
+    lastAssignmentDate: addDays(now, 2),
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,

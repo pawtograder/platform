@@ -273,8 +273,12 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   if (column.render_expression && !scoreAdvice) {
     scoreAdvice = `Raw score: ${studentGradebookColumn?.score_override ?? studentGradebookColumn?.score ?? "Missing"}`;
   }
-  const isSpecial = studentGradebookColumn?.score_override || studentGradebookColumn?.is_excused;
+  const isSpecial =
+    studentGradebookColumn?.score_override || studentGradebookColumn?.is_excused || !studentGradebookColumn;
 
+  if (!studentGradebookColumn) {
+    scoreAdvice = "This is an error?";
+  }
   if (studentGradebookColumn?.incomplete_values) {
     scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}This calculated column is missing these values: ${IncompleteValuesList(studentGradebookColumn.incomplete_values as IncompleteValuesAdvice)}`;
   }

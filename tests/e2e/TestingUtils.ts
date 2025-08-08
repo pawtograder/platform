@@ -115,7 +115,8 @@ export async function createUserInClass({
   section_id,
   lab_section_id,
   randomSuffix,
-  name
+  name,
+  email
 }: {
   role: "student" | "instructor" | "grader";
   class_id: number;
@@ -123,11 +124,12 @@ export async function createUserInClass({
   lab_section_id?: number;
   randomSuffix?: string;
   name?: string;
+  email?: string;
 }): Promise<TestingUser> {
   const password = process.env.TEST_PASSWORD || "change-it";
   const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
+  const resolvedEmail = email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const resolvedName = name ? name : `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
   const public_profile_name = name
     ? `Pseudonym #${userIdx[role]}`
@@ -135,7 +137,7 @@ export async function createUserInClass({
   const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
   const { data: userData, error: userError } = await supabase.auth.admin.createUser({
-    email: email,
+    email: resolvedEmail,
     password: password,
     email_confirm: true
   });
@@ -148,7 +150,7 @@ export async function createUserInClass({
       .from("profiles")
       .insert({
         name: public_profile_name,
-        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-user"}`,
         class_id: class_id,
         is_private_profile: false
       })
@@ -161,7 +163,7 @@ export async function createUserInClass({
       .from("profiles")
       .insert({
         name: private_profile_name,
-        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-private-user"}`,
         class_id: class_id,
         is_private_profile: true
       })
@@ -204,7 +206,7 @@ export async function createUserInClass({
   return {
     private_profile_name: private_profile_name,
     public_profile_name: public_profile_name,
-    email: email,
+    email: resolvedEmail,
     user_id: userData.user.id,
     private_profile_id: profileData.private_profile_id,
     public_profile_id: profileData.public_profile_id,

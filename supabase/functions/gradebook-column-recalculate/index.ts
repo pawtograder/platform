@@ -2,7 +2,18 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { processGradebookCellCalculation } from "./GradebookProcessor.ts";
+import * as Sentry from "npm:@sentry/deno";
 
+if (Deno.env.get("SENTRY_DSN")) {
+  Sentry.init({
+    dsn: Deno.env.get("SENTRY_DSN")!,
+    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
+    sendDefaultPii: true,
+    environment: Deno.env.get("ENVIRONMENT") || "development",
+    integrations: [],
+    tracesSampleRate: 0
+  });
+}
 export type QueueMessage<T> = {
   msg_id: number;
   read_ct: number;
@@ -11,21 +22,20 @@ export type QueueMessage<T> = {
   message: T;
 };
 
-export async function processBatch(adminSupabase: ReturnType<typeof createClient<Database>>) {
+export async function processBatch(adminSupabase: ReturnType<typeof createClient<Database>>, scope: Sentry.Scope) {
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "gradebook_column_recalculate",
     sleep_seconds: 60, // Short sleep since we're polling frequently
     n: 500
   });
-
   if (result.error) {
+    Sentry.captureException(result.error, scope);
     console.error("Queue read error:", result.error);
     return false;
   }
 
+  scope.setTag("queue_length", result.data?.length || 0);
   if (result.data && result.data.length > 0) {
-    console.log(`Processing ${result.data.length} messages from queue`);
-
     const studentColumns = (
       result.data as QueueMessage<{
         gradebook_column_id: number;
@@ -46,11 +56,10 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     }));
 
     try {
-      await processGradebookCellCalculation(studentColumns, adminSupabase);
-      console.log(`Successfully processed ${studentColumns.length} gradebook calculations`);
+      await processGradebookCellCalculation(studentColumns, adminSupabase, scope);
       return true;
     } catch (e) {
-      console.error("Error processing gradebook calculations:", e);
+      Sentry.captureException(e, scope);
       return false;
     }
   } else {
@@ -60,6 +69,9 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
 }
 
 export async function runBatchHandler() {
+  const scope = new Sentry.Scope();
+  scope.setTag("function", "gradebook_column_recalculate");
+
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -89,7 +101,7 @@ export async function runBatchHandler() {
 
   while (isRunning) {
     try {
-      const hasWork = await processBatch(adminSupabase);
+      const hasWork = await processBatch(adminSupabase, scope);
       consecutiveErrors = 0; // Reset error count on successful processing
 
       // If there was work, check again immediately, otherwise wait 10 seconds
@@ -99,9 +111,12 @@ export async function runBatchHandler() {
       }
     } catch (error) {
       consecutiveErrors++;
+      scope.setTag("consecutive_errors", consecutiveErrors);
       console.error(`Batch processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
+      Sentry.captureException(error, scope);
 
       if (consecutiveErrors >= maxConsecutiveErrors) {
+        Sentry.captureMessage("Too many consecutive errors, stopping batch handler", scope);
         console.error("Too many consecutive errors, stopping batch handler");
         break;
       }

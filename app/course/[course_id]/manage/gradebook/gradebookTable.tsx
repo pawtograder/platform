@@ -84,7 +84,8 @@ import {
   LuChevronDown,
   LuChevronRight,
   LuCalculator,
-  LuFile
+  LuFile,
+  LuLayoutGrid
 } from "react-icons/lu";
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
 import pluralize from "pluralize";
@@ -1158,20 +1159,11 @@ function GradebookColumnHeader({
   const allGrades = useGradebookColumnGrades(column_id);
 
   const moveLeft = useCallback(async () => {
+    console.log("Moving left", column_id, column.sort_order);
     if (column.sort_order == null || column.sort_order === 0) return;
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order!
-      })
-      .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", column.sort_order! - 1);
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order! - 1
-      })
-      .eq("id", column_id);
+    await supabase.rpc("gradebook_column_move_left", {
+      p_column_id: column_id
+    });
     await invalidate({
       resource: "gradebook_columns",
       id: column_id,
@@ -1180,21 +1172,17 @@ function GradebookColumnHeader({
   }, [column_id, column, invalidate, supabase]);
 
   const moveRight = useCallback(async () => {
+    console.log("Moving right", column_id, column.sort_order);
     if (column.sort_order == null) return;
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order!
-      })
-      .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", (column.sort_order ?? 0) + 1);
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: (column.sort_order ?? 0) + 1
-      })
-      .eq("id", column_id);
-  }, [column_id, column, supabase]);
+    await supabase.rpc("gradebook_column_move_right", {
+      p_column_id: column_id
+    });
+    await invalidate({
+      resource: "gradebook_columns",
+      id: column_id,
+      invalidates: ["all"]
+    });
+  }, [column_id, column, invalidate, supabase]);
 
   const releaseColumn = useCallback(async () => {
     await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
@@ -1669,6 +1657,13 @@ export default function GradebookTable() {
       return newSet;
     });
   }, []);
+
+  const autoLayout = useCallback(async () => {
+    const supabase = createClient();
+    await supabase.rpc("gradebook_auto_layout", {
+      p_gradebook_id: gradebookController.gradebook_id
+    });
+  }, [gradebookController]);
 
   // Expand all groups
   const expandAll = useCallback(() => {
@@ -2227,6 +2222,18 @@ export default function GradebookTable() {
                         Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
                           0 && (
                           <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                            <WrappedTooltip content="Auto-layout columns">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={autoLayout}
+                                colorPalette="blue"
+                                aria-label="Auto-layout columns"
+                              >
+                                <Icon as={LuLayoutGrid} boxSize={3} />
+                              </IconButton>
+                            </WrappedTooltip>
+
                             <WrappedTooltip content="Expand all groups">
                               <IconButton
                                 variant="ghost"

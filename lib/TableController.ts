@@ -97,12 +97,21 @@ export default class TableController<
     let nRows: number | undefined;
 
     // Load initial data, do all of the pages.
-    while (page * pageSize < (nRows ?? 1000)) {
-      const { data, error } = await this._query.range(page * pageSize, (page + 1) * pageSize);
+    // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
+    while (true) {
+      // If nRows is specified, only fetch up to nRows
+      const rangeStart = page * pageSize;
+      let rangeEnd = (page + 1) * pageSize - 1;
+      if (typeof nRows === "number") {
+        if (rangeStart >= nRows) break;
+        rangeEnd = Math.min(rangeEnd, nRows - 1);
+      }
+      const { data, error } = await this._query.range(rangeStart, rangeEnd);
+      console.log(`Fetching page ${page} of ${nRows ?? "unknown"} for ${this._table}`);
       if (error) {
         throw error;
       }
-      if (!data) {
+      if (!data || data.length === 0) {
         break;
       }
       rows.push(...data);

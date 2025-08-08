@@ -2,6 +2,7 @@ import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isArray, isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 import type {
   Assignment,
   GradebookColumn,
@@ -17,6 +18,7 @@ export type ExpressionContext = {
   is_private_calculation: boolean;
   incomplete_values: IncompleteValuesAdvice | null;
   incomplete_values_policy: "assume_max" | "assume_zero" | "report_only";
+  scope: Sentry.Scope;
 };
 //TODO: Move this to a shared file
 //See also in hooks/useGradebookWhatIf.tsx
@@ -265,19 +267,19 @@ class AssignmentsDependencySource extends DependencySourceBase {
     }
 
     const private_results = allSubmissions
-      .filter((submission) => students.has(submission.student_id!))
+      .filter((submission) => students.has(submission.student_private_profile_id!))
       .map((submission) => ({
         key: submission.assignment_slug ?? "",
-        student_id: submission.student_id!,
+        student_id: submission.student_private_profile_id!,
         value: submission.total_score,
         class_id: submission.class_id!,
         is_private: true
       }));
     const public_results = allSubmissions
-      .filter((submission) => students.has(submission.student_id!))
+      .filter((submission) => students.has(submission.student_private_profile_id!))
       .map((submission) => ({
         key: submission.assignment_slug ?? "",
-        student_id: submission.student_id!,
+        student_id: submission.student_private_profile_id!,
         value: submission.released ? submission.total_score : undefined,
         class_id: submission.class_id!,
         is_private: false
