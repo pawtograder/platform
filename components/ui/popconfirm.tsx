@@ -38,22 +38,21 @@ export const PopConfirm = ({
       isExecutingRef.current = true;
       setIsLoading(true);
 
-      // Use setTimeout to break out of the current call stack - Safari friendly
+      // Close the popover FIRST to avoid the original click being treated as an
+      // outside interaction for any dialog opened by onConfirm (immediate-close bug)
+      setIsOpen(false);
+
+      // Defer the confirm action slightly so the popover fully unmounts
       setTimeout(async () => {
         try {
           await onConfirm();
-          // Close with a delay to ensure Safari processes the action
-          setTimeout(() => {
-            setIsOpen(false);
-            setIsLoading(false);
-            isExecutingRef.current = false;
-          }, 50);
         } catch (error) {
           console.error("Error in confirm action:", error);
+        } finally {
           setIsLoading(false);
           isExecutingRef.current = false;
         }
-      }, 0);
+      }, 75);
     },
     [onConfirm, isLoading]
   );

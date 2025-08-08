@@ -280,8 +280,9 @@ export default function ImportGradebookColumns() {
                               let studentPrivateProfileId: string | null = null;
                               if (idType === "email") {
                                 studentPrivateProfileId =
-                                  courseController.getRoster().find((r) => r.users.email === identifier)
-                                    ?.private_profile_id ?? null;
+                                  courseController
+                                    .getRosterWithUserInfo()
+                                    .data.find((r) => r.users.email === identifier)?.private_profile_id ?? null;
                               } else if (idType === "sid") {
                                 const sid = (identifier ?? "").toString();
                                 studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
@@ -326,7 +327,9 @@ export default function ImportGradebookColumns() {
                       const rosterIdentifiers = studentRoster
                         .map((s) => {
                           if (previewData.idType === "email") {
-                            const rosterEntry = courseController.getRoster().find((r) => r.private_profile_id === s.id);
+                            const rosterEntry = courseController
+                              .getRosterWithUserInfo()
+                              .data.find((r) => r.private_profile_id === s.id);
                             return rosterEntry?.users.email ?? null;
                           } else if (previewData.idType === "sid") {
                             return s.sis_user_id;
@@ -398,8 +401,8 @@ export default function ImportGradebookColumns() {
                               let identifier: string | null = null;
                               if (previewData.idType === "email") {
                                 const rosterEntry = courseController
-                                  .getRoster()
-                                  .find((r) => r.private_profile_id === student.id);
+                                  .getRosterWithUserInfo()
+                                  .data.find((r) => r.private_profile_id === student.id);
                                 identifier = rosterEntry?.users.email ?? null;
                               } else if (previewData.idType === "sid") {
                                 identifier = student.sis_user_id;
@@ -455,8 +458,8 @@ export default function ImportGradebookColumns() {
                                 .map((s) => {
                                   if (previewData.idType === "email") {
                                     const rosterEntry = courseController
-                                      .getRoster()
-                                      .find((r) => r.private_profile_id === s.id);
+                                      .getRosterWithUserInfo()
+                                      .data.find((r) => r.private_profile_id === s.id);
                                     return rosterEntry?.users.email ?? null;
                                   } else if (previewData.idType === "sid") {
                                     return s.sis_user_id;
@@ -607,7 +610,9 @@ export default function ImportGradebookColumns() {
                                 // Only update for students in the roster
                                 const studentsToUpdate = col.students.filter((s) => {
                                   if (previewData.idType === "email") {
-                                    return courseController.getRoster().some((r) => r.users.email === s.identifier);
+                                    return courseController
+                                      .getRosterWithUserInfo()
+                                      .data.some((r) => r.users.email === s.identifier);
                                   } else if (previewData.idType === "sid") {
                                     return courseController.getProfileBySisId(s.identifier)?.id !== null;
                                   }
@@ -619,8 +624,9 @@ export default function ImportGradebookColumns() {
                                     let studentPrivateProfileId: string | null = null;
                                     if (previewData.idType === "email") {
                                       studentPrivateProfileId =
-                                        courseController.getRoster().find((r) => r.users.email === s.identifier)
-                                          ?.private_profile_id ?? null;
+                                        courseController
+                                          .getRosterWithUserInfo()
+                                          .data.find((r) => r.users.email === s.identifier)?.private_profile_id ?? null;
                                     } else if (previewData.idType === "sid") {
                                       const sid = (s.identifier ?? "").toString();
                                       studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
