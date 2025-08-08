@@ -7,10 +7,7 @@ Sentry.init({
   sendDefaultPii: true,
   release: "pawtograder-mvp",
   integrations: [],
-  tracesSampleRate: 0,
-  beforeSend(event) {
-    // Ensure the event is being sent to the right place
-    console.log("Sending event through tunnel:", event);
-    return event;
-  }
+  tracesSampleRate: 0
 });
+
+export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
