@@ -1,62 +1,6 @@
 set check_function_bodies = off;
 
-CREATE OR REPLACE FUNCTION public.broadcast_course_table_change()
- RETURNS trigger
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO ''
-AS $function$
-declare
-    class_id_value bigint;
-    row_id text;
-    main_payload jsonb;
-begin
-    -- Get the class_id and row_id from the record
-    if tg_op = 'insert' then
-        class_id_value := new.class_id;
-        row_id := new.id;
-    elsif tg_op = 'update' then
-        class_id_value := coalesce(new.class_id, old.class_id);
-        row_id := coalesce(new.id, old.id);
-    elsif tg_op = 'delete' then
-        class_id_value := old.class_id;
-        row_id := old.id;
-    end if;
-
-    -- Only broadcast if we have valid class_id
-    if class_id_value is not null then
-        -- Create payload with table-specific information
-        main_payload := jsonb_build_object(
-            'type', 'table_change',
-            'operation', tg_op,
-            'table', tg_table_name,
-            'row_id', row_id,
-            'class_id', class_id_value,
-            'data', case 
-                when tg_op = 'delete' then to_jsonb(old)
-                else to_jsonb(new)
-            end,
-            'timestamp', now()
-        );
-
-        -- Broadcast to table-specific channel that TableController listens to
-        perform realtime.send(
-            main_payload,
-            'broadcast',
-            tg_table_name,
-            true
-        );
-    end if;
-
-    -- Return the appropriate record
-    if tg_op = 'delete' then
-        return old;
-    else
-        return new;
-    end if;
-end;
-$function$
-;
+-- Removed unused function broadcast_course_table_change to align with office-hours pattern
 
 CREATE OR REPLACE FUNCTION public.broadcast_course_table_change_unified()
  RETURNS trigger
@@ -68,9 +12,11 @@ DECLARE
     class_id_value bigint;
     row_id text;
     staff_payload jsonb;
-    user_payload jsonb;
     affected_profile_ids uuid[];
     profile_id uuid;
+    creator_user_id uuid;
+    creator_profile_id uuid;
+    is_visible boolean;
 BEGIN
     -- Get the class_id and row_id from the record
     IF TG_OP = 'INSERT' THEN
@@ -86,9 +32,9 @@ BEGIN
 
     -- Only broadcast if we have valid class_id
     IF class_id_value IS NOT NULL THEN
-        -- Create payload with table-specific information
+        -- Create payload with table-specific information (staff scoped)
         staff_payload := jsonb_build_object(
-            'type', 'table_change',
+            'type', 'staff_data_change',
             'operation', TG_OP,
             'table', TG_TABLE_NAME,
             'row_id', row_id,
@@ -97,7 +43,6 @@ BEGIN
                 WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
                 ELSE to_jsonb(NEW)
             END,
-            'target_audience', 'staff',
             'timestamp', NOW()
         );
 
@@ -109,29 +54,87 @@ BEGIN
             true
         );
 
-        -- For non-sensitive tables, also broadcast to all student user channels
-        -- (You may want to add logic here to filter sensitive data)
-        
-        -- Get all students in the class for user channels
-        SELECT ARRAY(
-            SELECT ur.private_profile_id
+        -- Student-facing broadcasts by table, mirroring office-hours pattern where safe
+        IF TG_TABLE_NAME IN ('lab_sections', 'lab_section_meetings', 'profiles') THEN
+            -- Broadcast to all students in the class
+            SELECT ARRAY(
+                SELECT ur.private_profile_id
+                FROM public.user_roles ur
+                WHERE ur.class_id = class_id_value AND ur.role = 'student'
+            ) INTO affected_profile_ids;
+
+            FOREACH profile_id IN ARRAY affected_profile_ids LOOP
+                PERFORM realtime.send(
+                    staff_payload,
+                    'broadcast',
+                    'class:' || class_id_value || ':user:' || profile_id,
+                    true
+                );
+            END LOOP;
+        ELSIF TG_TABLE_NAME = 'tags' THEN
+            -- Tags visible to class → broadcast to all students; non-visible → only to creator
+            IF TG_OP = 'DELETE' THEN
+                is_visible := COALESCE(OLD.visible, false);
+                creator_user_id := OLD.creator_id;
+            ELSE
+                is_visible := COALESCE(NEW.visible, false);
+                creator_user_id := NEW.creator_id;
+            END IF;
+
+            -- Notify creator for any change (even when not visible)
+            SELECT ur.private_profile_id INTO creator_profile_id
             FROM public.user_roles ur
-            WHERE ur.class_id = class_id_value AND ur.role = 'student'
-        ) INTO affected_profile_ids;
+            WHERE ur.user_id = creator_user_id AND ur.class_id = class_id_value
+            LIMIT 1;
 
-        -- Create user payload
-        user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
+            IF creator_profile_id IS NOT NULL THEN
+                PERFORM realtime.send(
+                    staff_payload,
+                    'broadcast',
+                    'class:' || class_id_value || ':user:' || creator_profile_id,
+                    true
+                );
+            END IF;
 
-        -- Broadcast to all student user channels
-        FOREACH profile_id IN ARRAY affected_profile_ids
-        LOOP
-            PERFORM realtime.send(
-                user_payload,
-                'broadcast',
-                'class:' || class_id_value || ':user:' || profile_id,
-                true
-            );
-        END LOOP;
+            -- If visible, also broadcast to all students in the class
+            IF is_visible THEN
+                SELECT ARRAY(
+                    SELECT ur.private_profile_id
+                    FROM public.user_roles ur
+                    WHERE ur.class_id = class_id_value AND ur.role = 'student'
+                ) INTO affected_profile_ids;
+
+                FOREACH profile_id IN ARRAY affected_profile_ids LOOP
+                    PERFORM realtime.send(
+                        staff_payload,
+                        'broadcast',
+                        'class:' || class_id_value || ':user:' || profile_id,
+                        true
+                    );
+                END LOOP;
+            END IF;
+        ELSIF TG_TABLE_NAME = 'user_roles' THEN
+            -- Only the affected user (plus staff channel above)
+            IF TG_OP = 'DELETE' THEN
+                creator_user_id := OLD.user_id;
+            ELSE
+                creator_user_id := NEW.user_id;
+            END IF;
+
+            SELECT ur.private_profile_id INTO creator_profile_id
+            FROM public.user_roles ur
+            WHERE ur.user_id = creator_user_id AND ur.class_id = class_id_value
+            LIMIT 1;
+
+            IF creator_profile_id IS NOT NULL THEN
+                PERFORM realtime.send(
+                    staff_payload,
+                    'broadcast',
+                    'class:' || class_id_value || ':user:' || creator_profile_id,
+                    true
+                );
+            END IF;
+        END IF;
     END IF;
 
     -- Return the appropriate record
@@ -141,70 +144,6 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$function$
-;
-
-CREATE OR REPLACE FUNCTION public.broadcast_discussion_thread_read_status_change()
- RETURNS trigger
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO ''
-AS $function$
-declare
-    class_id_value bigint;
-    row_id text;
-    main_payload jsonb;
-begin
-    -- Get class_id from the discussion thread and row_id
-    if tg_op = 'insert' then
-        select dt.class_id into class_id_value
-        from public.discussion_threads dt
-        where dt.id = new.discussion_thread_id;
-        row_id := new.id;
-    elsif tg_op = 'update' then
-        select dt.class_id into class_id_value
-        from public.discussion_threads dt
-        where dt.id = coalesce(new.discussion_thread_id, old.discussion_thread_id);
-        row_id := coalesce(new.id, old.id);
-    elsif tg_op = 'delete' then
-        select dt.class_id into class_id_value
-        from public.discussion_threads dt
-        where dt.id = old.discussion_thread_id;
-        row_id := old.id;
-    end if;
-
-    -- Only broadcast if we have valid class_id
-    if class_id_value is not null then
-        -- Create payload with table-specific information
-        main_payload := jsonb_build_object(
-            'type', 'table_change',
-            'operation', tg_op,
-            'table', tg_table_name,
-            'row_id', row_id,
-            'class_id', class_id_value,
-            'data', case 
-                when tg_op = 'delete' then to_jsonb(old)
-                else to_jsonb(new)
-            end,
-            'timestamp', now()
-        );
-
-        -- Broadcast to table-specific channel that TableController listens to
-        perform realtime.send(
-            main_payload,
-            'broadcast',
-            tg_table_name,
-            true
-        );
-    end if;
-
-    -- Return the appropriate record
-    if tg_op = 'delete' then
-        return old;
-    else
-        return new;
-    end if;
-end;
 $function$
 ;
 
@@ -218,9 +157,9 @@ DECLARE
     class_id_value bigint;
     row_id text;
     staff_payload jsonb;
-    user_payload jsonb;
     affected_profile_ids uuid[];
     profile_id uuid;
+    viewer_profile_id uuid;
 BEGIN
     -- Get class_id from the discussion thread and row_id
     IF TG_OP = 'INSERT' THEN
@@ -242,9 +181,9 @@ BEGIN
 
     -- Only broadcast if we have valid class_id
     IF class_id_value IS NOT NULL THEN
-        -- Create payload with table-specific information
+        -- Create payload with table-specific information (staff scoped)
         staff_payload := jsonb_build_object(
-            'type', 'table_change',
+            'type', 'staff_data_change',
             'operation', TG_OP,
             'table', TG_TABLE_NAME,
             'row_id', row_id,
@@ -253,7 +192,6 @@ BEGIN
                 WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
                 ELSE to_jsonb(NEW)
             END,
-            'target_audience', 'staff',
             'timestamp', NOW()
         );
 
@@ -265,26 +203,21 @@ BEGIN
             true
         );
 
-        -- Get all students in the class for user channels
-        SELECT ARRAY(
-            SELECT ur.private_profile_id
-            FROM public.user_roles ur
-            WHERE ur.class_id = class_id_value AND ur.role = 'student'
-        ) INTO affected_profile_ids;
+        -- Student-facing broadcast for read status: only the viewer should see their own change
+        IF TG_OP = 'DELETE' THEN
+            viewer_profile_id := OLD.user_id;
+        ELSE
+            viewer_profile_id := NEW.user_id;
+        END IF;
 
-        -- Create user payload
-        user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
-
-        -- Broadcast to all student user channels
-        FOREACH profile_id IN ARRAY affected_profile_ids
-        LOOP
+        IF viewer_profile_id IS NOT NULL THEN
             PERFORM realtime.send(
-                user_payload,
+                staff_payload,
                 'broadcast',
-                'class:' || class_id_value || ':user:' || profile_id,
+                'class:' || class_id_value || ':user:' || viewer_profile_id,
                 true
             );
-        END LOOP;
+        END IF;
     END IF;
 
     -- Return the appropriate record
@@ -306,35 +239,33 @@ AS $function$
 declare
     target_class_id bigint;
     staff_payload jsonb;
-    user_payload jsonb;
     affected_profile_ids uuid[];
     profile_id uuid;
 begin
     -- Get the class_id from the record
-    if tg_op = 'insert' then
-        target_class_id := new.class_id;
-    elsif tg_op = 'update' then
-        target_class_id := coalesce(new.class_id, old.class_id);
-    elsif tg_op = 'delete' then
-        target_class_id := old.class_id;
+    if TG_OP = 'INSERT' then
+        target_class_id := NEW.class_id;
+    elsif TG_OP = 'UPDATE' then
+        target_class_id := coalesce(NEW.class_id, OLD.class_id);
+    elsif TG_OP = 'DELETE' then
+        target_class_id := OLD.class_id;
     end if;
 
     if target_class_id is not null then
-        -- Create payload for discussion_threads changes
+        -- Create payload for discussion_threads changes (staff scoped)
         staff_payload := jsonb_build_object(
-            'type', 'table_change',
-            'operation', tg_op,
-            'table', tg_table_name,
+            'type', 'staff_data_change',
+            'operation', TG_OP,
+            'table', TG_TABLE_NAME,
             'row_id', case
-                when tg_op = 'delete' then old.id
-                else new.id
+                when TG_OP = 'delete' then OLD.id
+                else NEW.id
             end,
             'data', case
-                when tg_op = 'delete' then to_jsonb(old)
-                else to_jsonb(new)
+                when TG_OP = 'delete' then to_jsonb(OLD)
+                else to_jsonb(NEW)
             end,
             'class_id', target_class_id,
-            'target_audience', 'staff',
             'timestamp', now()
         );
 
@@ -346,33 +277,29 @@ begin
             true
         );
 
-        -- Get all students in the class for user channels
-        select array(
-            select ur.private_profile_id
-            from user_roles ur
-            where ur.class_id = target_class_id and ur.role = 'student'
-        ) into affected_profile_ids;
+        -- Student-facing broadcasts for discussion threads (respect RLS constraints):
+        -- The SELECT policies already gate what students can fetch. We broadcast minimal payload to per-user channels.
+        SELECT ARRAY(
+            SELECT ur.private_profile_id
+            FROM public.user_roles ur
+            WHERE ur.class_id = target_class_id AND ur.role = 'student'
+        ) INTO affected_profile_ids;
 
-        -- Create user payload (same as staff but marked for users)
-        user_payload := staff_payload || jsonb_build_object('target_audience', 'user');
-
-        -- Broadcast to all student user channels (students see discussion threads)
-        foreach profile_id in array affected_profile_ids
-        loop
-            perform realtime.send(
-                user_payload,
+        FOREACH profile_id IN ARRAY affected_profile_ids LOOP
+            PERFORM realtime.send(
+                staff_payload,
                 'broadcast',
                 'class:' || target_class_id || ':user:' || profile_id,
                 true
             );
-        end loop;
+        END LOOP;
     end if;
 
     -- Return the appropriate record
-    if tg_op = 'delete' then
-        return old;
+    if TG_OP = 'DELETE' then
+        return OLD;
     else
-        return new;
+        return NEW;
     end if;
 end;
 $function$
@@ -402,15 +329,6 @@ declare
     is_profile_owner boolean;
     channel_type text;
 begin
-    -- Handle course data table channels (table-specific channels for course controller)
-    -- These are simple table names that broadcast course data changes
-    if topic_text in ('profiles', 'user_roles', 'discussion_thread_read_status', 'tags', 'lab_sections', 'lab_section_meetings') then
-        -- Allow authenticated users to subscribe to course data table channels
-        -- Client-side filtering by class_id in broadcast payload provides actual access control
-        -- Combined with RLS policies on the underlying tables
-        return auth.role() = 'authenticated';
-    end if;
-
     -- Handle special case for help_queues (global channel)
     if topic_text = 'help_queues' then
         -- Allow authenticated users to subscribe to global help queues channel

@@ -9,7 +9,7 @@ type TablesThatHaveAnIDField = {
 }[keyof DatabaseTableTypes];
 
 type BroadcastMessage = {
-  type: "table_change" | "channel_created" | "system";
+  type: "table_change" | "channel_created" | "system" | "staff_data_change";
   operation?: "INSERT" | "UPDATE" | "DELETE";
   table?: TablesThatHaveAnIDField;
   row_id?: number | string;
@@ -281,15 +281,22 @@ export class ClassRealTimeController {
   }
 
   private _handleBroadcastMessage(message: BroadcastMessage) {
-    // Skip system messages like channel_created
-    if (message.type !== "table_change") {
+    // Normalize custom payload types from SQL functions to the standard type expected by listeners
+    // SQL may emit type "staff_data_change"; treat it as "table_change" for downstream consumers
+    const normalized: BroadcastMessage =
+      message.type === "staff_data_change"
+        ? ({ ...(message as BroadcastMessage), type: "table_change" } as BroadcastMessage)
+        : message;
+
+    // Skip system and channel lifecycle messages
+    if (normalized.type === "system" || normalized.type === "channel_created") {
       return;
     }
 
     // Notify all relevant subscriptions
     for (const subscription of this._subscriptions.values()) {
-      if (this._messageMatchesFilter(message, subscription.filter)) {
-        subscription.callback(message);
+      if (this._messageMatchesFilter(normalized, subscription.filter)) {
+        subscription.callback(normalized);
       }
     }
   }

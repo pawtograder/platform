@@ -153,10 +153,14 @@ export function useDiscussionThreadTeasers() {
   return teasers;
 }
 type DiscussionThreadFields = keyof DiscussionThreadTeaser;
-export function useDiscussionThreadTeaser(id: number, watchFields?: DiscussionThreadFields[]) {
+export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: DiscussionThreadFields[]) {
   const controller = useCourseController();
   const [teaser, setTeaser] = useState<DiscussionThreadTeaser | undefined>(undefined);
   useEffect(() => {
+    if (id === undefined) {
+      setTeaser(undefined);
+      return;
+    }
     const { unsubscribe, data } = controller.discussionThreads.getById(id, (data) => {
       if (watchFields) {
         setTeaser((oldTeaser) => {
@@ -283,6 +287,7 @@ export class CourseController {
       client,
       table: "user_roles",
       query: client.from("user_roles").select("*, users(*)").eq("class_id", courseId).eq("role", "student"),
+      selectForSingleRow: "*, users(*)",
       classRealTimeController
     });
 
@@ -290,6 +295,7 @@ export class CourseController {
       client,
       table: "user_roles",
       query: client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", courseId),
+      selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
       classRealTimeController
     });
   }
