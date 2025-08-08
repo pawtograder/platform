@@ -255,6 +255,9 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   const column = useGradebookColumn(columnId);
   const [isEditing, setIsEditing] = useState(false);
   const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
+  if (!studentGradebookColumn) {
+    throw new Error(`Student ${studentId} has no gradebook column for column ${columnId}`);
+  }
   const triggerId = useId();
 
   let scoreAdvice: string | undefined = undefined;
@@ -277,7 +280,7 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
     studentGradebookColumn?.score_override || studentGradebookColumn?.is_excused || !studentGradebookColumn;
 
   if (!studentGradebookColumn) {
-    scoreAdvice = "This is an error?";
+    scoreAdvice = `Missing ${columnId} for ${studentId}`;
   }
   if (studentGradebookColumn?.incomplete_values) {
     scoreAdvice = `${scoreAdvice ? scoreAdvice + "\n" : ""}This calculated column is missing these values: ${IncompleteValuesList(studentGradebookColumn.incomplete_values as IncompleteValuesAdvice)}`;

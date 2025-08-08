@@ -18,7 +18,9 @@ import {
   useGradebookColumns,
   useGradebookController,
   useStudentDetailView,
-  useAreAllDependenciesReleased
+  useAreAllDependenciesReleased,
+  useGradebookRefetchStatus,
+  useStudentColumnIndexStatus
 } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -1152,6 +1154,10 @@ function GradebookColumnHeader({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [isMovingLeft, setIsMovingLeft] = useState(false);
+  const [isMovingRight, setIsMovingRight] = useState(false);
+  const [isReleasing, setIsReleasing] = useState(false);
+  const [isUnreleasing, setIsUnreleasing] = useState(false);
   const supabase = createClient();
   const invalidate = useInvalidate();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -1159,48 +1165,128 @@ function GradebookColumnHeader({
   const allGrades = useGradebookColumnGrades(column_id);
 
   const moveLeft = useCallback(async () => {
-    console.log("Moving left", column_id, column.sort_order);
     if (column.sort_order == null || column.sort_order === 0) return;
-    await supabase.rpc("gradebook_column_move_left", {
-      p_column_id: column_id
-    });
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
+
+    setIsMovingLeft(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_column_move_left", {
+        p_column_id: column_id
+      });
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column moved left",
+        description: `Successfully moved "${column.name}" to the left`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to move column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsMovingLeft(false);
+    }
   }, [column_id, column, invalidate, supabase]);
 
   const moveRight = useCallback(async () => {
-    console.log("Moving right", column_id, column.sort_order);
     if (column.sort_order == null) return;
-    await supabase.rpc("gradebook_column_move_right", {
-      p_column_id: column_id
-    });
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
+
+    setIsMovingRight(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_column_move_right", {
+        p_column_id: column_id
+      });
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column moved right",
+        description: `Successfully moved "${column.name}" to the right`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to move column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsMovingRight(false);
+    }
   }, [column_id, column, invalidate, supabase]);
 
   const releaseColumn = useCallback(async () => {
-    await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
-  }, [column_id, invalidate, supabase]);
+    setIsReleasing(true);
+    try {
+      const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column released",
+        description: `Successfully released "${column.name}" column`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to release column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsReleasing(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const unreleaseColumn = useCallback(async () => {
-    await supabase.from("gradebook_columns").update({ released: false }).eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
-  }, [column_id, invalidate, supabase]);
+    setIsUnreleasing(true);
+    try {
+      const { error } = await supabase.from("gradebook_columns").update({ released: false }).eq("id", column_id);
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column unreleased",
+        description: `Successfully unreleased "${column.name}" column`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to unrelease column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsUnreleasing(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const toolTipText = useMemo(() => {
     const ret: string[] = [];
@@ -1313,22 +1399,32 @@ function GradebookColumnHeader({
                 <Icon as={LuPencil} boxSize={3} mr={2} />
                 Edit Column
               </MenuItem>
-              <MenuItem value="moveLeft" onClick={moveLeft}>
-                <Icon as={LuArrowLeft} boxSize={3} mr={2} />
+              <MenuItem
+                value="moveLeft"
+                onClick={moveLeft}
+                disabled={isMovingLeft || isMovingRight}
+                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+              >
+                {isMovingLeft ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowLeft} boxSize={3} mr={2} />}
                 Move Left
               </MenuItem>
-              <MenuItem value="moveRight" onClick={moveRight}>
-                <Icon as={LuArrowRight} boxSize={3} mr={2} />
+              <MenuItem
+                value="moveRight"
+                onClick={moveRight}
+                disabled={isMovingLeft || isMovingRight}
+                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+              >
+                {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
                 Move Right
               </MenuItem>
               <MenuSeparator />
               <MenuItem
                 value="release"
                 onClick={releaseColumn}
-                disabled={!!column.score_expression}
+                disabled={!!column.score_expression || isReleasing || isUnreleasing}
                 _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
               >
-                <Icon as={LuCheck} boxSize={3} mr={2} />
+                {isReleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuCheck} boxSize={3} mr={2} />}
                 Release Column
                 {column.score_expression && (
                   <WrappedTooltip content="Auto-calculated columns cannot be manually released">
@@ -1341,10 +1437,10 @@ function GradebookColumnHeader({
               <MenuItem
                 value="unrelease"
                 onClick={unreleaseColumn}
-                disabled={!!column.score_expression}
+                disabled={!!column.score_expression || isReleasing || isUnreleasing}
                 _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
               >
-                <Icon as={LuX} boxSize={3} mr={2} />
+                {isUnreleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuX} boxSize={3} mr={2} />}
                 Unrelease Column
                 {column.score_expression && (
                   <WrappedTooltip content="Auto-calculated columns cannot be manually unreleased">
@@ -1523,9 +1619,12 @@ export default function GradebookTable() {
   const { allVisibleRoles } = useClassProfiles();
   const gradebookColumns = useGradebookColumns();
   const isInstructor = useIsInstructor();
+  const isRefetching = useGradebookRefetchStatus();
+  const isStudentColumnIndexPopulated = useStudentColumnIndexStatus();
 
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [isAutoLayouting, setIsAutoLayouting] = useState(false);
 
   // Fetch class sections
   const { data: classSections } = useList<ClassSection>({
@@ -1626,6 +1725,8 @@ export default function GradebookTable() {
     const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
     const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
 
+    console.log(groupedColumns);
+    console.log(baseGroupNames);
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -1660,9 +1761,29 @@ export default function GradebookTable() {
 
   const autoLayout = useCallback(async () => {
     const supabase = createClient();
-    await supabase.rpc("gradebook_auto_layout", {
-      p_gradebook_id: gradebookController.gradebook_id
-    });
+
+    setIsAutoLayouting(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_auto_layout", {
+        p_gradebook_id: gradebookController.gradebook_id
+      });
+
+      if (error) throw error;
+
+      toaster.create({
+        title: "Auto-layout complete",
+        description: "Successfully reorganized gradebook columns",
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Auto-layout failed",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsAutoLayouting(false);
+    }
   }, [gradebookController]);
 
   // Expand all groups
@@ -2046,12 +2167,43 @@ export default function GradebookTable() {
     [rowModel.rows, toggleGroup, firstColumnWidth, headerHeight, isSafari]
   );
 
-  if (!students) {
-    return <Spinner />;
+  if (!students || !isStudentColumnIndexPopulated) {
+    return (
+      <VStack gap={2} align="center" justify="center" minH="40vh">
+        <Spinner size="lg" color="blue.500" />
+        <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
+          {!students ? "Loading students..." : "Loading gradebook data..."}
+        </Text>
+      </VStack>
+    );
   }
 
   return (
-    <VStack align="stretch" w="100%" gap={0}>
+    <VStack align="stretch" w="100%" gap={0} position="relative">
+      {/* Refetch loading overlay */}
+      {(isRefetching || !isStudentColumnIndexPopulated) && (
+        <Box
+          position="absolute"
+          top={0}
+          left={0}
+          right={0}
+          bottom={0}
+          bg="rgba(255, 255, 255, 0.8)"
+          zIndex={1000}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          borderRadius="md"
+        >
+          <VStack gap={2}>
+            <Spinner size="lg" color="blue.500" />
+            <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
+              {isRefetching ? "Refreshing gradebook data..." : "Loading gradebook index..."}
+            </Text>
+          </VStack>
+        </Box>
+      )}
+
       <style jsx global>{`
         tr:hover .sticky-first-cell {
           background-color: var(--chakra-colors-bg-info) !important;
@@ -2229,8 +2381,10 @@ export default function GradebookTable() {
                                 onClick={autoLayout}
                                 colorPalette="blue"
                                 aria-label="Auto-layout columns"
+                                disabled={isAutoLayouting}
+                                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
                               >
-                                <Icon as={LuLayoutGrid} boxSize={3} />
+                                {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
                               </IconButton>
                             </WrappedTooltip>
 

@@ -3395,11 +3395,11 @@ async function runSmallScale() {
       numGraderTags: 4
     },
     labAssignmentConfig: {
-      numLabAssignments: 25,
+      numLabAssignments: 10,
       minutesDueAfterLab: 60 // 1 hour
     },
     groupAssignmentConfig: {
-      numGroupAssignments: 10,
+      numGroupAssignments: 5,
       numLabGroupAssignments: 10
     },
     helpRequestConfig: {
