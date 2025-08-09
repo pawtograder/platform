@@ -13,7 +13,6 @@ import { Alert } from "./alert";
 import { Button } from "./button";
 import { Skeleton } from "./skeleton";
 import { toaster, Toaster } from "./toaster";
-import { AssignmentsForStudentDashboard } from "@/app/course/[course_id]/assignments/page";
 
 function LateTokenButton({ assignment }: { assignment: Assignment }) {
   const { private_profile_id, role } = useClassProfiles();
@@ -234,13 +233,15 @@ export function AssignmentDueDate({
 
 export function SelfReviewDueDate({
   assignment,
-  showTimeZone = false
+  showTimeZone = false,
+  offsetHours = 0
 }: {
-  assignment: AssignmentsForStudentDashboard;
+  assignment: Assignment;
   showTimeZone?: boolean;
+  offsetHours?: number;
 }) {
   const { private_profile_id } = useClassProfiles();
-  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment as Assignment, {
+  const { dueDate, originalDueDate, time_zone } = useAssignmentDueDate(assignment, {
     studentPrivateProfileId: private_profile_id
   });
   if (!dueDate || !originalDueDate) {
@@ -250,7 +251,7 @@ export function SelfReviewDueDate({
     <HStack gap={1}>
       <Text>
         {formatInTimeZone(
-          new TZDate(addHours(dueDate, assignment.self_review_deadline_offset ?? 0)),
+          new TZDate(addHours(dueDate, offsetHours ?? 0)),
           time_zone || "America/New_York",
           "MMM d h:mm aaa"
         )}

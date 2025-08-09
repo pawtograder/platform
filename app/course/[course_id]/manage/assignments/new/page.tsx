@@ -93,9 +93,10 @@ export default function NewAssignmentPage() {
             self_review_setting_id: settings.data.id as number,
             group_formation_deadline: getValues("group_formation_deadline")
               ? new TZDate(getValues("group_formation_deadline"), timezone).toISOString()
-              : null
+              : null,
+            no_submission: getValues("no_submission") === true
           })
-          .select("id")
+          .select("id, no_submission")
           .single();
         if (error || !data) {
           toaster.error({
@@ -128,11 +129,13 @@ export default function NewAssignmentPage() {
           toaster.dismiss(loadingToast);
           toaster.create({
             title: "Assignment Created Successfully",
-            description: "GitHub repositories have been created and the assignment is ready.",
+            description: data.no_submission
+              ? "Assignment created as no-submission. No gradebook column will be created and check runs will be disabled."
+              : "GitHub repositories have been created and the assignment is ready.",
             type: "success"
           });
 
-          router.push(`/course/${course_id}/manage/assignments/${data.id}/autograder`);
+          router.push(`/course/${course_id}/manage/assignments/${data.id}${data.no_submission ? '' : '/autograder'}`);
         }
       } catch (error) {
         // Clear the timer and dismiss the loading toast

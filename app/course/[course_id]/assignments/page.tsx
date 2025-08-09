@@ -7,6 +7,7 @@ import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useIdentity } from "@/hooks/useIdentities";
 import { AssignmentGroup, AssignmentGroupMember, Repo } from "@/utils/supabase/DatabaseTypes";
+import type { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Container, EmptyState, Heading, Icon, Skeleton, Table, Text } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
@@ -134,9 +135,9 @@ export default function StudentPage() {
         submission_text: !assignment.submission_id
           ? "Have not submitted yet"
           : `#${assignment.submission_ordinal} (${assignment.grader_result_score || 0}/${assignment.grader_result_max_score || 0})`,
-        submission_link: assignment.submission_id
-          ? `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.submission_id}`
-          : undefined,
+                submission_link: assignment.submission_id
+            ? `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.submission_id}`
+            : undefined,
         group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
       });
 
@@ -149,7 +150,12 @@ export default function StudentPage() {
           name: "Self Review for " + assignment.title,
           type: "self review",
           due_date: evalDueDate ? new TZDate(evalDueDate) : undefined,
-          due_date_component: <SelfReviewDueDate assignment={assignment} />,
+          due_date_component: (
+            <SelfReviewDueDate
+              assignment={assignment as unknown as Assignment}
+              offsetHours={assignment.self_review_deadline_offset ?? 0}
+            />
+          ),
           repo: repo,
           name_link: `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.review_submission_id}/files?review_assignment_id=${assignment.review_assignment_id}`,
           submission_text: assignment.submission_review_completed_at ? "Submitted" : "Not Submitted",

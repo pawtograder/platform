@@ -169,6 +169,22 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
         {},
         scope
       );
+      // For no-submission assignments, disable Actions to avoid workflow runs
+      if (assignment.no_submission) {
+        try {
+          const repoFullName = `${assignment.classes!.github_org!}/${repoName}`;
+          const octokit = await github.getOctoKit(assignment.classes!.github_org!, scope);
+          if (octokit) {
+            await octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
+              owner: assignment.classes!.github_org!,
+              repo: repoName,
+              enabled: false
+            } as any);
+          }
+        } catch (_e) {
+          // best-effort; ignore failure to disable actions
+        }
+      }
       await github.syncRepoPermissions(
         assignment.classes!.github_org!,
         repoName,
