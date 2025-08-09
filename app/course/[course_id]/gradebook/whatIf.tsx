@@ -441,11 +441,13 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
     let currentGroupKey = "";
     let currentGroupIndex = 0;
     let lastSortOrder = -1;
+    console.log("sortedColumns", sortedColumns);
 
     sortedColumns.forEach((col) => {
       // Extract prefix before first hyphen
       const prefix = col.slug.split("-")[0];
       const baseGroupName = prefix || "other";
+      console.log("baseGroupName", baseGroupName);
 
       // Check if this column is contiguous with the previous one
       const currentSortOrder = col.sort_order ?? 0;

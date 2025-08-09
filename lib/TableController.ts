@@ -64,6 +64,8 @@ export default class TableController<
   private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
   private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
+  private _isRefetching: boolean = false;
+  private _refetchListeners: ((isRefetching: boolean) => void)[] = [];
 
   private _listDataListeners: ((
     data: ResultOne[],
@@ -77,6 +79,23 @@ export default class TableController<
   }
   get readyPromise() {
     return this._readyPromise;
+  }
+  get isRefetching() {
+    return this._isRefetching;
+  }
+
+  /**
+   * Subscribe to refetch status changes
+   * @param listener Callback that receives the current refetch status
+   * @returns Unsubscribe function
+   */
+  subscribeToRefetchStatus(listener: (isRefetching: boolean) => void) {
+    this._refetchListeners.push(listener);
+    // Immediately call with current status
+    listener(this._isRefetching);
+    return () => {
+      this._refetchListeners = this._refetchListeners.filter((l) => l !== listener);
+    };
   }
 
   async _fetchRow(id: IDType): Promise<ResultOne | undefined> {
@@ -97,12 +116,20 @@ export default class TableController<
     let nRows: number | undefined;
 
     // Load initial data, do all of the pages.
-    while (page * pageSize < (nRows ?? 1000)) {
-      const { data, error } = await this._query.range(page * pageSize, (page + 1) * pageSize);
+    // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
+    while (true) {
+      // If nRows is specified, only fetch up to nRows
+      const rangeStart = page * pageSize;
+      let rangeEnd = (page + 1) * pageSize - 1;
+      if (typeof nRows === "number") {
+        if (rangeStart >= nRows) break;
+        rangeEnd = Math.min(rangeEnd, nRows - 1);
+      }
+      const { data, error } = await this._query.range(rangeStart, rangeEnd);
       if (error) {
         throw error;
       }
-      if (!data) {
+      if (!data || data.length === 0) {
         break;
       }
       rows.push(...data);
@@ -119,6 +146,10 @@ export default class TableController<
    * Refetch all data and notify subscribers of changes
    */
   private async _refetchAllData(): Promise<void> {
+    // Set refetch state to true and notify listeners
+    this._isRefetching = true;
+    this._refetchListeners.forEach((listener) => listener(true));
+
     try {
       const oldRows = [...this._rows];
       const newData = await this._fetchInitialData();
@@ -161,6 +192,10 @@ export default class TableController<
       }
     } catch (error) {
       console.error(`Failed to refetch data for table ${this._table}:`, error);
+    } finally {
+      // Set refetch state to false and notify listeners
+      this._isRefetching = false;
+      this._refetchListeners.forEach((listener) => listener(false));
     }
   }
 
@@ -285,6 +320,10 @@ export default class TableController<
     if (this._statusUnsubscribe) {
       this._statusUnsubscribe();
     }
+    // Clear all listeners
+    this._refetchListeners = [];
+    this._listDataListeners = [];
+    this._itemDataListeners.clear();
   }
 
   private _handleInsert(message: BroadcastMessage) {
@@ -308,18 +347,7 @@ export default class TableController<
       if (pendingRow) {
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
-        const oldId = pendingRowWithId.id;
         pendingRowWithId.id = data.id as IDType;
-
-        // Debug logging for development
-        if (process.env.NODE_ENV === "development") {
-          console.log(`[TableController] Matched pending row for ${this._table}:`, {
-            oldId,
-            newId: data.id,
-            pendingData: pendingRow,
-            incomingData: data
-          });
-        }
 
         this._updateRow(
           data.id as IDType,
@@ -356,18 +384,7 @@ export default class TableController<
           if (pendingRow) {
             // Update the pending row with the real data instead of adding a duplicate
             const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
-            const oldId = pendingRowWithId.id;
             pendingRowWithId.id = message.row_id as IDType;
-
-            // Debug logging for development
-            if (process.env.NODE_ENV === "development") {
-              console.log(`[TableController] Matched pending row (ID-only) for ${this._table}:`, {
-                oldId,
-                newId: message.row_id,
-                pendingData: pendingRow,
-                fetchedData: row
-              });
-            }
 
             this._updateRow(message.row_id as IDType, row as ResultOne & { id: IDType }, false);
           } else {
@@ -711,9 +728,6 @@ export default class TableController<
     const oldRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
     if (!oldRow) {
       throw new Error("Row not found");
-    }
-    if (this._table === "gradebook_column_students") {
-      console.log("update", id, row, oldRow);
     }
     this._updateRow(id, { ...oldRow, ...row, id, __db_pending: true }, true);
     const { data, error } = await this._client.from(this._table).update(row).eq("id", id).select("*").single();

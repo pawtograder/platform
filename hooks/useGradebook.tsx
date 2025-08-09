@@ -27,12 +27,16 @@ export default function useGradebook() {
 export function useGradebookColumns() {
   const gradebookController = useGradebookController();
   const [columns, setColumns] = useState<GradebookColumn[]>(gradebookController.gradebook_columns.rows);
+  const isRefetching = useGradebookRefetchStatus();
+
   useEffect(() => {
     return gradebookController.gradebook_columns.list((data) => {
       setColumns(data);
     }).unsubscribe;
   }, [gradebookController]);
-  return columns;
+
+  // Return empty array during refetch to prevent showing partial data
+  return isRefetching ? [] : columns;
 }
 
 export function useGradebookColumn(column_id: number) {
@@ -54,10 +58,13 @@ export function useGradebookColumn(column_id: number) {
 export function useGradebookColumnGrades(column_id: number) {
   const gradebookController = useGradebookController();
   const [grades, setGrades] = useState<GradebookColumnStudent[]>(gradebookController.getStudentsForColumn(column_id));
+  const isRefetching = useGradebookRefetchStatus();
   useEffect(() => {
     return gradebookController.subscribeStudentsForColumn(column_id, setGrades);
   }, [gradebookController, column_id]);
-  return grades;
+
+  // Return empty array during refetch to prevent showing partial data
+  return isRefetching ? [] : grades;
 }
 
 export function useGradebookColumnStudent(column_id: number, student_id: string) {
@@ -65,12 +72,20 @@ export function useGradebookColumnStudent(column_id: number, student_id: string)
   const [columnStudent, setColumnStudent] = useState<GradebookColumnStudent | undefined>(
     gradebookController.getGradebookColumnStudent(column_id, student_id)
   );
+  const isRefetching = useGradebookRefetchStatus();
+  if (isRefetching) {
+    throw new Error("Should not try to get gradebook column student when any table is refetching");
+    // return undefined;
+  }
+
   useEffect(() => {
     // Use the specialized index for direct access to student/column pair
     const unsubscribe = gradebookController.subscribeStudentColumnPair(student_id, column_id, setColumnStudent);
     return () => unsubscribe();
   }, [column_id, student_id, gradebookController]);
-  return columnStudent;
+
+  // Return undefined during refetch to prevent showing partial data
+  return isRefetching ? undefined : columnStudent;
 }
 
 export function getScore(gradebookColumnStudent: GradebookColumnStudent | undefined) {
@@ -325,7 +340,6 @@ class StudentGradebookController {
 
   subscribeColumnStudent(column_id: number, cb: (item: GradebookColumnStudent | undefined) => void) {
     const arr = this._columnStudentSubscribers.get(column_id) || [];
-    console.log("subscribe", column_id, cb);
     this._columnStudentSubscribers.set(column_id, [...arr, cb]);
     return () => {
       const arr = this._columnStudentSubscribers.get(column_id) || [];
@@ -369,8 +383,15 @@ export class GradebookController {
 
   private cellRenderersByColumnId: Map<number, (cell: RendererParams) => React.ReactNode> = new Map();
 
+  // Refetch tracking
+  private _isAnyTableRefetching: boolean = false;
+  private _refetchStatusListeners: ((isRefetching: boolean) => void)[] = [];
+  private _tableRefetchUnsubscribes: (() => void)[] = [];
+
   // --- Specialized index for student/column pairs ---
   private studentColumnIndex: Map<string, number> = new Map(); // Maps (student_id, column_id) -> gradebook_column_student.id
+  private _isStudentColumnIndexPopulated: boolean = false;
+  private _studentColumnIndexListeners: ((isPopulated: boolean) => void)[] = [];
 
   // --- TableController instances ---
   readonly gradebook_columns: TableController<"gradebook_columns">;
@@ -390,9 +411,22 @@ export class GradebookController {
   private updateStudentColumnIndex() {
     this.studentColumnIndex.clear();
     this.gradebook_column_students.rows.forEach((student) => {
-      const key = this.getStudentColumnKey(student.student_id, student.gradebook_column_id);
-      this.studentColumnIndex.set(key, student.id);
+      if (student.is_private) {
+        const key = this.getStudentColumnKey(student.student_id, student.gradebook_column_id);
+        this.studentColumnIndex.set(key, student.id);
+      }
     });
+
+    // Consider index populated if we have data from gradebook_column_students table
+    // and the table is ready (not still loading initial data)
+    const wasPopulated = this._isStudentColumnIndexPopulated;
+    this._isStudentColumnIndexPopulated =
+      this.gradebook_column_students.ready && this.gradebook_column_students.rows.length > 0;
+
+    // Notify listeners if status changed
+    if (wasPopulated !== this._isStudentColumnIndexPopulated) {
+      this._studentColumnIndexListeners.forEach((listener) => listener(this._isStudentColumnIndexPopulated));
+    }
   }
 
   private _assignments?: Assignment[];
@@ -437,7 +471,11 @@ export class GradebookController {
     this.gradebook_column_students = new TableController({
       client,
       table: "gradebook_column_students",
-      query: client.from("gradebook_column_students").select("*").eq("class_id", class_id),
+      query: client
+        .from("gradebook_column_students")
+        .select("*")
+        .eq("class_id", class_id)
+        .eq("is_private", isInstructorOrGrader),
       classRealTimeController
     });
 
@@ -463,6 +501,9 @@ export class GradebookController {
 
     // Set up gradebook-specific broadcast subscriptions
     this._setupGradebookSubscriptions();
+
+    // Set up refetch status tracking
+    this._setupRefetchTracking();
   }
 
   private _setupGradebookSubscriptions() {
@@ -470,7 +511,6 @@ export class GradebookController {
     const unsubscribeColumns = this._classRealTimeController.subscribeToTable("gradebook_columns", (message) => {
       // The TableController will handle the actual data updates
       // This subscription is for any additional gradebook-specific logic
-      console.log("Gradebook columns change:", message);
     });
     this._unsubscribes.push(unsubscribeColumns);
 
@@ -480,7 +520,6 @@ export class GradebookController {
       (message) => {
         // The TableController will handle the actual data updates
         // This subscription is for any additional gradebook-specific logic
-        console.log("Gradebook column students change:", message);
 
         // Handle specific business logic for grade changes
         if (message.operation === "UPDATE" && message.data) {
@@ -503,12 +542,43 @@ export class GradebookController {
     }
   }
 
+  private _setupRefetchTracking() {
+    // Track refetch status for all tables
+    const tables = [this.gradebook_columns, this.gradebook_column_students, this.assignments_table];
+
+    tables.forEach((table) => {
+      const unsubscribe = table.subscribeToRefetchStatus(() => {
+        this._updateRefetchStatus();
+      });
+      this._tableRefetchUnsubscribes.push(unsubscribe);
+    });
+  }
+
+  private _updateRefetchStatus() {
+    // Check if any table is currently refetching
+    const isAnyRefetching =
+      this.gradebook_columns.isRefetching ||
+      this.gradebook_column_students.isRefetching ||
+      this.assignments_table.isRefetching;
+
+    if (this._isAnyTableRefetching !== isAnyRefetching) {
+      this._isAnyTableRefetching = isAnyRefetching;
+      this._refetchStatusListeners.forEach((listener) => listener(isAnyRefetching));
+    }
+  }
+
   close() {
     this.gradebook_columns.close();
     this.gradebook_column_students.close();
     this.assignments_table.close();
     this._unsubscribes.forEach((unsubscribe) => unsubscribe());
     this._unsubscribes = [];
+
+    // Clean up refetch subscriptions
+    this._tableRefetchUnsubscribes.forEach((unsubscribe) => unsubscribe());
+    this._tableRefetchUnsubscribes = [];
+    this._refetchStatusListeners = [];
+    this._studentColumnIndexListeners = [];
 
     // Close all student controllers
     this.studentGradebookControllers.forEach((controller) => {
@@ -576,6 +646,11 @@ export class GradebookController {
 
   // Get all students for a specific column using the specialized index
   getStudentsForColumn(column_id: number): GradebookColumnStudent[] {
+    // Don't return data if any table is refetching to avoid partial data
+    if (this._isAnyTableRefetching) {
+      return [];
+    }
+
     const students: GradebookColumnStudent[] = [];
     this.studentColumnIndex.forEach((studentId, key) => {
       // Extract column_id from the key (format: "student_id:column_id")
@@ -608,6 +683,11 @@ export class GradebookController {
 
   // Get all columns for a specific student using the specialized index
   getColumnsForStudent(student_id: string): GradebookColumnStudent[] {
+    // Don't return data if any table is refetching to avoid partial data
+    if (this._isAnyTableRefetching) {
+      return [];
+    }
+
     const columns: GradebookColumnStudent[] = [];
     this.studentColumnIndex.forEach((studentId, key) => {
       // Extract student_id from the key (format: "student_id:column_id")
@@ -643,11 +723,17 @@ export class GradebookController {
   }
 
   getGradebookColumnStudent(column_id: number, student_id: string) {
+    // Don't return data if any table is refetching to avoid partial data
+    if (this._isAnyTableRefetching) {
+      throw new Error("Should not try to get gradebook column student when any table is refetching");
+      // return undefined;
+    }
+
     const key = this.getStudentColumnKey(student_id, column_id);
     const studentId = this.studentColumnIndex.get(key);
 
     if (!studentId) {
-      return undefined;
+      throw new Error(`Student ${student_id} has no gradebook column index for column ${column_id}`);
     }
 
     // Get the actual student record from the TableController
@@ -657,8 +743,9 @@ export class GradebookController {
     if (student && (student.is_private || !this._isInstructorOrGrader)) {
       return student;
     }
-
-    return undefined;
+    throw new Error(
+      `Unauthorized access to gradebook column student ${studentId} for column ${column_id}. ${student?.is_private}, ${this._isInstructorOrGrader}`
+    );
   }
 
   public getRendererForColumn(column_id: number) {
@@ -861,6 +948,42 @@ export class GradebookController {
   get isReady() {
     return this.gradebook_columns.ready && this.gradebook_column_students.ready && this.assignments_table.ready;
   }
+
+  get isAnyTableRefetching() {
+    return this._isAnyTableRefetching;
+  }
+
+  get isStudentColumnIndexPopulated() {
+    return this._isStudentColumnIndexPopulated;
+  }
+
+  /**
+   * Subscribe to refetch status changes across all tables
+   * @param listener Callback that receives the current refetch status
+   * @returns Unsubscribe function
+   */
+  subscribeToRefetchStatus(listener: (isRefetching: boolean) => void) {
+    this._refetchStatusListeners.push(listener);
+    // Immediately call with current status
+    listener(this._isAnyTableRefetching);
+    return () => {
+      this._refetchStatusListeners = this._refetchStatusListeners.filter((l) => l !== listener);
+    };
+  }
+
+  /**
+   * Subscribe to studentColumnIndex population status changes
+   * @param listener Callback that receives the current population status
+   * @returns Unsubscribe function
+   */
+  subscribeToStudentColumnIndexStatus(listener: (isPopulated: boolean) => void) {
+    this._studentColumnIndexListeners.push(listener);
+    // Immediately call with current status
+    listener(this._isStudentColumnIndexPopulated);
+    return () => {
+      this._studentColumnIndexListeners = this._studentColumnIndexListeners.filter((l) => l !== listener);
+    };
+  }
   exportGradebook(courseController: CourseController) {
     const roster = courseController.getRoster();
     const columns = [...this.gradebook_columns.rows];
@@ -884,6 +1007,10 @@ export class GradebookController {
     return result;
   }
   get columns() {
+    // Don't return data if any table is refetching to avoid partial data
+    if (this._isAnyTableRefetching) {
+      return [];
+    }
     return this.gradebook_columns.rows;
   }
 
@@ -1051,4 +1178,26 @@ export function useStudentDetailView() {
     view,
     setView: (newView: string | null) => gradebookController.setStudentDetailView(newView)
   };
+}
+
+export function useGradebookRefetchStatus() {
+  const gradebookController = useGradebookController();
+  const [isRefetching, setIsRefetching] = useState(gradebookController.isAnyTableRefetching);
+
+  useEffect(() => {
+    return gradebookController.subscribeToRefetchStatus(setIsRefetching);
+  }, [gradebookController]);
+
+  return isRefetching;
+}
+
+export function useStudentColumnIndexStatus() {
+  const gradebookController = useGradebookController();
+  const [isPopulated, setIsPopulated] = useState(gradebookController.isStudentColumnIndexPopulated);
+
+  useEffect(() => {
+    return gradebookController.subscribeToStudentColumnIndexStatus(setIsPopulated);
+  }, [gradebookController]);
+
+  return isPopulated;
 }
