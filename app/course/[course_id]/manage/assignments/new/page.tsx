@@ -1,11 +1,7 @@
 "use client";
 import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useCourseController";
-import {
-  assignmentCreateHandoutRepo,
-  assignmentCreateSolutionRepo,
-  assignmentGroupCopyGroupsFromAssignment
-} from "@/lib/edgeFunctions";
+import { assignmentCreateHandoutRepo, assignmentGroupCopyGroupsFromAssignment } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -30,7 +26,7 @@ export default function NewAssignmentPage() {
       // Show loading toast before starting the process
       const loadingToast = toaster.create({
         title: "Creating Assignment",
-        description: "Creating GitHub repositories for handout and grader... This may take a few moments.",
+        description: "Creating GitHub handout repository... This may take a few moments.",
         type: "loading"
       });
 
@@ -108,10 +104,7 @@ export default function NewAssignmentPage() {
             { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
             supabase
           );
-          await assignmentCreateSolutionRepo(
-            { assignment_id: data.id, class_id: Number.parseInt(course_id as string) },
-            supabase
-          );
+          // Do not create solution repo automatically
           //Potentially copy groups from another assignment
           if (getValues("copy_groups_from_assignment")) {
             await assignmentGroupCopyGroupsFromAssignment(
