@@ -135,7 +135,7 @@ export default function NewAssignmentPage() {
             type: "success"
           });
 
-          router.push(`/course/${course_id}/manage/assignments/${data.id}${data.no_submission ? '' : '/autograder'}`);
+          router.push(`/course/${course_id}/manage/assignments/${data.id}${data.no_submission ? "" : "/autograder"}`);
         }
       } catch (error) {
         // Clear the timer and dismiss the loading toast

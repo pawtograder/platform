@@ -135,9 +135,9 @@ export default function StudentPage() {
         submission_text: !assignment.submission_id
           ? "Have not submitted yet"
           : `#${assignment.submission_ordinal} (${assignment.grader_result_score || 0}/${assignment.grader_result_max_score || 0})`,
-                submission_link: assignment.submission_id
-            ? `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.submission_id}`
-            : undefined,
+        submission_link: assignment.submission_id
+          ? `/course/${course_id}/assignments/${assignment.id}/submissions/${assignment.submission_id}`
+          : undefined,
         group: assignment.group_config === "individual" ? "Individual" : group?.assignment_groups?.name || "No Group"
       });
 
