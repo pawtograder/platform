@@ -706,6 +706,7 @@ export type Database = {
           meta_grading_rubric_id: number | null;
           min_group_size: number | null;
           minutes_due_after_lab: number | null;
+          no_submission: boolean;
           release_date: string | null;
           self_review_rubric_id: number | null;
           self_review_setting_id: number;
@@ -737,6 +738,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          no_submission?: boolean;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id: number;
@@ -768,6 +770,7 @@ export type Database = {
           meta_grading_rubric_id?: number | null;
           min_group_size?: number | null;
           minutes_due_after_lab?: number | null;
+          no_submission?: boolean;
           release_date?: string | null;
           self_review_rubric_id?: number | null;
           self_review_setting_id?: number;

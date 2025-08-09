@@ -45,6 +45,21 @@ async function handlePushToStudentRepo(
   scope.setTag("class_id", studentRepo.class_id.toString());
   scope.setTag("commits_count", payload.commits.length.toString());
 
+  // Early exit for no-submission assignments
+  const { data: assignmentRow, error: assignmentLookupError } = await adminSupabase
+    .from("assignments")
+    .select("no_submission")
+    .eq("id", studentRepo.assignment_id)
+    .single();
+  if (assignmentLookupError) {
+    console.error(assignmentLookupError);
+    scope.setTag("error_source", "assignment_lookup_failed");
+    Sentry.captureException(assignmentLookupError, scope);
+  }
+  if (assignmentRow?.no_submission) {
+    return;
+  }
+
   //Get the repo name from the payload
   const repoName = payload.repository.full_name;
   if (payload.ref.includes("refs/tags/pawtograder-submit/")) {
