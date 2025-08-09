@@ -7,8 +7,6 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import {
   addDependencySourceFunctions,
   ContextFunctions,
-  DependencySource,
-  DependencySourceMap,
   ExprDependencyInstance,
   ExpressionContext
 } from "./expression/DependencySource.ts";
@@ -34,6 +32,134 @@ type DependenciesType = {
   [key: string]: string[];
 };
 
+type CellBatch = GradebookCellRequest[];
+
+/**
+ * Performs topological sorting on gradebook cells based on their dependencies.
+ * Returns an array of batches where each batch can be processed in parallel,
+ * and batches must be processed in order (earlier batches before later ones).
+ */
+function sortCellsByDependencies(cells: GradebookCellRequest[], columnMap: Map<number, GradebookColumn>): CellBatch[] {
+  // Build dependency graph: columnId -> Set of columnIds that depend on it
+  const dependencyGraph = new Map<number, Set<number>>();
+  const inDegree = new Map<number, number>();
+
+  // Get all unique column IDs from cells
+  const columnIds = new Set(cells.map((cell) => cell.gradebook_column_id));
+
+  // Initialize in-degree counter for all columns
+  for (const columnId of columnIds) {
+    inDegree.set(columnId, 0);
+    dependencyGraph.set(columnId, new Set());
+  }
+
+  // Build the dependency graph
+  for (const columnId of columnIds) {
+    const column = columnMap.get(columnId);
+    if (column?.dependencies) {
+      const deps = column.dependencies as { gradebook_columns?: number[] };
+      if (deps.gradebook_columns) {
+        for (const depColumnId of deps.gradebook_columns) {
+          // Only consider dependencies that are also in our batch
+          if (columnIds.has(depColumnId)) {
+            // depColumnId -> columnId dependency
+            if (!dependencyGraph.has(depColumnId)) {
+              dependencyGraph.set(depColumnId, new Set());
+            }
+            dependencyGraph.get(depColumnId)!.add(columnId);
+
+            // Increase in-degree of the dependent column
+            inDegree.set(columnId, (inDegree.get(columnId) || 0) + 1);
+          }
+        }
+      }
+    }
+  }
+
+  // Group cells by column ID for easier processing
+  const cellsByColumn = new Map<number, GradebookCellRequest[]>();
+  for (const cell of cells) {
+    if (!cellsByColumn.has(cell.gradebook_column_id)) {
+      cellsByColumn.set(cell.gradebook_column_id, []);
+    }
+    cellsByColumn.get(cell.gradebook_column_id)!.push(cell);
+  }
+
+  // Topological sort using Kahn's algorithm
+  const batches: CellBatch[] = [];
+  const queue: number[] = [];
+
+  // Find all columns with no dependencies (in-degree 0)
+  for (const [columnId, degree] of inDegree) {
+    if (degree === 0) {
+      queue.push(columnId);
+    }
+  }
+
+  while (queue.length > 0) {
+    // Process all columns with no remaining dependencies as one batch
+    const currentBatch: GradebookCellRequest[] = [];
+    const currentBatchColumns = [...queue];
+    queue.length = 0; // Clear the queue
+
+    for (const columnId of currentBatchColumns) {
+      // Add all cells for this column to the current batch
+      const cellsForColumn = cellsByColumn.get(columnId) || [];
+      currentBatch.push(...cellsForColumn);
+
+      // Remove this column from dependency graph and update in-degrees
+      const dependents = dependencyGraph.get(columnId) || new Set();
+      for (const dependentColumnId of dependents) {
+        const newInDegree = (inDegree.get(dependentColumnId) || 0) - 1;
+        inDegree.set(dependentColumnId, newInDegree);
+
+        // If this dependent column now has no dependencies, add it to queue
+        if (newInDegree === 0) {
+          queue.push(dependentColumnId);
+        }
+      }
+    }
+
+    if (currentBatch.length > 0) {
+      batches.push(currentBatch);
+    }
+  }
+
+  // Check for cycles - if any columns still have positive in-degree, there's a cycle
+  const remainingColumns = Array.from(inDegree.entries())
+    .filter(([, degree]) => degree > 0)
+    .map(([columnId]) => columnId);
+
+  if (remainingColumns.length > 0) {
+    console.warn(`Circular dependencies detected in gradebook columns: ${remainingColumns.join(", ")}`);
+    // For now, just add remaining cells to the last batch
+    // In production, you might want to handle this more gracefully
+    const remainingCells: GradebookCellRequest[] = [];
+    for (const columnId of remainingColumns) {
+      const cellsForColumn = cellsByColumn.get(columnId) || [];
+      remainingCells.push(...cellsForColumn);
+    }
+    if (remainingCells.length > 0) {
+      batches.push(remainingCells);
+    }
+  }
+
+  return batches;
+}
+
+/**
+ * Process gradebook cell calculations with proper dependency ordering.
+ *
+ * This function implements topological sorting to ensure that dependencies
+ * are calculated before dependent cells. It:
+ * 1. Groups cells by their gradebook column dependencies
+ * 2. Uses Kahn's algorithm to create batches where each batch contains only
+ *    cells that have no dependencies on cells in later batches
+ * 3. Processes batches sequentially, ensuring dependencies are computed first
+ * 4. Within each batch, cells can be processed in parallel
+ * 5. Creates fresh dependency source instances for each batch to ensure
+ *    updated values from previous batches are properly read
+ */
 export async function processGradebookCellCalculation(
   cells: GradebookCellRequest[],
   adminSupabase: SupabaseClient<Database>,
@@ -48,13 +174,46 @@ export async function processGradebookCellCalculation(
     .select("*, gradebooks!gradebook_columns_gradebook_id_fkey(expression_prefix)")
     .in("id", Array.from(new Set(cells.map((s) => s.gradebook_column_id))));
   if (allColumns.error) {
-    Sentry.captureException(allColumns.error, scope);
+    const newScope = scope.clone();
+    newScope.setContext("column_ids", { ids: Array.from(new Set(cells.map((s) => s.gradebook_column_id))) });
+    newScope.setContext("cells_count", { count: cells.length });
+    Sentry.captureException(allColumns.error, newScope);
+    console.error("Error fetching gradebook columns:", allColumns.error);
     return;
   }
   const columnMap = new Map<number, GradebookColumn>();
   for (const column of allColumns.data ?? []) {
     columnMap.set(column.id, column);
   }
+
+  // Sort cells into dependency-ordered batches
+  const cellBatches = sortCellsByDependencies(cells, columnMap);
+  scope.setTag("dependency_batches", cellBatches.length);
+
+  // Process each batch sequentially (dependencies must be computed first)
+  for (let batchIndex = 0; batchIndex < cellBatches.length; batchIndex++) {
+    const batch = cellBatches[batchIndex];
+    scope.setTag("current_batch", batchIndex + 1);
+    scope.setTag("batch_size", batch.length);
+
+    console.log(`Processing dependency batch ${batchIndex + 1}/${cellBatches.length} with ${batch.length} cells`);
+
+    // Process this batch (cells within a batch can be processed in parallel)
+    await processCellBatch(batch, columnMap, allColumns.data ?? [], adminSupabase, scope);
+  }
+}
+
+/**
+ * Process a single batch of cells that have no dependencies on each other.
+ * This function contains the original processing logic from processGradebookCellCalculation.
+ */
+async function processCellBatch(
+  cells: GradebookCellRequest[],
+  columnMap: Map<number, GradebookColumn>,
+  allColumnsData: GradebookColumn[],
+  adminSupabase: SupabaseClient<Database>,
+  scope: Sentry.Scope
+) {
   function CellRequestToKeyRequests(cell: GradebookCellRequest): ExprDependencyInstance[] {
     const column = columnMap.get(cell.gradebook_column_id);
     if (!column) {
@@ -73,7 +232,7 @@ export async function processGradebookCellCalculation(
     const ret: ExprDependencyInstance[] = [];
     for (const dependencyProvider of Object.keys(dependencies)) {
       // Validate that we have a dependency source for this provider
-      if (!DependencySourceMap[dependencyProvider as keyof typeof DependencySourceMap]) {
+      if (dependencyProvider !== "assignments" && dependencyProvider !== "gradebook_columns") {
         const newScope = scope.clone();
         newScope.setContext("cell", cell);
         Sentry.captureMessage(`Dependency source ${dependencyProvider} not found`, newScope);
@@ -95,23 +254,17 @@ export async function processGradebookCellCalculation(
   // Create a custom mathjs instance
   const math = create(all, {});
 
+  // Create fresh dependency source instances for this batch to ensure
+  // they pick up the latest values from previous batches
   await addDependencySourceFunctions({ math, keys: keysToRetrieve.flat(), supabase: adminSupabase });
 
   const gradebookColumnToScoreExpression = new Map<number, EvalFunction>();
-  const functionNameToDependencySource = new Map<string, DependencySource>();
-  scope.setTag(
-    "function_names",
-    Object.values(DependencySourceMap)
-      .flatMap((s) => s.getFunctionNames())
-      .join(",")
-  );
-  for (const dependencySource of Object.values(DependencySourceMap)) {
-    for (const functionName of dependencySource.getFunctionNames()) {
-      functionNameToDependencySource.set(functionName, dependencySource);
-    }
-  }
 
-  for (const column of allColumns.data ?? []) {
+  // Note: We're no longer using the global DependencySourceMap since we create
+  // fresh instances in addDependencySourceFunctions for each batch
+  // This ensures each batch sees the updated values from previous batches
+
+  for (const column of allColumnsData) {
     if (!column.score_expression) {
       continue;
     }
@@ -130,17 +283,26 @@ export async function processGradebookCellCalculation(
           fn.args = newArgs;
           return node;
         }
-        if (functionNameToDependencySource.has(fn.fn.name) && fn.args.length > 0) {
+        // Check if this is a dependency function (assignments or gradebook_columns)
+        if ((fn.fn.name === "assignments" || fn.fn.name === "gradebook_columns") && fn.args.length > 0) {
           const argType = fn.args[0].type;
           const newArgs: MathNode[] = [];
           newArgs.push(new math.SymbolNode("context"));
           if (argType === "ConstantNode") {
             const argVal = (fn.args[0] as ConstantNode).value;
             if (typeof argVal === "string" && (argVal as string).includes("*")) {
-              const dependencySource = functionNameToDependencySource.get(fn.fn.name);
-              if (dependencySource) {
+              // For wildcard patterns, expand them using the batch dependency sources
+              const batchDependencySourceMap = (math as unknown as Record<string, unknown>)
+                ._batchDependencySourceMap as Record<
+                string,
+                { expandKey: (params: { key: string; class_id: number }) => string[] }
+              >;
+              if (batchDependencySourceMap && batchDependencySourceMap[fn.fn.name]) {
+                const dependencySource = batchDependencySourceMap[fn.fn.name];
                 const expandedKeys = dependencySource.expandKey({ key: argVal, class_id: column.class_id });
-                newArgs.push(new math.ArrayNode(expandedKeys.map((key) => new math.ConstantNode(key))));
+                newArgs.push(new math.ArrayNode(expandedKeys.map((key: string) => new math.ConstantNode(key))));
+              } else {
+                newArgs.push(...fn.args);
               }
             } else {
               newArgs.push(...fn.args);
@@ -159,7 +321,7 @@ export async function processGradebookCellCalculation(
   }
 
   for (const cell of cells) {
-    const column = allColumns.data?.find((c) => c.id === cell.gradebook_column_id);
+    const column = allColumnsData.find((c) => c.id === cell.gradebook_column_id);
     if (column) {
       scope.setContext("cell", cell);
       scope.setTag("score_expression", column.score_expression);
@@ -196,7 +358,7 @@ export async function processGradebookCellCalculation(
               ? null
               : context.incomplete_values;
 
-          await adminSupabase
+          const { error: updateError } = await adminSupabase
             .from("gradebook_column_students")
             .update({
               is_missing: isMissing,
@@ -205,13 +367,27 @@ export async function processGradebookCellCalculation(
               is_recalculating: false
             })
             .eq("id", cell.gradebook_column_student_id);
-          cell.onComplete();
+
+          if (updateError) {
+            const newScope = scope.clone();
+            newScope.setContext("cell", cell);
+            newScope.setContext("update_data", {
+              is_missing: isMissing,
+              score,
+              incomplete_values: incompleteValues,
+              is_recalculating: false
+            });
+            Sentry.captureException(updateError, newScope);
+            console.error("Error updating gradebook cell:", updateError);
+          }
+
+          await cell.onComplete();
         } catch (e) {
           const newScope = scope.clone();
           newScope.setTag("score_expression", column.score_expression);
           newScope.setContext("cell", cell);
           Sentry.captureException(e, newScope);
-          const { error } = await adminSupabase
+          const { error: errorUpdateError } = await adminSupabase
             .from("gradebook_column_students")
             .update({
               is_missing: true,
@@ -220,10 +396,17 @@ export async function processGradebookCellCalculation(
               is_recalculating: false
             })
             .eq("id", cell.gradebook_column_student_id);
-          if (error) {
-            Sentry.captureException(error, newScope);
+          if (errorUpdateError) {
+            newScope.setContext("error_update_data", {
+              is_missing: true,
+              score: null,
+              incomplete_values: null,
+              is_recalculating: false
+            });
+            Sentry.captureException(errorUpdateError, newScope);
+            console.error("Error updating gradebook cell in error state:", errorUpdateError);
           }
-          cell.onComplete();
+          await cell.onComplete();
         }
         // updatePromises.push(updatePromise);
         // console.log(`Result for cell ${cell.gradebook_column_id} ${cell.student_id}: ${result}`);

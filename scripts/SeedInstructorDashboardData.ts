@@ -918,7 +918,6 @@ async function createSpecificationGradingColumns(
 
       // Update render expression separately for labs
       if (isLab) {
-        await supabase.from("gradebook_columns").update({ render_expression: "checkOrX(score)" }).eq("id", column.id);
         labColumnIds.push(column.id);
       } else {
         hwColumnIds.push(column.id);
@@ -932,7 +931,7 @@ async function createSpecificationGradingColumns(
         name: "Avg HW",
         description: "Average of all homework assignments",
         slug: "average.hw",
-        score_expression: 'mean(gradebook_columns("hw-*"))',
+        score_expression: 'mean(gradebook_columns("assignment-assignment-*"))',
         max_score: 100,
         dependencies: { gradebook_columns: hwColumnIds },
         sort_order: 22
@@ -945,7 +944,7 @@ async function createSpecificationGradingColumns(
         name: "Total Labs",
         description: "Total number of labs participated in",
         slug: "total-labs",
-        score_expression: 'countif(gradebook_columns("lab-*"), f(x) = not x.is_missing and x.score>0)',
+        score_expression: 'countif(gradebook_columns("assignment-lab-*"), f(x) = not x.is_missing and x.score>0)',
         max_score: labColumnIds.length,
         dependencies: { gradebook_columns: labColumnIds },
         sort_order: 33
@@ -2936,12 +2935,70 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const groupSize = calculateGroupSize(students.length);
     console.log(`   Group size: ${groupSize} students per group`);
 
-    // Create all assignments in parallel
+    // Test the alternating pattern logic
+    console.log(
+      `\n🧪 Testing alternating pattern with ${numAssignments} total assignments, ${effectiveLabAssignmentConfig.numLabAssignments} labs:`
+    );
+    const testPattern: string[] = [];
+    let testLabsCreated = 0;
+    let testRegularAssignmentsCreated = 0;
+    for (let i = 0; i < numAssignments; i++) {
+      const shouldCreateLab = i % 2 === 0;
+      const canCreateLab = testLabsCreated < effectiveLabAssignmentConfig.numLabAssignments;
+      const canCreateRegularAssignment =
+        testRegularAssignmentsCreated < numAssignments - effectiveLabAssignmentConfig.numLabAssignments;
+
+      let isLabAssignment: boolean;
+      if (shouldCreateLab && canCreateLab) {
+        isLabAssignment = true;
+        testLabsCreated++;
+      } else if (!shouldCreateLab && canCreateRegularAssignment) {
+        isLabAssignment = false;
+        testRegularAssignmentsCreated++;
+      } else if (canCreateLab) {
+        isLabAssignment = true;
+        testLabsCreated++;
+      } else {
+        isLabAssignment = false;
+        testRegularAssignmentsCreated++;
+      }
+      testPattern.push(isLabAssignment ? "L" : "A");
+    }
+    console.log(`   Pattern: ${testPattern.join("-")} (L=Lab, A=Assignment)`);
+    console.log(`   Labs created: ${testLabsCreated}, Regular assignments: ${testRegularAssignmentsCreated}`);
+
+    // Create all assignments in parallel with alternating lab/assignment pattern
     let labAssignmentIdx = 1;
     let assignmentIdx = 1;
+    let labsCreated = 0;
+    let regularAssignmentsCreated = 0;
     const assignmentPromises = Array.from({ length: numAssignments }, async (_, i) => {
       const assignmentDate = new Date(firstAssignmentDate.getTime() + timeStep * i);
-      const isLabAssignment = i < effectiveLabAssignmentConfig.numLabAssignments;
+
+      // Alternate between lab and regular assignments
+      // Pattern: Lab, Assignment, Lab, Assignment, etc.
+      // But stop creating labs once we've reached the limit, and stop creating regular assignments once we've reached the limit
+      const shouldCreateLab = i % 2 === 0; // Even indices (0, 2, 4, ...) for labs
+      const canCreateLab = labsCreated < effectiveLabAssignmentConfig.numLabAssignments;
+      const canCreateRegularAssignment =
+        regularAssignmentsCreated < numAssignments - effectiveLabAssignmentConfig.numLabAssignments;
+
+      let isLabAssignment: boolean;
+      if (shouldCreateLab && canCreateLab) {
+        isLabAssignment = true;
+        labsCreated++;
+      } else if (!shouldCreateLab && canCreateRegularAssignment) {
+        isLabAssignment = false;
+        regularAssignmentsCreated++;
+      } else if (canCreateLab) {
+        // If we can't create the preferred type, create a lab if possible
+        isLabAssignment = true;
+        labsCreated++;
+      } else {
+        // Otherwise create a regular assignment
+        isLabAssignment = false;
+        regularAssignmentsCreated++;
+      }
       const isGroupAssignment = i < effectiveGroupAssignmentConfig.numGroupAssignments;
       const isLabGroupAssignment =
         isLabAssignment &&
@@ -3418,9 +3475,10 @@ async function runMicro() {
     numStudents: 2,
     numGraders: 1,
     numInstructors: 1,
-    numAssignments: 5,
-    firstAssignmentDate: addDays(now, -5),
-    lastAssignmentDate: addDays(now, 2),
+    numAssignments: 20,
+    firstAssignmentDate: addDays(now, -65),
+    lastAssignmentDate: addDays(now, -2),
+    gradingScheme: "specification",
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
@@ -3436,12 +3494,12 @@ async function runMicro() {
       numGraderTags: 1
     },
     labAssignmentConfig: {
-      numLabAssignments: 1, // 40% of 5 assignments
+      numLabAssignments: 10,
       minutesDueAfterLab: 10 // 1 hour
     },
     groupAssignmentConfig: {
-      numGroupAssignments: 1, // 40% of regular assignments (3 * 0.4 ≈ 1)
-      numLabGroupAssignments: 1 // 50% of lab assignments (2 * 0.5 = 1)
+      numGroupAssignments: 1,
+      numLabGroupAssignments: 1
     }
   });
 }
@@ -3451,8 +3509,8 @@ async function runMicro() {
 async function main() {
   // await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  await runSmallScale();
-  // await runMicro();
+  // await runSmallScale();
+  await runMicro();
 }
 
 main();
