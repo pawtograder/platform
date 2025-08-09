@@ -25,6 +25,11 @@ const limiter = new Bottleneck({
   maxConcurrent: 200
 });
 
+//Auth does not use pgbouncer!
+const authLimiter = new Bottleneck({
+  maxConcurrent: 30
+});
+
 const smallLimiter = new Bottleneck({
   maxConcurrent: 3 // Smaller limit for grading operations
 });
@@ -414,11 +419,9 @@ async function batchGradeSubmissions(
     number,
     {
       grader: string;
-      total_score: number;
       released: boolean;
       completed_by: string | null;
       completed_at: string | null;
-      total_autograde_score: number;
     }
   >();
 
@@ -429,59 +432,93 @@ async function batchGradeSubmissions(
     const files = submissionFilesMap.get(review.submission_id) || [];
 
     if (isCompleted) {
-      // Create comments for each rubric check
-      for (const check of rubricChecks) {
+      // Calculate maximum possible points for this rubric
+      const maxPossiblePoints = 90; // TODO: When we finalize the design of max points for hand vs auto grade, update here...
+      console.log(`Max possible points: ${maxPossiblePoints} from ${rubricChecks.length} checks`);
+
+      const targetPercentage = Math.max(0.75, Math.min(1, 0.9 + (Math.random() * 0.1 - 0.05)));
+      const targetTotalPoints = 90; //Math.floor(maxPossiblePoints * targetPercentage);
+      console.log(`Target total points: ${targetTotalPoints} (${Math.round(targetPercentage * 100)}% of max)`);
+
+      // Filter checks that will be applied
+      const applicableChecks = rubricChecks.filter((check) => {
         const applyChance = 0.8;
-        const shouldApply = check.is_required || Math.random() < applyChance;
+        return check.is_required || Math.random() < applyChance;
+      });
 
-        if (shouldApply) {
-          const pointsAwarded = Math.floor(Math.random() * (check.points + 1));
+      // Distribute target points among applicable checks (ignore individual check.points limits)
+      const checkPointAllocations = new Map<number, number>();
 
-          if (check.is_annotation && files.length > 0) {
-            // Create submission file comment (annotation)
-            const file = files[Math.floor(Math.random() * files.length)];
-            const lineNumber = Math.floor(Math.random() * 5) + 1;
+      // Distribute points roughly equally among checks with some randomness
+      let remainingPoints = targetTotalPoints;
 
-            submissionFileComments.push({
-              submission_id: review.submission_id,
-              submission_file_id: file.id,
-              author: grader.private_profile_id,
-              comment: `${check.name}: Grading comment for this check`,
-              points: pointsAwarded,
-              line: lineNumber,
-              class_id: review.class_id,
-              released: true,
-              rubric_check_id: check.id,
-              submission_review_id: review.id
-            });
-          } else {
-            // Create submission comment (general comment)
-            submissionComments.push({
-              submission_id: review.submission_id,
-              author: grader.private_profile_id,
-              comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
-              points: pointsAwarded,
-              class_id: review.class_id,
-              released: true,
-              rubric_check_id: check.id,
-              submission_review_id: review.id
-            });
-          }
+      for (let i = 0; i < applicableChecks.length; i++) {
+        const check = applicableChecks[i];
+
+        if (i === applicableChecks.length - 1) {
+          // Last check gets all remaining points
+          checkPointAllocations.set(check.id, remainingPoints);
+          remainingPoints = 0;
+        } else {
+          // Allocate roughly equal portion with some randomness
+          const baseAllocation = Math.floor(targetTotalPoints / applicableChecks.length);
+          const randomBonus = Math.floor(Math.random() * 10) - 5; // ±5 points variance
+          const allocation = Math.max(1, baseAllocation + randomBonus); // At least 1 point
+
+          // Don't allocate more than what's remaining
+          const finalAllocation = Math.min(allocation, remainingPoints - (applicableChecks.length - i - 1));
+
+          checkPointAllocations.set(check.id, finalAllocation);
+          remainingPoints -= finalAllocation;
+        }
+      }
+
+      const totalPointsAwarded = Array.from(checkPointAllocations.values()).reduce((sum, points) => sum + points, 0);
+      if (totalPointsAwarded !== targetTotalPoints) {
+        console.log(`Total points awarded: ${totalPointsAwarded} !== target total points: ${targetTotalPoints}`);
+      }
+      // Create comments for applicable checks with allocated points
+      for (const check of applicableChecks) {
+        const pointsAwarded = checkPointAllocations.get(check.id) || 0;
+
+        if (check.is_annotation && files.length > 0) {
+          // Create submission file comment (annotation)
+          const file = files[Math.floor(Math.random() * files.length)];
+          const lineNumber = Math.floor(Math.random() * 5) + 1;
+
+          submissionFileComments.push({
+            submission_id: review.submission_id,
+            submission_file_id: file.id,
+            author: grader.private_profile_id,
+            comment: `${check.name}: Grading comment for this check`,
+            points: pointsAwarded,
+            line: lineNumber,
+            class_id: review.class_id,
+            released: true,
+            rubric_check_id: check.id,
+            submission_review_id: review.id
+          });
+        } else {
+          // Create submission comment (general comment)
+          submissionComments.push({
+            submission_id: review.submission_id,
+            author: grader.private_profile_id,
+            comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
+            points: pointsAwarded,
+            class_id: review.class_id,
+            released: true,
+            rubric_check_id: check.id,
+            submission_review_id: review.id
+          });
         }
       }
     }
 
-    // Prepare review update
-    const totalScore = isCompleted ? Math.floor(Math.random() * 100) : 0;
-    const totalAutogradeScore = Math.floor(Math.random() * 100);
-
     reviewUpdates.set(review.id, {
       grader: grader.private_profile_id,
-      total_score: totalScore,
       released: isCompleted,
       completed_by: isCompleted ? grader.private_profile_id : null,
-      completed_at: isCompleted ? new Date().toISOString() : null,
-      total_autograde_score: totalAutogradeScore
+      completed_at: isCompleted ? new Date().toISOString() : null
     });
   }
 
@@ -533,7 +570,14 @@ async function batchGradeSubmissions(
       const updateErrors = updateResults.filter((result) => result.error);
 
       if (updateErrors.length > 0) {
-        throw new Error(`Failed to update ${updateErrors.length} submission reviews in batch ${chunkIndex + 1}`);
+        console.error(
+          "Update errors:",
+          updateErrors.map((e) => ({ error: e.error, data: e.data }))
+        );
+        console.error("Sample update data:", chunk[0][1]);
+        throw new Error(
+          `Failed to update ${updateErrors.length} submission reviews in batch ${chunkIndex + 1}: ${updateErrors[0].error?.message}`
+        );
       }
     })
   );
@@ -702,7 +746,7 @@ async function findExistingPawtograderUsers(): Promise<{
     .select(
       "*, user_roles(role, private_profile_id, public_profile_id, profiles_private:profiles!private_profile_id(name), profiles_public:profiles!public_profile_id(name))"
     )
-    .like("email", "%@pawtograder.net");
+    .like("email", "%demo@pawtograder.net");
 
   if (usersError) {
     console.error(`Failed to fetch existing users: ${usersError.message}`);
@@ -712,11 +756,11 @@ async function findExistingPawtograderUsers(): Promise<{
   const pawtograderUsers = existingUsers;
 
   if (pawtograderUsers.length === 0) {
-    console.log("No existing @pawtograder.net users found");
+    console.log("No existing *demo@pawtograder.net users found");
     return { instructors: [], graders: [], students: [] };
   }
 
-  console.log(`Found ${pawtograderUsers.length} existing @pawtograder.net users`);
+  console.log(`Found ${pawtograderUsers.length} existing *demo@pawtograder.net users`);
 
   // Convert to TestingUser format
   const convertToTestingUser = (
@@ -824,7 +868,7 @@ async function createSpecificationGradingColumns(
   class_id: number,
   students: TestingUser[],
   assignments: { id: number }[],
-  labAssignments: { id: number }[]
+  _labAssignments: { id: number }[]
 ): Promise<void> {
   console.log("\n📊 Creating specification grading scheme columns...");
 
@@ -987,18 +1031,76 @@ final;`,
   // Update render expression separately
   await supabase.from("gradebook_columns").update({ render_expression: "letter(score)" }).eq("id", finalColumn.id);
 
-  // Set scores for skill columns using diverse patterns
+  // Set scores for skill columns using specified distribution
+  // 90% of students: 10+ skills at 2, none at 0
+  // 5% of students: 8-9 skills at 2, none at 0
+  // 5% of students: random distribution
+
+  // Categorize students
+  const shuffledStudents = [...students].sort(() => Math.random() - 0.5);
+  const excellent = shuffledStudents.slice(0, Math.floor(students.length * 0.9)); // 90%
+  const good = shuffledStudents.slice(Math.floor(students.length * 0.9), Math.floor(students.length * 0.95)); // 5%
+  const random = shuffledStudents.slice(Math.floor(students.length * 0.95)); // 5%
+
+  console.log(
+    `Skills distribution: ${excellent.length} excellent, ${good.length} good, ${random.length} random students`
+  );
+
   for (let i = 0; i < skillColumns.length; i++) {
     const skillColumn = skillColumns[i];
-    await setGradebookColumnScores({
+
+    // Create custom score distribution for this skill
+    const customScores = students.map((student, index) => {
+      const studentCategory =
+        index < excellent.length ? "excellent" : index < excellent.length + good.length ? "good" : "random";
+
+      if (studentCategory === "excellent") {
+        // 90% of students: 10+ skills at 2, none at 0
+        if (i < 10) {
+          return Math.random() < 0.9 ? 2 : 1; // First 10 skills: mostly 2s, some 1s
+        } else {
+          return Math.random() < 0.7 ? 2 : 1; // Remaining 2 skills: mix of 1s and 2s
+        }
+      } else if (studentCategory === "good") {
+        // 5% of students: 8-9 skills at 2, none at 0
+        if (i < 8) {
+          return Math.random() < 0.85 ? 2 : 1; // First 8 skills: mostly 2s, some 1s
+        } else if (i < 10) {
+          return Math.random() < 0.5 ? 2 : 1; // Skills 9-10: mix of 1s and 2s
+        } else {
+          return Math.random() < 0.3 ? 2 : 1; // Remaining skills: mostly 1s
+        }
+      } else {
+        // 5% of students: completely random distribution
+        return [0, 1, 2][Math.floor(Math.random() * 3)];
+      }
+    });
+
+    // Use the existing setGradebookColumnScores function with custom scores
+    await setCustomGradebookColumnScores({
       class_id,
       gradebook_column_id: skillColumn.id,
       students,
-      averageScore: 1.2 + Math.random() * 0.6, // Average between 1.2-1.8 for realistic skill progression
-      standardDeviation: 0.7,
-      maxScore: 2,
-      useDiscreteValues: [0, 1, 2] // Only allow 0, 1, 2 scores
+      customScores
     });
+
+    const avgScore = customScores.reduce((sum, s) => sum + s, 0) / customScores.length;
+    console.log(`✓ Set ${skillColumn.name} scores: avg=${avgScore.toFixed(2)}`);
+  }
+
+  // Call auto layout RPC to organize columns properly
+  const { data: gradebook } = await supabase.from("gradebooks").select("id").eq("class_id", class_id).single();
+
+  if (gradebook) {
+    const { error: layoutError } = await supabase.rpc("gradebook_auto_layout", {
+      p_gradebook_id: gradebook.id
+    });
+
+    if (layoutError) {
+      console.error("Failed to auto-layout gradebook:", layoutError);
+    } else {
+      console.log("✓ Applied auto-layout to gradebook columns");
+    }
   }
 
   console.log(`✓ Created specification grading scheme with ${skillColumns.length} skills and aggregate columns`);
@@ -1120,6 +1222,68 @@ async function createCurrentGradingColumns(
   }
 
   return manualGradedColumns;
+}
+
+// Helper function to set custom scores for students in a gradebook column
+async function setCustomGradebookColumnScores({
+  class_id,
+  gradebook_column_id,
+  students,
+  customScores
+}: {
+  class_id: number;
+  gradebook_column_id: number;
+  students: TestingUser[];
+  customScores: number[];
+}): Promise<void> {
+  const limiter = new Bottleneck({
+    maxConcurrent: 5,
+    minTime: 100
+  });
+
+  // Get the gradebook_id for this class
+  const { data: gradebook, error: gradebookError } = await supabase
+    .from("gradebooks")
+    .select("id")
+    .eq("class_id", class_id)
+    .single();
+
+  if (gradebookError || !gradebook) {
+    throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
+  }
+
+  // Get existing gradebook column student records
+  const { data: existingRecords, error: fetchError } = await supabase
+    .from("gradebook_column_students")
+    .select("id, student_id")
+    .eq("gradebook_column_id", gradebook_column_id)
+    .eq("is_private", true);
+
+  if (fetchError) {
+    throw new Error(`Failed to fetch existing gradebook column students: ${fetchError.message}`);
+  }
+
+  if (!existingRecords || existingRecords.length === 0) {
+    throw new Error(`No existing gradebook column student records found for column ${gradebook_column_id}`);
+  }
+
+  const updatePromises = students.map(async (student, index) => {
+    const existingRecord = existingRecords.find((record) => record.student_id === student.private_profile_id);
+    if (!existingRecord) {
+      console.warn(`No gradebook column student record found for student ${student.email}`);
+      return;
+    }
+
+    const { error: updateError } = await limiter.schedule(() =>
+      supabase.from("gradebook_column_students").update({ score: customScores[index] }).eq("id", existingRecord.id)
+    );
+
+    if (updateError) {
+      throw new Error(`Failed to update score for student ${student.email}: ${updateError.message}`);
+    }
+  });
+
+  await Promise.all(updatePromises);
 }
 
 // Helper function to set scores for students in a gradebook column using normal distribution
@@ -1425,8 +1589,8 @@ function generateRubricStructure(config: NonNullable<SeedingOptions["rubricConfi
           config.minChecksPerCriteria;
         const selectedChecks = criteriaTemplate.checks.slice(0, Math.min(numChecks, criteriaTemplate.checks.length));
 
-        // Randomly select points from the available options
-        const criteriaPoints = criteriaTemplate.points[Math.floor(Math.random() * criteriaTemplate.points.length)];
+        // Will be set later to ensure total sums to 90
+        const criteriaPoints = 10; // Temporary value
 
         return {
           ...criteriaTemplate,
@@ -1523,7 +1687,7 @@ async function insertEnhancedAssignment({
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
       template_repo: TEST_HANDOUT_REPO,
-      autograder_points: 100,
+      autograder_points: 20,
       total_points: 100,
       max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
@@ -1601,6 +1765,46 @@ async function insertEnhancedAssignment({
 
   // Combine self-review with generated structure for grading rubric
   const allParts = [selfReviewPart, ...rubricStructure.map((part) => ({ ...part, ordinal: part.ordinal + 1 }))];
+
+  // CRITICAL FIX: Ensure all criteria total_points sum to exactly 90
+  const targetTotal = 90;
+  const selfReviewPoints = 10; // Fixed self-review points
+  const remainingPoints = targetTotal - selfReviewPoints; // 80 points to distribute
+
+  // Collect all non-self-review criteria
+  const allCriteria = allParts.slice(1).flatMap((part) => part.criteria);
+  console.log(
+    `🎯 Distributing ${remainingPoints} points among ${allCriteria.length} criteria (${selfReviewPoints} for self-review)`
+  );
+
+  // Distribute remaining points among criteria to ensure exact total
+  let pointsLeft = remainingPoints;
+  for (let i = 0; i < allCriteria.length; i++) {
+    const criteria = allCriteria[i];
+    if (i === allCriteria.length - 1) {
+      // Last criteria gets all remaining points
+      criteria.total_points = pointsLeft;
+      console.log(`  Final criteria "${criteria.name}": ${pointsLeft} points`);
+    } else {
+      // Distribute roughly equally with some variance
+      const basePoints = Math.floor(remainingPoints / allCriteria.length);
+      const variance = Math.floor(Math.random() * 6) - 3; // ±3 points
+      const allocatedPoints = Math.max(
+        5,
+        Math.min(pointsLeft - (allCriteria.length - i - 1) * 5, basePoints + variance)
+      );
+      criteria.total_points = allocatedPoints;
+      pointsLeft -= allocatedPoints;
+      console.log(`  Criteria "${criteria.name}": ${allocatedPoints} points`);
+    }
+  }
+
+  const actualTotal = allParts.flatMap((part) => part.criteria).reduce((sum, c) => sum + c.total_points, 0);
+  console.log(`✅ Criteria total_points sum: ${actualTotal} (target: ${targetTotal})`);
+
+  if (actualTotal !== targetTotal) {
+    throw new Error(`Criteria total_points sum (${actualTotal}) doesn't match target (${targetTotal})`);
+  }
 
   // Create rubric parts
   const createdParts = [];
@@ -2778,9 +2982,15 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const newInstructorsNeeded = Math.max(0, numInstructors - existingInstructors.length);
     const newInstructors = await Promise.all(
       Array.from({ length: newInstructorsNeeded }).map(() =>
-        limiter.schedule(async () => {
+        authLimiter.schedule(async () => {
           const name = faker.person.fullName();
-          return createUserInClass({ role: "instructor", class_id, name });
+          const uuid = crypto.randomUUID();
+          return createUserInClass({
+            role: "instructor",
+            class_id,
+            name,
+            email: `instructor-${uuid}-demo@pawtograder.net`
+          });
         })
       )
     );
@@ -2801,9 +3011,10 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const newGradersNeeded = Math.max(0, numGraders - existingGraders.length);
     const newGraders = await Promise.all(
       Array.from({ length: newGradersNeeded }).map(() =>
-        limiter.schedule(async () => {
+        authLimiter.schedule(async () => {
           const name = faker.person.fullName();
-          return createUserInClass({ role: "grader", class_id, name });
+          const uuid = crypto.randomUUID();
+          return createUserInClass({ role: "grader", class_id, name, email: `grader-${uuid}-demo@pawtograder.net` });
         })
       )
     );
@@ -2824,9 +3035,10 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const newStudentsNeeded = Math.max(0, numStudents - existingStudents.length);
     const newStudents = await Promise.all(
       Array.from({ length: newStudentsNeeded }).map(() =>
-        limiter.schedule(async () => {
+        authLimiter.schedule(async () => {
           const name = faker.person.fullName();
-          return createUserInClass({ role: "student", class_id, name });
+          const uuid = crypto.randomUUID();
+          return createUserInClass({ role: "student", class_id, name, email: `student-${uuid}-demo@pawtograder.net` });
         })
       )
     );
@@ -3425,7 +3637,7 @@ export async function runLargeScale() {
 }
 
 // Small-scale example for testing
-async function runSmallScale() {
+async function _runSmallScale() {
   const now = new Date();
 
   await seedInstructorDashboardData({
@@ -3472,7 +3684,7 @@ async function runMicro() {
   const now = new Date();
 
   await seedInstructorDashboardData({
-    numStudents: 2,
+    numStudents: 20,
     numGraders: 1,
     numInstructors: 1,
     numAssignments: 20,
