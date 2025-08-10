@@ -1,26 +1,13 @@
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-function shouldEnableDebug(): boolean {
-  // Enable via NEXT_PUBLIC_DEBUG_LOG=1 or localStorage('debug') containing 'realtime'
-  try {
-    if (typeof process !== "undefined" && process.env && process.env.NEXT_PUBLIC_DEBUG_LOG === "1") return true;
-  } catch {}
-  try {
-    if (typeof window !== "undefined") {
-      const dbg = window.localStorage.getItem("debug") || "";
-      if (dbg.includes("realtime") || dbg.includes("pawto")) return true;
-    }
-  } catch {}
-  return false;
-}
-
 export class DebugLogger {
   private scope: string;
   private enabled: boolean;
 
   constructor(scope: string) {
     this.scope = scope;
-    this.enabled = shouldEnableDebug();
+    // Always enabled per request to not rely on env or localStorage
+    this.enabled = true;
   }
 
   setEnabled(enabled: boolean) {
