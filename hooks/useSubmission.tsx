@@ -1070,7 +1070,12 @@ export function useWritableSubmissionReviews(rubric_id?: number) {
     }
     if (role.role === "grader") {
       writableRubrics.push(
-        ...rubrics.filter((r) => r.review_round === "grading-review" || assignments.some((a) => a.rubric_id === r.id))
+        ...rubrics.filter(
+          (r) =>
+            r.review_round === "grading-review" ||
+            r.review_round === "code-walk" ||
+            assignments.some((a) => a.rubric_id === r.id)
+        )
       );
     }
     if (role.role === "student") {

@@ -22,7 +22,7 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useCreate, useInvalidate, useList } from "@refinedev/core";
+import { useInvalidate, useList } from "@refinedev/core";
 import { MultiValue, Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -125,7 +125,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
   const [numGradersToSelect, setNumGradersToSelect] = useState<number>(0);
   const [isGraderListExpanded, setIsGraderListExpanded] = useState<boolean>(false);
 
-  const { mutateAsync } = useCreate();
+  // const { mutateAsync } = useCreate();
   const [isGeneratingReviews, setIsGeneratingReviews] = useState(false);
   const course = useCourse();
   const { tags } = useTags();
@@ -668,120 +668,141 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    * Creates the review assignments based on the draft reviews.
    */
   const assignReviews = async () => {
-    if (!selectedRubric) {
-      toaster.error({ title: "Error creating review assignments", description: "Failed to find rubric" });
-      return false;
-    } else if (!course_id) {
-      toaster.error({ title: "Error creating review assignments", description: "Failed to find current course" });
-      return false;
-    }
+    try {
+      if (!selectedRubric) {
+        toaster.error({ title: "Error creating review assignments", description: "Failed to find rubric" });
+        return false;
+      } else if (!course_id) {
+        toaster.error({ title: "Error creating review assignments", description: "Failed to find current course" });
+        return false;
+      }
 
-    const submissionReviewPromises = (draftReviews ?? []).map(async (review) => ({
-      review,
-      submissionReviewId: await submissionReviewIdForReview(review)
-    }));
-
-    const reviewsWithSubmissionIds = await Promise.all(submissionReviewPromises);
-
-    const validReviews = reviewsWithSubmissionIds.filter(({ submissionReviewId }) => submissionReviewId);
-
-    if (validReviews.length === 0) {
-      toaster.error({ title: "Error", description: "No valid reviews to assign" });
-      return false;
-    }
-
-    const { data: existingAssignments, error: existingAssignmentsError } = await supabase
-      .from("review_assignments")
-      .select(
-        "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
-      )
-      .eq("assignment_id", Number(assignment_id))
-      .eq("rubric_id", selectedRubric.id);
-
-    if (existingAssignmentsError) {
-      toaster.error({ title: "Error", description: "Error fetching existing review assignments" });
-      return false;
-    }
-
-    const assignmentsToUpdate = existingAssignments
-      .filter((assignment) => {
-        return validReviews.find(
-          ({ review, submissionReviewId }) =>
-            assignment.assignee_profile_id === review.assignee.private_profile_id &&
-            assignment.submission_review_id === submissionReviewId
-        );
-      })
-      .map((assignment) => assignment.id);
-    await supabase
-      .from("review_assignments")
-      .update({
-        completed_at: null
-      })
-      .in("id", assignmentsToUpdate);
-
-    const assignmentsToCreate = validReviews
-      .filter(({ review, submissionReviewId }) => {
-        return !existingAssignments.find(
-          (assignment) =>
-            assignment.assignee_profile_id === review.assignee.private_profile_id &&
-            assignment.submission_review_id === submissionReviewId
-        );
-      })
-      .map(({ review, submissionReviewId }) => ({
-        assignee_profile_id: review.assignee.private_profile_id,
-        submission_id: review.submission.id,
-        assignment_id: Number(assignment_id),
-        rubric_id: selectedRubric.id,
-        class_id: Number(course_id),
-        submission_review_id: submissionReviewId,
-        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+      const submissionReviewPromises = (draftReviews ?? []).map(async (review) => ({
+        review,
+        submissionReviewId: await submissionReviewIdForReview(review)
       }));
-    await supabase.from("review_assignments").insert(assignmentsToCreate);
 
-    const { data: allReviewAssignments, error: allReviewAssignmentsError } = await supabase
-      .from("review_assignments")
-      .select(
-        "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
-      )
-      .eq("assignment_id", Number(assignment_id))
-      .eq("rubric_id", selectedRubric.id);
+      const reviewsWithSubmissionIds = await Promise.all(submissionReviewPromises);
 
-    if (allReviewAssignmentsError) {
-      toaster.error({ title: "Error", description: "Error fetching all review assignments" });
-      return false;
-    }
-    //Now insert all the reivew assignment parts as needed
-    const reviewAssignmentPartsToCreate = validReviews
-      .map(({ review, submissionReviewId }) => {
-        if (review.part) {
-          const assignment = allReviewAssignments.find(
+      const validReviews = reviewsWithSubmissionIds.filter(({ submissionReviewId }) => submissionReviewId);
+
+      if (validReviews.length === 0) {
+        toaster.error({ title: "Error", description: "No valid reviews to assign" });
+        return false;
+      }
+
+      const { data: existingAssignments, error: existingAssignmentsError } = await supabase
+        .from("review_assignments")
+        .select(
+          "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
+        )
+        .eq("assignment_id", Number(assignment_id))
+        .eq("rubric_id", selectedRubric.id);
+
+      if (existingAssignmentsError) {
+        toaster.error({ title: "Error", description: existingAssignmentsError.message || "Error fetching existing review assignments" });
+        return false;
+      }
+
+      const assignmentsToUpdate = existingAssignments
+        .filter((assignment) => {
+          return validReviews.find(
+            ({ review, submissionReviewId }) =>
+              assignment.assignee_profile_id === review.assignee.private_profile_id &&
+              assignment.submission_review_id === submissionReviewId
+          );
+        })
+        .map((assignment) => assignment.id);
+      await supabase
+        .from("review_assignments")
+        .update({
+          completed_at: null
+        })
+        .in("id", assignmentsToUpdate);
+
+      const assignmentsToCreate = validReviews
+        .filter(({ review, submissionReviewId }) => {
+          return !existingAssignments.find(
             (assignment) =>
               assignment.assignee_profile_id === review.assignee.private_profile_id &&
               assignment.submission_review_id === submissionReviewId
           );
-          if (!assignment || !assignment.id) {
-            toaster.error({ title: "Error", description: "Error finding review assignment for review" });
+        })
+        .map(({ review, submissionReviewId }) => ({
+          assignee_profile_id: review.assignee.private_profile_id,
+          submission_id: review.submission.id,
+          assignment_id: Number(assignment_id),
+          rubric_id: selectedRubric.id,
+          class_id: Number(course_id),
+          submission_review_id: submissionReviewId,
+          due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+        }));
+      const { error: insertAssignmentsError } = await supabase.from("review_assignments").insert(assignmentsToCreate);
+      if (insertAssignmentsError) {
+        toaster.error({ title: "Error creating review assignments", description: insertAssignmentsError.message });
+        return false;
+      }
+
+      const { data: allReviewAssignments, error: allReviewAssignmentsError } = await supabase
+        .from("review_assignments")
+        .select(
+          "id, completed_at, review_assignment_rubric_parts(id, rubric_part_id), assignee_profile_id, submission_review_id"
+        )
+        .eq("assignment_id", Number(assignment_id))
+        .eq("rubric_id", selectedRubric.id);
+
+      if (allReviewAssignmentsError) {
+        toaster.error({ title: "Error", description: allReviewAssignmentsError.message || "Error fetching all review assignments" });
+        return false;
+      }
+      //Now insert all the reivew assignment parts as needed
+      const reviewAssignmentPartsToCreate = validReviews
+        .map(({ review, submissionReviewId }) => {
+          if (review.part) {
+            const assignment = allReviewAssignments.find(
+              (assignment) =>
+                assignment.assignee_profile_id === review.assignee.private_profile_id &&
+                assignment.submission_review_id === submissionReviewId
+            );
+            if (!assignment || !assignment.id) {
+              toaster.error({ title: "Error", description: "Error finding review assignment for review" });
+              return undefined;
+            }
+            return {
+              review_assignment_id: assignment.id,
+              rubric_part_id: review.part.id,
+              class_id: Number(course_id)
+            };
+          } else {
             return undefined;
           }
-          return {
-            review_assignment_id: assignment.id,
-            rubric_part_id: review.part.id,
-            class_id: Number(course_id)
-          };
-        } else {
-          return undefined;
-        }
-      })
-      .filter((part) => part !== undefined);
-    await supabase.from("review_assignment_rubric_parts").insert(reviewAssignmentPartsToCreate);
+        })
+        .filter((part) => part !== undefined);
+      const { error: insertPartsError } = await supabase
+        .from("review_assignment_rubric_parts")
+        .insert(reviewAssignmentPartsToCreate);
+      if (insertPartsError) {
+        toaster.error({ title: "Error creating review assignment parts", description: insertPartsError.message });
+        return false;
+      }
 
-    toaster.success({
-      title: "Reviews Assigned",
-      description: `Successfully assigned ${validReviews.length} review assignments`
-    });
+      toaster.success({
+        title: "Reviews Assigned",
+        description: `Successfully assigned ${validReviews.length} review assignments`
+      });
 
-    handleReviewAssignmentChange();
-    clearStateData();
+      handleReviewAssignmentChange();
+      clearStateData();
+      return true;
+    } catch (e: unknown) {
+      const errMsg = (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
+        "An unexpected error occurred while confirming assignments";
+      toaster.error({
+        title: "Error confirming assignments",
+        description: errMsg
+      });
+      return false;
+    }
   };
 
   /**
@@ -792,32 +813,35 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    */
   const submissionReviewIdForReview = useCallback(
     async (review: DraftReviewAssignment) => {
-      let submissionReviewId: number;
-      if (review.submission.submission_reviews.length > 0) {
-        submissionReviewId = review.submission.submission_reviews[0].id;
+      let submissionReviewId: number | undefined;
+      // Prefer in-memory submission reviews if available and matching rubric
+      const localMatch = review.submission.submission_reviews?.find((sr) => sr.rubric_id === selectedRubric?.id);
+      if (localMatch) {
+        submissionReviewId = localMatch.id;
       } else {
-        const { data: rev } = await mutateAsync({
-          resource: "submission_reviews",
-          values: {
-            total_score: 0,
-            tweak: 0,
-            class_id: course_id,
-            submission_id: review.submission.id,
-            name: selectedRubric?.name,
-            rubric_id: selectedRubric?.id
-          }
-        });
-        submissionReviewId = Number(rev.id);
+        // Lookup existing submission review (auto-created by trigger or backfilled)
+        const { data: sr, error } = await supabase
+          .from("submission_reviews")
+          .select("id")
+          .eq("submission_id", review.submission.id)
+          .eq("rubric_id", Number(selectedRubric?.id))
+          .single();
+        if (!error && sr) {
+          submissionReviewId = sr.id as number;
+        }
       }
-      if (isNaN(submissionReviewId)) {
+      if (!submissionReviewId || isNaN(Number(submissionReviewId))) {
         toaster.error({
           title: "Error creating review assignments",
-          description: `Failed to find or create submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}`
+          description:
+            `Failed to find submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}. ` +
+            `Please ensure the rubric exists for this assignment.`
         });
+        return 0;
       }
-      return submissionReviewId;
+      return Number(submissionReviewId);
     },
-    [selectedRubric, course_id, mutateAsync]
+    [selectedRubric, supabase]
   );
 
   useEffect(() => {
