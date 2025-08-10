@@ -90,7 +90,6 @@ export function OverrideScoreForm({
       score: values.is_missing && !forceMissingOff ? null : values.score,
       is_missing: forceMissingOff ? false : values.is_missing
     });
-    console.log("updated");
     if (onSuccess) onSuccess();
   };
 
@@ -255,14 +254,22 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
   const column = useGradebookColumn(columnId);
   const [isEditing, setIsEditing] = useState(false);
   const studentGradebookColumn = useGradebookColumnStudent(columnId, studentId);
-  if (!studentGradebookColumn) {
-    throw new Error(`Student ${studentId} has no gradebook column for column ${columnId}`);
-  }
   const triggerId = useId();
 
+  // Handle case where student doesn't have a gradebook entry yet (normal during imports or new columns)
+  if (!studentGradebookColumn) {
+    return (
+      <Box p={2} minH="40px" display="flex" alignItems="center" justifyContent="center">
+        <Text fontSize="sm" color="fg.muted">
+          -
+        </Text>
+      </Box>
+    );
+  }
+
   let scoreAdvice: string | undefined = undefined;
-  if (column.score_expression && !studentGradebookColumn) {
-    scoreAdvice = `This column is automatically calculated but has not been calculated yet.`;
+  if (column.score_expression) {
+    scoreAdvice = `This column is automatically calculated.`;
   } else if (studentGradebookColumn?.score_override) {
     if (studentGradebookColumn.score) {
       scoreAdvice = `This column has been overridden from ${studentGradebookColumn.score} to ${studentGradebookColumn.score_override}`;
@@ -338,6 +345,18 @@ export default function GradebookCell({ columnId, studentId }: { columnId: numbe
                 _hover={{ border: "2px solid border.info", borderColor: "border.info" }}
                 _active={{ border: "2px solid border.info", borderColor: "border.info" }}
                 position="relative"
+                role="gridcell"
+                aria-label={`Grade cell for ${column.name}: ${
+                  studentGradebookColumn &&
+                  (studentGradebookColumn?.score !== undefined || studentGradebookColumn?.score_override !== undefined)
+                    ? gradebookController.getRendererForColumn(column.id)({
+                        ...studentGradebookColumn,
+                        max_score: column.max_score
+                      })
+                    : "Not available"
+                }`}
+                aria-describedby={scoreAdvice ? `grade-advice-${columnId}-${studentId}` : undefined}
+                tabIndex={0}
               >
                 {isSpecial && (
                   <Float placement="top-end" offset={3}>

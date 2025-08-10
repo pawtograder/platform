@@ -1678,7 +1678,7 @@ export default function GradebookTable() {
   }));
   columnsForGrouping.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   const cachedColumnsKey = JSON.stringify(columnsForGrouping);
-  // Group gradebook columns by slug prefix before first hyphen
+  // Group gradebook columns by slug prefix, with special handling for assignment sub-groups
   const groupedColumns = useMemo(() => {
     const groups: Record<string, { groupName: string; columns: typeof columnsForGrouping }> = {};
     const columns = JSON.parse(cachedColumnsKey) as typeof columnsForGrouping;
@@ -1690,9 +1690,17 @@ export default function GradebookTable() {
     let lastSortOrder = -1;
 
     columns.forEach((col) => {
-      // Extract prefix before first hyphen
-      const prefix = col.slug.split("-")[0];
-      const baseGroupName = prefix || "other";
+      const slugParts = col.slug.split("-");
+      let baseGroupName: string;
+
+      // Special handling for assignment columns
+      if (slugParts[0] === "assignment" && slugParts.length >= 3) {
+        // For assignment-assignment-*, assignment-lab-*, etc., use "assignment-{type}" as the base group
+        baseGroupName = `${slugParts[0]}-${slugParts[1]}`;
+      } else {
+        // For all other columns, use the first part as the base group
+        baseGroupName = slugParts[0] || "other";
+      }
 
       // Check if this column is contiguous with the previous one
       const currentSortOrder = col.sort_order ?? 0;
@@ -1707,8 +1715,20 @@ export default function GradebookTable() {
       const groupKey = `${baseGroupName}-${currentGroupIndex}`;
 
       if (!groups[groupKey]) {
+        // Format group name for display
+        let displayName: string;
+        if (baseGroupName === "other") {
+          displayName = "Other";
+        } else if (baseGroupName.startsWith("assignment-")) {
+          // For assignment sub-groups, capitalize and format nicely
+          const subType = baseGroupName.split("-")[1];
+          displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
+        } else {
+          displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
+        }
+
         groups[groupKey] = {
-          groupName: baseGroupName === "other" ? "Other" : baseGroupName,
+          groupName: displayName,
           columns: []
         };
       }
@@ -1724,9 +1744,6 @@ export default function GradebookTable() {
   useEffect(() => {
     const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
     const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
-
-    console.log(groupedColumns);
-    console.log(baseGroupNames);
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -1746,18 +1763,57 @@ export default function GradebookTable() {
     });
   }, [groupedColumns]);
 
-  // Toggle group collapse/expand using base group name
-  const toggleGroup = useCallback((baseGroupName: string) => {
-    setCollapsedGroups((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(baseGroupName)) {
-        newSet.delete(baseGroupName);
-      } else {
-        newSet.add(baseGroupName);
+  // Force recalculation helper
+  const forceRecalculation = useCallback(() => {
+    setTimeout(() => {
+      // Recalculate header height
+      if (headerRef.current) {
+        const height = headerRef.current.offsetHeight;
+        setHeaderHeight(height);
       }
-      return newSet;
-    });
-  }, []);
+
+      // Recalculate first column width
+      if (students && students.length > 0) {
+        const tempElement = document.createElement("div");
+        tempElement.style.position = "absolute";
+        tempElement.style.visibility = "hidden";
+        tempElement.style.whiteSpace = "nowrap";
+        tempElement.style.fontSize = "14px";
+        tempElement.style.fontFamily = "inherit";
+        document.body.appendChild(tempElement);
+
+        let maxWidth = 180;
+        students.forEach((student) => {
+          tempElement.textContent = student.name || student.short_name || "Unknown Student";
+          const textWidth = tempElement.offsetWidth;
+          maxWidth = Math.max(maxWidth, textWidth + 60);
+        });
+
+        document.body.removeChild(tempElement);
+        const finalWidth = Math.min(maxWidth, 400);
+        setFirstColumnWidth(finalWidth);
+      }
+    }, 50);
+  }, [students]);
+
+  // Toggle group collapse/expand using base group name
+  const toggleGroup = useCallback(
+    (baseGroupName: string) => {
+      setCollapsedGroups((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(baseGroupName)) {
+          newSet.delete(baseGroupName);
+        } else {
+          newSet.add(baseGroupName);
+        }
+        return newSet;
+      });
+
+      // Force recalculation after toggle to fix alignment
+      forceRecalculation();
+    },
+    [forceRecalculation]
+  );
 
   const autoLayout = useCallback(async () => {
     const supabase = createClient();
@@ -1789,14 +1845,16 @@ export default function GradebookTable() {
   // Expand all groups
   const expandAll = useCallback(() => {
     setCollapsedGroups(new Set());
-  }, []);
+    forceRecalculation();
+  }, [forceRecalculation]);
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
     const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
     const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
     setCollapsedGroups(new Set(baseGroupNames));
-  }, [groupedColumns]);
+    forceRecalculation();
+  }, [groupedColumns, forceRecalculation]);
 
   // Helper function to find the best column to show when collapsed
   const findBestColumnToShow = useCallback(
@@ -2044,10 +2102,33 @@ export default function GradebookTable() {
     calculateFirstColumnWidth();
   }, [calculateFirstColumnWidth]);
 
-  // Calculate header height after render
+  // Calculate header height after render and when columns/groups change
   useEffect(() => {
     calculateHeaderHeight();
-  }, [calculateHeaderHeight, gradebookColumns.length]);
+  }, [calculateHeaderHeight, gradebookColumns.length, groupedColumns, collapsedGroups]);
+
+  // Force recalculation after a short delay to handle async rendering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      forceRecalculation();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [forceRecalculation, groupedColumns, collapsedGroups]);
+
+  // Add ResizeObserver to handle layout changes
+  useEffect(() => {
+    if (!parentRef.current) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      forceRecalculation();
+    });
+
+    resizeObserver.observe(parentRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [forceRecalculation]);
 
   const virtualizer = useVirtualizer({
     count: rowModel.rows.length,
@@ -2068,6 +2149,8 @@ export default function GradebookTable() {
       return (
         <Table.Row
           key={`${row.id}-${virtualRow.index}`}
+          role="row"
+          aria-label={`Student ${row.original.name || "Unknown"} grades`}
           bg={idx % 2 === 0 ? "bg.subtle" : "bg.muted"}
           _hover={{ bg: "bg.info" }}
           style={{
@@ -2211,10 +2294,23 @@ export default function GradebookTable() {
       `}</style>
       <Toaster />
       <StudentDetailDialog />
-      <Box ref={parentRef} overflowX="auto" overflowY="auto" maxW="100%" maxH="80vh" height="80vh" position="relative">
+      <Box
+        ref={parentRef}
+        overflowX="auto"
+        overflowY="auto"
+        maxW="100%"
+        maxH="80vh"
+        height="80vh"
+        position="relative"
+        role="region"
+        aria-label="Instructor Gradebook Table"
+        tabIndex={0}
+      >
         <Table.Root
           minW="100%"
           w="100%"
+          role="table"
+          aria-label="Student grades by assignment"
           style={{ tableLayout: "fixed", width: "100%", margin: 0, padding: 0, borderSpacing: 0, position: "relative" }}
         >
           <Table.Header

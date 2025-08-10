@@ -136,17 +136,72 @@ export async function createUserInClass({
     : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
   const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
-  const { data: userData, error: userError } = await supabase.auth.admin.createUser({
+  // Try to create user, if it fails due to existing email, try to get the existing user
+  let userData;
+  const { data: newUserData, error: userError } = await supabase.auth.admin.createUser({
     email: resolvedEmail,
     password: password,
     email_confirm: true
   });
+
   if (userError) {
-    console.error(userError);
-    throw new Error(`Failed to create user: ${userError.message}`);
+    // Check if error is due to user already existing
+    if (userError.message.includes("already exists") || userError.message.includes("already registered")) {
+      // eslint-disable-next-line no-console
+      console.log(`User with email ${resolvedEmail} already exists, attempting to retrieve...`);
+
+      // Try to get the user by email using getUserByEmail (if available)
+      try {
+        const { data: existingUserData, error: getUserError } = await supabase.auth.admin.getUserByEmail(resolvedEmail);
+        if (getUserError) {
+          throw new Error(`Failed to get existing user: ${getUserError.message}`);
+        }
+        userData = existingUserData;
+        // eslint-disable-next-line no-console
+        console.log(`Successfully retrieved existing user: ${resolvedEmail}`);
+      } catch (error) {
+        // If getUserByEmail doesn't work, fall back to listing users
+        const { data: existingUsers, error: listError } = await supabase.auth.admin.listUsers();
+        if (listError) {
+          throw new Error(`Failed to list users and retrieve existing user: ${listError.message}`);
+        }
+        const existingUser = existingUsers.users.find((user) => user.email === resolvedEmail);
+        if (existingUser) {
+          userData = { user: existingUser };
+          // eslint-disable-next-line no-console
+          console.log(`Found existing user via list: ${resolvedEmail}`);
+        } else {
+          throw new Error(`User creation failed and couldn't find existing user: ${userError.message}`);
+        }
+      }
+    } else {
+      console.error(userError);
+      throw new Error(`Failed to create user: ${userError.message}`);
+    }
+  } else {
+    userData = newUserData;
+    // eslint-disable-next-line no-console
+    console.log(`Successfully created new user: ${resolvedEmail}`);
   }
-  if (class_id !== 1) {
-    const { data: publicProfileData, error: publicProfileError } = await supabase
+  // Check if user already has a role in this class
+  const { data: existingRole, error: roleCheckError } = await supabase
+    .from("user_roles")
+    .select("private_profile_id, public_profile_id")
+    .eq("user_id", userData.user.id)
+    .eq("class_id", class_id)
+    .single();
+
+  let publicProfileData, privateProfileData;
+
+  if (existingRole && !roleCheckError) {
+    // User already enrolled in class, get existing profile data
+    // eslint-disable-next-line no-console
+    console.log(`User already enrolled in class ${class_id}, using existing profiles`);
+    publicProfileData = { id: existingRole.public_profile_id };
+    privateProfileData = { id: existingRole.private_profile_id };
+  } else if (class_id !== 1) {
+    // User not enrolled or new class, create profiles and enrollment
+    const { data: newPublicProfileData, error: publicProfileError } = await supabase
       .from("profiles")
       .insert({
         name: public_profile_name,
@@ -159,7 +214,8 @@ export async function createUserInClass({
     if (publicProfileError) {
       throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
     }
-    const { data: privateProfileData, error: privateProfileError } = await supabase
+
+    const { data: newPrivateProfileData, error: privateProfileError } = await supabase
       .from("profiles")
       .insert({
         name: private_profile_name,
@@ -172,9 +228,14 @@ export async function createUserInClass({
     if (privateProfileError) {
       throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
     }
-    if (!publicProfileData || !privateProfileData) {
+
+    if (!newPublicProfileData || !newPrivateProfileData) {
       throw new Error("Failed to create public or private profile");
     }
+
+    publicProfileData = newPublicProfileData;
+    privateProfileData = newPrivateProfileData;
+
     await supabase.from("user_roles").insert({
       user_id: userData.user.id,
       class_id: class_id,

@@ -291,9 +291,8 @@ class StudentGradebookController {
   }
 
   private _updateColumnsForStudent(allStudents: GradebookColumnStudent[]) {
-    const newColumns = allStudents.filter(
-      (s) => s.student_id === this._profile_id && (s.is_private || !this._isInstructorOrGrader)
-    );
+    // Filter by student_id only since the TableController query already filters by appropriate is_private value
+    const newColumns = allStudents.filter((s) => s.student_id === this._profile_id);
     if (newColumns.length !== this._columnsForStudent.length) {
       this._columnsForStudent = newColumns;
 
@@ -312,9 +311,7 @@ class StudentGradebookController {
     if (updatedColumn.student_id !== this._profile_id) {
       throw new Error("Column is not for this student");
     }
-    if (!updatedColumn.is_private && this._isInstructorOrGrader) {
-      return;
-    }
+    // Accept the column since the data already comes from the appropriate is_private filtered query
     const index = this._columnsForStudent.findIndex((s) => s.id === updatedColumn.id);
     if (index === -1) {
       this._columnsForStudent.push(updatedColumn);
@@ -411,10 +408,10 @@ export class GradebookController {
   private updateStudentColumnIndex() {
     this.studentColumnIndex.clear();
     this.gradebook_column_students.rows.forEach((student) => {
-      if (student.is_private) {
-        const key = this.getStudentColumnKey(student.student_id, student.gradebook_column_id);
-        this.studentColumnIndex.set(key, student.id);
-      }
+      // Index all student records regardless of is_private value
+      // The query already filters by appropriate is_private value based on user role
+      const key = this.getStudentColumnKey(student.student_id, student.gradebook_column_id);
+      this.studentColumnIndex.set(key, student.id);
     });
 
     // Consider index populated if we have data from gradebook_column_students table
@@ -722,7 +719,7 @@ export class GradebookController {
     return this.gradebook_columns.rows.find((col) => col.id === id);
   }
 
-  getGradebookColumnStudent(column_id: number, student_id: string) {
+  getGradebookColumnStudent(column_id: number, student_id: string): GradebookColumnStudent | undefined {
     // Don't return data if any table is refetching to avoid partial data
     if (this._isAnyTableRefetching) {
       throw new Error("Should not try to get gradebook column student when any table is refetching");
@@ -733,19 +730,21 @@ export class GradebookController {
     const studentId = this.studentColumnIndex.get(key);
 
     if (!studentId) {
-      throw new Error(`Student ${student_id} has no gradebook column index for column ${column_id}`);
+      // Return undefined if student doesn't have an entry for this column (normal case)
+      return undefined;
     }
 
     // Get the actual student record from the TableController
     const student = this.gradebook_column_students.rows.find((s) => s.id === studentId);
 
-    // Apply privacy filter
+    // Apply privacy filter - return student if authorized, undefined if not
     if (student && (student.is_private || !this._isInstructorOrGrader)) {
       return student;
     }
-    throw new Error(
-      `Unauthorized access to gradebook column student ${studentId} for column ${column_id}. ${student?.is_private}, ${this._isInstructorOrGrader}`
-    );
+
+    // Return undefined for unauthorized access instead of throwing
+    // This handles cases where students shouldn't see private data
+    return undefined;
   }
 
   public getRendererForColumn(column_id: number) {

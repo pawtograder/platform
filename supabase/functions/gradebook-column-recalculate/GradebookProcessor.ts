@@ -223,10 +223,9 @@ async function processCellBatch(
     if (!dependencies) {
       const newScope = scope.clone();
       newScope.setContext("cell", cell);
-      Sentry.captureMessage(
-        `Column ${cell.gradebook_column_id} has no dependencies, why is it being recalculated?`,
-        newScope
-      );
+      newScope.setTag("column_id", cell.gradebook_column_id);
+      newScope.setTag("score_expression", column.score_expression);
+      Sentry.captureMessage(`Column has no dependencies, why is it being recalculated?`, newScope);
       return [];
     }
     const ret: ExprDependencyInstance[] = [];

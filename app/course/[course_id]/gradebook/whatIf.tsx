@@ -292,7 +292,9 @@ function GradebookCard({
   return (
     <Card.Root
       key={column.id}
-      aria-label={`Gradebook Entry ${column.name}`}
+      role="article"
+      aria-label={`Grade for ${column.name}`}
+      aria-describedby={`grade-description-${column.id}`}
       w={isCollapsedGroupItem ? "calc(100% - 1rem)" : "100%"}
       bg={isShowingWhatIf ? "bg.info" : undefined}
       justifyContent="space-between"
@@ -318,9 +320,17 @@ function GradebookCard({
       <HStack align="top">
         <Card.Header flexGrow={10} p={0}>
           <VStack align="left" maxW="md">
-            <Heading size="sm">{column.name}</Heading>
+            <Heading size="sm" id={`grade-title-${column.id}`}>
+              {column.name}
+            </Heading>
             {linkToAssignment && (
-              <Link ml={2} fontSize="sm" href={linkToAssignment} target="_blank">
+              <Link
+                ml={2}
+                fontSize="sm"
+                href={linkToAssignment}
+                target="_blank"
+                aria-label={`View submission for ${column.name}`}
+              >
                 <Icon as={LuExternalLink} /> View Submission
               </Link>
             )}
@@ -335,7 +345,9 @@ function GradebookCard({
           />
         </Card.Body>
       </HStack>
-      <Markdown style={{ fontSize: "0.8rem" }}>{column.description}</Markdown>
+      <Box id={`grade-description-${column.id}`}>
+        <Markdown style={{ fontSize: "0.8rem" }}>{column.description}</Markdown>
+      </Box>
       {hasIncompleteValues && (
         <IncompleteValuesAlert incompleteValues={incompleteValues as IncompleteValuesAdvice} column_id={column.id} />
       )}
@@ -434,20 +446,26 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
     return cols;
   }, [columns]);
 
-  // Group gradebook columns by slug prefix before first hyphen
+  // Group gradebook columns by slug prefix, with special handling for assignment sub-groups
   const groupedColumns = useMemo(() => {
     const groups: Record<string, { groupName: string; columns: GradebookColumn[] }> = {};
 
     let currentGroupKey = "";
     let currentGroupIndex = 0;
     let lastSortOrder = -1;
-    console.log("sortedColumns", sortedColumns);
 
     sortedColumns.forEach((col) => {
-      // Extract prefix before first hyphen
-      const prefix = col.slug.split("-")[0];
-      const baseGroupName = prefix || "other";
-      console.log("baseGroupName", baseGroupName);
+      const slugParts = col.slug.split("-");
+      let baseGroupName: string;
+
+      // Special handling for assignment columns
+      if (slugParts[0] === "assignment" && slugParts.length >= 3) {
+        // For assignment-assignment-*, assignment-lab-*, etc., use "assignment-{type}" as the base group
+        baseGroupName = `${slugParts[0]}-${slugParts[1]}`;
+      } else {
+        // For all other columns, use the first part as the base group
+        baseGroupName = slugParts[0] || "other";
+      }
 
       // Check if this column is contiguous with the previous one
       const currentSortOrder = col.sort_order ?? 0;
@@ -462,8 +480,20 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
       const groupKey = `${baseGroupName}-${currentGroupIndex}`;
 
       if (!groups[groupKey]) {
+        // Format group name for display
+        let displayName: string;
+        if (baseGroupName === "other") {
+          displayName = "Other";
+        } else if (baseGroupName.startsWith("assignment-")) {
+          // For assignment sub-groups, capitalize and format nicely
+          const subType = baseGroupName.split("-")[1];
+          displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
+        } else {
+          displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
+        }
+
         groups[groupKey] = {
-          groupName: baseGroupName === "other" ? "Other" : baseGroupName,
+          groupName: displayName,
           columns: []
         };
       }
@@ -524,8 +554,6 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
     setCollapsedGroups(new Set(baseGroupNames));
   }, [groupedColumns]);
 
-  // We'll use the BestColumnSelector component to handle the selection logic
-
   // Build the rendered items
   const renderedItems = useMemo(() => {
     const items: JSX.Element[] = [];
@@ -572,21 +600,19 @@ export function WhatIf({ private_profile_id }: { private_profile_id: string }) {
   }, [groupedColumns, collapsedGroups, toggleGroup, private_profile_id]);
 
   return (
-    <GradebookWhatIfProvider private_profile_id={private_profile_id}>
-      <VStack minW="md" maxW="xl" align="flex-start" aria-label="Gradebook Entry List" gap={0}>
-        {/* Expand/Collapse All Buttons */}
-        {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
-          <HStack gap={2} justifyContent="flex-end" w="100%" px={2} py={2}>
-            <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
-              <Icon as={LuChevronDown} mr={2} /> Expand All
-            </Button>
-            <Button variant="ghost" size="sm" onClick={collapseAll} colorPalette="blue">
-              <Icon as={LuChevronRight} mr={2} /> Collapse All
-            </Button>
-          </HStack>
-        )}
-        {renderedItems}
-      </VStack>
-    </GradebookWhatIfProvider>
+    <VStack minW="md" maxW="xl" align="flex-start" role="region" aria-label="Student Gradebook" gap={0}>
+      {/* Expand/Collapse All Buttons */}
+      {Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length > 0 && (
+        <HStack gap={2} justifyContent="flex-end" w="100%" px={2} py={2}>
+          <Button variant="ghost" size="sm" onClick={expandAll} colorPalette="blue">
+            <Icon as={LuChevronDown} mr={2} /> Expand All
+          </Button>
+          <Button variant="ghost" size="sm" onClick={collapseAll} colorPalette="blue">
+            <Icon as={LuChevronRight} mr={2} /> Collapse All
+          </Button>
+        </HStack>
+      )}
+      {renderedItems}
+    </VStack>
   );
 }

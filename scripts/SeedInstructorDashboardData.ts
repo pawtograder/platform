@@ -921,7 +921,7 @@ async function createSpecificationGradingColumns(
     name: "Skills Not Meeting Expectations",
     description: "Total number of skills at does not meet expectations level",
     slug: "does-not-meet-expectations",
-    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = x.score == 0)',
+    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = not x.is_missing and x.score == 0)',
     max_score: 12,
     dependencies: { gradebook_columns: skillColumnIds },
     sort_order: 16
