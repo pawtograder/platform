@@ -240,7 +240,6 @@ export default function AutograderConfiguration({ graderRepo }: { graderRepo: st
     // We should really get rid of refine.dev!!
   }, [graderRepo, assignment, course_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-
   const saveRegressionTests = useCallback(async () => {
     setSaveLoading(true);
     const additions = selectedRepos.filter((r) => !regressionTestRepos?.data.some((rt) => rt.repository === r));

@@ -222,7 +222,6 @@ export class OfficeHoursRealTimeController {
    * Handle incoming broadcast messages and route them to relevant subscriptions
    */
   private _handleBroadcastMessage(message: OfficeHoursBroadcastMessage) {
-
     // Skip system messages like channel_created
     if (message.type === "channel_created" || message.type === "system") {
       return;
