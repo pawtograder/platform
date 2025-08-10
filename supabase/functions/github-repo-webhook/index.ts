@@ -446,6 +446,8 @@ eventHandler.on("membership", async ({ payload }) => {
       return;
     }
 
+    const orgName = payload.organization?.login;
+    scope?.setTag("org_name", orgName);
     scope?.setTag("course_slug", courseSlug);
     scope?.setTag("team_type", teamType);
 
@@ -454,10 +456,11 @@ eventHandler.on("membership", async ({ payload }) => {
       .from("classes")
       .select("id")
       .eq("slug", courseSlug)
+      .eq("github_org", orgName)
       .single();
 
     if (classError) {
-      if (courseSlug === "pawtograder-playground") {
+      if (orgName === "pawtograder-playground") {
         return; // Don't bother logging this - we intentionally share this org across instances.
       }
       Sentry.captureMessage(`Class not found for slug ${courseSlug}:`, scope);
@@ -720,116 +723,6 @@ eventHandler.on("workflow_run", async ({ id: _id, name: _name, payload: payloadB
   } catch (error) {
     Sentry.captureException(error, scope);
     // Don't throw here to avoid breaking the webhook processing
-  }
-});
-// Handle team membership changes (when users are added to GitHub teams)
-eventHandler.on("membership", async ({ payload }) => {
-  console.log(
-    `Received membership event: ${payload.action} for team: ${(payload as any).team?.slug}, member: ${payload.member?.login}`
-  );
-
-  try {
-    const adminSupabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-
-    // Only process when a member is added to a team
-    if (payload.action !== "added") {
-      console.log(`Skipping membership action: ${payload.action}`);
-      return;
-    }
-
-    // Extract team information - cast to any to access team property
-    const teamSlug = (payload as any).team?.slug;
-    const memberGithubUsername = payload.member?.login;
-
-    if (!teamSlug || !memberGithubUsername) {
-      console.log("Missing team slug or member login, skipping");
-      return;
-    }
-
-    // Parse team slug to determine course and team type
-    // Team naming convention: {courseSlug}-staff or {courseSlug}-students
-    let courseSlug: string;
-    let teamType: "staff" | "student";
-
-    if (teamSlug.endsWith("-staff")) {
-      courseSlug = teamSlug.slice(0, -6); // Remove '-staff'
-      teamType = "staff";
-    } else if (teamSlug.endsWith("-students")) {
-      courseSlug = teamSlug.slice(0, -9); // Remove '-students'
-      teamType = "student";
-    } else {
-      console.log(`Team slug ${teamSlug} doesn't match expected pattern, skipping`);
-      return;
-    }
-
-    console.log(`Parsed team: courseSlug=${courseSlug}, teamType=${teamType}`);
-
-    // Find the class by slug
-    const { data: classData, error: classError } = await adminSupabase
-      .from("classes")
-      .select("id")
-      .eq("slug", courseSlug)
-      .single();
-
-    if (classError || !classData) {
-      console.log(`Class not found for slug ${courseSlug}:`, classError);
-      return;
-    }
-
-    const classId = classData.id;
-
-    // Find the user by GitHub username
-    const { data: userData, error: userError } = await adminSupabase
-      .from("users")
-      .select("user_id")
-      .eq("github_username", memberGithubUsername)
-      .single();
-
-    if (userError || !userData) {
-      console.log(`User not found for GitHub username ${memberGithubUsername}:`, userError);
-      return;
-    }
-
-    const userId = userData.user_id;
-
-    // Find the user's role in this class
-    const { data: userRoleData, error: userRoleError } = await adminSupabase
-      .from("user_roles")
-      .select("id, role")
-      .eq("user_id", userId)
-      .eq("class_id", classId)
-      .single();
-
-    if (userRoleError || !userRoleData) {
-      console.log(`User role not found for user ${userId} in class ${classId}:`, userRoleError);
-      return;
-    }
-
-    // Check if the team type matches the user's role
-    const userRole = userRoleData.role;
-    const isCorrectTeam =
-      (teamType === "staff" && (userRole === "instructor" || userRole === "grader")) ||
-      (teamType === "student" && userRole === "student");
-
-    if (isCorrectTeam) {
-      // Update github_org_confirmed to true
-      const { error: updateError } = await adminSupabase
-        .from("user_roles")
-        .update({ github_org_confirmed: true })
-        .eq("id", userRoleData.id);
-
-      if (updateError) {
-        console.error(`Failed to update github_org_confirmed for user role ${userRoleData.id}:`, updateError);
-      } else {
-        console.log(
-          `Successfully confirmed GitHub team membership for user ${memberGithubUsername} (${userRole}) in team ${teamSlug}`
-        );
-      }
-    } else {
-      console.log(`Team type ${teamType} does not match user role ${userRole}, not updating confirmation`);
-    }
-  } catch (error) {
-    console.error("Error processing membership event:", error);
   }
 });
 

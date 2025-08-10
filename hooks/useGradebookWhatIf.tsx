@@ -1,6 +1,5 @@
 import { GradebookColumnStudent, GradebookColumnWithEntries } from "@/utils/supabase/DatabaseTypes";
-import { Spinner } from "@chakra-ui/react";
-import { all, create, FunctionNode, i, isArray, MathNode, Matrix } from "mathjs";
+import { all, create, FunctionNode, isArray, MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
@@ -50,25 +49,6 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
     "column_slug" in value
   );
 }
-type UnreleasedGradebookColumnStudent = {
-  score: undefined;
-  score_override: undefined;
-  is_missing: true;
-  is_excused: true;
-  is_droppable: true;
-  is_released: false;
-  max_score: number;
-};
-function isUnreleasedGradebookColumnStudent(value: unknown): value is UnreleasedGradebookColumnStudent {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "is_missing" in value &&
-    value.is_missing === true &&
-    "is_excused" in value &&
-    value.is_excused === true
-  );
-}
 
 class GradebookWhatIfController {
   private _grades: GradebookWhatIfGradeMap = {};
@@ -89,17 +69,20 @@ class GradebookWhatIfController {
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
     for (const column of allColumns) {
       const columnStudent = this.gradebookController.getGradebookColumnStudent(column.id, this.private_profile_id);
-      if (columnStudent) {
-        const gradebookScore =
-          columnStudent.score_override !== null ? columnStudent.score_override : (columnStudent.score ?? undefined);
-        this._grades[column.id] = {
-          what_if: undefined,
-          report_only: undefined,
-          assume_max: undefined,
-          assume_zero: undefined,
-          gradebook_score: gradebookScore
-        };
-      }
+      // Initialize grade entry for all columns, even if student doesn't have an existing entry
+      const gradebookScore = columnStudent
+        ? columnStudent.score_override !== null
+          ? columnStudent.score_override
+          : (columnStudent.score ?? undefined)
+        : undefined;
+
+      this._grades[column.id] = {
+        what_if: undefined,
+        report_only: undefined,
+        assume_max: undefined,
+        assume_zero: undefined,
+        gradebook_score: gradebookScore
+      };
     }
     //Recalculate all columns
     this.recalculateDependentColumns();
@@ -159,7 +142,14 @@ class GradebookWhatIfController {
 
   setWhatIfGrade(columnId: number, value: number | undefined, incompleteValues: IncompleteValuesAdvice | null) {
     if (!this._grades[columnId]) {
-      throw new Error(`Column ${columnId} not found in grades`);
+      // Create grade entry if it doesn't exist (safety net)
+      this._grades[columnId] = {
+        what_if: value,
+        report_only: undefined,
+        assume_max: undefined,
+        assume_zero: undefined,
+        gradebook_score: undefined
+      };
     } else {
       this._grades[columnId] = {
         ...this._grades[columnId],
@@ -694,30 +684,25 @@ export function GradebookWhatIfProvider({
   const gradebookController = useGradebookController();
   const controllerRef = useRef<GradebookWhatIfController>();
 
-  // Cleanup previous controller if private_profile_id changes
+  // Initialize controller synchronously if it doesn't exist
+  if (!controllerRef.current) {
+    controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id);
+  }
+
+  // Cleanup and reinitialize when private_profile_id changes
   useEffect(() => {
+    // If private_profile_id changed, cleanup and create new controller
     if (controllerRef.current) {
       controllerRef.current.cleanup();
-      controllerRef.current = undefined;
+      controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id);
     }
-  }, [private_profile_id]);
 
-  // Cleanup on unmount
-  useEffect(() => {
     return () => {
       if (controllerRef.current) {
         controllerRef.current.cleanup();
       }
     };
-  }, []);
-
-  if (!controllerRef.current) {
-    if (gradebookController.isReady) {
-      controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id);
-    } else {
-      return <Spinner />;
-    }
-  }
+  }, [private_profile_id, gradebookController]);
 
   return <GradebookWhatIfContext.Provider value={controllerRef.current}>{children}</GradebookWhatIfContext.Provider>;
 }
