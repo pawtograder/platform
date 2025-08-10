@@ -306,7 +306,8 @@ export class RealtimeChannelManager {
 
       // Set up broadcast message handler
       channel.on("broadcast", { event: "broadcast" }, (message) => {
-        log.debug("Broadcast received", { topic, payloadType: (message.payload as any)?.type });
+        const payloadType = (message.payload as unknown as { type?: string })?.type;
+        log.debug("Broadcast received", { topic, payloadType });
         this._routeMessage(topic, message.payload as BroadcastMessage);
       });
 
@@ -564,7 +565,8 @@ export class RealtimeChannelManager {
 
       // Set up broadcast message handler
       newChannel.on("broadcast", { event: "broadcast" }, (message) => {
-        log.debug("Broadcast received (reconn)", { topic, payloadType: (message.payload as any)?.type });
+        const payloadType = (message.payload as unknown as { type?: string })?.type;
+        log.debug("Broadcast received (reconn)", { topic, payloadType });
         this._routeMessage(topic, message.payload as BroadcastMessage);
       });
 

@@ -848,20 +848,44 @@ export function CourseControllerProvider({
   course_id: number;
   children: React.ReactNode;
 }) {
-  const controller = useRef<CourseController>(new CourseController(course_id));
-  const [isInitialized, setIsInitialized] = useState(false);
-  const currentController = controller.current;
+  const controller = useRef<CourseController | null>(null);
+  const client = createClient();
+  const [classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
+
+  // Initialize ClassRealTimeController
   useEffect(() => {
-    console.log("Initializing realtime controller", profile_id, role);
-    log.info("mount", { course_id, profile_id, role });
-    currentController.initializeRealTimeController(profile_id, role === "instructor" || role === "grader");
-    setIsInitialized(true);
+    const realTimeController = new ClassRealTimeController({
+      client,
+      classId: course_id,
+      profileId: profile_id,
+      isStaff: role === "instructor" || role === "grader"
+    });
+
+    setClassRealTimeController(realTimeController);
+
     return () => {
-      log.warn("cleanup (provider unmount)", { course_id });
-      currentController.classRealTimeController.close();
+      realTimeController.close();
     };
-  }, [currentController, profile_id, role]);
-  if (!isInitialized) {
+  }, [client, course_id, profile_id, role]);
+
+  // Initialize CourseController with required dependencies
+  if (!controller.current && classRealTimeController) {
+    log.info("construct CourseController", { course_id });
+    controller.current = new CourseController(course_id, client, classRealTimeController);
+  }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (controller.current) {
+        log.warn("cleanup (provider unmount)", { course_id });
+        controller.current.close();
+        controller.current = null;
+      }
+    };
+  }, []);
+
+  if (!controller.current) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />
