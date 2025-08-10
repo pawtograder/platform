@@ -49,6 +49,49 @@ import PersonName from "./person-name";
 import SelfReviewDueDateInformation from "./self-review-due-date-information";
 import { Toaster, toaster } from "./toaster";
 
+function ReviewStatusDisplay() {
+  const writableSubmissionReviews = useWritableSubmissionReviews();
+  const rubrics = useRubrics();
+  const activeSubmissionReviewId = useActiveSubmissionReviewId();
+
+  if (!writableSubmissionReviews || writableSubmissionReviews.length === 0) {
+    return null;
+  }
+
+  const getReviewStatus = (review: { completed_at?: string | null; released?: boolean }) => {
+    if (review.completed_at) {
+      return review.released ? "completed, released" : "completed";
+    }
+    return "in progress";
+  };
+
+  const getStatusColor = (review: { completed_at?: string | null; released?: boolean }) => {
+    if (review.completed_at && review.released) return "green";
+    if (review.completed_at) return "blue";
+    return "orange";
+  };
+
+  return (
+    <VStack align="start" gap={1} w="100%">
+      {writableSubmissionReviews.map((review) => {
+        const rubric = rubrics.find((r) => r.id === review.rubric_id);
+        const isActive = review.id === activeSubmissionReviewId;
+        return (
+          <HStack key={review.id} gap={2} w="100%">
+            <Text fontWeight={isActive ? "bold" : "normal"} fontSize="sm" color={isActive ? "blue.500" : "text.muted"}>
+              {rubric?.name || "Unknown rubric"}:
+            </Text>
+            <Text fontSize="sm" color={`${getStatusColor(review)}.500`} fontWeight="medium">
+              {getReviewStatus(review)}
+              {isActive && " (active)"}
+            </Text>
+          </HStack>
+        );
+      })}
+    </VStack>
+  );
+}
+
 function ActiveReviewPicker() {
   const activeSubmissionReviewId = useActiveSubmissionReviewId();
   const writableSubmissionReviews = useWritableSubmissionReviews();
@@ -58,23 +101,28 @@ function ActiveReviewPicker() {
     return <Skeleton />;
   }
   return (
-    <HStack gap={2}>
-      <Text>Select a review to work on:</Text>
-      <SegmentGroup.Root
-        value={activeSubmissionReviewId?.toString() ?? ""}
-        onValueChange={(value) => {
-          setActiveSubmissionReviewId(Number(value.value));
-        }}
-      >
-        <SegmentGroup.Indicator />
-        {writableSubmissionReviews?.map((review) => (
-          <SegmentGroup.Item key={review.id} value={review.id.toString()}>
-            <SegmentGroup.ItemText>{rubrics.find((r) => r.id === review.rubric_id)?.name}</SegmentGroup.ItemText>
-            <SegmentGroup.ItemHiddenInput />
-          </SegmentGroup.Item>
-        ))}
-      </SegmentGroup.Root>
-    </HStack>
+    <VStack align="start" gap={3} w="100%">
+      <ReviewStatusDisplay />
+      {writableSubmissionReviews && writableSubmissionReviews.length > 1 && (
+        <HStack gap={2}>
+          <Text>Select a review to work on:</Text>
+          <SegmentGroup.Root
+            value={activeSubmissionReviewId?.toString() ?? ""}
+            onValueChange={(value) => {
+              setActiveSubmissionReviewId(Number(value.value));
+            }}
+          >
+            <SegmentGroup.Indicator />
+            {writableSubmissionReviews?.map((review) => (
+              <SegmentGroup.Item key={review.id} value={review.id.toString()}>
+                <SegmentGroup.ItemText>{rubrics.find((r) => r.id === review.rubric_id)?.name}</SegmentGroup.ItemText>
+                <SegmentGroup.ItemHiddenInput />
+              </SegmentGroup.Item>
+            ))}
+          </SegmentGroup.Root>
+        </HStack>
+      )}
+    </VStack>
   );
 }
 

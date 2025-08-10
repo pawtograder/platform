@@ -25,8 +25,10 @@ import {
   useSubmission,
   useSubmissionComments,
   useSubmissionController,
-  useSubmissionReviewOrGradingReview
+  useSubmissionReviewOrGradingReview,
+  useWritableSubmissionReviews
 } from "@/hooks/useSubmission";
+import { useRubrics } from "@/hooks/useAssignment";
 import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { activateSubmission } from "@/lib/edgeFunctions";
@@ -471,6 +473,73 @@ function UnGradedGradingSummary() {
   );
 }
 
+function RubricScores() {
+  const writableSubmissionReviews = useWritableSubmissionReviews();
+  const rubrics = useRubrics();
+
+  if (!writableSubmissionReviews || writableSubmissionReviews.length === 0) {
+    return <Heading size="xl">Overall Score (Not yet graded)</Heading>;
+  }
+
+  return (
+    <VStack align="start" gap={2} w="100%">
+      <Heading size="xl">Scores by Rubric</Heading>
+      {writableSubmissionReviews.map((review) => {
+        const rubric = rubrics.find((r) => r.id === review.rubric_id);
+        if (!rubric) return null;
+
+        const isCompleted = review.completed_at;
+        const isReleased = review.released;
+        const score = review.total_score;
+        const maxScore =
+          rubric.rubric_parts?.reduce(
+            (total, part) =>
+              total +
+              (part.rubric_criteria?.reduce((partTotal, criteria) => partTotal + (criteria.total_points || 0), 0) || 0),
+            0
+          ) || 0;
+
+        return (
+          <Box
+            key={review.id}
+            p={3}
+            borderWidth="1px"
+            borderRadius="md"
+            borderColor="border.subtle"
+            bg={isCompleted ? (isReleased ? "bg.success.subtle" : "bg.info.subtle") : "bg.muted"}
+            w="100%"
+          >
+            <HStack justify="space-between" w="100%">
+              <VStack align="start" gap={1}>
+                <Text fontWeight="bold" fontSize="md">
+                  {rubric.name}
+                </Text>
+                <Text fontSize="sm" color="text.muted">
+                  {rubric.review_round?.replace("-", " ") || "Unknown"}
+                </Text>
+              </VStack>
+              <VStack align="end" gap={1}>
+                {isCompleted ? (
+                  <Text fontWeight="bold" fontSize="lg">
+                    {score || 0}/{maxScore || 0}
+                  </Text>
+                ) : (
+                  <Text fontSize="sm" color="text.muted">
+                    Not graded
+                  </Text>
+                )}
+                <Text fontSize="xs" color={isCompleted ? (isReleased ? "text.success" : "text.info") : "text.muted"}>
+                  {isCompleted ? (isReleased ? "Released" : "Completed") : "In progress"}
+                </Text>
+              </VStack>
+            </HStack>
+          </Box>
+        );
+      })}
+    </VStack>
+  );
+}
+
 function RubricView() {
   const submission = useSubmission();
   const isGraderOrInstructor = useIsGraderOrInstructor();
@@ -544,11 +613,7 @@ function RubricView() {
             )}
           </Box>
         )}
-        {submission.assignments.total_points !== null && (
-          <Heading size="xl">
-            Overall Score ({gradingReview?.total_score}/{submission.assignments.total_points})
-          </Heading>
-        )}
+        <RubricScores />
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
