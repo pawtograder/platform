@@ -3,9 +3,13 @@
 
 CREATE OR REPLACE FUNCTION public.gradebook_auto_layout(p_gradebook_id bigint)
 RETURNS void
+CREATE OR REPLACE FUNCTION public.gradebook_auto_layout(p_gradebook_id bigint)
+RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
+-- function body continues here
 DECLARE
   v_col record;
   v_dep_col_id bigint;
