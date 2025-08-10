@@ -314,7 +314,12 @@ export class ClassRealTimeController {
       return;
     }
 
-    log.debug("broadcast", { type: normalized.type, table: normalized.table, op: normalized.operation, row_id: normalized.row_id });
+    log.debug("broadcast", {
+      type: normalized.type,
+      table: normalized.table,
+      op: normalized.operation,
+      row_id: normalized.row_id
+    });
 
     // Notify all relevant subscriptions
     for (const subscription of this._subscriptions.values()) {

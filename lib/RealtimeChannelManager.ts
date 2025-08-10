@@ -156,7 +156,10 @@ export class RealtimeChannelManager {
       (channel) => channel.reconnectAttempts > 0 || channel.isReconnecting
     );
 
-    log.debug("window focus; channelsNeedingCheck=", channelsNeedingCheck.map((c) => c.topic));
+    log.debug(
+      "window focus; channelsNeedingCheck=",
+      channelsNeedingCheck.map((c) => c.topic)
+    );
 
     if (channelsNeedingCheck.length > 0) {
       // Reset health check and trigger immediate health check
@@ -230,7 +233,10 @@ export class RealtimeChannelManager {
     });
 
     if (stuckChannels.length > 0) {
-      log.warn("Found stuck channels; forcing resubscribe", stuckChannels.map((c) => c.topic));
+      log.warn(
+        "Found stuck channels; forcing resubscribe",
+        stuckChannels.map((c) => c.topic)
+      );
       for (const channel of stuckChannels) {
         channel.isReconnecting = false;
         this._resubscribeToChannelWithBackoff(channel.topic);
@@ -663,7 +669,7 @@ export class RealtimeChannelManager {
    * Disconnect all channels (useful for tab visibility changes)
    */
   disconnectAllChannels() {
-    log.warn("Disconnecting all channels (visibility/offline)" );
+    log.warn("Disconnecting all channels (visibility/offline)");
     for (const managedChannel of this._channels.values()) {
       // Reset reconnection state
       managedChannel.isReconnecting = false;
