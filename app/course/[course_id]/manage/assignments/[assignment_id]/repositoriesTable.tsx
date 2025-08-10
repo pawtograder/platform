@@ -55,17 +55,18 @@ export default function RepositoriesTable() {
     return filters;
   }, [assignment_id, course_id]);
 
-  const { getHeaderGroups, getRowModel, isLoading } =
-    useCustomTable<Database["public"]["Tables"]["repositories"]["Row"]>({
-      columns,
-      resource: "repositories",
-      serverFilters,
-      select: "*",
-      initialState: {
-        sorting: [{ id: "repository", desc: false }],
-        pagination: { pageIndex: 0, pageSize: 100 }
-      }
-    });
+  const { getHeaderGroups, getRowModel, isLoading } = useCustomTable<
+    Database["public"]["Tables"]["repositories"]["Row"]
+  >({
+    columns,
+    resource: "repositories",
+    serverFilters,
+    select: "*",
+    initialState: {
+      sorting: [{ id: "repository", desc: false }],
+      pagination: { pageIndex: 0, pageSize: 100 }
+    }
+  });
 
   // Client-side filters for search and owner type
   const filteredRows = getRowModel().rows.filter((row) => {
@@ -85,7 +86,10 @@ export default function RepositoriesTable() {
         </Field>
         <Field label="Owner type" helperText="Filter by individual or group repos">
           <NativeSelect.Root>
-            <NativeSelect.Field value={ownerType} onChange={(e) => setOwnerType((e.target.value as "all" | "individual" | "group") || "all")}>
+            <NativeSelect.Field
+              value={ownerType}
+              onChange={(e) => setOwnerType((e.target.value as "all" | "individual" | "group") || "all")}
+            >
               <option value="all">All</option>
               <option value="individual">Individual</option>
               <option value="group">Group</option>
