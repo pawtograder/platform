@@ -1,10 +1,8 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { useCourse } from "@/hooks/useAuthState";
-import { useCustomTable, ServerFilter } from "@/hooks/useCustomTable";
+import { ServerFilter, useCustomTable } from "@/hooks/useCustomTable";
 import { Repo } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, HStack, NativeSelect, Table, Text, VStack } from "@chakra-ui/react";
@@ -14,7 +12,6 @@ import { useMemo, useState } from "react";
 
 export default function RepositoriesTable() {
   const { assignment_id, course_id } = useParams();
-  const course = useCourse();
   const [search, setSearch] = useState("");
   const [ownerType, setOwnerType] = useState<"all" | "individual" | "group">("all");
 
@@ -58,7 +55,7 @@ export default function RepositoriesTable() {
     return filters;
   }, [assignment_id, course_id]);
 
-  const { getHeaderGroups, getRowModel, setPageIndex, getPageCount, getState, setPageSize, data, isLoading } =
+  const { getHeaderGroups, getRowModel, isLoading } =
     useCustomTable<Database["public"]["Tables"]["repositories"]["Row"]>({
       columns,
       resource: "repositories",
@@ -88,7 +85,7 @@ export default function RepositoriesTable() {
         </Field>
         <Field label="Owner type" helperText="Filter by individual or group repos">
           <NativeSelect.Root>
-            <NativeSelect.Field value={ownerType} onChange={(e) => setOwnerType((e.target.value as any) || "all")}>
+            <NativeSelect.Field value={ownerType} onChange={(e) => setOwnerType((e.target.value as "all" | "individual" | "group") || "all")}>
               <option value="all">All</option>
               <option value="individual">Individual</option>
               <option value="group">Group</option>
@@ -129,7 +126,7 @@ export default function RepositoriesTable() {
               <Table.Row key={row.id}>
                 {row.getVisibleCells().map((cell) => (
                   <Table.Cell key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell ?? cell.column.columnDef.header, cell.getContext())}
+                    {flexRender(cell.column.columnDef.cell ?? ((info) => info.getValue()), cell.getContext())}
                   </Table.Cell>
                 ))}
               </Table.Row>
