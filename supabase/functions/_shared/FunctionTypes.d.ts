@@ -99,6 +99,10 @@ export type GradeResponse = {
 export type SubmissionResponse = {
   grader_url: string;
   grader_sha: string;
+  handout_notice?: {
+    message: string;
+    assignments: { id: number; title: string; slug?: string }[];
+  };
 };
 export type RegressionTestRunResponse = {
   regression_test_url: string;

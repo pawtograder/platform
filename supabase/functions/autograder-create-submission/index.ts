@@ -126,11 +126,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .from("repositories")
     .select("*, assignments(class_id, due_date, allow_not_graded_submissions, autograder(*))")
     .eq("repository", repository)
-    .single();
+    .maybeSingle();
   if (repoError) {
     scope?.setTag("db_error", "repository_lookup_failed");
     scope?.setTag("db_error_message", repoError.message);
-    throw new UserVisibleError(`Failed to find repository: ${repoError.message}`);
+    throw new UserVisibleError(`Failed to query repositories: ${repoError.message}`);
   }
 
   if (repoData) {
@@ -138,6 +138,31 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope?.setTag("class_id", repoData.assignments.class_id?.toString() || "unknown");
     scope?.setTag("profile_id", repoData.profile_id || "none");
     scope?.setTag("assignment_group_id", repoData.assignment_group_id?.toString() || "none");
+  }
+
+  // If repository isn't a student repo, check if it's a handout (template) repo for any assignment(s)
+  if (!repoData) {
+    const { data: handoutAssignments, error: handoutLookupError } = await adminSupabase
+      .from("assignments")
+      .select("id, title, slug")
+      .eq("template_repo", repository);
+    if (handoutLookupError) {
+      scope?.setTag("db_error", "handout_lookup_failed");
+      scope?.setTag("db_error_message", handoutLookupError.message);
+      throw new UserVisibleError(`Failed to check handout repository: ${handoutLookupError.message}`);
+    }
+    if (handoutAssignments && handoutAssignments.length > 0) {
+      // Return special handout notice response; autograder action should treat this as terminal
+      return {
+        grader_url: "",
+        grader_sha: "",
+        handout_notice: {
+          message:
+            "Detected this is a handout repository. The grader will not run on handout repos. It will run on the corresponding student repositories for the assignment(s) below.",
+          assignments: handoutAssignments.map((a) => ({ id: a.id, title: a.title, slug: a.slug }))
+        }
+      };
+    }
   }
 
   // Begin code where we might report an error to the user.
