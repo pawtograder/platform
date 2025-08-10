@@ -183,6 +183,7 @@ export class ClassRealTimeController {
         break;
       }
       default: {
+        log.error("unknown status", { channel: channelName, status: String(status) });
         const exhaustiveCheck: never = status;
         throw new Error(`Unknown channel status: ${exhaustiveCheck}`);
       }

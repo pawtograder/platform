@@ -298,6 +298,36 @@ export class RealtimeChannelManager {
     if (!managedChannel) {
       // Create new channel and subscription
       await this._refreshSessionIfNeeded();
+
+      // Debug: Log current user and pre-check authorization via RPC if available
+      try {
+        const userRes = await this._client.auth.getUser();
+        log.info("auth user", { id: userRes.data.user?.id });
+      } catch (e) {
+        log.warn("auth getUser failed", { error: (e as Error).message });
+      }
+      try {
+        const rpcFn = (
+          this._client as unknown as {
+            rpc: (
+              fn: string,
+              args: Record<string, unknown>
+            ) => Promise<{ data: unknown; error: { message?: string } | null }>;
+          }
+        ).rpc;
+        // Try with raw topic
+        const pre1 = await rpcFn("check_unified_realtime_authorization", { topic_text: topic });
+        log.info("preAuth rpc", { topic, allowed: pre1.data, error: pre1.error?.message });
+        // Try with topic without 'realtime:' prefix if present
+        const normalized = topic.startsWith("realtime:") ? topic.slice("realtime:".length) : topic;
+        if (normalized !== topic) {
+          const pre2 = await rpcFn("check_unified_realtime_authorization", { topic_text: normalized });
+          log.info("preAuth rpc (normalized)", { topic: normalized, allowed: pre2.data, error: pre2.error?.message });
+        }
+      } catch (e) {
+        log.warn("preAuth rpc failed", { error: (e as Error).message });
+      }
+
       log.info("Subscribing to new topic", topic);
       const channel = this._client.channel(topic, { config: { private: true } });
 
