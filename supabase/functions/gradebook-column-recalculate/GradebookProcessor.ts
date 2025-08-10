@@ -39,7 +39,11 @@ type CellBatch = GradebookCellRequest[];
  * Returns an array of batches where each batch can be processed in parallel,
  * and batches must be processed in order (earlier batches before later ones).
  */
-function sortCellsByDependencies(cells: GradebookCellRequest[], columnMap: Map<number, GradebookColumn>): CellBatch[] {
+function sortCellsByDependencies(
+  cells: GradebookCellRequest[],
+  columnMap: Map<number, GradebookColumn>,
+  scope: Sentry.Scope
+): CellBatch[] {
   // Build dependency graph: columnId -> Set of columnIds that depend on it
   const dependencyGraph = new Map<number, Set<number>>();
   const inDegree = new Map<number, number>();
@@ -131,9 +135,9 @@ function sortCellsByDependencies(cells: GradebookCellRequest[], columnMap: Map<n
     .map(([columnId]) => columnId);
 
   if (remainingColumns.length > 0) {
-    console.warn(`Circular dependencies detected in gradebook columns: ${remainingColumns.join(", ")}`);
-    // For now, just add remaining cells to the last batch
-    // In production, you might want to handle this more gracefully
+    const innerScope = scope.clone();
+    innerScope.setContext("remaining_columns", { remaining_columns: remainingColumns.join(",") });
+    //This will not be correct, but is a way to terminate the process, if this ever actually happens we should debug further to prevent cycles in the first place
     const remainingCells: GradebookCellRequest[] = [];
     for (const columnId of remainingColumns) {
       const cellsForColumn = cellsByColumn.get(columnId) || [];
@@ -187,7 +191,7 @@ export async function processGradebookCellCalculation(
   }
 
   // Sort cells into dependency-ordered batches
-  const cellBatches = sortCellsByDependencies(cells, columnMap);
+  const cellBatches = sortCellsByDependencies(cells, columnMap, scope);
   scope.setTag("dependency_batches", cellBatches.length);
 
   // Process each batch sequentially (dependencies must be computed first)

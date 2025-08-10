@@ -35,6 +35,12 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Allow bypassing trigger enforcement during bulk operations for specific gradebooks
+  -- This avoids the need for ACCESS EXCLUSIVE locks when disabling triggers globally
+  IF current_setting('pawtograder.bypass_sort_order_trigger_' || NEW.gradebook_id::text, true) = 'true' THEN
+    RETURN NEW;
+  END IF;
+
   -- Take per-gradebook advisory locks to serialize operations and avoid races
   IF TG_OP = 'UPDATE' AND NEW.gradebook_id IS DISTINCT FROM OLD.gradebook_id THEN
     IF OLD.gradebook_id < NEW.gradebook_id THEN

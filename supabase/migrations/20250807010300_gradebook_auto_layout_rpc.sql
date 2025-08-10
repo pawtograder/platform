@@ -33,8 +33,9 @@ BEGIN
   -- Serialize per-gradebook to avoid race conditions
   PERFORM pg_advisory_xact_lock(p_gradebook_id);
 
-  -- Temporarily disable the sort order trigger to avoid conflicts during bulk operations
-  ALTER TABLE public.gradebook_columns DISABLE TRIGGER gradebook_columns_enforce_sort_order_tr;
+  -- Temporarily bypass the sort order trigger for this specific gradebook during bulk operations
+  -- This avoids ACCESS EXCLUSIVE locks that would block concurrent operations on other gradebooks
+  PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || p_gradebook_id::text, 'true', true);
 
   BEGIN
     -- Step 1: Initial alphanumeric sort by slug (lab-2 before lab-10)
@@ -152,13 +153,13 @@ BEGIN
 
   EXCEPTION
     WHEN OTHERS THEN
-      -- Always re-enable the trigger, even if there was an error
-      ALTER TABLE public.gradebook_columns ENABLE TRIGGER gradebook_columns_enforce_sort_order_tr;
+      -- Always reset the bypass setting for this gradebook, even if there was an error
+      PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || p_gradebook_id::text, 'false', true);
       RAISE;
   END;
 
-  -- Re-enable the sort order trigger
-  ALTER TABLE public.gradebook_columns ENABLE TRIGGER gradebook_columns_enforce_sort_order_tr;
+  -- Reset the bypass setting to re-enable normal trigger enforcement for this gradebook
+  PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || p_gradebook_id::text, 'false', true);
 
 END;
 $$;

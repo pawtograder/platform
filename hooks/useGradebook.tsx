@@ -468,11 +468,7 @@ export class GradebookController {
     this.gradebook_column_students = new TableController({
       client,
       table: "gradebook_column_students",
-      query: client
-        .from("gradebook_column_students")
-        .select("*")
-        .eq("class_id", class_id)
-        .eq("is_private", isInstructorOrGrader),
+      query: client.from("gradebook_column_students").select("*").eq("class_id", class_id),
       classRealTimeController
     });
 

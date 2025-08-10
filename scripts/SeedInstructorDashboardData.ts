@@ -3684,10 +3684,10 @@ async function runMicro() {
   const now = new Date();
 
   await seedInstructorDashboardData({
-    numStudents: 20,
+    numStudents: 2,
     numGraders: 1,
     numInstructors: 1,
-    numAssignments: 20,
+    numAssignments: 10,
     firstAssignmentDate: addDays(now, -65),
     lastAssignmentDate: addDays(now, -2),
     gradingScheme: "specification",
