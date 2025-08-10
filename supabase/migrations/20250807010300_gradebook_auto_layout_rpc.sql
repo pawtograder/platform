@@ -35,8 +35,8 @@ BEGIN
   END IF;
 
   -- Serialize per-gradebook to avoid race conditions
-  PERFORM pg_advisory_xact_lock(p_gradebook_id);
-
+  -- Namespace 17031 chosen arbitrarily for "gradebook_auto_layout"
+  PERFORM pg_advisory_xact_lock(17031, p_gradebook_id);
   -- Temporarily bypass the sort order trigger for this specific gradebook during bulk operations
   -- This avoids ACCESS EXCLUSIVE locks that would block concurrent operations on other gradebooks
   PERFORM set_config('pawtograder.bypass_sort_order_trigger_' || p_gradebook_id::text, 'true', true);
