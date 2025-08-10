@@ -2,6 +2,9 @@ import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
 import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
+import { createLogger } from "./DebugLogger";
+
+const log = createLogger("ClassRealTimeController");
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -92,6 +95,8 @@ export class ClassRealTimeController {
     this._isStaff = isStaff;
     this._channelManager = RealtimeChannelManager.getInstance();
 
+    log.info("construct", { classId, profileId, isStaff });
+
     // Set the client on the channel manager
     this._channelManager.setClient(client);
 
@@ -118,14 +123,18 @@ export class ClassRealTimeController {
 
     // Wait for initialization that started in constructor
     await this._initializationPromise;
+    log.info("start completed");
 
     return true;
   }
 
   private async _initializeChannels() {
     if (this._closed) {
+      log.warn("initializeChannels called after close");
       return;
     }
+
+    log.info("initializeChannels", { classId: this._classId, profileId: this._profileId, isStaff: this._isStaff });
 
     // Session refresh is now handled by the channel manager
 
@@ -150,21 +159,25 @@ export class ClassRealTimeController {
 
     switch (status) {
       case REALTIME_SUBSCRIBE_STATES.SUBSCRIBED: {
+        log.info("subscribed", { channel: channelName });
         console.debug(`Successfully subscribed to '${channelName}'`);
         this._notifyStatusChange();
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.CLOSED: {
+        log.warn("closed", { channel: channelName, err: err?.message });
         console.debug(`Channel closed '${channelName}'`);
         this._notifyStatusChange();
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT: {
+        log.warn("timed_out", { channel: channelName });
         console.debug(`Channel timed out '${channelName}'`);
         this._notifyStatusChange();
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR: {
+        log.error("channel_error", { channel: channelName, err: err?.message });
         console.warn(`Channel error in '${channelName}': `, err?.message);
         this._notifyStatusChange();
         break;
@@ -182,9 +195,11 @@ export class ClassRealTimeController {
   private _addOnVisibilityChangeListener() {
     const handler = () => this._handleVisibilityChange();
     document.addEventListener("visibilitychange", handler);
+    log.debug("visibility listener attached");
 
     this._visibilityChangeListener = () => {
       document.removeEventListener("visibilitychange", handler);
+      log.debug("visibility listener detached");
     };
   }
 
@@ -195,6 +210,9 @@ export class ClassRealTimeController {
     if (document.hidden) {
       if (!this._inactiveTabTimer) {
         this._inactiveTabTimer = setTimeout(async () => {
+          log.warn("inactive tab timeout reached; disconnecting realtime", {
+            timeoutSeconds: this._inactiveTabTimeoutSeconds
+          });
           console.log(`Tab inactive for ${this._inactiveTabTimeoutSeconds} seconds. Disconnecting from realtime.`);
           this._channelManager.disconnectAllChannels();
         }, this._inactiveTabTimeoutSeconds * 1000);
@@ -205,6 +223,7 @@ export class ClassRealTimeController {
         this._inactiveTabTimer = undefined;
       }
 
+      log.info("tab visible; resubscribing all channels");
       this._channelManager.resubscribeToAllChannels();
     }
   }
@@ -213,6 +232,7 @@ export class ClassRealTimeController {
     if (!this._isStaff) return;
 
     const topic = `class:${this._classId}:staff`;
+    log.info("subscribe staff", { topic });
     const unsubscriber = await this._channelManager.subscribe(
       topic,
       (message: BroadcastMessage) => {
@@ -228,6 +248,7 @@ export class ClassRealTimeController {
 
   private async _subscribeToUserChannel() {
     const topic = `class:${this._classId}:user:${this._profileId}`;
+    log.info("subscribe user", { topic });
     const unsubscriber = await this._channelManager.subscribe(
       topic,
       (message: BroadcastMessage) => {
@@ -292,6 +313,8 @@ export class ClassRealTimeController {
     if (normalized.type === "system" || normalized.type === "channel_created") {
       return;
     }
+
+    log.debug("broadcast", { type: normalized.type, table: normalized.table, op: normalized.operation, row_id: normalized.row_id });
 
     // Notify all relevant subscriptions
     for (const subscription of this._subscriptions.values()) {
@@ -403,6 +426,7 @@ export class ClassRealTimeController {
    * Clean up channels and subscriptions
    */
   async close() {
+    log.warn("close called; cleaning up channels and listeners");
     this._subscriptions.clear();
     this._statusChangeListeners = [];
 
@@ -489,11 +513,13 @@ export class ClassRealTimeController {
       overall = "partial";
     }
 
-    return {
-      overall,
-      channels,
-      lastUpdate: new Date()
-    };
+    const snapshot = { overall, channels, lastUpdate: new Date() };
+    log.info("status", {
+      overall: snapshot.overall,
+      channels: snapshot.channels.map((c) => ({ name: c.name, state: c.state, type: c.type }))
+    });
+
+    return snapshot;
   }
 
   /**

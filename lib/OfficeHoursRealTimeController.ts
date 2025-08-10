@@ -3,6 +3,9 @@ import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
 import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
+import { createLogger } from "./DebugLogger";
+
+const log = createLogger("OfficeHoursRTC");
 
 type MessageFilter = {
   type?: OfficeHoursBroadcastMessage["type"];
@@ -76,6 +79,8 @@ export class OfficeHoursRealTimeController {
     this._isStaff = isStaff;
     this._channelManager = RealtimeChannelManager.getInstance();
 
+    log.info("construct", { classId, profileId, isStaff });
+
     // Set the client on the channel manager
     this._channelManager.setClient(client);
 
@@ -113,6 +118,8 @@ export class OfficeHoursRealTimeController {
       return;
     }
 
+    log.info("init globals");
+
     // Session refresh is now handled by the channel manager
 
     // Initialize global help_queues channel
@@ -123,6 +130,7 @@ export class OfficeHoursRealTimeController {
       },
       async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
         console.log(`Help queues channel status: help_queues`, status, err);
+        log.debug("status", { topic: "help_queues", status, err: err?.message });
         this._notifyStatusChange();
       }
     );
@@ -140,6 +148,7 @@ export class OfficeHoursRealTimeController {
         },
         async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
           console.log(`Class staff channel status: ${staffChannelTopic}`, status, err);
+          log.debug("status", { topic: staffChannelTopic, status, err: err?.message });
           this._notifyStatusChange();
         }
       );
@@ -166,6 +175,7 @@ export class OfficeHoursRealTimeController {
         },
         async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
           console.log(`Help request channel status: ${mainChannelName}`, status, err);
+          log.debug("status", { topic: mainChannelName, status, err: err?.message });
           this._notifyStatusChange();
         }
       );
@@ -184,6 +194,7 @@ export class OfficeHoursRealTimeController {
           },
           async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
             console.log(`Help request staff channel status: ${staffChannelName}`, status, err);
+            log.debug("status", { topic: staffChannelName, status, err: err?.message });
             this._notifyStatusChange();
           }
         );
@@ -210,6 +221,7 @@ export class OfficeHoursRealTimeController {
         },
         async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
           console.log(`Help queue channel status: ${channelName}`, status, err);
+          log.debug("status", { topic: channelName, status, err: err?.message });
           this._notifyStatusChange();
         }
       );
@@ -228,6 +240,8 @@ export class OfficeHoursRealTimeController {
     if (message.type === "channel_created" || message.type === "system") {
       return;
     }
+
+    log.debug("broadcast", { type: message.type, table: message.table, op: message.operation, row_id: message.row_id });
 
     // Notify all relevant subscriptions
     for (const subscription of this._subscriptions.values()) {

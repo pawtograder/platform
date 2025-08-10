@@ -30,6 +30,9 @@ import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
 import { toaster } from "@/components/ui/toaster";
+import { createLogger } from "@/lib/DebugLogger";
+
+const log = createLogger("CourseControllerProvider");
 
 export function useUpdateThreadTeaser() {
   const { mutateAsync: updateThread } = useUpdate<DiscussionThread>({
@@ -845,49 +848,26 @@ export function CourseControllerProvider({
   course_id: number;
   children: React.ReactNode;
 }) {
-  const controller = useRef<CourseController | null>(null);
-  const client = createClient();
-  const [classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
-
-  // Initialize ClassRealTimeController
+  const controller = useRef<CourseController>(new CourseController(course_id));
+  const [isInitialized, setIsInitialized] = useState(false);
+  const currentController = controller.current;
   useEffect(() => {
-    const realTimeController = new ClassRealTimeController({
-      client,
-      classId: course_id,
-      profileId: profile_id,
-      isStaff: role === "instructor" || role === "grader"
-    });
-
-    setClassRealTimeController(realTimeController);
-
+    console.log("Initializing realtime controller", profile_id, role);
+    log.info("mount", { course_id, profile_id, role });
+    currentController.initializeRealTimeController(profile_id, role === "instructor" || role === "grader");
+    setIsInitialized(true);
     return () => {
-      realTimeController.close();
+      log.warn("cleanup (provider unmount)", { course_id });
+      currentController.classRealTimeController.close();
     };
-  }, [client, course_id, profile_id, role]);
-
-  // Initialize CourseController with required dependencies
-  if (!controller.current && classRealTimeController) {
-    controller.current = new CourseController(course_id, client, classRealTimeController);
-  }
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (controller.current) {
-        controller.current.close();
-        controller.current = null;
-      }
-    };
-  }, []);
-
-  if (!controller.current) {
+  }, [currentController, profile_id, role]);
+  if (!isInitialized) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />
       </Box>
     );
   }
-
   return (
     <CourseControllerContext.Provider value={controller.current}>
       <CourseControllerProviderImpl controller={controller.current} course_id={course_id} />

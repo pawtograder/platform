@@ -22,6 +22,9 @@ import {
 } from "@/utils/supabase/DatabaseTypes";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { Box, Spinner } from "@chakra-ui/react";
+import { createLogger } from "@/lib/DebugLogger";
+
+const log = createLogger("OfficeHoursControllerProvider");
 
 // Type for broadcast messages from the database trigger
 type DatabaseBroadcastMessage = {
@@ -304,6 +307,7 @@ export function OfficeHoursControllerProvider({
   const [officeHoursRealTimeController, setOfficeHoursRealTimeController] =
     useState<OfficeHoursRealTimeController | null>(null);
   useEffect(() => {
+    log.info("mount", { classId, profileId, role });
     setOfficeHoursRealTimeController(
       new OfficeHoursRealTimeController({
         client,
@@ -316,6 +320,7 @@ export function OfficeHoursControllerProvider({
 
   // Initialize controller with required dependencies
   if (!controller.current && officeHoursRealTimeController) {
+    log.info("construct OfficeHoursController");
     controller.current = new OfficeHoursController(classId, client, officeHoursRealTimeController);
   }
 
@@ -323,6 +328,7 @@ export function OfficeHoursControllerProvider({
     // Cleanup on unmount
     return () => {
       if (controller.current) {
+        log.warn("cleanup (provider unmount)", { classId });
         controller.current.close();
         controller.current = null;
       }
