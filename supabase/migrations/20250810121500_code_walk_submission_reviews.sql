@@ -69,7 +69,7 @@ END
 $function$;
 
 -- SECURITY DEFINER function to get or create a submission_review for a (submission_id, rubric_id)
-CREATE OR REPLACE FUNCTION public.get_or_create_submission_review(
+-- REMOVED get_or_create_submission_review RPC per request; reviews are auto-created on submission insert
   p_submission_id bigint,
   p_rubric_id bigint,
   p_class_id bigint,

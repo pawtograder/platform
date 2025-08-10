@@ -794,8 +794,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       handleReviewAssignmentChange();
       clearStateData();
       return true;
-    } catch (e) {
-      const errMsg = (e && typeof e === "object" && "message" in e && (e as any).message) || "An unexpected error occurred while confirming assignments";
+    } catch (e: unknown) {
+      const errMsg = (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
+        "An unexpected error occurred while confirming assignments";
       toaster.error({
         title: "Error confirming assignments",
         description: errMsg
@@ -812,32 +813,35 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
    */
   const submissionReviewIdForReview = useCallback(
     async (review: DraftReviewAssignment) => {
-      let submissionReviewId: number;
-      if (review.submission.submission_reviews.length > 0) {
-        submissionReviewId = review.submission.submission_reviews[0].id;
+      let submissionReviewId: number | undefined;
+      // Prefer in-memory submission reviews if available and matching rubric
+      const localMatch = review.submission.submission_reviews?.find((sr) => sr.rubric_id === selectedRubric?.id);
+      if (localMatch) {
+        submissionReviewId = localMatch.id;
       } else {
-        // Use RPC to get or create the submission review on the server (bypasses RLS for inserts)
-        const { data, error } = await supabase.rpc("get_or_create_submission_review", {
-          p_submission_id: review.submission.id,
-          p_rubric_id: selectedRubric?.id,
-          p_class_id: course_id,
-          p_name: selectedRubric?.name
-        });
-        if (error) {
-          toaster.error({ title: "Error creating submission review", description: error.message });
-          return 0;
+        // Lookup existing submission review (auto-created by trigger or backfilled)
+        const { data: sr, error } = await supabase
+          .from("submission_reviews")
+          .select("id")
+          .eq("submission_id", review.submission.id)
+          .eq("rubric_id", Number(selectedRubric?.id))
+          .single();
+        if (!error && sr) {
+          submissionReviewId = sr.id as number;
         }
-        submissionReviewId = Number(data);
       }
-      if (isNaN(submissionReviewId)) {
+      if (!submissionReviewId || isNaN(Number(submissionReviewId))) {
         toaster.error({
           title: "Error creating review assignments",
-          description: `Failed to find or create submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}`
+          description:
+            `Failed to find submission review for ${review.submitters.map((s) => s.profiles.name).join(", ")}. ` +
+            `Please ensure the rubric exists for this assignment.`
         });
+        return 0;
       }
-      return submissionReviewId;
+      return Number(submissionReviewId);
     },
-    [selectedRubric, course_id, supabase]
+    [selectedRubric, supabase]
   );
 
   useEffect(() => {
