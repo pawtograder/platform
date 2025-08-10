@@ -863,6 +863,9 @@ export function CourseControllerProvider({
 
     setClassRealTimeController(realTimeController);
 
+    // Ensure enhanced features are initialized
+    void realTimeController.start();
+
     return () => {
       realTimeController.close();
     };

@@ -72,8 +72,17 @@ export class RealtimeChannelManager {
    * Set the Supabase client to use for channel operations
    */
   setClient(client: SupabaseClient<Database>) {
-    this._client = client;
-    log.info("setClient invoked");
+    // Idempotent: keep the first client to avoid channel churn across providers
+    if (!this._client) {
+      this._client = client;
+      log.info("setClient invoked (initial)");
+      return;
+    }
+    if (this._client === client) {
+      log.debug("setClient invoked (same client; ignored)");
+      return;
+    }
+    log.warn("setClient invoked with different client; keeping original to avoid channel reset");
   }
 
   /**

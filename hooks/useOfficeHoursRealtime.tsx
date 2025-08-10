@@ -308,14 +308,14 @@ export function OfficeHoursControllerProvider({
     useState<OfficeHoursRealTimeController | null>(null);
   useEffect(() => {
     log.info("mount", { classId, profileId, role });
-    setOfficeHoursRealTimeController(
-      new OfficeHoursRealTimeController({
-        client,
-        classId,
-        profileId,
-        isStaff: role === "instructor" || role === "grader"
-      })
-    );
+    const rtc = new OfficeHoursRealTimeController({
+      client,
+      classId,
+      profileId,
+      isStaff: role === "instructor" || role === "grader"
+    });
+    setOfficeHoursRealTimeController(rtc);
+    void rtc.start();
   }, [client, classId, profileId, role]);
 
   // Initialize controller with required dependencies
