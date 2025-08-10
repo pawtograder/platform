@@ -300,7 +300,8 @@ class AssignmentsDependencySource extends DependencySourceBase {
           submission_id: r.submission_id as number,
           total_score: (r as unknown as { total_score: number | null }).total_score ?? null,
           released: (r as unknown as { released: boolean | null }).released ?? null,
-          review_round: (r as unknown as { rubrics: { review_round: string | null } | null }).rubrics?.review_round ?? null
+          review_round:
+            (r as unknown as { rubrics: { review_round: string | null } | null }).rubrics?.review_round ?? null
         });
       }
       if (reviews.length < pageSize) break;
@@ -308,12 +309,18 @@ class AssignmentsDependencySource extends DependencySourceBase {
     }
 
     // Build maps for quick lookup
-    const submissionByAssignmentAndStudent = new Map<string, { id: number; assignment_id: number; profile_id: string }>();
+    const submissionByAssignmentAndStudent = new Map<
+      string,
+      { id: number; assignment_id: number; profile_id: string }
+    >();
     for (const sub of allSubmissions) {
       submissionByAssignmentAndStudent.set(`${sub.assignment_id}:${sub.profile_id}`, sub);
     }
 
-    const reviewsBySubmission = new Map<number, Array<{ total_score: number | null; released: boolean | null; review_round: string | null }>>();
+    const reviewsBySubmission = new Map<
+      number,
+      Array<{ total_score: number | null; released: boolean | null; review_round: string | null }>
+    >();
     for (const rev of allReviews) {
       const arr = reviewsBySubmission.get(rev.submission_id) ?? [];
       arr.push(rev);
@@ -329,7 +336,7 @@ class AssignmentsDependencySource extends DependencySourceBase {
         if (!assignment || !assignment.slug) continue;
         const keySlug = assignment.slug;
         const class_id = assignment.class_id!;
-        const reviews = sub ? reviewsBySubmission.get(sub.id) ?? [] : [];
+        const reviews = sub ? (reviewsBySubmission.get(sub.id) ?? []) : [];
         // Aggregate scores by review_round
         const privateScoreByRound: Record<string, number | undefined> = {};
         const publicScoreByRound: Record<string, number | undefined> = {};
