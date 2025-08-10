@@ -3,8 +3,6 @@
 
 CREATE OR REPLACE FUNCTION public.gradebook_auto_layout(p_gradebook_id bigint)
 RETURNS void
-CREATE OR REPLACE FUNCTION public.gradebook_auto_layout(p_gradebook_id bigint)
-RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -168,5 +166,4 @@ BEGIN
 END;
 $$;
 
--- Allow API roles to call this RPC (RLS still applies due to SECURITY INVOKER)
 grant execute on function public.gradebook_auto_layout(bigint) to "anon", "authenticated", "service_role";
