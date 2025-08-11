@@ -26,8 +26,8 @@ export type TestingUser = {
   class_id: number;
 };
 
-export async function createClass() {
-  const className = `E2E Test Class`;
+export async function createClass({ name }: { name?: string } = {}) {
+  const className = name ?? `E2E Test Class`;
   const { data: classData, error: classError } = await supabase
     .from("classes")
     .insert({

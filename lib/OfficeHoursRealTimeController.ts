@@ -222,8 +222,6 @@ export class OfficeHoursRealTimeController {
    * Handle incoming broadcast messages and route them to relevant subscriptions
    */
   private _handleBroadcastMessage(message: OfficeHoursBroadcastMessage) {
-    console.log("Received office hours broadcast message:", message);
-
     // Skip system messages like channel_created
     if (message.type === "channel_created" || message.type === "system") {
       return;

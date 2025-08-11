@@ -130,7 +130,9 @@ export function useDiscussionThreadReadStatus(threadId: number) {
         });
       }
     },
-    [user?.id, createdThreadReadStatuses, controller, createThreadReadStatus, updateThreadReadStatus]
+    // OMG refine.dev mutateAsync is not stable!?
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user?.id, createdThreadReadStatuses, controller]
   );
   return { readStatus, setUnread };
 }
