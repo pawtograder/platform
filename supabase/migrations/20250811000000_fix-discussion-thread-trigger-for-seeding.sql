@@ -23,7 +23,7 @@ BEGIN
          NEW.root = NEW.id;
          root_subject = NEW.subject;
       else
-        SELECT discussion_threads.subject from discussion_threads into root_subject WHERE id=NEW.root; 
+        SELECT discussion_threads.subject INTO root_subject FROM discussion_threads WHERE id=NEW.root; 
       END if;
       SELECT name into reply_author_name from profiles where id=NEW.author; 
 

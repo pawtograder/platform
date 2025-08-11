@@ -3192,7 +3192,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
   try {
     // Create test class using TestingUtils
-    const testClass = await createClass();
+    const testClass = await createClass({ name: process.env.CLASS_NAME || "Test Class" });
     const class_id = testClass.id;
     console.log(`✓ Created test class: ${testClass.name} (ID: ${class_id})`);
 
@@ -3829,21 +3829,19 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     console.log(`\n🔐 Login Credentials:`);
     console.log(`\n   Instructor:`);
-    console.log(`     Email: ${instructors[0].email}`);
+    console.log(`     Sample email: ${instructors[0].email}`);
     console.log(`     Password: ${instructors[0].password}`);
 
     console.log(`\n   Graders (${graders.length} total):`);
     if (graders.length > 0) {
-      console.log(`     Email Template: ${graders[0].email.replace(/#\d+/, "#N")}`);
+      console.log(`     Sample email: ${graders[0].email}`);
       console.log(`     Password: ${graders[0].password}`);
-      console.log(`     Available Numbers: 1-${graders.length} `);
     }
 
     console.log(`\n   Students (${students.length} total):`);
     if (students.length > 0) {
-      console.log(`     Email Template: ${students[0].email.replace(/#\d+/, "#N")}`);
+      console.log(`     Sample email: ${students[0].email}`);
       console.log(`     Password: ${students[0].password}`);
-      console.log(`     Available Numbers: 1-${students.length}`);
     }
 
     console.log(`\n🔗 View the instructor dashboard at: /course/${class_id}`);
@@ -3903,7 +3901,7 @@ export async function runLargeScale() {
 }
 
 // Small-scale example for testing
-async function _runSmallScale() {
+async function runSmallScale() {
   const now = new Date();
 
   await seedInstructorDashboardData({
@@ -3914,7 +3912,7 @@ async function _runSmallScale() {
     firstAssignmentDate: subDays(now, 30), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
     numManualGradedColumns: 5, // 5 manual graded columns for small scale
-    gradingScheme: "specification", // Use specification grading scheme
+    gradingScheme: "current", // Use current grading scheme
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
@@ -3944,8 +3942,8 @@ async function _runSmallScale() {
       maxMembersPerRequest: 6
     },
     discussionConfig: {
-      postsPerTopic: faker.number.int({ min: 2, max: 4 }), // 2-4 posts per topic
-      maxRepliesPerPost: 32 // up to 32 replies per root post
+      postsPerTopic: faker.number.int({ min: 5, max: 16 }), // 5-16 posts per topic
+      maxRepliesPerPost: 16 // up to 16 replies per root post
     }
   });
 }
