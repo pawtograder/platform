@@ -55,7 +55,7 @@ export default function BulkAssignGradingPage() {
           </Link>
           <Text fontSize="sm" maxW="lg">
             Bulk assign grading, accounting for conflicts. This form will not allow you to re-assign work (see{" "}
-            <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/bulk-assign/reassign`}>
+            <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
               Reassigning Work
             </Link>
             ), and will only process submissions/rubric parts that have not been assigned yet.

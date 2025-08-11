@@ -26,8 +26,8 @@ export type TestingUser = {
   class_id: number;
 };
 
-export async function createClass() {
-  const className = `E2E Test Class`;
+export async function createClass({ name }: { name?: string } = {}) {
+  const className = name ?? `E2E Test Class`;
   const { data: classData, error: classError } = await supabase
     .from("classes")
     .insert({
@@ -115,7 +115,8 @@ export async function createUserInClass({
   section_id,
   lab_section_id,
   randomSuffix,
-  name
+  name,
+  email
 }: {
   role: "student" | "instructor" | "grader";
   class_id: number;
@@ -123,32 +124,100 @@ export async function createUserInClass({
   lab_section_id?: number;
   randomSuffix?: string;
   name?: string;
+  email?: string;
 }): Promise<TestingUser> {
   const password = process.env.TEST_PASSWORD || "change-it";
   const extra_randomness = randomSuffix ?? Math.random().toString(36).substring(2, 20);
   const workerIndex = process.env.TEST_WORKER_INDEX || "undefined-worker-index";
-  const email = `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
+  const resolvedEmail = email ?? `${role}-${workerIndex}-${extra_randomness}-${userIdx[role]}@pawtograder.net`;
   const resolvedName = name ? name : `${role.charAt(0).toUpperCase()}${role.slice(1)} #${userIdx[role]}Test`;
   const public_profile_name = name
     ? `Pseudonym #${userIdx[role]}`
     : `Pseudonym #${userIdx[role]} ${role.charAt(0).toUpperCase()}${role.slice(1)}`;
   const private_profile_name = `${resolvedName}`;
   userIdx[role]++;
-  const { data: userData, error: userError } = await supabase.auth.admin.createUser({
-    email: email,
+  // Try to create user, if it fails due to existing email, try to get the existing user
+  let userId: string;
+  const { data: newUserData, error: userError } = await supabase.auth.admin.createUser({
+    email: resolvedEmail,
     password: password,
     email_confirm: true
   });
+
   if (userError) {
-    console.error(userError);
-    throw new Error(`Failed to create user: ${userError.message}`);
+    // Check if error is due to user already existing
+    if (userError.message.includes("already exists") || userError.message.includes("already registered")) {
+      // eslint-disable-next-line no-console
+      console.log(`User with email ${resolvedEmail} already exists, attempting to retrieve...`);
+
+      // Try to get the user by email using getUserByEmail (if available)
+      try {
+        const { data: existingUserData, error: getUserError } = await supabase
+          .from("users")
+          .select("*")
+          .eq("email", resolvedEmail)
+          .single();
+        if (getUserError) {
+          throw new Error(`Failed to get existing user: ${getUserError.message}`);
+        }
+        userId = existingUserData.user_id;
+        // eslint-disable-next-line no-console
+        console.log(`Successfully retrieved existing user: ${resolvedEmail}`);
+      } catch {
+        // If getUserByEmail doesn't work, fall back to listing users
+        const { data: existingUsers, error: listError } = await supabase.auth.admin.listUsers();
+        if (listError) {
+          throw new Error(`Failed to list users and retrieve existing user: ${listError.message}`);
+        }
+        const existingUser = existingUsers.users.find((user) => user.email === resolvedEmail);
+        if (existingUser) {
+          userId = existingUser.id;
+          // eslint-disable-next-line no-console
+          console.log(`Found existing user via list: ${resolvedEmail}`);
+        } else {
+          throw new Error(`User creation failed and couldn't find existing user: ${userError.message}`);
+        }
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.error(userError);
+      throw new Error(`Failed to create user: ${userError.message}`);
+    }
+  } else {
+    // Handle both possible return structures from createUser
+    if (newUserData && "user" in newUserData && newUserData.user) {
+      userId = newUserData.user.id;
+    } else if (newUserData && "id" in newUserData) {
+      userId = (newUserData as unknown as { id: string }).id;
+    } else {
+      throw new Error("Failed to extract user ID from created user data");
+    }
+    // eslint-disable-next-line no-console
+    console.log(`Successfully created new user: ${resolvedEmail}`);
   }
-  if (class_id !== 1) {
-    const { data: publicProfileData, error: publicProfileError } = await supabase
+  // Check if user already has a role in this class
+  const { data: existingRole, error: roleCheckError } = await supabase
+    .from("user_roles")
+    .select("private_profile_id, public_profile_id")
+    .eq("user_id", userId)
+    .eq("class_id", class_id)
+    .single();
+
+  let publicProfileData, privateProfileData;
+
+  if (existingRole && !roleCheckError) {
+    // User already enrolled in class, get existing profile data
+    // eslint-disable-next-line no-console
+    console.log(`User already enrolled in class ${class_id}, using existing profiles`);
+    publicProfileData = { id: existingRole.public_profile_id };
+    privateProfileData = { id: existingRole.private_profile_id };
+  } else if (class_id !== 1) {
+    // User not enrolled or new class, create profiles and enrollment
+    const { data: newPublicProfileData, error: publicProfileError } = await supabase
       .from("profiles")
       .insert({
         name: public_profile_name,
-        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-user"}`,
         class_id: class_id,
         is_private_profile: false
       })
@@ -157,11 +226,12 @@ export async function createUserInClass({
     if (publicProfileError) {
       throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
     }
-    const { data: privateProfileData, error: privateProfileError } = await supabase
+
+    const { data: newPrivateProfileData, error: privateProfileError } = await supabase
       .from("profiles")
       .insert({
         name: private_profile_name,
-        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(email)}`,
+        avatar_url: `https://api.dicebear.com/9.x/identicon/svg?seed=${"test-private-user"}`,
         class_id: class_id,
         is_private_profile: true
       })
@@ -170,11 +240,16 @@ export async function createUserInClass({
     if (privateProfileError) {
       throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
     }
-    if (!publicProfileData || !privateProfileData) {
+
+    if (!newPublicProfileData || !newPrivateProfileData) {
       throw new Error("Failed to create public or private profile");
     }
+
+    publicProfileData = newPublicProfileData;
+    privateProfileData = newPrivateProfileData;
+
     await supabase.from("user_roles").insert({
-      user_id: userData.user.id,
+      user_id: userId,
       class_id: class_id,
       private_profile_id: privateProfileData.id,
       public_profile_id: publicProfileData.id,
@@ -189,13 +264,13 @@ export async function createUserInClass({
         class_section_id: section_id,
         lab_section_id: lab_section_id
       })
-      .eq("user_id", userData.user.id)
+      .eq("user_id", userId)
       .eq("class_id", class_id);
   }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
     .select("private_profile_id, public_profile_id")
-    .eq("user_id", userData.user.id)
+    .eq("user_id", userId)
     .eq("class_id", class_id)
     .single();
   if (!profileData || profileError) {
@@ -204,8 +279,8 @@ export async function createUserInClass({
   return {
     private_profile_name: private_profile_name,
     public_profile_name: public_profile_name,
-    email: email,
-    user_id: userData.user.id,
+    email: resolvedEmail,
+    user_id: userId,
     private_profile_id: profileData.private_profile_id,
     public_profile_id: profileData.public_profile_id,
     password: password,
@@ -263,6 +338,7 @@ export async function insertPreBakedSubmission({
     .select("id")
     .single();
   if (checkRunError) {
+    // eslint-disable-next-line no-console
     console.error(checkRunError);
     throw new Error("Failed to create check run");
   }
@@ -284,6 +360,7 @@ export async function insertPreBakedSubmission({
     .select("id")
     .single();
   if (submissionError) {
+    // eslint-disable-next-line no-console
     console.error(submissionError);
     throw new Error("Failed to create submission");
   }
@@ -323,6 +400,7 @@ public class Entrypoint {
     assignment_group_id: assignment_group_id
   });
   if (submissionFileError) {
+    // eslint-disable-next-line no-console
     console.error(submissionFileError);
     throw new Error("Failed to create submission file");
   }
@@ -342,6 +420,7 @@ public class Entrypoint {
     .select("id")
     .single();
   if (graderResultError) {
+    // eslint-disable-next-line no-console
     console.error(graderResultError);
     throw new Error("Failed to create grader result");
   }
@@ -374,6 +453,7 @@ public class Entrypoint {
     }
   ]);
   if (graderResultTestError) {
+    // eslint-disable-next-line no-console
     console.error(graderResultTestError);
     throw new Error("Failed to create grader result test");
   }
@@ -682,6 +762,7 @@ export async function insertSubmissionViaAPI({
     .select("id")
     .single();
   if (checkRunError) {
+    // eslint-disable-next-line no-console
     console.error(checkRunError);
     throw new Error("Failed to create check run");
   }
@@ -1018,8 +1099,25 @@ export async function createAssignmentsAndGradebookColumns({
 }> {
   // Import required dependencies
   const { addDays } = await import("date-fns");
-  const { all, ConstantNode, create, FunctionNode } = await import("mathjs");
+  const { all, create } = await import("mathjs");
   const { minimatch } = await import("minimatch");
+
+  // Define interfaces for mathjs node types to avoid using 'any'
+  interface MathJSNode {
+    type: string;
+    traverse: (callback: (node: MathJSNode) => void) => void;
+  }
+
+  interface FunctionNode extends MathJSNode {
+    type: "FunctionNode";
+    fn: { name: string };
+    args: MathJSNode[];
+  }
+
+  interface ConstantNode extends MathJSNode {
+    type: "ConstantNode";
+    value: unknown;
+  }
 
   // Helper function to extract dependencies from score expressions
   function extractDependenciesFromExpression(
@@ -1034,21 +1132,22 @@ export async function createAssignmentsAndGradebookColumns({
     const errors: string[] = [];
 
     try {
-      const exprNode = math.parse(expr);
+      const exprNode = math.parse(expr) as MathJSNode;
       const availableDependencies = {
         assignments: availableAssignments,
         gradebook_columns: availableColumns
       };
 
-      exprNode.traverse((node) => {
+      exprNode.traverse((node: MathJSNode) => {
         if (node.type === "FunctionNode") {
-          const functionNode = node as any;
+          const functionNode = node as FunctionNode;
           const functionName = functionNode.fn.name;
           if (functionName in availableDependencies) {
             const args = functionNode.args;
-            const argType = args[0].type;
-            if (argType === "ConstantNode") {
-              const argName = (args[0] as any).value;
+            const firstArg = args[0];
+            if (firstArg && firstArg.type === "ConstantNode") {
+              const constantNode = firstArg as ConstantNode;
+              const argName = constantNode.value;
               if (typeof argName === "string") {
                 const matching = availableDependencies[functionName as keyof typeof availableDependencies].filter((d) =>
                   minimatch(d.slug!, argName)
@@ -1068,6 +1167,7 @@ export async function createAssignmentsAndGradebookColumns({
       });
 
       if (errors.length > 0) {
+        // eslint-disable-next-line no-console
         console.warn(`Dependency extraction warnings for expression "${expr}": ${errors.join(", ")}`);
       }
 
@@ -1082,6 +1182,7 @@ export async function createAssignmentsAndGradebookColumns({
       }
       return flattenedDependencies;
     } catch (error) {
+      // eslint-disable-next-line no-console
       console.warn(`Failed to parse expression "${expr}": ${error}`);
       throw error;
     }
@@ -1575,6 +1676,7 @@ export async function createAssignmentsAndGradebookColumns({
     const updatePromises = students.map(async (student, index) => {
       const existingRecord = existingRecords.find((record) => record.student_id === student.private_profile_id);
       if (!existingRecord) {
+        // eslint-disable-next-line no-console
         console.warn(`No gradebook column student record found for student ${student.email}`);
         return;
       }

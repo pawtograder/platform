@@ -18,7 +18,9 @@ import {
   useGradebookColumns,
   useGradebookController,
   useStudentDetailView,
-  useAreAllDependenciesReleased
+  useAreAllDependenciesReleased,
+  useGradebookRefetchStatus,
+  useStudentColumnIndexStatus
 } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -84,7 +86,8 @@ import {
   LuChevronDown,
   LuChevronRight,
   LuCalculator,
-  LuFile
+  LuFile,
+  LuLayoutGrid
 } from "react-icons/lu";
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
 import pluralize from "pluralize";
@@ -1151,6 +1154,10 @@ function GradebookColumnHeader({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConvertingMissing, setIsConvertingMissing] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [isMovingLeft, setIsMovingLeft] = useState(false);
+  const [isMovingRight, setIsMovingRight] = useState(false);
+  const [isReleasing, setIsReleasing] = useState(false);
+  const [isUnreleasing, setIsUnreleasing] = useState(false);
   const supabase = createClient();
   const invalidate = useInvalidate();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -1159,60 +1166,127 @@ function GradebookColumnHeader({
 
   const moveLeft = useCallback(async () => {
     if (column.sort_order == null || column.sort_order === 0) return;
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order!
-      })
-      .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", column.sort_order! - 1);
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order! - 1
-      })
-      .eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
+
+    setIsMovingLeft(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_column_move_left", {
+        p_column_id: column_id
+      });
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column moved left",
+        description: `Successfully moved "${column.name}" to the left`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to move column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsMovingLeft(false);
+    }
   }, [column_id, column, invalidate, supabase]);
 
   const moveRight = useCallback(async () => {
     if (column.sort_order == null) return;
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: column.sort_order!
-      })
-      .eq("gradebook_id", column.gradebook_id)
-      .eq("sort_order", (column.sort_order ?? 0) + 1);
-    await supabase
-      .from("gradebook_columns")
-      .update({
-        sort_order: (column.sort_order ?? 0) + 1
-      })
-      .eq("id", column_id);
-  }, [column_id, column, supabase]);
+
+    setIsMovingRight(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_column_move_right", {
+        p_column_id: column_id
+      });
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column moved right",
+        description: `Successfully moved "${column.name}" to the right`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to move column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsMovingRight(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const releaseColumn = useCallback(async () => {
-    await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
-  }, [column_id, invalidate, supabase]);
+    setIsReleasing(true);
+    try {
+      const { error } = await supabase.from("gradebook_columns").update({ released: true }).eq("id", column_id);
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column released",
+        description: `Successfully released "${column.name}" column`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to release column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsReleasing(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const unreleaseColumn = useCallback(async () => {
-    await supabase.from("gradebook_columns").update({ released: false }).eq("id", column_id);
-    await invalidate({
-      resource: "gradebook_columns",
-      id: column_id,
-      invalidates: ["all"]
-    });
-  }, [column_id, invalidate, supabase]);
+    setIsUnreleasing(true);
+    try {
+      const { error } = await supabase.from("gradebook_columns").update({ released: false }).eq("id", column_id);
+
+      if (error) throw error;
+
+      await invalidate({
+        resource: "gradebook_columns",
+        id: column_id,
+        invalidates: ["all"]
+      });
+
+      toaster.create({
+        title: "Column unreleased",
+        description: `Successfully unreleased "${column.name}" column`,
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Failed to unrelease column",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsUnreleasing(false);
+    }
+  }, [column_id, column, invalidate, supabase]);
 
   const toolTipText = useMemo(() => {
     const ret: string[] = [];
@@ -1325,22 +1399,32 @@ function GradebookColumnHeader({
                 <Icon as={LuPencil} boxSize={3} mr={2} />
                 Edit Column
               </MenuItem>
-              <MenuItem value="moveLeft" onClick={moveLeft}>
-                <Icon as={LuArrowLeft} boxSize={3} mr={2} />
+              <MenuItem
+                value="moveLeft"
+                onClick={moveLeft}
+                disabled={isMovingLeft || isMovingRight}
+                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+              >
+                {isMovingLeft ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowLeft} boxSize={3} mr={2} />}
                 Move Left
               </MenuItem>
-              <MenuItem value="moveRight" onClick={moveRight}>
-                <Icon as={LuArrowRight} boxSize={3} mr={2} />
+              <MenuItem
+                value="moveRight"
+                onClick={moveRight}
+                disabled={isMovingLeft || isMovingRight}
+                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+              >
+                {isMovingRight ? <Spinner size="xs" mr={2} /> : <Icon as={LuArrowRight} boxSize={3} mr={2} />}
                 Move Right
               </MenuItem>
               <MenuSeparator />
               <MenuItem
                 value="release"
                 onClick={releaseColumn}
-                disabled={!!column.score_expression}
+                disabled={!!column.score_expression || isReleasing || isUnreleasing}
                 _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
               >
-                <Icon as={LuCheck} boxSize={3} mr={2} />
+                {isReleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuCheck} boxSize={3} mr={2} />}
                 Release Column
                 {column.score_expression && (
                   <WrappedTooltip content="Auto-calculated columns cannot be manually released">
@@ -1353,10 +1437,10 @@ function GradebookColumnHeader({
               <MenuItem
                 value="unrelease"
                 onClick={unreleaseColumn}
-                disabled={!!column.score_expression}
+                disabled={!!column.score_expression || isReleasing || isUnreleasing}
                 _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
               >
-                <Icon as={LuX} boxSize={3} mr={2} />
+                {isUnreleasing ? <Spinner size="xs" mr={2} /> : <Icon as={LuX} boxSize={3} mr={2} />}
                 Unrelease Column
                 {column.score_expression && (
                   <WrappedTooltip content="Auto-calculated columns cannot be manually unreleased">
@@ -1535,9 +1619,12 @@ export default function GradebookTable() {
   const { allVisibleRoles } = useClassProfiles();
   const gradebookColumns = useGradebookColumns();
   const isInstructor = useIsInstructor();
+  const isRefetching = useGradebookRefetchStatus();
+  const isStudentColumnIndexPopulated = useStudentColumnIndexStatus();
 
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [isAutoLayouting, setIsAutoLayouting] = useState(false);
 
   // Fetch class sections
   const { data: classSections } = useList<ClassSection>({
@@ -1591,7 +1678,7 @@ export default function GradebookTable() {
   }));
   columnsForGrouping.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   const cachedColumnsKey = JSON.stringify(columnsForGrouping);
-  // Group gradebook columns by slug prefix before first hyphen
+  // Group gradebook columns by slug prefix, with special handling for assignment sub-groups
   const groupedColumns = useMemo(() => {
     const groups: Record<string, { groupName: string; columns: typeof columnsForGrouping }> = {};
     const columns = JSON.parse(cachedColumnsKey) as typeof columnsForGrouping;
@@ -1603,9 +1690,17 @@ export default function GradebookTable() {
     let lastSortOrder = -1;
 
     columns.forEach((col) => {
-      // Extract prefix before first hyphen
-      const prefix = col.slug.split("-")[0];
-      const baseGroupName = prefix || "other";
+      const slugParts = col.slug.split("-");
+      let baseGroupName: string;
+
+      // Special handling for assignment columns
+      if (slugParts[0] === "assignment" && slugParts.length >= 3) {
+        // For assignment-assignment-*, assignment-lab-*, etc., use "assignment-{type}" as the base group
+        baseGroupName = `${slugParts[0]}-${slugParts[1]}`;
+      } else {
+        // For all other columns, use the first part as the base group
+        baseGroupName = slugParts[0] || "other";
+      }
 
       // Check if this column is contiguous with the previous one
       const currentSortOrder = col.sort_order ?? 0;
@@ -1620,8 +1715,20 @@ export default function GradebookTable() {
       const groupKey = `${baseGroupName}-${currentGroupIndex}`;
 
       if (!groups[groupKey]) {
+        // Format group name for display
+        let displayName: string;
+        if (baseGroupName === "other") {
+          displayName = "Other";
+        } else if (baseGroupName.startsWith("assignment-")) {
+          // For assignment sub-groups, capitalize and format nicely
+          const subType = baseGroupName.split("-")[1];
+          displayName = `${subType.charAt(0).toUpperCase() + subType.slice(1)}`;
+        } else {
+          displayName = baseGroupName.charAt(0).toUpperCase() + baseGroupName.slice(1);
+        }
+
         groups[groupKey] = {
-          groupName: baseGroupName === "other" ? "Other" : baseGroupName,
+          groupName: displayName,
           columns: []
         };
       }
@@ -1637,7 +1744,6 @@ export default function GradebookTable() {
   useEffect(() => {
     const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
     const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
-
     setCollapsedGroups((prev) => {
       const newSet = new Set<string>();
 
@@ -1657,30 +1763,98 @@ export default function GradebookTable() {
     });
   }, [groupedColumns]);
 
-  // Toggle group collapse/expand using base group name
-  const toggleGroup = useCallback((baseGroupName: string) => {
-    setCollapsedGroups((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(baseGroupName)) {
-        newSet.delete(baseGroupName);
-      } else {
-        newSet.add(baseGroupName);
+  // Force recalculation helper
+  const forceRecalculation = useCallback(() => {
+    setTimeout(() => {
+      // Recalculate header height
+      if (headerRef.current) {
+        const height = headerRef.current.offsetHeight;
+        setHeaderHeight(height);
       }
-      return newSet;
-    });
-  }, []);
+
+      // Recalculate first column width
+      if (students && students.length > 0) {
+        const tempElement = document.createElement("div");
+        tempElement.style.position = "absolute";
+        tempElement.style.visibility = "hidden";
+        tempElement.style.whiteSpace = "nowrap";
+        tempElement.style.fontSize = "14px";
+        tempElement.style.fontFamily = "inherit";
+        document.body.appendChild(tempElement);
+
+        let maxWidth = 180;
+        students.forEach((student) => {
+          tempElement.textContent = student.name || student.short_name || "Unknown Student";
+          const textWidth = tempElement.offsetWidth;
+          maxWidth = Math.max(maxWidth, textWidth + 60);
+        });
+
+        document.body.removeChild(tempElement);
+        const finalWidth = Math.min(maxWidth, 400);
+        setFirstColumnWidth(finalWidth);
+      }
+    }, 50);
+  }, [students]);
+
+  // Toggle group collapse/expand using base group name
+  const toggleGroup = useCallback(
+    (baseGroupName: string) => {
+      setCollapsedGroups((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(baseGroupName)) {
+          newSet.delete(baseGroupName);
+        } else {
+          newSet.add(baseGroupName);
+        }
+        return newSet;
+      });
+
+      // Force recalculation after toggle to fix alignment
+      forceRecalculation();
+    },
+    [forceRecalculation]
+  );
+
+  const autoLayout = useCallback(async () => {
+    const supabase = createClient();
+
+    setIsAutoLayouting(true);
+    try {
+      const { error } = await supabase.rpc("gradebook_auto_layout", {
+        p_gradebook_id: gradebookController.gradebook_id
+      });
+
+      if (error) throw error;
+
+      toaster.create({
+        title: "Auto-layout complete",
+        description: "Successfully reorganized gradebook columns",
+        type: "success"
+      });
+    } catch (error) {
+      toaster.create({
+        title: "Auto-layout failed",
+        description: error instanceof Error ? error.message : "An unexpected error occurred",
+        type: "error"
+      });
+    } finally {
+      setIsAutoLayouting(false);
+    }
+  }, [gradebookController]);
 
   // Expand all groups
   const expandAll = useCallback(() => {
     setCollapsedGroups(new Set());
-  }, []);
+    forceRecalculation();
+  }, [forceRecalculation]);
 
   // Collapse all groups
   const collapseAll = useCallback(() => {
     const allGroupKeys = Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1);
     const baseGroupNames = [...new Set(allGroupKeys.map((key) => groupedColumns[key].groupName))];
     setCollapsedGroups(new Set(baseGroupNames));
-  }, [groupedColumns]);
+    forceRecalculation();
+  }, [groupedColumns, forceRecalculation]);
 
   // Helper function to find the best column to show when collapsed
   const findBestColumnToShow = useCallback(
@@ -1928,10 +2102,33 @@ export default function GradebookTable() {
     calculateFirstColumnWidth();
   }, [calculateFirstColumnWidth]);
 
-  // Calculate header height after render
+  // Calculate header height after render and when columns/groups change
   useEffect(() => {
     calculateHeaderHeight();
-  }, [calculateHeaderHeight, gradebookColumns.length]);
+  }, [calculateHeaderHeight, gradebookColumns.length, groupedColumns, collapsedGroups]);
+
+  // Force recalculation after a short delay to handle async rendering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      forceRecalculation();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [forceRecalculation, groupedColumns, collapsedGroups]);
+
+  // Add ResizeObserver to handle layout changes
+  useEffect(() => {
+    if (!parentRef.current) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      forceRecalculation();
+    });
+
+    resizeObserver.observe(parentRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [forceRecalculation]);
 
   const virtualizer = useVirtualizer({
     count: rowModel.rows.length,
@@ -1952,6 +2149,8 @@ export default function GradebookTable() {
       return (
         <Table.Row
           key={`${row.id}-${virtualRow.index}`}
+          role="row"
+          aria-label={`Student ${row.original.name || "Unknown"} grades`}
           bg={idx % 2 === 0 ? "bg.subtle" : "bg.muted"}
           _hover={{ bg: "bg.info" }}
           style={{
@@ -2051,12 +2250,43 @@ export default function GradebookTable() {
     [rowModel.rows, toggleGroup, firstColumnWidth, headerHeight, isSafari]
   );
 
-  if (!students) {
-    return <Spinner />;
+  if (!students || !isStudentColumnIndexPopulated) {
+    return (
+      <VStack gap={2} align="center" justify="center" minH="40vh">
+        <Spinner size="lg" color="blue.500" />
+        <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
+          {!students ? "Loading students..." : "Loading gradebook data..."}
+        </Text>
+      </VStack>
+    );
   }
 
   return (
-    <VStack align="stretch" w="100%" gap={0}>
+    <VStack align="stretch" w="100%" gap={0} position="relative">
+      {/* Refetch loading overlay */}
+      {(isRefetching || !isStudentColumnIndexPopulated) && (
+        <Box
+          position="absolute"
+          top={0}
+          left={0}
+          right={0}
+          bottom={0}
+          bg="rgba(255, 255, 255, 0.8)"
+          zIndex={1000}
+          display="flex"
+          alignItems="center"
+          justifyContent="center"
+          borderRadius="md"
+        >
+          <VStack gap={2}>
+            <Spinner size="lg" color="blue.500" />
+            <Text fontSize="sm" color="fg.emphasized" fontWeight="medium">
+              {isRefetching ? "Refreshing gradebook data..." : "Loading gradebook index..."}
+            </Text>
+          </VStack>
+        </Box>
+      )}
+
       <style jsx global>{`
         tr:hover .sticky-first-cell {
           background-color: var(--chakra-colors-bg-info) !important;
@@ -2064,10 +2294,23 @@ export default function GradebookTable() {
       `}</style>
       <Toaster />
       <StudentDetailDialog />
-      <Box ref={parentRef} overflowX="auto" overflowY="auto" maxW="100%" maxH="80vh" height="80vh" position="relative">
+      <Box
+        ref={parentRef}
+        overflowX="auto"
+        overflowY="auto"
+        maxW="100%"
+        maxH="80vh"
+        height="80vh"
+        position="relative"
+        role="region"
+        aria-label="Instructor Gradebook Table"
+        tabIndex={0}
+      >
         <Table.Root
           minW="100%"
           w="100%"
+          role="table"
+          aria-label="Student grades by assignment"
           style={{ tableLayout: "fixed", width: "100%", margin: 0, padding: 0, borderSpacing: 0, position: "relative" }}
         >
           <Table.Header
@@ -2227,6 +2470,20 @@ export default function GradebookTable() {
                         Object.keys(groupedColumns).filter((key) => groupedColumns[key].columns.length > 1).length >
                           0 && (
                           <HStack gap={1} justifyContent="flex-end" position="absolute" top={1} right={1} zIndex={22}>
+                            <WrappedTooltip content="Auto-layout columns">
+                              <IconButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={autoLayout}
+                                colorPalette="blue"
+                                aria-label="Auto-layout columns"
+                                disabled={isAutoLayouting}
+                                _disabled={{ opacity: 0.5, cursor: "not-allowed" }}
+                              >
+                                {isAutoLayouting ? <Spinner size="xs" /> : <Icon as={LuLayoutGrid} boxSize={3} />}
+                              </IconButton>
+                            </WrappedTooltip>
+
                             <WrappedTooltip content="Expand all groups">
                               <IconButton
                                 variant="ghost"
