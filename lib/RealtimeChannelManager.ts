@@ -272,7 +272,9 @@ export class RealtimeChannelManager {
     if (!managedChannel) {
       // Create new channel and subscription
       await this._refreshSessionIfNeeded(client);
+      console.log(`Joining channel ${topic}`);
       const channel = client.channel(topic, { config: { private: true } });
+      console.log(`Channel ${topic} initialized?`);
 
       managedChannel = {
         channel,
@@ -291,6 +293,7 @@ export class RealtimeChannelManager {
 
       // Subscribe to the channel (this should only happen once per topic)
       channel.subscribe(async (status, err) => {
+        console.log("Subscription status:", status, err);
         this._handleSubscriptionStateEvent(topic, status, err);
       });
 
@@ -308,6 +311,7 @@ export class RealtimeChannelManager {
 
     // Return unsubscribe function that removes this specific subscription
     return () => {
+      console.log("Unsubscribing from channel:", topic);
       const index = managedChannel.subscriptions.indexOf(subscription);
       if (index > -1) {
         managedChannel.subscriptions.splice(index, 1);
@@ -342,6 +346,7 @@ export class RealtimeChannelManager {
    * Handle subscription state events and notify all subscribed controllers
    */
   private _handleSubscriptionStateEvent(topic: string, status: REALTIME_SUBSCRIBE_STATES, err?: Error) {
+    console.log("Subscription state event:", topic, status, err);
     const managedChannel = this._channels.get(topic);
     if (!managedChannel) return;
 
@@ -396,7 +401,9 @@ export class RealtimeChannelManager {
    * Refresh the session token if needed and set it for Supabase Realtime
    */
   private async _refreshSessionIfNeeded(client: SupabaseClient<Database>) {
+    console.log("Checking session");
     const { data, error } = await client.auth.getSession();
+    console.log("Session data", data);
     if (error) {
       throw error;
     }
@@ -404,6 +411,7 @@ export class RealtimeChannelManager {
       throw new Error("Session not found");
     }
     if (client.realtime.accessTokenValue !== data.session.access_token) {
+      console.log("Setting auth");
       await client.realtime.setAuth(data.session.access_token);
     }
   }
@@ -498,6 +506,8 @@ export class RealtimeChannelManager {
    */
   private async _resubscribeToChannel(topic: string): Promise<void> {
     const managedChannel = this._channels.get(topic);
+    console.log("Resubscribing to channel:", topic);
+    console.log("Managed channel:", managedChannel);
     if (!managedChannel) return;
 
     try {
@@ -519,6 +529,7 @@ export class RealtimeChannelManager {
       // Subscribe to the new channel with improved error handling
       newChannel.subscribe(async (status, err) => {
         // Use a different handler to prevent infinite recursion
+        console.log("Subscription status:", status, err);
         this._handleReconnectionStateEvent(topic, status, err);
       });
 
@@ -582,6 +593,7 @@ export class RealtimeChannelManager {
    */
   async resubscribeToAllChannels() {
     try {
+      console.log("Resubscribing to all channels");
       const topics = Array.from(this._channels.keys());
 
       for (const topic of topics) {
@@ -603,6 +615,7 @@ export class RealtimeChannelManager {
    * Disconnect all channels (useful for tab visibility changes)
    */
   disconnectAllChannels() {
+    console.log("Disconnecting all channels");
     for (const managedChannel of this._channels.values()) {
       // Reset reconnection state
       managedChannel.isReconnecting = false;
@@ -629,6 +642,7 @@ export class RealtimeChannelManager {
    * Force cleanup of all channels (use with caution)
    */
   cleanup() {
+    console.log("Cleaning up channels");
     for (const managedChannel of this._channels.values()) {
       managedChannel.channel.unsubscribe();
       managedChannel.client.removeChannel(managedChannel.channel);

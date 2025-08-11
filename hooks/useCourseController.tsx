@@ -216,6 +216,7 @@ export class CourseController {
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   private _classRealTimeController: ClassRealTimeController | null = null;
+  
 
   // TableController instances for each table
   readonly profiles: TableController<"profiles">;
@@ -832,12 +833,16 @@ export function CourseControllerProvider({
   course_id: number;
   children: React.ReactNode;
 }) {
-  const controller = useRef<CourseController | null>(null);
+  // const controller = useRef<CourseController | null>(null);
   const client = createClient();
-  const [classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
+  const [courseController, setCourseController] = useState<CourseController | null>(null);
 
   // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
+    const initializationID = Math.random().toString(36).substring(2, 15);
+    console.log(`Initializing ClassRealTimeController ${initializationID}`);
     let cancelled = false;
     const realTimeController = new ClassRealTimeController({
       client,
@@ -845,14 +850,19 @@ export function CourseControllerProvider({
       profileId: profile_id,
       isStaff: role === "instructor" || role === "grader"
     });
+    let _courseController: CourseController | null = null;
 
     const start = async () => {
       try {
         await realTimeController.start();
+        _courseController = new CourseController(course_id, client, realTimeController);
+
         if (cancelled) {
+          console.log(`Cancelling ClassRealTimeController ${initializationID}`);
           await realTimeController.close();
           return;
         }
+        setCourseController(_courseController);
         setClassRealTimeController(realTimeController);
       } catch (e) {
         // eslint-disable-next-line no-console
@@ -860,30 +870,18 @@ export function CourseControllerProvider({
         await realTimeController.close();
       }
     };
-    void start();
+    start();
 
     return () => {
+      console.log(`Cancelling ClassRealTimeController ${initializationID}`);
       cancelled = true;
       realTimeController.close();
+      _courseController?.close();
     };
   }, [client, course_id, profile_id, role]);
 
-  // Initialize CourseController with required dependencies
-  if (!controller.current && classRealTimeController) {
-    controller.current = new CourseController(course_id, client, classRealTimeController);
-  }
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (controller.current) {
-        controller.current.close();
-        controller.current = null;
-      }
-    };
-  }, []);
-
-  if (!controller.current) {
+  if (!courseController) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
         <Spinner />
@@ -892,8 +890,8 @@ export function CourseControllerProvider({
   }
 
   return (
-    <CourseControllerContext.Provider value={controller.current}>
-      <CourseControllerProviderImpl controller={controller.current} course_id={course_id} />
+    <CourseControllerContext.Provider value={courseController}>
+      <CourseControllerProviderImpl controller={courseController} course_id={course_id} />
       {children}
     </CourseControllerContext.Provider>
   );
