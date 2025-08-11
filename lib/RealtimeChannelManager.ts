@@ -562,6 +562,7 @@ export class RealtimeChannelManager {
 
       case REALTIME_SUBSCRIBE_STATES.CLOSED:
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
+        console.debug("Channel manager debug info:", this.getDebugInfo());
         console.debug("Channel closed or timed out:", topic, managedChannel.channel);
         managedChannel.isReconnecting = false;
         break;

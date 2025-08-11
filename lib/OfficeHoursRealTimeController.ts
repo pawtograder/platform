@@ -121,6 +121,7 @@ export class OfficeHoursRealTimeController {
       },
       async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
         console.debug("Office Hours Client all channels:", this._client.getChannels());
+        console.debug("Help queues channel manager: ", this._channelManager.getDebugInfo());
         console.log(`Help queues channel status: help_queues`, status, err);
         this._notifyStatusChange();
       }

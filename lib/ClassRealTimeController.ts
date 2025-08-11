@@ -152,6 +152,7 @@ export class ClassRealTimeController {
         break;
       }
       case REALTIME_SUBSCRIBE_STATES.CLOSED: {
+        console.debug("Class Client debug info:", this.getDebugInfo());
         console.debug(`Channel closed '${channelName}'`);
         this._notifyStatusChange();
         break;
