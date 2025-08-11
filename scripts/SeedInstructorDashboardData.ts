@@ -19,7 +19,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 dotenv.config({ path: ".env.local" });
 
 export const RANDOM_SEED = 100;
-const RECYCLE_USERS_KEY = "jon-test";
+const RECYCLE_USERS_KEY = process.env.RECYCLE_USERS_KEY || "demo";
 faker.seed(RANDOM_SEED);
 
 const limiter = new Bottleneck({
