@@ -282,7 +282,20 @@ export class ClassRealTimeController {
     return channel.topic;
   }
 
+  private static broadcastCounter = new Map<string, number>();
+
   private _handleBroadcastMessage(message: BroadcastMessage) {
+    const key = `${message.type}-${message.table || "unknown"}-${message.operation || "none"}`;
+    const current = ClassRealTimeController.broadcastCounter.get(key) || 0;
+    ClassRealTimeController.broadcastCounter.set(key, current + 1);
+
+    // Log summary every 100 broadcasts
+    const total = Array.from(ClassRealTimeController.broadcastCounter.values()).reduce((sum, count) => sum + count, 0);
+
+    if (total % 100 === 0) {
+      console.log("Broadcast Summary:", Object.fromEntries(ClassRealTimeController.broadcastCounter));
+    }
+
     // Normalize custom payload types from SQL functions to the standard type expected by listeners
     // SQL may emit type "staff_data_change"; treat it as "table_change" for downstream consumers
     const normalized: BroadcastMessage =
