@@ -216,7 +216,6 @@ export class CourseController {
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   private _classRealTimeController: ClassRealTimeController | null = null;
-  
 
   // TableController instances for each table
   readonly profiles: TableController<"profiles">;
@@ -879,7 +878,6 @@ export function CourseControllerProvider({
       _courseController?.close();
     };
   }, [client, course_id, profile_id, role]);
-
 
   if (!courseController) {
     return (
