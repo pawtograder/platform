@@ -14,6 +14,7 @@ type FormData = {
   email: string;
   name: string;
   role: "student" | "grader" | "instructor";
+  notify?: boolean;
 };
 
 export default function AddSingleStudent() {
@@ -33,10 +34,10 @@ export default function AddSingleStudent() {
       });
       const supabase = createClient();
       try {
-        await enrollmentAdd(
-          { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
-          supabase
-        );
+                 await enrollmentAdd(
+           { courseId: Number(course_id), email: data.email, name: data.name, role: data.role, notify: !!data.notify },
+           supabase
+         );
         toaster.create({
           title: "Student added",
           description: "Refreshing user_roles",
@@ -94,6 +95,12 @@ export default function AddSingleStudent() {
                   </NativeSelect.Field>
                 </NativeSelect.Root>
                 <Field.ErrorText>{errors.role?.message}</Field.ErrorText>
+              </Field.Root>
+              <Field.Root>
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input type="checkbox" {...register("notify")} />
+                  Notify user they were added to this course
+                </label>
               </Field.Root>
               <Button type="submit" mt={2}>
                 Add Student
