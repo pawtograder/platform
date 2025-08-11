@@ -128,6 +128,7 @@ export class RealtimeChannelManager {
     for (const managedChannel of this._channels.values()) {
       for (const subscription of managedChannel.subscriptions) {
         try {
+          console.debug("Notifying subscription of offline event:", subscription, managedChannel.channel);
           subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
         } catch (error) {
           console.error("Error notifying subscription of offline event:", error);
@@ -561,6 +562,7 @@ export class RealtimeChannelManager {
 
       case REALTIME_SUBSCRIBE_STATES.CLOSED:
       case REALTIME_SUBSCRIBE_STATES.TIMED_OUT:
+        console.debug("Channel closed or timed out:", topic, managedChannel.channel);
         managedChannel.isReconnecting = false;
         break;
     }
@@ -614,6 +616,7 @@ export class RealtimeChannelManager {
     for (const managedChannel of this._channels.values()) {
       for (const subscription of managedChannel.subscriptions) {
         try {
+          console.debug("Notifying subscription of disconnection:", subscription, managedChannel.channel);
           subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
         } catch (error) {
           console.error("Error notifying subscription of disconnection:", error);
