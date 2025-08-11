@@ -400,17 +400,17 @@ export class GradebookController {
   public studentSubmissions: Map<string, SubmissionWithGrades[]> = new Map();
 
   // Helper method to generate index key for student/column pair
-  private getStudentColumnKey(student_id: string, column_id: number): string {
-    return `${student_id}:${column_id}`;
+  private getStudentColumnKey(student_id: string, column_id: number, isPrivate: boolean): string {
+    return `${student_id}:${column_id}:${isPrivate}`;
   }
 
   // Update the specialized index when gradebook_column_students data changes
   private updateStudentColumnIndex() {
     this.studentColumnIndex.clear();
     this.gradebook_column_students.rows.forEach((student) => {
-      // Index all student records regardless of is_private value
+      // Index all student records with is_private distinction
       // The query already filters by appropriate is_private value based on user role
-      const key = this.getStudentColumnKey(student.student_id, student.gradebook_column_id);
+      const key = this.getStudentColumnKey(student.student_id, student.gradebook_column_id, student.is_private);
       this.studentColumnIndex.set(key, student.id);
     });
 
@@ -600,15 +600,23 @@ export class GradebookController {
   subscribeStudentColumnPair(
     student_id: string,
     column_id: number,
-    cb: (item: GradebookColumnStudent | undefined) => void
+    cb: (item: GradebookColumnStudent | undefined) => void,
+    preferPrivate: boolean = this._isInstructorOrGrader // If true, prefer private records, otherwise prefer non-private
   ) {
     // Get initial value
     const initialValue = this.getGradebookColumnStudent(column_id, student_id);
     cb(initialValue);
 
-    // Get the record ID for this student/column pair
-    const key = this.getStudentColumnKey(student_id, column_id);
-    const studentId = this.studentColumnIndex.get(key);
+    // Try to get the appropriate record based on user role
+    // Instructors/graders prefer private records, students get non-private
+    let key = this.getStudentColumnKey(student_id, column_id, preferPrivate);
+    let studentId = this.studentColumnIndex.get(key);
+
+    // If preferred record doesn't exist, try the other type
+    if (!studentId) {
+      key = this.getStudentColumnKey(student_id, column_id, !preferPrivate);
+      studentId = this.studentColumnIndex.get(key);
+    }
 
     if (!studentId) {
       // If no record exists, subscribe to list changes to catch when it's created
@@ -646,7 +654,7 @@ export class GradebookController {
 
     const students: GradebookColumnStudent[] = [];
     this.studentColumnIndex.forEach((studentId, key) => {
-      // Extract column_id from the key (format: "student_id:column_id")
+      // Extract column_id from the key (format: "student_id:column_id:isPrivate")
       const keyParts = key.split(":");
       const keyColumnId = parseInt(keyParts[1]);
 
@@ -683,7 +691,7 @@ export class GradebookController {
 
     const columns: GradebookColumnStudent[] = [];
     this.studentColumnIndex.forEach((studentId, key) => {
-      // Extract student_id from the key (format: "student_id:column_id")
+      // Extract student_id from the key (format: "student_id:column_id:isPrivate")
       const keyParts = key.split(":");
       const keyStudentId = keyParts[0];
 
@@ -722,8 +730,17 @@ export class GradebookController {
       // return undefined;
     }
 
-    const key = this.getStudentColumnKey(student_id, column_id);
-    const studentId = this.studentColumnIndex.get(key);
+    // Try to get the appropriate record based on user role
+    // Instructors/graders prefer private records, students get non-private
+    const preferPrivate = this._isInstructorOrGrader;
+    let key = this.getStudentColumnKey(student_id, column_id, preferPrivate);
+    let studentId = this.studentColumnIndex.get(key);
+
+    // If preferred record doesn't exist, try the other type
+    if (!studentId) {
+      key = this.getStudentColumnKey(student_id, column_id, !preferPrivate);
+      studentId = this.studentColumnIndex.get(key);
+    }
 
     if (!studentId) {
       // Return undefined if student doesn't have an entry for this column (normal case)
