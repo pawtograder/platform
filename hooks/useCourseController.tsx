@@ -836,8 +836,9 @@ export function CourseControllerProvider({
   const client = createClient();
   const [classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
 
-  // Initialize ClassRealTimeController
+  // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
+    let cancelled = false;
     const realTimeController = new ClassRealTimeController({
       client,
       classId: course_id,
@@ -845,9 +846,24 @@ export function CourseControllerProvider({
       isStaff: role === "instructor" || role === "grader"
     });
 
-    setClassRealTimeController(realTimeController);
+    const start = async () => {
+      try {
+        await realTimeController.start();
+        if (cancelled) {
+          await realTimeController.close();
+          return;
+        }
+        setClassRealTimeController(realTimeController);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to start ClassRealTimeController:", e);
+        await realTimeController.close();
+      }
+    };
+    void start();
 
     return () => {
+      cancelled = true;
       realTimeController.close();
     };
   }, [client, course_id, profile_id, role]);
