@@ -3993,7 +3993,7 @@ async function runMicro() {
 async function main() {
   // await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  // await runSmallScale();
-  await runMicro();
+  await runSmallScale();
+  // await runMicro();
 }
 main();
