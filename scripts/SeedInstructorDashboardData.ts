@@ -2903,14 +2903,14 @@ async function seedDiscussionThreads({
     return;
   }
 
-  console.log(`Found ${discussionTopics.length} discussion topics: ${discussionTopics.map(t => t.topic).join(", ")}`);
+  console.log(`Found ${discussionTopics.length} discussion topics: ${discussionTopics.map((t) => t.topic).join(", ")}`);
 
   // All users who can post (students, instructors, graders)
   const allUsers = [...students, ...instructors, ...graders];
 
   // Question subjects for different topics
   const topicSubjects = {
-    "Assignments": [
+    Assignments: [
       "Homework 1 clarification needed",
       "Project submission format?",
       "Due date extension request",
@@ -2922,7 +2922,7 @@ async function seedDiscussionThreads({
       "Resubmission allowed?",
       "Group work guidelines"
     ],
-    "Logistics": [
+    Logistics: [
       "Office hours schedule",
       "Exam dates confirmed?",
       "Class cancelled today?",
@@ -2934,7 +2934,7 @@ async function seedDiscussionThreads({
       "Grade distribution",
       "Contact TA question"
     ],
-    "Readings": [
+    Readings: [
       "Chapter 5 discussion",
       "Required vs optional readings",
       "Paper analysis help",
@@ -2946,7 +2946,7 @@ async function seedDiscussionThreads({
       "Key concepts summary",
       "Follow-up questions"
     ],
-    "Memes": [
+    Memes: [
       "When you finally understand recursion",
       "Debugging at 3am be like...",
       "That feeling when code compiles",
@@ -2998,15 +2998,15 @@ async function seedDiscussionThreads({
   // Create root posts for each topic
   for (const topic of discussionTopics) {
     const subjectsForTopic = topicSubjects[topic.topic as keyof typeof topicSubjects] || ["General discussion"];
-    
+
     for (let i = 0; i < postsPerTopic; i++) {
       const user = faker.helpers.arrayElement(allUsers);
       const isAnonymous = faker.datatype.boolean(0.3); // 30% chance of anonymous posting
       const isQuestion = faker.datatype.boolean(0.6); // 60% chance of being a question
       const authorId = isAnonymous ? user.public_profile_id : user.private_profile_id;
-      
+
       const subject = faker.helpers.arrayElement(subjectsForTopic);
-      const body = isQuestion 
+      const body = isQuestion
         ? faker.helpers.arrayElement(questionBodies)
         : faker.lorem.paragraphs(faker.number.int({ min: 2, max: 10 }));
 
@@ -3032,8 +3032,8 @@ async function seedDiscussionThreads({
       }
 
       if (thread) {
-        createdThreads.push({ 
-          id: thread.id, 
+        createdThreads.push({
+          id: thread.id,
           topic_id: topic.id,
           is_question: isQuestion
         });
@@ -3047,12 +3047,12 @@ async function seedDiscussionThreads({
   let totalReplies = 0;
   for (const rootThread of createdThreads) {
     const numReplies = faker.number.int({ min: 1, max: maxRepliesPerPost });
-    
+
     for (let i = 0; i < numReplies; i++) {
       const user = faker.helpers.arrayElement(allUsers);
       const isAnonymous = faker.datatype.boolean(0.25); // 25% chance of anonymous replies
       const authorId = isAnonymous ? user.public_profile_id : user.private_profile_id;
-      
+
       const body = faker.helpers.arrayElement(replyBodies);
 
       const { data: reply, error: replyError } = await supabase
@@ -3081,11 +3081,9 @@ async function seedDiscussionThreads({
       totalReplies++;
 
       // Sometimes mark a reply as an answer if the root post was a question
-      if (reply && rootThread.is_question && faker.datatype.boolean(0.3)) { // 30% chance
-        await supabase
-          .from("discussion_threads")
-          .update({ answer: reply.id })
-          .eq("id", rootThread.id);
+      if (reply && rootThread.is_question && faker.datatype.boolean(0.3)) {
+        // 30% chance
+        await supabase.from("discussion_threads").update({ answer: reply.id }).eq("id", rootThread.id);
       }
     }
   }
@@ -3251,7 +3249,12 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         authLimiter.schedule(async () => {
           const name = faker.person.fullName();
           const uuid = crypto.randomUUID();
-          return createUserInClass({ role: "grader", class_id, name, email: `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net` });
+          return createUserInClass({
+            role: "grader",
+            class_id,
+            name,
+            email: `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          });
         })
       )
     );
@@ -3275,7 +3278,12 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         authLimiter.schedule(async () => {
           const name = faker.person.fullName();
           const uuid = crypto.randomUUID();
-          return createUserInClass({ role: "student", class_id, name, email: `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net` });
+          return createUserInClass({
+            role: "student",
+            class_id,
+            name,
+            email: `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          });
         })
       )
     );
@@ -3778,8 +3786,6 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       console.log(`✓ Help request generation completed`);
     }
 
-
-
     console.log("\n🎉 Database seeding completed successfully!");
     console.log(`\n📊 Summary:`);
     console.log(`   Class ID: ${class_id}`);
@@ -3808,7 +3814,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       console.log(`   Help Requests: ${helpRequestConfig.numHelpRequests} (80% resolved/closed)`);
     }
     if (discussionConfig) {
-      console.log(`   Discussion Threads: ${discussionConfig.postsPerTopic} posts per topic, up to ${discussionConfig.maxRepliesPerPost} replies each`);
+      console.log(
+        `   Discussion Threads: ${discussionConfig.postsPerTopic} posts per topic, up to ${discussionConfig.maxRepliesPerPost} replies each`
+      );
     }
 
     console.log(`\n🏫 Section Details:`);
