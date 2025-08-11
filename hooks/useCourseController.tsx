@@ -216,15 +216,16 @@ export class CourseController {
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   private _classRealTimeController: ClassRealTimeController | null = null;
+  private _client: SupabaseClient<Database>;
 
-  // TableController instances for each table
-  readonly profiles: TableController<"profiles">;
-  readonly discussionThreads: TableController<"discussion_threads">;
-  readonly discussionThreadReadStatus: TableController<"discussion_thread_read_status">;
-  readonly tags: TableController<"tags">;
-  readonly labSections: TableController<"lab_sections">;
-  readonly labSectionMeetings: TableController<"lab_section_meetings">;
-  readonly userRolesWithProfiles: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
+  // Lazily created TableController instances to avoid realtime subscription bursts
+  private _profiles?: TableController<"profiles">;
+  private _discussionThreads?: TableController<"discussion_threads">;
+  private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
+  private _tags?: TableController<"tags">;
+  private _labSections?: TableController<"lab_sections">;
+  private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
 
   constructor(
     public courseId: number,
@@ -232,57 +233,7 @@ export class CourseController {
     classRealTimeController: ClassRealTimeController
   ) {
     this._classRealTimeController = classRealTimeController;
-
-    // Initialize TableController instances
-    this.profiles = new TableController({
-      client,
-      table: "profiles",
-      query: client.from("profiles").select("*").eq("class_id", courseId),
-      classRealTimeController
-    });
-
-    this.discussionThreads = new TableController({
-      client,
-      table: "discussion_threads",
-      query: client.from("discussion_threads").select("*").eq("class_id", courseId),
-      classRealTimeController
-    });
-
-    this.discussionThreadReadStatus = new TableController({
-      client,
-      table: "discussion_thread_read_status",
-      query: client.from("discussion_thread_read_status").select("*"),
-      classRealTimeController
-    });
-
-    this.tags = new TableController({
-      client,
-      table: "tags",
-      query: client.from("tags").select("*").eq("class_id", courseId),
-      classRealTimeController
-    });
-
-    this.labSections = new TableController({
-      client,
-      table: "lab_sections",
-      query: client.from("lab_sections").select("*").eq("class_id", courseId),
-      classRealTimeController
-    });
-
-    this.labSectionMeetings = new TableController({
-      client,
-      table: "lab_section_meetings",
-      query: client.from("lab_section_meetings").select("*").eq("class_id", courseId),
-      classRealTimeController
-    });
-
-    this.userRolesWithProfiles = new TableController({
-      client,
-      table: "user_roles",
-      query: client.from("user_roles").select("*, profiles!private_profile_id(*), users(*)").eq("class_id", courseId),
-      selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
-      classRealTimeController
-    });
+    this._client = client as SupabaseClient<Database>;
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -290,6 +241,95 @@ export class CourseController {
       throw new Error("ClassRealTimeController not initialized.");
     }
     return this._classRealTimeController;
+  }
+
+  // Lazy getters
+  get profiles(): TableController<"profiles"> {
+    if (!this._profiles) {
+      this._profiles = new TableController({
+        client: this._client,
+        table: "profiles",
+        query: this._client.from("profiles").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._profiles;
+  }
+
+  get discussionThreads(): TableController<"discussion_threads"> {
+    if (!this._discussionThreads) {
+      this._discussionThreads = new TableController({
+        client: this._client,
+        table: "discussion_threads",
+        query: this._client.from("discussion_threads").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionThreads;
+  }
+
+  get discussionThreadReadStatus(): TableController<"discussion_thread_read_status"> {
+    if (!this._discussionThreadReadStatus) {
+      this._discussionThreadReadStatus = new TableController({
+        client: this._client,
+        table: "discussion_thread_read_status",
+        query: this._client.from("discussion_thread_read_status").select("*"),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._discussionThreadReadStatus;
+  }
+
+  get tags(): TableController<"tags"> {
+    if (!this._tags) {
+      this._tags = new TableController({
+        client: this._client,
+        table: "tags",
+        query: this._client.from("tags").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._tags;
+  }
+
+  get labSections(): TableController<"lab_sections"> {
+    if (!this._labSections) {
+      this._labSections = new TableController({
+        client: this._client,
+        table: "lab_sections",
+        query: this._client.from("lab_sections").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._labSections;
+  }
+
+  get labSectionMeetings(): TableController<"lab_section_meetings"> {
+    if (!this._labSectionMeetings) {
+      this._labSectionMeetings = new TableController({
+        client: this._client,
+        table: "lab_section_meetings",
+        query: this._client.from("lab_section_meetings").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._labSectionMeetings;
+  }
+
+  get userRolesWithProfiles(): TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)"> {
+    if (!this._userRolesWithProfiles) {
+      this._userRolesWithProfiles = new TableController({
+        client: this._client,
+        table: "user_roles",
+        query: this._client
+          .from("user_roles")
+          .select("*, profiles!private_profile_id(*), users(*)")
+          .eq("class_id", this.courseId),
+        selectForSingleRow: "*, profiles!private_profile_id(*), users(*)",
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._userRolesWithProfiles;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -673,27 +713,35 @@ export class CourseController {
 
   // All data loading is handled by TableController instances
   get isDataLoaded() {
-    // Check if all TableControllers are ready
-    return (
-      this.profiles.ready &&
-      this.discussionThreads.ready &&
-      this.discussionThreadReadStatus.ready &&
-      this.tags.ready &&
-      this.labSections.ready &&
-      this.labSectionMeetings.ready &&
-      this.userRolesWithProfiles.ready
-    );
+    // Consider only instantiated controllers to avoid triggering lazy creation
+    const createdControllers: Array<
+      | TableController<"profiles">
+      | TableController<"discussion_threads">
+      | TableController<"discussion_thread_read_status">
+      | TableController<"tags">
+      | TableController<"lab_sections">
+      | TableController<"lab_section_meetings">
+      | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
+    > = [];
+    if (this._profiles) createdControllers.push(this._profiles);
+    if (this._discussionThreads) createdControllers.push(this._discussionThreads);
+    if (this._discussionThreadReadStatus) createdControllers.push(this._discussionThreadReadStatus);
+    if (this._tags) createdControllers.push(this._tags);
+    if (this._labSections) createdControllers.push(this._labSections);
+    if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
+    if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
+    return createdControllers.every((c) => c.ready);
   }
 
   // Close method to clean up TableController instances
   close(): void {
-    this.profiles.close();
-    this.discussionThreads.close();
-    this.discussionThreadReadStatus.close();
-    this.tags.close();
-    this.labSections.close();
-    this.labSectionMeetings.close();
-    this.userRolesWithProfiles.close();
+    this._profiles?.close();
+    this._discussionThreads?.close();
+    this._discussionThreadReadStatus?.close();
+    this._tags?.close();
+    this._labSections?.close();
+    this._labSectionMeetings?.close();
+    this._userRolesWithProfiles?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -840,8 +888,6 @@ export function CourseControllerProvider({
 
   // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
-    const initializationID = Math.random().toString(36).substring(2, 15);
-    console.log(`Initializing ClassRealTimeController ${initializationID}`);
     let cancelled = false;
     const realTimeController = new ClassRealTimeController({
       client,
@@ -857,7 +903,6 @@ export function CourseControllerProvider({
         _courseController = new CourseController(course_id, client, realTimeController);
 
         if (cancelled) {
-          console.log(`Cancelling ClassRealTimeController ${initializationID}`);
           await realTimeController.close();
           return;
         }
@@ -872,7 +917,6 @@ export function CourseControllerProvider({
     start();
 
     return () => {
-      console.log(`Cancelling ClassRealTimeController ${initializationID}`);
       cancelled = true;
       realTimeController.close();
       _courseController?.close();
