@@ -1,7 +1,9 @@
 "use client";
 
+import MessageInput from "@/components/ui/message-input";
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useDiscussionThreadReadStatus } from "@/hooks/useCourseController";
 import useDiscussionThreadChildren, {
   DiscussionThreadsControllerProvider
@@ -13,12 +15,10 @@ import { Avatar, Badge, Box, Button, Flex, Heading, HStack, Link, Text, VStack }
 import { useList, useOne, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { FaEye, FaEyeSlash, FaPencilAlt, FaReply, FaSmile } from "react-icons/fa";
 import Markdown from "react-markdown";
-import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
-import MessageInput from "@/components/ui/message-input";
+import { DiscussionThread, DiscussionThreadReply, useLogIfChanged } from "../discussion_thread";
 
 function ThreadHeader({ thread, topic }: { thread: DiscussionThreadType; topic: DiscussionTopic | undefined }) {
   const userProfile = useUserProfile(thread.author);
@@ -158,6 +158,15 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
       setUnread(root_id, root_id, false);
     }
   }, [readStatus, setUnread, root_id]);
+  const sendMessage = useCallback(async (message: string) => {
+    await updateThread({
+      id: root_id.toString(),
+      values: { body: message, edited_at: new Date().toISOString() }
+    });
+    setEditing(false);
+    // OMG refine.dev mutateAsync is not stable!?
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root_id]);
 
   if (isLoading || !discussion_topics?.data || !rootThread?.data) {
     return <Skeleton height="100px" />;
@@ -171,13 +180,7 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
       <Box>
         {editing ? (
           <MessageInput
-            sendMessage={async (message) => {
-              await updateThread({
-                id: root_id.toString(),
-                values: { body: message, edited_at: new Date().toISOString() }
-              });
-              setEditing(false);
-            }}
+            sendMessage={sendMessage}
             enableEmojiPicker={true}
             enableFilePicker={true}
             enableGiphyPicker={true}

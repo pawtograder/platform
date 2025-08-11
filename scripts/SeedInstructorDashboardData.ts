@@ -19,6 +19,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 dotenv.config({ path: ".env.local" });
 
 export const RANDOM_SEED = 100;
+const RECYCLE_USERS_KEY = "jon-test";
 faker.seed(RANDOM_SEED);
 
 const limiter = new Bottleneck({
@@ -641,7 +642,6 @@ function extractDependenciesFromExpression(
     if (Object.keys(flattenedDependencies).length === 0) {
       return null;
     }
-    console.log(flattenedDependencies);
     return flattenedDependencies;
   } catch (error) {
     console.warn(`Failed to parse expression "${expr}": ${error}`);
@@ -746,7 +746,7 @@ async function findExistingPawtograderUsers(): Promise<{
     .select(
       "*, user_roles(role, private_profile_id, public_profile_id, profiles_private:profiles!private_profile_id(name), profiles_public:profiles!public_profile_id(name))"
     )
-    .like("email", "%demo@pawtograder.net");
+    .like("email", `%${RECYCLE_USERS_KEY}-demo@pawtograder.net`);
 
   if (usersError) {
     console.error(`Failed to fetch existing users: ${usersError.message}`);
@@ -2859,7 +2859,239 @@ interface SeedingOptions {
     maxRepliesPerRequest: number;
     maxMembersPerRequest: number;
   };
+  discussionConfig?: {
+    postsPerTopic: number;
+    maxRepliesPerPost: number;
+  };
   gradingScheme?: "current" | "specification";
+}
+
+// Helper function to seed discussion threads
+async function seedDiscussionThreads({
+  class_id,
+  students,
+  instructors,
+  graders,
+  postsPerTopic,
+  maxRepliesPerPost
+}: {
+  class_id: number;
+  students: TestingUser[];
+  instructors: TestingUser[];
+  graders: TestingUser[];
+  postsPerTopic: number;
+  maxRepliesPerPost: number;
+}) {
+  console.log(`\n💬 Creating discussion threads...`);
+  console.log(`   Posts per topic: ${postsPerTopic}`);
+  console.log(`   Max replies per post: ${maxRepliesPerPost}`);
+
+  // Get the discussion topics for this class (auto-created by triggers)
+  const { data: discussionTopics, error: topicsError } = await supabase
+    .from("discussion_topics")
+    .select("*")
+    .eq("class_id", class_id)
+    .order("ordinal");
+
+  if (topicsError) {
+    console.error("Error fetching discussion topics:", topicsError);
+    throw topicsError;
+  }
+
+  if (!discussionTopics || discussionTopics.length === 0) {
+    console.log("No discussion topics found - they should be auto-created by triggers");
+    return;
+  }
+
+  console.log(`Found ${discussionTopics.length} discussion topics: ${discussionTopics.map(t => t.topic).join(", ")}`);
+
+  // All users who can post (students, instructors, graders)
+  const allUsers = [...students, ...instructors, ...graders];
+
+  // Question subjects for different topics
+  const topicSubjects = {
+    "Assignments": [
+      "Homework 1 clarification needed",
+      "Project submission format?",
+      "Due date extension request",
+      "Grading rubric question",
+      "Partner work allowed?",
+      "Late submission policy",
+      "Assignment requirements unclear",
+      "Help with problem 3",
+      "Resubmission allowed?",
+      "Group work guidelines"
+    ],
+    "Logistics": [
+      "Office hours schedule",
+      "Exam dates confirmed?",
+      "Class cancelled today?",
+      "Final exam format",
+      "Missing lecture notes",
+      "Room change notification",
+      "Midterm review session",
+      "Course syllabus update",
+      "Grade distribution",
+      "Contact TA question"
+    ],
+    "Readings": [
+      "Chapter 5 discussion",
+      "Required vs optional readings",
+      "Paper analysis help",
+      "Research methodology question",
+      "Citation format clarification",
+      "Additional resources?",
+      "Textbook alternatives",
+      "Reading comprehension check",
+      "Key concepts summary",
+      "Follow-up questions"
+    ],
+    "Memes": [
+      "When you finally understand recursion",
+      "Debugging at 3am be like...",
+      "That feeling when code compiles",
+      "Coffee addiction level: programmer",
+      "Stack overflow saves the day again",
+      "When the semester starts vs ends",
+      "Professor vs student expectations",
+      "Group project dynamics",
+      "Finals week survival guide",
+      "Coding bootcamp vs reality"
+    ]
+  };
+
+  // Bodies for different types of posts
+  const questionBodies = [
+    "Can someone help me understand this concept? I've been struggling with it for hours.",
+    "I'm not sure I understand the requirements correctly. Could someone clarify?",
+    "Has anyone else encountered this issue? Looking for advice.",
+    "What's the best approach for solving this type of problem?",
+    "Can someone point me to relevant resources on this topic?",
+    "I'm getting confused by the instructions. Any help would be appreciated.",
+    "Quick question about the implementation details...",
+    "Not sure if my understanding is correct. Can someone verify?",
+    "Looking for study group partners for this topic.",
+    "What are the common pitfalls to avoid here?"
+  ];
+
+  const replyBodies = [
+    "Thanks for asking this! I had the same question.",
+    "Great point! I hadn't considered that perspective.",
+    "Here's what worked for me in a similar situation...",
+    "I think the key is to focus on the fundamentals first.",
+    "Actually, I believe there might be another way to approach this.",
+    "This helped clarify things for me too!",
+    "Good catch - that's an important detail to remember.",
+    "I found this resource helpful: [example link]",
+    "Building on what others have said...",
+    "That makes perfect sense now, thank you!",
+    "I had a similar issue and solved it by...",
+    "Totally agree with the previous responses.",
+    "Just to add to this discussion...",
+    "This is exactly what I needed to know!",
+    "Another thing to consider is..."
+  ];
+
+  // Track created threads for replies
+  const createdThreads: Array<{ id: number; topic_id: number; is_question: boolean }> = [];
+
+  // Create root posts for each topic
+  for (const topic of discussionTopics) {
+    const subjectsForTopic = topicSubjects[topic.topic as keyof typeof topicSubjects] || ["General discussion"];
+    
+    for (let i = 0; i < postsPerTopic; i++) {
+      const user = faker.helpers.arrayElement(allUsers);
+      const isAnonymous = faker.datatype.boolean(0.3); // 30% chance of anonymous posting
+      const isQuestion = faker.datatype.boolean(0.6); // 60% chance of being a question
+      const authorId = isAnonymous ? user.public_profile_id : user.private_profile_id;
+      
+      const subject = faker.helpers.arrayElement(subjectsForTopic);
+      const body = isQuestion 
+        ? faker.helpers.arrayElement(questionBodies)
+        : faker.lorem.paragraphs(faker.number.int({ min: 2, max: 10 }));
+
+      const { data: thread, error: threadError } = await supabase
+        .from("discussion_threads")
+        .insert({
+          author: authorId,
+          subject,
+          body,
+          class_id,
+          topic_id: topic.id,
+          is_question: isQuestion,
+          instructors_only: false,
+          draft: false,
+          root_class_id: class_id // Set for root threads
+        })
+        .select("id")
+        .single();
+
+      if (threadError) {
+        console.error(`Error creating discussion thread for topic ${topic.topic}:`, threadError);
+        throw new Error(`Failed to create discussion thread for topic ${topic.topic}: ${threadError.message}`);
+      }
+
+      if (thread) {
+        createdThreads.push({ 
+          id: thread.id, 
+          topic_id: topic.id,
+          is_question: isQuestion
+        });
+      }
+    }
+  }
+
+  console.log(`✓ Created ${createdThreads.length} root discussion threads`);
+
+  // Create replies to the root posts
+  let totalReplies = 0;
+  for (const rootThread of createdThreads) {
+    const numReplies = faker.number.int({ min: 1, max: maxRepliesPerPost });
+    
+    for (let i = 0; i < numReplies; i++) {
+      const user = faker.helpers.arrayElement(allUsers);
+      const isAnonymous = faker.datatype.boolean(0.25); // 25% chance of anonymous replies
+      const authorId = isAnonymous ? user.public_profile_id : user.private_profile_id;
+      
+      const body = faker.helpers.arrayElement(replyBodies);
+
+      const { data: reply, error: replyError } = await supabase
+        .from("discussion_threads")
+        .insert({
+          author: authorId,
+          subject: "Re: Discussion Reply",
+          body,
+          class_id,
+          topic_id: rootThread.topic_id,
+          parent: rootThread.id,
+          root: rootThread.id,
+          is_question: false, // Replies are typically not questions
+          instructors_only: false,
+          draft: false
+          // root_class_id stays null for non-root threads
+        })
+        .select("id")
+        .single();
+
+      if (replyError) {
+        console.error(`Error creating reply to thread ${rootThread.id}:`, replyError);
+        throw new Error(`Failed to create reply to thread ${rootThread.id}: ${replyError.message}`);
+      }
+
+      totalReplies++;
+
+      // Sometimes mark a reply as an answer if the root post was a question
+      if (reply && rootThread.is_question && faker.datatype.boolean(0.3)) { // 30% chance
+        await supabase
+          .from("discussion_threads")
+          .update({ answer: reply.id })
+          .eq("id", rootThread.id);
+      }
+    }
+  }
+
+  console.log(`✓ Created ${totalReplies} replies to discussion threads`);
+  console.log(`✓ Discussion threads seeding completed`);
 }
 
 async function seedInstructorDashboardData(options: SeedingOptions) {
@@ -2876,6 +3108,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     labAssignmentConfig,
     groupAssignmentConfig,
     helpRequestConfig,
+    discussionConfig,
     gradingScheme = "current"
   } = options;
 
@@ -2953,6 +3186,10 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     );
     console.log(`   Max Members per Request: ${helpRequestConfig.maxMembersPerRequest}`);
   }
+  if (discussionConfig) {
+    console.log(`   Discussion Posts per Topic: ${discussionConfig.postsPerTopic}`);
+    console.log(`   Max Replies per Post: ${discussionConfig.maxRepliesPerPost}`);
+  }
   console.log("");
 
   try {
@@ -2989,7 +3226,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
             role: "instructor",
             class_id,
             name,
-            email: `instructor-${uuid}-demo@pawtograder.net`
+            email: `instructor-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
           });
         })
       )
@@ -3014,7 +3251,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         authLimiter.schedule(async () => {
           const name = faker.person.fullName();
           const uuid = crypto.randomUUID();
-          return createUserInClass({ role: "grader", class_id, name, email: `grader-${uuid}-demo@pawtograder.net` });
+          return createUserInClass({ role: "grader", class_id, name, email: `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net` });
         })
       )
     );
@@ -3038,7 +3275,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         authLimiter.schedule(async () => {
           const name = faker.person.fullName();
           const uuid = crypto.randomUUID();
-          return createUserInClass({ role: "student", class_id, name, email: `student-${uuid}-demo@pawtograder.net` });
+          return createUserInClass({ role: "student", class_id, name, email: `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net` });
         })
       )
     );
@@ -3102,6 +3339,18 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     // Create grader conflicts based on specified patterns
     console.log("\n⚔️ Creating grader conflicts based on specified patterns...");
     await insertGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
+
+    // Create discussion threads first (before assignments)
+    if (discussionConfig) {
+      await seedDiscussionThreads({
+        class_id,
+        students,
+        instructors,
+        graders,
+        postsPerTopic: discussionConfig.postsPerTopic,
+        maxRepliesPerPost: discussionConfig.maxRepliesPerPost
+      });
+    }
 
     // Create assignments with enhanced rubric generation
     console.log("\n📚 Creating test assignments with diverse rubrics...");
@@ -3529,6 +3778,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       console.log(`✓ Help request generation completed`);
     }
 
+
+
     console.log("\n🎉 Database seeding completed successfully!");
     console.log(`\n📊 Summary:`);
     console.log(`   Class ID: ${class_id}`);
@@ -3555,6 +3806,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     );
     if (helpRequestConfig) {
       console.log(`   Help Requests: ${helpRequestConfig.numHelpRequests} (80% resolved/closed)`);
+    }
+    if (discussionConfig) {
+      console.log(`   Discussion Threads: ${discussionConfig.postsPerTopic} posts per topic, up to ${discussionConfig.maxRepliesPerPost} replies each`);
     }
 
     console.log(`\n🏫 Section Details:`);
@@ -3632,6 +3886,10 @@ export async function runLargeScale() {
       minRepliesPerRequest: 0,
       maxRepliesPerRequest: 300,
       maxMembersPerRequest: 5
+    },
+    discussionConfig: {
+      postsPerTopic: faker.number.int({ min: 50, max: 100 }), // 50-100 posts per topic
+      maxRepliesPerPost: 100 // up to 100 replies per root post
     }
   });
 }
@@ -3676,6 +3934,10 @@ async function _runSmallScale() {
       minRepliesPerRequest: 0,
       maxRepliesPerRequest: 70,
       maxMembersPerRequest: 6
+    },
+    discussionConfig: {
+      postsPerTopic: faker.number.int({ min: 2, max: 4 }), // 2-4 posts per topic
+      maxRepliesPerPost: 32 // up to 32 replies per root post
     }
   });
 }
@@ -3712,6 +3974,10 @@ async function runMicro() {
     groupAssignmentConfig: {
       numGroupAssignments: 1,
       numLabGroupAssignments: 1
+    },
+    discussionConfig: {
+      postsPerTopic: 2, // 2 posts per topic
+      maxRepliesPerPost: 4 // up to 4 replies per root post
     }
   });
 }
@@ -3724,5 +3990,4 @@ async function main() {
   // await runSmallScale();
   await runMicro();
 }
-
 main();
