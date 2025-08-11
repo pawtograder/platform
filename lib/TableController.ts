@@ -366,16 +366,6 @@ export default class TableController<
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
         pendingRowWithId.id = data.id as IDType;
-
-        // Debug logging for development
-        if (process.env.NODE_ENV === "development") {
-          console.log(`[TableController] Matched pending row for ${this._table}:`, {
-            oldId,
-            newId: data.id,
-            pendingData: pendingRow,
-            incomingData: data
-          });
-        }
         // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
         if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
           this._fetchRow(data.id as IDType).then((fullRow) => {
