@@ -64,6 +64,7 @@ export default class TableController<
   private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
   private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
+  private _closed: boolean = false;
   /**
    * Optional select clause to use when fetching a single row (e.g., after realtime events).
    * This enables preserving joined columns for controllers initialized with joined selects.
@@ -123,8 +124,7 @@ export default class TableController<
 
     // Load initial data, do all of the pages.
     // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
-    while (true) {
-      // If nRows is specified, only fetch up to nRows
+    while (!this._closed) {
       const rangeStart = page * pageSize;
       let rangeEnd = (page + 1) * pageSize - 1;
       if (typeof nRows === "number") {
@@ -132,13 +132,16 @@ export default class TableController<
         rangeEnd = Math.min(rangeEnd, nRows - 1);
       }
       const { data, error } = await this._query.range(rangeStart, rangeEnd);
+      if (this._closed) {
+        return [];
+      }
       if (error) {
         throw error;
       }
       if (!data || data.length === 0) {
         break;
       }
-      rows.push(...data);
+      rows.push(...(data as unknown as ResultOne[]));
       if (data.length < pageSize) {
         break;
       }
@@ -259,6 +262,7 @@ export default class TableController<
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         const messageHandler = (message: BroadcastMessage) => {
+          if (this._closed) return;
           // Filter by table name
           if (message.table !== table) {
             return;
@@ -276,9 +280,24 @@ export default class TableController<
               break;
           }
         };
+
+        // Fetch initial data first, respecting cancellation
+        if (this._closed) {
+          resolve();
+          return;
+        }
+        const initialData = await this._fetchInitialData();
+        if (this._closed) {
+          resolve();
+          return;
+        }
+        this._rows = initialData.map((row) => ({
+          ...row,
+          __db_pending: false
+        }));
+
         // Set up realtime subscription if controller is provided
-        if (this._classRealTimeController) {
-          // Subscribe to messages for this table, optionally filtered by submission
+        if (!this._closed && this._classRealTimeController) {
           if (this._submissionId) {
             this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
               table,
@@ -291,22 +310,24 @@ export default class TableController<
 
           // Subscribe to connection status changes for reconnection handling
           this._statusUnsubscribe = this._classRealTimeController.subscribeToStatus((status) => {
+            if (this._closed) return;
             this._handleConnectionStatusChange(status);
           });
 
           // Get initial connection status
           this._lastConnectionStatus = this._classRealTimeController.getConnectionStatus().overall;
         }
-        if (this._officeHoursRealTimeController) {
+        if (!this._closed && this._officeHoursRealTimeController) {
           this._realtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(table, messageHandler);
         }
-        const initialData = await this._fetchInitialData();
-        this._rows = initialData.map((row) => ({
-          ...row,
-          __db_pending: false
-        }));
+
+        if (this._closed) {
+          resolve();
+          return;
+        }
+
         this._ready = true;
-        //Emit a change event
+        // Emit a change event
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered: this._rows, left: [] }));
         this._itemDataListeners.forEach((listeners, id) => {
           const row = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
@@ -318,12 +339,17 @@ export default class TableController<
         });
         resolve();
       } catch (error) {
-        reject(error);
+        if (!this._closed) {
+          reject(error);
+        } else {
+          resolve();
+        }
       }
     });
   }
 
   close() {
+    this._closed = true;
     if (this._realtimeUnsubscribe) {
       this._realtimeUnsubscribe();
     }
@@ -337,6 +363,7 @@ export default class TableController<
   }
 
   private _handleInsert(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -545,6 +572,7 @@ export default class TableController<
   }
 
   private _handleUpdate(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -595,6 +623,7 @@ export default class TableController<
   }
 
   private _handleDelete(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       const data = message.data as Record<string, unknown>;
       this._removeRow(data.id as IDType);
