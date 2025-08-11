@@ -98,6 +98,7 @@ import { FaLock } from "react-icons/fa";
 import { FaLockOpen } from "react-icons/fa6";
 import { Select } from "chakra-react-select";
 import { useParams } from "next/navigation";
+import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
 const MemoizedGradebookCell = React.memo(GradebookCell);
 
 function RenderExprDocs() {
@@ -1592,7 +1593,7 @@ function StudentNameCell({ uid }: { uid: string }) {
 function StudentDetailDialog() {
   const { view, setView } = useStudentDetailView();
   return (
-    <Dialog.Root open={!!view} onOpenChange={(details) => (!details.open ? setView(null) : undefined)}>
+    <Dialog.Root open={!!view} onOpenChange={(details) => (!details.open ? setView(null) : undefined)} lazyMount>
       <Dialog.Backdrop />
       <Dialog.Positioner>
         <Dialog.Content>
@@ -1604,7 +1605,11 @@ function StudentDetailDialog() {
               This view allows you to simulate the impact of a grade change. Students have the exact same interface (but
               can only see released gradebook columns and scores).
             </Text>
-            {view && <WhatIf private_profile_id={view} />}
+            {view && (
+              <GradebookWhatIfProvider private_profile_id={view}>
+                <WhatIf private_profile_id={view} />
+              </GradebookWhatIfProvider>
+            )}
           </Dialog.Body>
         </Dialog.Content>
       </Dialog.Positioner>
