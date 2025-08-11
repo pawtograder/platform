@@ -159,6 +159,16 @@ async function sendEmail(params: {
     return;
   }
 
+  // Skip sending/logging for internal test emails and archive the message
+  const recipientEmailLower = recipient.email?.toLowerCase() ?? "";
+  if (recipientEmailLower.endsWith("@pawtograder.net")) {
+    await adminSupabase.schema("pgmq_public").rpc("archive", {
+      queue_name: "notification_emails",
+      message_id: notification.msg_id
+    });
+    return;
+  }
+
   // Replace user-specific template variables
   const userRole = userRoles.find((role) => role.user_id === recipient.user_id);
   if (userRole) {
