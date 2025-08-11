@@ -92,9 +92,6 @@ export class ClassRealTimeController {
     this._isStaff = isStaff;
     this._channelManager = RealtimeChannelManager.getInstance();
 
-    // Set the client on the channel manager
-    this._channelManager.setClient(client);
-
     if (config?.inactiveTabTimeoutSeconds) {
       this._inactiveTabTimeoutSeconds = config.inactiveTabTimeoutSeconds;
     }
@@ -215,6 +212,7 @@ export class ClassRealTimeController {
     const topic = `class:${this._classId}:staff`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
@@ -230,6 +228,7 @@ export class ClassRealTimeController {
     const topic = `class:${this._classId}:user:${this._profileId}`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
@@ -247,6 +246,7 @@ export class ClassRealTimeController {
     const topic = `submission:${submissionId}:graders`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
@@ -262,6 +262,7 @@ export class ClassRealTimeController {
     const topic = `submission:${submissionId}:profile_id:${this._profileId}`;
     const unsubscriber = await this._channelManager.subscribe(
       topic,
+      this._client,
       (message: BroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
