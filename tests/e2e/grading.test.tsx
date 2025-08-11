@@ -74,12 +74,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
   test.describe.configure({ mode: "serial" });
   test("Students can submit self-review early", async ({ page }) => {
     await loginAsUser(page, student!, course);
+    // Allow realtime connections to stabilize and stagger controller mounts
+    await page.waitForTimeout(200);
     //Wait for the realtime connection status to be connected
     await expect(
       page.getByRole("note", { name: "Realtime connection status: All realtime connections active" })
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 10000 });
 
+    await page.waitForTimeout(100);
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.waitForTimeout(100);
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
 
     await page.getByRole("link", { name: assignment!.title }).click();
