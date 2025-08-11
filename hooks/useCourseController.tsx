@@ -219,13 +219,11 @@ export class CourseController {
 
   // TableController instances for each table
   readonly profiles: TableController<"profiles">;
-  readonly userRoles: TableController<"user_roles">;
   readonly discussionThreads: TableController<"discussion_threads">;
   readonly discussionThreadReadStatus: TableController<"discussion_thread_read_status">;
   readonly tags: TableController<"tags">;
   readonly labSections: TableController<"lab_sections">;
   readonly labSectionMeetings: TableController<"lab_section_meetings">;
-  readonly rosterWithUserInfo: TableController<"user_roles", "*, users(*)">;
   readonly userRolesWithProfiles: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
 
   constructor(
@@ -240,13 +238,6 @@ export class CourseController {
       client,
       table: "profiles",
       query: client.from("profiles").select("*").eq("class_id", courseId),
-      classRealTimeController
-    });
-
-    this.userRoles = new TableController({
-      client,
-      table: "user_roles",
-      query: client.from("user_roles").select("*").eq("class_id", courseId),
       classRealTimeController
     });
 
@@ -282,14 +273,6 @@ export class CourseController {
       client,
       table: "lab_section_meetings",
       query: client.from("lab_section_meetings").select("*").eq("class_id", courseId),
-      classRealTimeController
-    });
-
-    this.rosterWithUserInfo = new TableController({
-      client,
-      table: "user_roles",
-      query: client.from("user_roles").select("*, users(*)").eq("class_id", courseId).eq("role", "student"),
-      selectForSingleRow: "*, users(*)",
       classRealTimeController
     });
 
@@ -516,12 +499,12 @@ export class CourseController {
   }
 
   getUserRole(user_id: string) {
-    const result = this.userRoles.list();
+    const result = this.userRolesWithProfiles.list();
     return result.data.find((role) => role.user_id === user_id);
   }
 
   getUserRoleByPrivateProfileId(private_profile_id: string) {
-    const result = this.userRoles.list();
+    const result = this.userRolesWithProfiles.list();
     return result.data.find((role) => role.private_profile_id === private_profile_id);
   }
 
@@ -543,7 +526,7 @@ export class CourseController {
     return this.tags.list(callback);
   }
   getRoster() {
-    const result = this.userRoles.list();
+    const result = this.userRolesWithProfiles.list();
     return result.data.filter((role) => role.role === "student");
   }
 
@@ -551,20 +534,25 @@ export class CourseController {
     unsubscribe: Unsubscribe;
     data: UserRoleWithUser[];
   } {
+    const mapToStudentUserRoles = (data: unknown[]): UserRoleWithUser[] =>
+      (data as UserRoleWithPrivateProfileAndUser[])
+        .filter((role) => role.role === "student")
+        .map((role) => role as unknown as UserRoleWithUser);
+
     if (callback) {
-      const result = this.rosterWithUserInfo.list((data) => {
-        callback(data);
+      const result = this.userRolesWithProfiles.list((data) => {
+        callback(mapToStudentUserRoles(data as unknown[]));
       });
       return {
         unsubscribe: result.unsubscribe,
-        data: result.data
+        data: mapToStudentUserRoles(result.data as unknown[])
       };
     }
 
-    const result = this.rosterWithUserInfo.list();
+    const result = this.userRolesWithProfiles.list();
     return {
       unsubscribe: result.unsubscribe,
-      data: result.data
+      data: mapToStudentUserRoles(result.data as unknown[])
     };
   }
 
@@ -620,7 +608,7 @@ export class CourseController {
    * Gets the lab section ID for a given student profile ID
    */
   getStudentLabSectionId(studentPrivateProfileId: string): number | null {
-    const result = this.userRoles.list();
+    const result = this.userRolesWithProfiles.list();
     const userRole = result.data.find((role) => role.private_profile_id === studentPrivateProfileId);
     // lab_section_id should be available on UserRoleWithUser after database types regeneration
     return userRole?.lab_section_id || null;
@@ -688,7 +676,6 @@ export class CourseController {
     // Check if all TableControllers are ready
     return (
       this.profiles.ready &&
-      this.userRoles.ready &&
       this.discussionThreads.ready &&
       this.discussionThreadReadStatus.ready &&
       this.tags.ready &&
@@ -701,13 +688,11 @@ export class CourseController {
   // Close method to clean up TableController instances
   close(): void {
     this.profiles.close();
-    this.userRoles.close();
     this.discussionThreads.close();
     this.discussionThreadReadStatus.close();
     this.tags.close();
     this.labSections.close();
     this.labSectionMeetings.close();
-    this.rosterWithUserInfo.close();
     this.userRolesWithProfiles.close();
 
     if (this._classRealTimeController) {
