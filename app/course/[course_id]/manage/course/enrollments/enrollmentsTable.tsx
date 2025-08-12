@@ -43,7 +43,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaEdit, FaFileImport, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
-import AddSingleStudent from "./addSingleStudent";
+import AddSingleCourseMember from "./addSingleCourseMember";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
 import ImportStudentsCSVModal from "./importStudentsCSVModal";
@@ -725,7 +725,7 @@ export default function EnrollmentsTable() {
             <Icon as={FaFileImport} mr="2" />
             Import from CSV
           </Button>
-          <AddSingleStudent />
+          <AddSingleCourseMember />
         </HStack>
       </Box>
       {editingUserId && (

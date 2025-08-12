@@ -4,7 +4,7 @@ import { Icon, Button, Input, Dialog, Field, NativeSelect, Text } from "@chakra-
 import { FaPlus } from "react-icons/fa";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
@@ -15,7 +15,8 @@ type FormData = {
   role: "student" | "grader" | "instructor";
 };
 
-export default function AddSingleStudent() {
+export default function AddSingleCourseMember() {
+  const [open, setOpen] = useState(false);
   const { course_id } = useParams();
   const {
     register,
@@ -35,6 +36,7 @@ export default function AddSingleStudent() {
           { courseId: Number(course_id), email: data.email, name: data.name, role: data.role },
           supabase
         );
+        setOpen(false);
         toaster.create({
           title: "Course member added successfully",
           description: "The new member will appear in the enrollments table automatically",
@@ -50,7 +52,7 @@ export default function AddSingleStudent() {
     [course_id]
   );
   return (
-    <Dialog.Root>
+    <Dialog.Root aria-label="Add Course Member Dialog" lazyMount open={open} onOpenChange={(e) => setOpen(e.open)}>
       <Dialog.Trigger asChild>
         <Button marginLeft="auto">
           <Icon as={FaPlus} />
@@ -93,7 +95,7 @@ export default function AddSingleStudent() {
                 <Field.ErrorText>{errors.role?.message}</Field.ErrorText>
               </Field.Root>
               <Button type="submit" mt={2}>
-                Add Student
+                Add
               </Button>
             </form>
           </Dialog.Body>
