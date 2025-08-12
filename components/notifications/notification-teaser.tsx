@@ -91,6 +91,8 @@ export type HelpRequestNotification = NotificationEnvelope & {
   assignee_name?: string;
   status?: "open" | "in_progress" | "resolved" | "closed";
   request_preview: string;
+  request_subject?: string;
+  request_body?: string;
   is_private: boolean;
 };
 
