@@ -7881,9 +7881,30 @@ export type Database = {
         Args: { p_help_request_id: number };
         Returns: boolean;
       };
+      help_request_notification: {
+        Args: {
+          p_help_request_id: number;
+          p_action: string;
+          p_class_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_creator_profile_id: string;
+          p_creator_name: string;
+          p_assignee_profile_id: string;
+          p_assignee_name: string;
+          p_status: string;
+          p_request_preview: string;
+          p_is_private: boolean;
+        };
+        Returns: undefined;
+      };
       intval: {
         Args: { "": string };
         Returns: number;
+      };
+      invoke_email_batch_processor_background_task: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       invoke_gradebook_recalculation_background_task: {
         Args: Record<PropertyKey, never>;
