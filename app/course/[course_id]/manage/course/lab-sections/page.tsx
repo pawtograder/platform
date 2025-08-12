@@ -323,7 +323,7 @@ function LabSectionsTable() {
 
   return (
     <>
-      <VStack gap={4}>
+      <VStack gap={4} mt={4}>
         <HStack justify="space-between" width="100%">
           <Heading size="lg">Lab Sections</Heading>
           <Button onClick={handleCreateNew} size="sm">
