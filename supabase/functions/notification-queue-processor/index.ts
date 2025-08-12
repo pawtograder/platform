@@ -194,11 +194,15 @@ async function sendEmail(params: {
     const help_queue_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}/office-hours/${(body as any).help_queue_id}`;
     emailBody = emailBody.replaceAll("{help_queue_url}", help_queue_url);
     emailSubject = emailSubject.replaceAll("{help_queue_url}", help_queue_url);
+    Sentry.captureMessage("Ignoring help notification until the bug that generates too many notifications is fixed");
+    return;
   }
   if ("help_request_id" in body) {
     const help_request_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}/office-hours/request/${(body as any).help_request_id}`;
     emailBody = emailBody.replaceAll("{help_request_url}", help_request_url);
     emailSubject = emailSubject.replaceAll("{help_request_url}", help_request_url);
+    Sentry.captureMessage("Ignoring help notification until the bug that generates too many notifications is fixed");
+    return;
   }
   if (course_slug) {
     emailBody = emailBody.replaceAll("{course_slug}", course_slug);
