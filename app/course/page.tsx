@@ -2,10 +2,12 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
 import { createClient } from "@/utils/supabase/server";
-import { Card, Flex, Heading, Stack, VStack } from "@chakra-ui/react";
+import Logo from "@/components/ui/logo";
+import { Card, Container, Flex, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { Box } from "lucide-react";
 import { redirect } from "next/navigation";
 import { signOutAction } from "../actions";
+
 export default async function ProtectedPage() {
   const supabase = await createClient();
 
@@ -24,8 +26,37 @@ export default async function ProtectedPage() {
     .order("semester", { ascending: false })
     .order("name", { ascending: true });
 
-  if (courses.data?.length === 1) {
-    return redirect(`/course/${courses.data[0].id}`);
+  const courseList = courses.data ?? [];
+
+  if (courseList.length === 0) {
+    return (
+      <Container maxW="md" py={{ base: "12", md: "24" }}>
+        <Stack gap="6">
+          <VStack gap="2" textAlign="center" mt="4">
+            <Logo width={100} />
+            <Heading size="3xl">Pawtograder</Heading>
+            <Text color="fg.muted">Your pawsome course companion</Text>
+          </VStack>
+
+          <Card.Root p="4" colorPalette="red" variant="outline">
+            <Card.Body>
+              <Card.Title>You don\'t have access to any courses</Card.Title>
+              <Card.Description>
+                You do not currently have access to any courses on Pawtograder. Please check with your instructor.
+              </Card.Description>
+            </Card.Body>
+          </Card.Root>
+
+          <Button onClick={signOutAction} variant="outline" width="100%">
+            Sign out
+          </Button>
+        </Stack>
+      </Container>
+    );
+  }
+
+  if (courseList.length === 1) {
+    return redirect(`/course/${courseList[0].id}`);
   }
   return (
     <VStack>
@@ -39,7 +70,7 @@ export default async function ProtectedPage() {
         <Heading size="xl">Your courses</Heading>
         <Flex>
           <Stack gap="4" direction="row" wrap="wrap">
-            {courses.data!.map((course) => (
+            {courseList.map((course) => (
               <Link key={course.id} href={`/course/${course.id}`}>
                 <Card.Root key={course.id} p="4" w="300px" _hover={{ bg: "bg.subtle", cursor: "pointer" }}>
                   <Card.Body>
