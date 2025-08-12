@@ -80,5 +80,65 @@ export const emailTemplates = {
       subject: "You've been added to {course_name} on Pawtograder",
       body: 'Hello!\n\n{inviter_name} ({inviter_email}) has added you to the course "{course_name}" on Pawtograder.\n\nYou can access the course here: {course_url}\n\nIf you have any questions, please contact {inviter_name} or your course instructor.\n\nWelcome to Pawtograder!'
     }
+  },
+  /**
+   * Help request variables:
+   * {help_queue_name} - The name of the help queue
+   * {creator_name} - The name of the student who created the request
+   * {assignee_name} - The name of the staff member assigned (if any)
+   * {status} - The status of the request
+   * {request_preview} - A short preview of the request text
+   * {help_request_url} - Direct link to the help request
+   * {help_queue_url} - Link to the help queue
+   */
+  help_request: {
+    created: {
+      subject: "{course_name} - New help request in {help_queue_name}",
+      body: "{creator_name} created a new help request. Read more details in Pawtograder at {help_request_url}"
+    },
+    assigned: {
+      subject: "{course_name} - Help request assigned in {help_queue_name}",
+      body: "{assignee_name} is now working on {creator_name}'s help request. Read more details in Pawtograder at {help_request_url}"
+    },
+    status_changed: {
+      subject: "{course_name} - Help request in {help_queue_name} updated to {status}",
+      body: "Help request by {creator_name} is now {status}. Read more details in Pawtograder at {help_request_url}"
+    }
+  },
+  /**
+   * Help request message variables:
+   * {help_queue_name} - The name of the help queue
+   * {author_name} - The name of the message author
+   * {help_request_creator_name} - The name of the original help request creator
+   * {help_request_url} - Direct link to the help request
+   */
+  help_request_message: {
+    subject: "{course_name} - New message in help request ({help_queue_name})",
+    body: "{author_name} replied to {help_request_creator_name}'s help request. Read more details in Pawtograder at {help_request_url}"
+  },
+  /**
+   * Regrade request variables:
+   * {action} - One of comment_challenged | status_change | escalated | new_comment
+   * {new_status} - New status when applicable
+   * {assignment_url} - Link to the related assignment (when available)
+   * {course_url} - Fallback link to the course
+   */
+  regrade_request: {
+    comment_challenged: {
+      subject: "{course_name} - A regrade request has been opened",
+      body: "A regrade request was opened on your grading comment. Read more details in Pawtograder at {course_url}"
+    },
+    status_change: {
+      subject: "{course_name} - Regrade request status updated to {new_status}",
+      body: "A regrade request you're involved in was updated to {new_status}. Read more details in Pawtograder at {course_url}"
+    },
+    escalated: {
+      subject: "{course_name} - Regrade request escalated",
+      body: "A regrade request has been escalated. Read more details in Pawtograder at {course_url}"
+    },
+    new_comment: {
+      subject: "{course_name} - New comment on a regrade request",
+      body: "There's a new comment on a regrade request you're involved in. Read more details in Pawtograder at {course_url}"
+    }
   }
 };

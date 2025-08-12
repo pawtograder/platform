@@ -185,6 +185,21 @@ async function sendEmail(params: {
     emailBody = emailBody.replaceAll("{assignment_url}", assignment_link);
     emailSubject = emailSubject.replaceAll("{assignment_url}", assignment_link);
   }
+  // Build course URL for any template referencing it
+  const course_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}`;
+  emailBody = emailBody.replaceAll("{course_url}", course_url);
+  emailSubject = emailSubject.replaceAll("{course_url}", course_url);
+  // Help request links
+  if ("help_queue_id" in body) {
+    const help_queue_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}/office-hours/${(body as any).help_queue_id}`;
+    emailBody = emailBody.replaceAll("{help_queue_url}", help_queue_url);
+    emailSubject = emailSubject.replaceAll("{help_queue_url}", help_queue_url);
+  }
+  if ("help_request_id" in body) {
+    const help_request_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}/office-hours/request/${(body as any).help_request_id}`;
+    emailBody = emailBody.replaceAll("{help_request_url}", help_request_url);
+    emailSubject = emailSubject.replaceAll("{help_request_url}", help_request_url);
+  }
   if (course_slug) {
     emailBody = emailBody.replaceAll("{course_slug}", course_slug);
     emailSubject = emailSubject.replaceAll("{course_slug}", course_slug);
@@ -198,12 +213,7 @@ async function sendEmail(params: {
     emailBody = emailBody.replaceAll("{thread_url}", thread_url);
     emailSubject = emailSubject.replaceAll("{thread_url}", thread_url);
   }
-  if (body.type === "course_enrollment") {
-    // Build the course link
-    const course_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}`;
-    emailBody = emailBody.replaceAll("{course_url}", course_url);
-    emailSubject = emailSubject.replaceAll("{course_url}", course_url);
-  }
+  // course_url replacement for course_enrollment is handled above generically
   const recipient = emails.find((email) => email.email);
   if (!recipient) {
     const error = new Error(`No recipient found for notification ${notification.msg_id}`);
