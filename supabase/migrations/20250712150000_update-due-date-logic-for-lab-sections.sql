@@ -84,7 +84,7 @@ BEGIN
         SELECT 1 FROM review_assignments ra 
         WHERE ra.assignment_id = a.id AND ra.assignee_profile_id = prof.id
     )
-    ON CONFLICT (submission_review_id, assignee_profile_id) DO NOTHING;
+    ON CONFLICT (submission_id, rubric_id) DO NOTHING;
 END;
 $$;
 

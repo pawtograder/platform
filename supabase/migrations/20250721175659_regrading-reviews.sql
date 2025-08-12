@@ -312,9 +312,7 @@ begin
                     'action', 'comment_challenged',
                     'regrade_request_id', regrade_request_id,
                     'submission_id', current_request.submission_id,
-                    'assignment_id', current_request.assignment_id,
-                    'opened_by', profile_id,
-                    'opened_by_name', (select name from public.profiles where id = profile_id)
+                    'opened_by', profile_id
                 ) as body,
                 'info' as style,
                 ur.user_id
@@ -440,9 +438,7 @@ begin
             'old_status', current_request.status,
             'new_status', new_status,
             'submission_id', current_request.submission_id,
-            'assignment_id', current_request.assignment_id,
-            'updated_by', profile_id,
-            'updated_by_name', (select name from public.profiles where id = profile_id)
+            'updated_by', profile_id
         ) as body,
         'info' as style,
         ur.user_id
@@ -480,9 +476,7 @@ begin
                 'old_status', current_request.status,
                 'new_status', new_status,
                 'submission_id', current_request.submission_id,
-                'assignment_id', current_request.assignment_id,
-                'escalated_by', profile_id,
-                'escalated_by_name', (select name from public.profiles where id = profile_id)
+                'escalated_by', profile_id
             ) as body,
             'warning' as style,
             ur.user_id
@@ -542,9 +536,7 @@ begin
             'action', 'new_comment',
             'regrade_request_id', regrade_request_record.id,
             'submission_id', regrade_request_record.submission_id,
-            'assignment_id', regrade_request_record.assignment_id,
             'comment_author', NEW.author,
-            'comment_author_name', (select name from public.profiles where id = NEW.author),
             'comment_id', NEW.id
         ) as body,
         'info' as style,
