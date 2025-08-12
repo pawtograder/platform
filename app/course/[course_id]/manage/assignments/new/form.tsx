@@ -14,11 +14,13 @@ import {
 import { Controller, FieldValues } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import { appendTimezoneOffset } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
+import { addMinutes } from "date-fns";
 import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -319,6 +321,9 @@ export default function AssignmentForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const timezone = course.classes.time_zone || "America/New_York";
   const isEditing = !!form.getValues("id");
+  // Enforce that release date must be strictly in the future
+  const nowPlusOneMinute = addMinutes(TZDate.tz(timezone), 1);
+  const minReleaseLocal = new TZDate(nowPlusOneMinute, timezone).toISOString().slice(0, -13);
   const onSubmitWrapper = useCallback(
     async (values: FieldValues) => {
       setIsSubmitting(true);
@@ -390,7 +395,7 @@ export default function AssignmentForm({
           <Fieldset.Content>
             <Field
               label={`Release Date (${course.classes.time_zone})`}
-              helperText="Date that students can see the assignment"
+              helperText="Date that students can see the assignment. Student repositories will be created at the release date. Ensure all handout materials are in place before this time."
               errorText={errors.release_date?.message?.toString()}
               invalid={errors.release_date ? true : false}
               required={true}
@@ -398,7 +403,15 @@ export default function AssignmentForm({
               <Controller
                 name="release_date"
                 control={control}
-                rules={{ required: "This is required" }}
+                rules={{
+                  required: "This is required",
+                  validate: (value: string) => {
+                    if (!value) return "This is required";
+                    const selected = new TZDate(value, timezone).getTime();
+                    const now = TZDate.tz(timezone).getTime();
+                    return selected > now || "Release date must be in the future";
+                  }
+                }}
                 render={({ field }) => {
                   const hasATimezoneOffset =
                     field.value &&
@@ -411,6 +424,7 @@ export default function AssignmentForm({
                   return (
                     <Input
                       type="datetime-local"
+                      min={minReleaseLocal}
                       value={localValue || ""}
                       onChange={field.onChange}
                       onBlur={field.onBlur}
@@ -419,6 +433,12 @@ export default function AssignmentForm({
                 }}
               />
             </Field>
+          </Fieldset.Content>
+          <Fieldset.Content>
+            <Alert status="warning" variant="subtle" title="Student repositories will be created at the release date">
+              Ensure all handout materials are in place before this time. Repositories for students are created at the
+              release date.
+            </Alert>
           </Fieldset.Content>
           <Fieldset.Content>
             <Field
