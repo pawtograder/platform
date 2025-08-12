@@ -261,3 +261,52 @@ parts:
 - Use `max_annotations` to prevent over‑counting nitpicks.
 - Prefer options when the same check has graded tiers (e.g., Complete/Partial/Incomplete).
 - Use `student_visibility` to separate internal notes from student‑facing feedback.
+
+## Field reference: required vs optional (with defaults)
+
+- Rubric
+  - Mandatory: `name`, `parts`
+  - Optional: `description`
+
+- Part
+  - Mandatory: `name`, `criteria`
+  - Optional: `id`, `description`, `data`
+
+- Criteria
+  - Mandatory: `name`, `checks`
+  - Optional: `id`, `description`, `data`, `is_additive` (default: `false`), `total_points` (default: `0`), `min_checks_per_submission`, `max_checks_per_submission`
+
+- Check
+  - Mandatory: `name`, `is_annotation` (boolean), `is_required` (boolean), `is_comment_required` (boolean), `points` (number; use `0` when the check relies on `data.options`)
+  - Optional: `id`, `description`, `file`, `artifact`, `annotation_target` (`file` | `artifact`; default behavior in UI is `file` when omitted for annotations), `max_annotations`, `data` (see below), `student_visibility` (default: `always`)
+
+- Check `data.options` (for multiple-choice checks)
+  - Mandatory per option: `label`, `points`
+  - Optional per option: `description`
+  - Notes: Must define at least two options (single-option checks are rejected by the editor). When options are present, the selected option’s `points` replace the base `points` for that check when applied.
+
+Defaults and behaviors used by the grader UI
+- Criteria without `is_additive` are treated as subtractive (deduction) criteria.
+- Criteria without `total_points` default to `0` (i.e., no contribution unless checks add points in additive mode).
+- Check `student_visibility` defaults to `always`.
+- Annotation `annotation_target` defaults to `file` in the UI if omitted.
+- `min_checks_per_submission` and `max_checks_per_submission` are optional; when not set, graders are not constrained by count.
+
+## Check references (cross‑rubric context)
+
+What it is
+- A check on one rubric can reference a check on another rubric. During grading, any applied feedback (comments/points) from the referenced check(s) is shown inline under the current check as “Related Feedback from Other Reviews”. This gives graders context from, e.g., self‑review or prior review rounds.
+
+Scoring and visibility
+- References are informational only. They do not contribute points to the current rubric’s criteria and do not alter the score computation.
+- Referenced feedback is surfaced to graders in grading mode. Student visibility continues to follow each original check’s own `student_visibility` and release state within its source review.
+
+How to configure
+- Navigate to the rubric preview/editor for an assignment.
+- For the check you want to augment, click “Add Reference”.
+- Search/select a check from other rubrics (the current rubric’s checks are excluded).
+- Save. The relationship is stored so that, when grading, the referenced feedback appears under the referencing check.
+
+Good use cases
+- Show a student’s self‑review evidence next to the corresponding grading check.
+- Pull in meta‑grading notes when doing final pass reviews.
