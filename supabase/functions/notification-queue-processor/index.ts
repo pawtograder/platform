@@ -4,6 +4,18 @@ import { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
 import { Notification } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
+import * as Sentry from "npm:@sentry/deno";
+
+if (Deno.env.get("SENTRY_DSN")) {
+  Sentry.init({
+    dsn: Deno.env.get("SENTRY_DSN")!,
+    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
+    sendDefaultPii: true,
+    environment: Deno.env.get("ENVIRONMENT") || "development",
+    integrations: [],
+    tracesSampleRate: 0
+  });
+}
 
 export type QueueMessage<T> = {
   msg_id: number;
@@ -75,6 +87,15 @@ export type EmailNotification = NotificationEnvelope & {
   reply_to?: string;
 };
 
+export type CourseEnrollmentNotification = NotificationEnvelope & {
+  type: "course_enrollment";
+  action: "create";
+  course_name: string;
+  course_id: number;
+  inviter_name: string;
+  inviter_email: string;
+};
+
 async function sendEmail(params: {
   adminSupabase: SupabaseClient<Database>;
   transporter: nodemailer.Transporter;
@@ -87,10 +108,25 @@ async function sendEmail(params: {
     lab_section_id: number | null;
     lab_section_name: string | null;
   }[];
+  scope: Sentry.Scope;
 }) {
-  const { adminSupabase, transporter, notification, emails, courses, userRoles } = params;
+  const { adminSupabase, transporter, notification, emails, courses, userRoles, scope } = params;
+
+  // Set up Sentry scope context
+  scope.setTag("notification_id", notification.message.id);
+  scope.setTag("class_id", notification.message.class_id);
+  scope.setTag("user_id", notification.message.user_id);
+  scope.setContext("notification", {
+    msg_id: notification.msg_id,
+    notification_id: notification.message.id,
+    class_id: notification.message.class_id,
+    user_id: notification.message.user_id
+  });
 
   if (!notification.message.body) {
+    const error = new Error(`No body found for notification ${notification.message.id}`);
+    scope.setContext("error_details", { missing: "notification.message.body" });
+    Sentry.captureException(error, scope);
     console.error(`No body found for notification ${notification.message.id}`);
     return;
   }
@@ -103,6 +139,9 @@ async function sendEmail(params: {
 
   let emailTemplate = emailTemplates[body.type as keyof typeof emailTemplates];
   if (!emailTemplate) {
+    const error = new Error(`No email template found for notification type ${body.type}`);
+    scope.setContext("error_details", { missing_template_type: body.type });
+    Sentry.captureException(error, scope);
     console.error(`No email template found for notification type ${body.type}`);
     return;
   }
@@ -110,10 +149,16 @@ async function sendEmail(params: {
     emailTemplate = emailTemplate[body.action as keyof typeof emailTemplate];
   }
   if (!("subject" in emailTemplate)) {
+    const error = new Error(`No subject found for email template ${body.type}`);
+    scope.setContext("error_details", { missing_subject_for_type: body.type });
+    Sentry.captureException(error, scope);
     console.error(`No subject found for email template ${body.type}`);
     return;
   }
   if (!("body" in emailTemplate)) {
+    const error = new Error(`No body found for email template ${body.type}`);
+    scope.setContext("error_details", { missing_body_for_type: body.type });
+    Sentry.captureException(error, scope);
     console.error(`No body found for email template ${body.type}`);
     return;
   }
@@ -122,14 +167,14 @@ async function sendEmail(params: {
   //Fill in the variables using the keys of body
   const variables = Object.keys(body);
   if ("subject" in body) {
-    emailSubject = emailBody.replace("{subject}", body["subject" as keyof NotificationEnvelope]);
+    emailSubject = emailSubject.replaceAll("{subject}", body["subject" as keyof NotificationEnvelope]);
   }
   if ("body" in body) {
-    emailBody = emailBody.replace("{body}", body["body" as keyof NotificationEnvelope]);
+    emailBody = emailBody.replaceAll("{body}", body["body" as keyof NotificationEnvelope]);
   }
   for (const variable of variables) {
-    emailSubject = emailSubject.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
-    emailBody = emailBody.replace(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
+    emailSubject = emailSubject.replaceAll(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
+    emailBody = emailBody.replaceAll(`{${variable}}`, body[variable as keyof NotificationEnvelope]);
   }
   //Replace course_slug and course_name
   const course_slug = courses.find((course) => course.id === notification.message.class_id)?.slug;
@@ -137,25 +182,48 @@ async function sendEmail(params: {
   if ("assignment_id" in body) {
     // Build the assignment link
     const assignment_link = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}/assignments/${body.assignment_id}`;
-    emailBody = emailBody.replace("{assignment_url}", assignment_link);
-    emailSubject = emailSubject.replace("{assignment_url}", assignment_link);
+    emailBody = emailBody.replaceAll("{assignment_url}", assignment_link);
+    emailSubject = emailSubject.replaceAll("{assignment_url}", assignment_link);
   }
   if (course_slug) {
-    emailBody = emailBody.replace("{course_slug}", course_slug);
-    emailSubject = emailSubject.replace("{course_slug}", course_slug);
+    emailBody = emailBody.replaceAll("{course_slug}", course_slug);
+    emailSubject = emailSubject.replaceAll("{course_slug}", course_slug);
   }
   if (course_name) {
-    emailBody = emailBody.replace("{course_name}", course_name);
-    emailSubject = emailSubject.replace("{course_name}", course_name);
+    emailBody = emailBody.replaceAll("{course_name}", course_name);
+    emailSubject = emailSubject.replaceAll("{course_name}", course_name);
   }
   if ("root_thread_id" in body) {
     const thread_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}/discussion/${body.root_thread_id}`;
-    emailBody = emailBody.replace("{thread_url}", thread_url);
-    emailSubject = emailSubject.replace("{thread_url}", thread_url);
+    emailBody = emailBody.replaceAll("{thread_url}", thread_url);
+    emailSubject = emailSubject.replaceAll("{thread_url}", thread_url);
+  }
+  if (body.type === "course_enrollment") {
+    // Build the course link
+    const course_url = `https://${Deno.env.get("APP_URL")}/course/${notification.message.class_id}`;
+    emailBody = emailBody.replaceAll("{course_url}", course_url);
+    emailSubject = emailSubject.replaceAll("{course_url}", course_url);
   }
   const recipient = emails.find((email) => email.email);
   if (!recipient) {
+    const error = new Error(`No recipient found for notification ${notification.msg_id}`);
+    scope.setContext("error_details", {
+      notification_msg_id: notification.msg_id,
+      available_emails: emails.length,
+      notification: notification
+    });
+    Sentry.captureException(error, scope);
     console.error(`No recipient found for notification ${notification.msg_id}, ${JSON.stringify(notification)}`);
+    return;
+  }
+
+  // Skip sending/logging for internal test emails and archive the message
+  const recipientEmailLower = recipient.email?.toLowerCase() ?? "";
+  if (recipientEmailLower.endsWith("@pawtograder.net")) {
+    await adminSupabase.schema("pgmq_public").rpc("archive", {
+      queue_name: "notification_emails",
+      message_id: notification.msg_id
+    });
     return;
   }
 
@@ -171,6 +239,14 @@ async function sendEmail(params: {
       emailSubject = emailSubject.replace("{lab_section}", userRole.lab_section_name);
     }
   }
+  // Add email context to scope
+  scope.setContext("email", {
+    recipient: recipient.email,
+    subject: emailSubject,
+    cc_count: cc_emails.length,
+    template_type: body.type
+  });
+
   try {
     console.log(`Sending email to ${recipient.email}`);
     console.log(transporter);
@@ -183,6 +259,13 @@ async function sendEmail(params: {
       text: emailBody
     });
   } catch (error) {
+    scope.setContext("smtp_error", {
+      recipient: recipient.email,
+      error_message: error instanceof Error ? error.message : String(error),
+      smtp_host: Deno.env.get("SMTP_HOST"),
+      smtp_port: Deno.env.get("SMTP_PORT")
+    });
+    Sentry.captureException(error, scope);
     console.error(`Error sending email: ${error}`);
     return;
   }
@@ -192,19 +275,34 @@ async function sendEmail(params: {
     message_id: notification.msg_id
   });
 }
-async function processNotificationQueue() {
-  const adminSupabase = createClient<Database>(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
+/**
+ * Process a batch of email notifications with proper error handling and batching.
+ *
+ * This function implements the same pattern as the gradebook batch processor:
+ * 1. Reads messages from the queue in batches
+ * 2. Processes emails with proper context fetching
+ * 3. Archives completed messages
+ * 4. Returns whether work was processed for polling decisions
+ */
+export async function processBatch(adminSupabase: ReturnType<typeof createClient<Database>>, scope: Sentry.Scope) {
   const result = await adminSupabase.schema("pgmq_public").rpc("read", {
     queue_name: "notification_emails",
-    sleep_seconds: 5,
-    n: 20
+    sleep_seconds: 30, // Longer sleep for email processing
+    n: 100 // Process up to 100 emails at once
   });
-  if (result.data) {
+
+  if (result.error) {
+    Sentry.captureException(result.error, scope);
+    console.error("Queue read error:", result.error);
+    return false;
+  }
+
+  scope.setTag("queue_length", result.data?.length || 0);
+  if (result.data && result.data.length > 0) {
+    console.log(`Processing ${result.data.length} email notifications`);
+
     //Fetch all context: emails and course names
-    const notifications = result.data as { message: Notification }[];
+    const notifications = result.data as QueueMessage<Notification>[];
     const uniqueEmails = new Set<string>();
     notifications.forEach((notification) => {
       uniqueEmails.add(notification.message.user_id);
@@ -253,16 +351,26 @@ async function processNotificationQueue() {
       );
 
     if (emailsError) {
+      scope.setContext("context_fetch_error", { type: "emails", unique_emails_count: uniqueEmails.size });
+      Sentry.captureException(emailsError, scope);
       console.error(`Error fetching emails: ${emailsError?.message}`);
-      return;
+      return false;
     }
     if (coursesError) {
+      scope.setContext("context_fetch_error", { type: "courses", unique_courses_count: uniqueCourseIds.size });
+      Sentry.captureException(coursesError, scope);
       console.error(`Error fetching courses: ${coursesError?.message}`);
-      return;
+      return false;
     }
     if (userRolesError) {
+      scope.setContext("context_fetch_error", {
+        type: "user_roles",
+        unique_emails_count: uniqueEmails.size,
+        unique_courses_count: uniqueCourseIds.size
+      });
+      Sentry.captureException(userRolesError, scope);
       console.error(`Error fetching user roles: ${userRolesError?.message}`);
-      return;
+      return false;
     }
 
     // Transform user roles data to include section names
@@ -273,31 +381,126 @@ async function processNotificationQueue() {
         lab_section_id: role.lab_section_id,
         lab_section_name: role.lab_sections?.name || null
       })) || [];
+
     const transporter = nodemailer.createTransport({
       pool: false,
       host: Deno.env.get("SMTP_HOST") || "",
       port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
-      secure: false, // use TLS
+      secure: true, // use TLS
       auth: {
         user: Deno.env.get("SMTP_USER") || "",
         pass: Deno.env.get("SMTP_PASSWORD") || ""
       }
     });
+
+    // Process emails in parallel
     await Promise.all(
-      result.data.map((notification) =>
-        sendEmail({
+      notifications.map((notification) => {
+        // Create a new scope for each email to isolate context
+        const emailScope = scope.clone();
+        emailScope.setTag("msg_id", notification.msg_id);
+        return sendEmail({
           adminSupabase,
           transporter,
-          notification: notification as QueueMessage<Notification>,
+          notification,
           emails,
           courses,
-          userRoles: transformedUserRoles
-        })
-      )
+          userRoles: transformedUserRoles,
+          scope: emailScope
+        });
+      })
     );
+
+    return true; // Work was processed
+  } else {
+    // No messages in queue
+    return false;
   }
 }
-Deno.serve(async () => {
-  await processNotificationQueue();
-  return new Response(JSON.stringify({}), { headers: { "Content-Type": "application/json" } });
+
+export async function runBatchHandler() {
+  const scope = new Sentry.Scope();
+  scope.setTag("function", "notification_queue_processor");
+
+  const adminSupabase = createClient<Database>(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+
+  let isRunning = true;
+  let consecutiveErrors = 0;
+  const maxConsecutiveErrors = 5;
+
+  // Handle graceful shutdown
+  const controller = new AbortController();
+  const shutdownHandler = () => {
+    console.log("Received shutdown signal, stopping email batch handler...");
+    isRunning = false;
+    controller.abort();
+  };
+
+  // Listen for termination signals (if supported in edge runtime)
+  try {
+    Deno.addSignalListener("SIGINT", shutdownHandler);
+    Deno.addSignalListener("SIGTERM", shutdownHandler);
+  } catch (e) {
+    console.error("Error adding signal listeners:", e);
+    // Signal listeners might not be available in edge runtime
+    console.log("Signal listeners not available in this environment");
+  }
+
+  while (isRunning) {
+    try {
+      const hasWork = await processBatch(adminSupabase, scope);
+      consecutiveErrors = 0; // Reset error count on successful processing
+
+      // If there was work, check again immediately, otherwise wait 15 seconds
+      if (!hasWork) {
+        console.log("No emails to process, waiting 15 seconds before next poll...");
+        await new Promise((resolve) => setTimeout(resolve, 15000));
+      }
+    } catch (error) {
+      consecutiveErrors++;
+      scope.setTag("consecutive_errors", consecutiveErrors);
+      console.error(`Email batch processing error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
+      Sentry.captureException(error, scope);
+
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        Sentry.captureMessage("Too many consecutive errors, stopping email batch handler", scope);
+        console.error("Too many consecutive errors, stopping email batch handler");
+        break;
+      }
+
+      // Wait before retrying on error
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+
+  console.log("Email batch handler stopped");
+}
+
+Deno.serve((req) => {
+  const headers = req.headers;
+  const secret = headers.get("x-edge-function-secret");
+  const expectedSecret = Deno.env.get("EDGE_FUNCTION_SECRET") || "some-secret-value";
+  if (secret !== expectedSecret) {
+    return new Response(JSON.stringify({ error: "Invalid secret" }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  EdgeRuntime.waitUntil(runBatchHandler());
+
+  // Return immediately to acknowledge the start request
+  return Promise.resolve(
+    new Response(
+      JSON.stringify({
+        message: "Email batch handler started",
+        timestamp: new Date().toISOString()
+      }),
+      {
+        headers: { "Content-Type": "application/json" }
+      }
+    )
+  );
 });

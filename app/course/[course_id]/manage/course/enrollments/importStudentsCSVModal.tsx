@@ -39,6 +39,7 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
   const [usersToPreviewAdd, setUsersToPreviewAdd] = useState<
     Array<{ email: string; name: string; role: AppRole; canvas_id?: number }>
   >([]);
+  const [notifyOnAdd, setNotifyOnAdd] = useState<boolean>(false);
   const [usersToPreviewIgnore, setUsersToPreviewIgnore] = useState<
     Array<{ email: string; name: string; role: AppRole; canvas_id?: number }>
   >([]);
@@ -208,7 +209,8 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
                 email: user.email!,
                 name: user.name!,
                 role: user.role,
-                canvasId: user.canvas_id
+                canvasId: user.canvas_id,
+                notify: notifyOnAdd
               },
               supabase
             );
@@ -304,6 +306,14 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
                       <Text fontWeight="bold" mb={2}>
                         Users to be added ({usersToPreviewAdd.length}):
                       </Text>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={notifyOnAdd}
+                          onChange={(e) => setNotifyOnAdd(e.target.checked)}
+                        />
+                        Notify users they were added to this course
+                      </label>
                       <VStack
                         as="ul"
                         listStyleType="none"

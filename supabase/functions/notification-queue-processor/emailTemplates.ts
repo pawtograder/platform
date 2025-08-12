@@ -67,5 +67,18 @@ export const emailTemplates = {
       subject: "{course_name} - {subject}",
       body: "{body}"
     }
+  },
+  /**
+   * Course enrollment variables:
+   * {course_name} - The name of the course
+   * {course_url} - The URL of the course
+   * {inviter_name} - The name of the person who added them
+   * {inviter_email} - The email of the person who added them
+   */
+  course_enrollment: {
+    create: {
+      subject: "You've been added to {course_name} on Pawtograder",
+      body: 'Hello!\n\n{inviter_name} ({inviter_email}) has added you to the course "{course_name}" on Pawtograder.\n\nYou can access the course here: {course_url}\n\nIf you have any questions, please contact {inviter_name} or your course instructor.\n\nWelcome to Pawtograder!'
+    }
   }
 };
