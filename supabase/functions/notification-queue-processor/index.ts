@@ -231,12 +231,12 @@ async function sendEmail(params: {
   const userRole = userRoles.find((role) => role.user_id === recipient.user_id);
   if (userRole) {
     if (userRole.class_section) {
-      emailBody = emailBody.replace("{class_section}", userRole.class_section);
-      emailSubject = emailSubject.replace("{class_section}", userRole.class_section);
+      emailBody = emailBody.replaceAll("{class_section}", String(userRole.class_section || ""));
+      emailSubject = emailSubject.replaceAll("{class_section}", String(userRole.class_section || ""));
     }
     if (userRole.lab_section_name) {
-      emailBody = emailBody.replace("{lab_section}", userRole.lab_section_name);
-      emailSubject = emailSubject.replace("{lab_section}", userRole.lab_section_name);
+      emailBody = emailBody.replaceAll("{lab_section}", String(userRole.lab_section_name || ""));
+      emailSubject = emailSubject.replaceAll("{lab_section}", String(userRole.lab_section_name || ""));
     }
   }
   // Add email context to scope
