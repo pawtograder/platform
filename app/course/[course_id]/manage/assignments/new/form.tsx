@@ -20,6 +20,7 @@ import { useCourse } from "@/hooks/useAuthState";
 import { appendTimezoneOffset } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
+import { addMinutes } from "date-fns";
 import { useList } from "@refinedev/core";
 import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
@@ -321,7 +322,7 @@ export default function AssignmentForm({
   const timezone = course.classes.time_zone || "America/New_York";
   const isEditing = !!form.getValues("id");
   // Enforce that release date must be strictly in the future
-  const nowPlusOneMinute = new Date(TZDate.tz(timezone).getTime() + 60 * 1000);
+  const nowPlusOneMinute = addMinutes(TZDate.tz(timezone), 1);
   const minReleaseLocal = new TZDate(nowPlusOneMinute, timezone).toISOString().slice(0, -13);
   const onSubmitWrapper = useCallback(
     async (values: FieldValues) => {
