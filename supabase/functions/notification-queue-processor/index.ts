@@ -382,6 +382,10 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         lab_section_name: role.lab_sections?.name || null
       })) || [];
 
+    if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "" || Deno.env.get("SMTP_HOST") === '127.0.0.1') {
+      Sentry.captureMessage("No SMTP host found, skipping email processing", scope);
+      return false;
+    }
     const transporter = nodemailer.createTransport({
       pool: false,
       host: Deno.env.get("SMTP_HOST") || "",
