@@ -4,8 +4,7 @@ import * as React from "react";
 import { useFormStatus } from "react-dom";
 import { Button, type ButtonProps } from "./button";
 
-export interface SubmitButtonProps
-  extends Omit<ButtonProps, "loading" | "loadingText" | "type"> {
+export interface SubmitButtonProps extends Omit<ButtonProps, "loading" | "loadingText" | "type"> {
   pendingText?: React.ReactNode;
   trackByName?: string;
   trackByValue?: string;
@@ -18,16 +17,7 @@ export function SubmitButton(props: SubmitButtonProps) {
   const pending = formStatus?.pending ?? false;
   const data = formStatus?.data;
 
-  const {
-    children,
-    pendingText,
-    trackByName = "action",
-    trackByValue,
-    name,
-    value,
-    disabled,
-    ...rest
-  } = props;
+  const { children, pendingText, trackByName = "action", trackByValue, name, value, disabled, ...rest } = props;
 
   const isThisSubmit = React.useMemo(() => {
     if (!pending) return false;

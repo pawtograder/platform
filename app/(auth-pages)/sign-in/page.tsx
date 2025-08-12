@@ -52,23 +52,12 @@ export default async function Login(props: { searchParams: Promise<SearchParams>
               <Input name="password" placeholder="password" type="password" aria-label="Sign in password" />
             </Box>
             <Box mt="4">
-              <SubmitButton
-                name="action"
-                value="signin"
-                width="100%"
-                pendingText="Signing in…"
-              >
+              <SubmitButton name="action" value="signin" width="100%" pendingText="Signing in…">
                 Sign in with email
               </SubmitButton>
             </Box>
             <HStack gap="4" w="100%" mt="4">
-              <SubmitButton
-                variant="outline"
-                name="action"
-                value="signup"
-                flex="1"
-                pendingText="Creating account…"
-              >
+              <SubmitButton variant="outline" name="action" value="signup" flex="1" pendingText="Creating account…">
                 Sign up
               </SubmitButton>
               <SubmitButton

@@ -16,7 +16,7 @@ type ClassProfileContextType = {
   public_profile_id: string;
   private_profile: UserProfile;
   public_profile: UserProfile;
-}
+};
 
 const ClassProfileContext = createContext<ClassProfileContextType | undefined>(undefined);
 
