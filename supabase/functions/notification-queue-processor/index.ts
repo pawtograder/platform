@@ -592,6 +592,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
 
     if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "" || Deno.env.get("SMTP_HOST") === "127.0.0.1") {
       Sentry.captureMessage("No SMTP host found, skipping email processing", scope);
+      await Promise.all(notifications.map((notification) => archiveMessage(adminSupabase, notification.msg_id, scope)));
       return false;
     }
     const transporter = nodemailer.createTransport({

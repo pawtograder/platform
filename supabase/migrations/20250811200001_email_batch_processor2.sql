@@ -67,6 +67,7 @@ begin
             -- Notify the author of the comment that triggered this regrade request
             insert into public.notifications (class_id, subject, body, style, user_id)
             select 
+                distinct on (ur.user_id)
                 current_request.class_id,
                 '{}'::jsonb as subject,
                 jsonb_build_object(
