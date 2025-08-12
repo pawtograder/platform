@@ -1,7 +1,8 @@
 {
-  "version": "4",
+  "version": "5",
   "specifiers": {
     "jsr:@supabase/functions-js@*": "2.4.4",
+    "npm:@sentry/deno@*": "10.1.0",
     "npm:@types/node@*": "22.12.0",
     "npm:nodemailer@*": "6.10.1",
     "npm:openai@^4.52.5": "4.87.3"
@@ -15,6 +16,15 @@
     }
   },
   "npm": {
+    "@sentry/core@10.1.0": {
+      "integrity": "sha512-sda76pKjgEgh6VNRNJa9P0WG2egA7N85dTQ8wS/QZ6rD/dNXQZ+ITfL99Jb0b6WhTgvzspJq8bNSl/nRUdbwbQ=="
+    },
+    "@sentry/deno@10.1.0": {
+      "integrity": "sha512-f0Jnh07HPr/pYwmE4t3zhYkNxG6sIQyQU2rRI/d5Pq4ESSszzOr5Y+mMjc+eP9A7TEzEDoRWH4hA7cKMW6jcTg==",
+      "dependencies": [
+        "@sentry/core"
+      ]
+    },
     "@types/node-fetch@2.6.12": {
       "integrity": "sha512-8nneRWKCg3rMtF69nLQJnOYUcbafYeFSjqkw3jCRLsqkWFlHaoQrr5mXmofFGOx3DKn7UfmBMyov8ySvLRVldA==",
       "dependencies": [
@@ -181,7 +191,8 @@
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
     },
     "node-domexception@1.0.0": {
-      "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ=="
+      "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
+      "deprecated": true
     },
     "node-fetch@2.7.0": {
       "integrity": "sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==",
@@ -202,7 +213,8 @@
         "form-data-encoder",
         "formdata-node",
         "node-fetch"
-      ]
+      ],
+      "bin": true
     },
     "tr46@0.0.3": {
       "integrity": "sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw=="
