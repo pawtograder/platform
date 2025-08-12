@@ -52,14 +52,10 @@ test.describe("Office Hours", () => {
   test.describe.configure({ mode: "serial" });
   test("Student can request help", async ({ page }) => {
     await loginAsUser(page, student!, course);
-    // Give realtime time to settle to avoid bursts
-    await page.waitForTimeout(200);
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
-    await page.waitForTimeout(100);
 
     //Make a private request first
     await page.getByRole("link", { name: "Submit Request" }).click();
-    await page.waitForTimeout(100);
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
     await page.getByRole("textbox").click();
     await page.getByRole("textbox").fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
@@ -78,7 +74,6 @@ test.describe("Office Hours", () => {
 
     //Make a public request
     await page.getByRole("link", { name: "Submit Request" }).click();
-    await page.waitForTimeout(100);
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
     await page.getByRole("textbox").click();
     await page.getByRole("textbox").fill(HELP_REQUEST_MESSAGE_1);
@@ -93,10 +88,7 @@ test.describe("Office Hours", () => {
   });
   test("Another student can view the public request and comment on it, but cant see the private", async ({ page }) => {
     await loginAsUser(page, student2!, course);
-    await page.waitForTimeout(200);
-
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
-    await page.waitForTimeout(100);
     await page.getByRole("button", { name: "View Chat" }).click();
     await percySnapshot(page, "Office Hours - View Queue with a public request");
     await expect(page.getByText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1)).toBeVisible();
@@ -108,9 +100,7 @@ test.describe("Office Hours", () => {
   });
   test("Instructor can view all, comment, and start a video call", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
-    await page.waitForTimeout(200);
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
-    await page.waitForTimeout(100);
     await page.getByRole("link", { name: HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await expect(page.locator("body")).toContainText(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);

@@ -8,7 +8,7 @@ dotenv.config({ path: ".env.local" });
 
 export const supabase = createClient<Database>(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 // Global, test-only rate limiter to avoid tripping realtime broadcast limits in CI
-const RATE_LIMIT_DELAY_MS = Number.parseInt(process.env.LOCAL_TEST_RATE_LIMIT_DELAY_MS || "0");
+const RATE_LIMIT_DELAY_MS = process.env.CI ? 0 : 250;
 
 class TestRateLimiter {
   private queue: Array<() => Promise<void>> = [];
