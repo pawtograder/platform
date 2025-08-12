@@ -940,6 +940,8 @@ begin
       'assignee_name', p_assignee_name,
       'status', p_status,
       'request_preview', p_request_preview,
+      'request_subject', COALESCE((select name from public.help_request_templates hrt where hrt.id = (select template_id from public.help_requests where id = p_help_request_id)), 'General'),
+      'request_body', (select request from public.help_requests where id = p_help_request_id),
       'is_private', p_is_private
     );
   end if;

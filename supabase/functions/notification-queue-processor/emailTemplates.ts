@@ -94,15 +94,15 @@ export const emailTemplates = {
   help_request: {
     created: {
       subject: "{course_name} - New help request in {help_queue_name}",
-      body: "{creator_name} created a new help request. Read more details in Pawtograder at {help_request_url}"
+      body: "{creator_name} created a new help request.\n\nSubject: {request_subject}\n\n{request_body}\n\nOpen it in Pawtograder at {help_request_url}"
     },
     assigned: {
       subject: "{course_name} - Help request assigned in {help_queue_name}",
-      body: "{assignee_name} is now working on {creator_name}'s help request. Read more details in Pawtograder at {help_request_url}"
+      body: "{assignee_name} is now working on {creator_name}'s help request.\n\nSubject: {request_subject}\n\n{request_body}\n\nOpen it in Pawtograder at {help_request_url}"
     },
     status_changed: {
       subject: "{course_name} - Help request in {help_queue_name} updated to {status}",
-      body: "Help request by {creator_name} is now {status}. Read more details in Pawtograder at {help_request_url}"
+      body: "Help request by {creator_name} is now {status}.\n\nSubject: {request_subject}\n\n{request_body}\n\nOpen it in Pawtograder at {help_request_url}"
     }
   },
   /**
@@ -126,19 +126,19 @@ export const emailTemplates = {
   regrade_request: {
     comment_challenged: {
       subject: "{course_name} - A regrade request has been opened",
-      body: "A regrade request was opened on your grading comment. Read more details in Pawtograder at {course_url}"
+      body: "{opened_by_name} opened a regrade request on your grading comment. Read more details in Pawtograder at {assignment_url}"
     },
     status_change: {
       subject: "{course_name} - Regrade request status updated to {new_status}",
-      body: "A regrade request you're involved in was updated to {new_status}. Read more details in Pawtograder at {course_url}"
+      body: "{updated_by_name} updated a regrade request to {new_status}. Read more details in Pawtograder at {assignment_url}"
     },
     escalated: {
       subject: "{course_name} - Regrade request escalated",
-      body: "A regrade request has been escalated. Read more details in Pawtograder at {course_url}"
+      body: "{escalated_by_name} escalated a regrade request. Read more details in Pawtograder at {assignment_url}"
     },
     new_comment: {
       subject: "{course_name} - New comment on a regrade request",
-      body: "There's a new comment on a regrade request you're involved in. Read more details in Pawtograder at {course_url}"
+      body: "{comment_author_name} commented on a regrade request you're involved in. Read more details in Pawtograder at {assignment_url}"
     }
   }
 };
