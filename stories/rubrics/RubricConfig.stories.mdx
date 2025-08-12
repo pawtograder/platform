@@ -1,0 +1,76 @@
+import { Meta } from "@storybook/addon-docs";
+
+<Meta title="Rubrics/Configuration Guide" />
+
+### Rubrics: configuration overview
+
+- A rubric contains parts; parts contain criteria; criteria contain checks.
+- Criteria can be additive (points earned) or subtractive (points deducted from a max).
+- Checks can be global or annotations (on a file line or artifact). They may have selectable options.
+- Visibility can be controlled per check.
+
+#### Minimal rubric
+```yaml
+name: Sample Rubric
+parts:
+  - name: Code Quality
+    criteria:
+      - name: Style and Clarity
+        total_points: 10
+        is_additive: false
+        checks:
+          - name: Missing Javadocs
+            is_annotation: false
+            is_required: false
+            is_comment_required: false
+            points: 2
+```
+
+#### Options (multiple choice)
+```yaml
+checks:
+  - name: Response completeness
+    is_annotation: false
+    points: 0
+    data:
+      options:
+        - label: Complete and correct
+          points: 5
+        - label: Mostly complete
+          points: 3
+        - label: Incomplete
+          points: 1
+```
+
+#### Annotations and limits
+```yaml
+checks:
+  - name: Unclear comment
+    is_annotation: true
+    annotation_target: file
+    file: src/Main.java
+    is_comment_required: true
+    max_annotations: 3
+    points: 1
+```
+
+#### Min/Max checks
+```yaml
+criteria:
+  - name: Choose exactly one pattern
+    total_points: 5
+    is_additive: true
+    min_checks_per_submission: 1
+    max_checks_per_submission: 1
+```
+
+#### Student visibility
+```yaml
+checks:
+  - name: For staff only
+    is_annotation: false
+    points: 0
+    student_visibility: never
+```
+
+See `Rubrics/Examples` stories for interactive previews using canned data.
