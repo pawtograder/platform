@@ -1,11 +1,13 @@
 "use client";
-import NotFound from "@/components/ui/not-found";
+import Logo from "@/components/ui/logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CourseWithFeatures, UserProfile, UserRole, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
+import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
 import { CrudFilter, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
 import { createContext, useContext, useMemo } from "react";
 import useAuthState from "./useAuthState";
+import { signOutAction } from "@/app/actions";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allVisibleRoles: UserRole[];
@@ -14,7 +16,7 @@ type ClassProfileContextType = {
   public_profile_id: string;
   private_profile: UserProfile;
   public_profile: UserProfile;
-};
+}
 
 const ClassProfileContext = createContext<ClassProfileContextType | undefined>(undefined);
 
@@ -135,7 +137,31 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
     (r) => r.user_id === user?.id && (!course_id || r.class_id === Number(course_id as string))
   );
   if (!myRole) {
-    return <NotFound />;
+    return (
+      <Container maxW="md" py={{ base: "12", md: "24" }}>
+        <Stack gap="6">
+          <VStack gap="2" textAlign="center" mt="4">
+            <Logo width={100} />
+            <Heading size="3xl">Pawtograder</Heading>
+            <Text color="fg.muted">Your pawsome course companion</Text>
+          </VStack>
+
+          <Card.Root p="4" colorPalette="red" variant="subtle">
+            <Card.Body>
+              <Card.Title>You don&apos;t have access to any courses</Card.Title>
+              <Card.Description>
+                You do not currently have access to any courses on Pawtograder. Please check with your instructor if you
+                think you should have access to a course.
+              </Card.Description>
+            </Card.Body>
+          </Card.Root>
+
+          <Button onClick={signOutAction} variant="outline" width="100%">
+            Sign out
+          </Button>
+        </Stack>
+      </Container>
+    );
   }
 
   return (
