@@ -92,8 +92,12 @@ export default function HelpRequestList() {
   // Enhanced requests with queue information and students
   const enhancedRequests = useMemo(() => {
     return allHelpRequests
-      .map(
-        (request): EnhancedHelpRequest => ({
+      .map((request): EnhancedHelpRequest => {
+        // Fallback: if student associations haven't arrived yet, use the creator as the primary student
+        const associatedStudents = requestStudentsMap[request.id] || [];
+        const students =
+          associatedStudents.length > 0 ? associatedStudents : ([request.created_by!].filter(Boolean) as string[]);
+        return {
           ...request,
           queue:
             queueMap[request.help_queue] ||
@@ -103,9 +107,9 @@ export default function HelpRequestList() {
               queue_type: "text",
               color: null
             } as HelpQueue),
-          students: requestStudentsMap[request.id] || []
-        })
-      )
+          students
+        };
+      })
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); // oldest first
   }, [allHelpRequests, queueMap, requestStudentsMap]);
 
