@@ -101,7 +101,8 @@ export default function HelpRequestForm() {
 
   // Get table controllers from office hours controller
   const controller = useOfficeHoursController();
-  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity } = controller;
+  const { helpRequestStudents, helpRequests, helpRequestFileReferences, studentHelpActivity, helpRequestMessages } =
+    controller;
 
   // Get available help queues using individual hook
   const allHelpQueues = useHelpQueues();
@@ -350,8 +351,7 @@ export default function HelpRequestForm() {
                   activity_type: "request_created",
                   activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown"}`
                 });
-              } catch (error) {
-                console.error(`Failed to log activity for student:`, error);
+              } catch {
                 // Don't throw here - activity logging shouldn't block request creation
               }
             }
@@ -361,6 +361,26 @@ export default function HelpRequestForm() {
               description: "No students selected for help request"
             });
             throw new Error("No students selected for help request");
+          }
+
+          // Create the initial chat message from the request description so it shows in the conversation view
+          try {
+            const requestText = (getValues("request") as string) || "";
+            if (requestText.trim().length > 0 && private_profile_id) {
+              await helpRequestMessages.create({
+                message: requestText,
+                help_request_id: createdHelpRequest.id,
+                author: private_profile_id,
+                class_id: Number.parseInt(course_id as string),
+                instructors_only: false,
+                reply_to_message_id: null
+              });
+            }
+          } catch {
+            toaster.error({
+              title: "Error",
+              description: "Failed to create initial chat message with help request description."
+            });
           }
 
           // Create file references if any
@@ -439,6 +459,7 @@ export default function HelpRequestForm() {
       helpRequestFileReferences,
       helpRequests,
       helpRequestStudents,
+      helpRequestMessages,
       queue_id,
       router,
       reset,
