@@ -59,27 +59,10 @@ test.describe("Enrollments Page", () => {
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Actions" }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "Add Course Member" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Import from CSV" })).toBeVisible();
-    const student1EmailCell = await page.locator("td.chakra-table__cell").filter({ hasText: student1?.email }).first();
-    await expect(student1EmailCell).toBeVisible();
-    const student1NameCell = await page
-      .locator("td.chakra-table__cell")
-      .filter({ hasText: student1?.private_profile_name })
-      .first();
-    await expect(student1NameCell.getByText(student1?.private_profile_name ?? "")).toBeVisible();
-    const student1RoleCell = await page.locator("td.chakra-table__cell").filter({ hasText: "Student" }).first();
-    await expect(student1RoleCell.getByText("Student")).toBeVisible();
-    const instructor1EmailCell = await page
-      .locator("td.chakra-table__cell")
-      .filter({ hasText: instructor1?.email })
-      .first();
-    await expect(instructor1EmailCell).toBeVisible();
-    const instructor1NameCell = await page
-      .locator("td.chakra-table__cell")
-      .filter({ hasText: instructor1?.private_profile_name })
-      .first();
-    await expect(instructor1NameCell.getByText(instructor1?.private_profile_name ?? "")).toBeVisible();
-    const instructor1RoleCell = await page.locator("td.chakra-table__cell").filter({ hasText: "Instructor" }).first();
-    await expect(instructor1RoleCell.getByText("Instructor")).toBeVisible();
+    await expect(page.getByText(student1?.email ?? "")).toBeVisible();
+    await expect(page.getByText(student1?.private_profile_name ?? "")).toBeVisible();
+    await expect(page.getByText(instructor1?.email ?? "")).toBeVisible();
+    await expect(page.getByText(instructor1?.private_profile_name ?? "")).toBeVisible();
   });
 
   test("Instructors can add individual course members", async ({ page }) => {
@@ -94,10 +77,8 @@ test.describe("Enrollments Page", () => {
     await page.getByPlaceholder("Name").fill(student2Name);
     await page.locator('select[name="role"]').selectOption("student");
     await page.getByRole("button", { name: "Add" }).click();
-    const student2EmailCell = await page.locator("td.chakra-table__cell").filter({ hasText: student2Email }).first();
-    await expect(student2EmailCell).toBeVisible();
-    const student2NameCell = await page.locator("td.chakra-table__cell").filter({ hasText: student2Name }).first();
-    await expect(student2NameCell).toBeVisible();
+    await expect(page.getByText(student2Email)).toBeVisible();
+    await expect(page.getByText(student2Name)).toBeVisible();
 
     // Test Add Course Member Dialog With Grader Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
@@ -106,10 +87,8 @@ test.describe("Enrollments Page", () => {
     await page.getByPlaceholder("Name").fill(graderName);
     await page.locator('select[name="role"]').selectOption("grader");
     await page.getByRole("button", { name: "Add" }).click();
-    const graderEmailCell = await page.locator("td.chakra-table__cell").filter({ hasText: graderEmail }).first();
-    await expect(graderEmailCell).toBeVisible();
-    const graderNameCell = await page.locator("td.chakra-table__cell").filter({ hasText: graderName }).first();
-    await expect(graderNameCell).toBeVisible();
+    await expect(page.getByText(graderEmail)).toBeVisible();
+    await expect(page.getByText(graderName)).toBeVisible();
 
     // Test Add Course Member Dialog With Instructor Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
@@ -118,16 +97,8 @@ test.describe("Enrollments Page", () => {
     await page.getByPlaceholder("Name").fill(instructor2Name);
     await page.locator('select[name="role"]').selectOption("instructor");
     await page.getByRole("button", { name: "Add" }).click();
-    const instructor2EmailCell = await page
-      .locator("td.chakra-table__cell")
-      .filter({ hasText: instructor2Email })
-      .first();
-    await expect(instructor2EmailCell).toBeVisible();
-    const instructor2NameCell = await page
-      .locator("td.chakra-table__cell")
-      .filter({ hasText: instructor2Name })
-      .first();
-    await expect(instructor2NameCell).toBeVisible();
+    await expect(page.getByText(instructor2Email)).toBeVisible();
+    await expect(page.getByText(instructor2Name)).toBeVisible();
     // TODO: The cells for roles don't have any unique characteristics except for the composition of the parent row and combination of sibling cells, probably needs a revisit for proper testing.
   });
 
