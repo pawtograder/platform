@@ -12,6 +12,7 @@ DECLARE
     class_id_value bigint;
     row_id text;
     staff_payload jsonb;
+    student_payload jsonb;
     affected_profile_ids uuid[];
     profile_id uuid;
     creator_user_id uuid;
@@ -45,6 +46,9 @@ BEGIN
             END,
             'timestamp', NOW()
         );
+
+        -- For student-facing notifications, start with the same payload (can be minimized later)
+        student_payload := staff_payload;
 
         -- Broadcast to staff channel
         PERFORM realtime.send(
@@ -117,18 +121,21 @@ BEGIN
             -- Only the affected user (plus staff channel above)
             IF TG_OP = 'DELETE' THEN
                 creator_user_id := OLD.user_id;
+                creator_profile_id := OLD.private_profile_id;
             ELSE
                 creator_user_id := NEW.user_id;
             END IF;
 
-            SELECT ur.private_profile_id INTO creator_profile_id
-            FROM public.user_roles ur
-            WHERE ur.user_id = creator_user_id AND ur.class_id = class_id_value
-            LIMIT 1;
+            IF TG_OP <> 'DELETE' THEN
+                SELECT ur.private_profile_id INTO creator_profile_id
+                FROM public.user_roles ur
+                WHERE ur.user_id = creator_user_id AND ur.class_id = class_id_value
+                LIMIT 1;
+            END IF;
 
             IF creator_profile_id IS NOT NULL THEN
                 PERFORM realtime.send(
-                    staff_payload,
+                    student_payload,
                     'broadcast',
                     'class:' || class_id_value || ':user:' || creator_profile_id,
                     true
@@ -547,18 +554,48 @@ end;
 $function$
 ;
 
-CREATE TRIGGER broadcast_discussion_thread_read_status_realtime AFTER INSERT OR DELETE OR UPDATE ON public.discussion_thread_read_status FOR EACH ROW EXECUTE FUNCTION broadcast_discussion_thread_read_status_unified();
+DROP TRIGGER IF EXISTS broadcast_discussion_thread_read_status_realtime ON public.discussion_thread_read_status;
+CREATE TRIGGER broadcast_discussion_thread_read_status_realtime
+  AFTER INSERT OR DELETE OR UPDATE
+  ON public.discussion_thread_read_status
+  FOR EACH ROW
+  EXECUTE FUNCTION broadcast_discussion_thread_read_status_unified();
 
-CREATE TRIGGER broadcast_discussion_threads_realtime AFTER INSERT OR DELETE OR UPDATE ON public.discussion_threads FOR EACH ROW EXECUTE FUNCTION broadcast_discussion_threads_change();
+DROP TRIGGER IF EXISTS broadcast_discussion_threads_realtime ON public.discussion_threads;
+CREATE TRIGGER broadcast_discussion_threads_realtime
+  AFTER INSERT OR DELETE OR UPDATE
+  ON public.discussion_threads
+  FOR EACH ROW
+  EXECUTE FUNCTION broadcast_discussion_threads_change();
 
-CREATE TRIGGER broadcast_lab_section_meetings_realtime AFTER INSERT OR DELETE OR UPDATE ON public.lab_section_meetings FOR EACH ROW EXECUTE FUNCTION broadcast_course_table_change_unified();
+DROP TRIGGER IF EXISTS broadcast_lab_section_meetings_realtime ON public.lab_section_meetings;
+CREATE TRIGGER broadcast_lab_section_meetings_realtime
+  AFTER INSERT OR DELETE OR UPDATE
+  ON public.lab_section_meetings
+  FOR EACH ROW
+  EXECUTE FUNCTION broadcast_course_table_change_unified();
 
-CREATE TRIGGER broadcast_lab_sections_realtime AFTER INSERT OR DELETE OR UPDATE ON public.lab_sections FOR EACH ROW EXECUTE FUNCTION broadcast_course_table_change_unified();
+DROP TRIGGER IF EXISTS broadcast_lab_sections_realtime ON public.lab_sections;
+CREATE TRIGGER broadcast_lab_sections_realtime
+  AFTER INSERT OR DELETE OR UPDATE
+  ON public.lab_sections
+  FOR EACH ROW
+  EXECUTE FUNCTION broadcast_course_table_change_unified();
 
-CREATE TRIGGER broadcast_profiles_realtime AFTER INSERT OR DELETE OR UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION broadcast_course_table_change_unified();
+-- profiles trigger intentionally removed; see earlier comment
 
-CREATE TRIGGER broadcast_tags_realtime AFTER INSERT OR DELETE OR UPDATE ON public.tags FOR EACH ROW EXECUTE FUNCTION broadcast_course_table_change_unified();
+DROP TRIGGER IF EXISTS broadcast_tags_realtime ON public.tags;
+CREATE TRIGGER broadcast_tags_realtime
+  AFTER INSERT OR DELETE OR UPDATE
+  ON public.tags
+  FOR EACH ROW
+  EXECUTE FUNCTION broadcast_course_table_change_unified();
 
-CREATE TRIGGER broadcast_user_roles_realtime AFTER INSERT OR DELETE OR UPDATE ON public.user_roles FOR EACH ROW EXECUTE FUNCTION broadcast_course_table_change_unified();
+DROP TRIGGER IF EXISTS broadcast_user_roles_realtime ON public.user_roles;
+CREATE TRIGGER broadcast_user_roles_realtime
+  AFTER INSERT OR DELETE OR UPDATE
+  ON public.user_roles
+  FOR EACH ROW
+  EXECUTE FUNCTION broadcast_course_table_change_unified();
 
 
