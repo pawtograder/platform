@@ -11,6 +11,7 @@ import useModalManager from "@/hooks/useModalManager";
 import useTags from "@/hooks/useTags";
 import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
 import {
   Box,
@@ -420,8 +421,10 @@ export default function EnrollmentsTable() {
   const [strategy, setStrategy] = useState<"add" | "remove" | "none">("none");
 
   const deleteMutation = async (params: { resource: string; id: string }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase as any).from(params.resource).delete().eq("id", params.id);
+    const { error } = await supabase
+      .from(params.resource as keyof Database["public"]["Tables"])
+      .delete()
+      .eq("id", params.id);
     if (error) throw error;
   };
 
@@ -451,7 +454,7 @@ export default function EnrollmentsTable() {
                             </Text>
                             {header.id === "checkbox" && (
                               <Checkbox.Root
-                                checked={checkedBoxesRef.current.size === getRowModel().rows.length}
+                                checked={checkedBoxes.size === getRowModel().rows.length}
                                 onCheckedChange={(checked) => {
                                   if (checked.checked.valueOf() === true) {
                                     getRowModel()
