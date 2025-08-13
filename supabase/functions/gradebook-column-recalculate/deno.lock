@@ -2,6 +2,7 @@
   "version": "5",
   "specifiers": {
     "jsr:@supabase/functions-js@*": "2.4.4",
+    "npm:@sentry/deno@*": "10.1.0",
     "npm:@supabase/postgrest-js@^1.19.4": "1.19.4",
     "npm:@supabase/supabase-js@*": "2.50.0",
     "npm:@supabase/supabase-js@^2.50.0": "2.50.0",
@@ -31,6 +32,15 @@
       "integrity": "sha512-ZT55BDLV0yv0RBm2czMiZ+SqCGO7AvmOM3G/w2xhVPH+te0aKgFjmBvGlL1dH+ql2tgGO3MVrbb3jCKyvpgnxA==",
       "dependencies": [
         "@isaacs/balanced-match"
+      ]
+    },
+    "@sentry/core@10.1.0": {
+      "integrity": "sha512-sda76pKjgEgh6VNRNJa9P0WG2egA7N85dTQ8wS/QZ6rD/dNXQZ+ITfL99Jb0b6WhTgvzspJq8bNSl/nRUdbwbQ=="
+    },
+    "@sentry/deno@10.1.0": {
+      "integrity": "sha512-f0Jnh07HPr/pYwmE4t3zhYkNxG6sIQyQU2rRI/d5Pq4ESSszzOr5Y+mMjc+eP9A7TEzEDoRWH4hA7cKMW6jcTg==",
+      "dependencies": [
+        "@sentry/core"
       ]
     },
     "@supabase/auth-js@2.70.0": {

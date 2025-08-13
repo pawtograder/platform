@@ -511,17 +511,86 @@ export async function addDependencySourceFunctions({
   // during expression compilation
   (math as unknown as Record<string, unknown>)._batchDependencySourceMap = batchDependencySourceMap;
 
-  imports["multiply"] = (a: number, b: number) => {
+  imports["divide"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
     if (a === undefined || b === undefined) {
       return undefined;
     }
-    return a * b;
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val / b_val;
   };
-  imports["add"] = (a: number, b: number) => {
+  imports["subtract"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
     if (a === undefined || b === undefined) {
       return undefined;
     }
-    return a + b;
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val - b_val;
+  };
+  imports["multiply"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
+    if (a === undefined || b === undefined) {
+      return undefined;
+    }
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val * b_val;
+  };
+  imports["add"] = (a: number | GradebookColumnStudentWithMaxScore, b: number | GradebookColumnStudentWithMaxScore) => {
+    if (a === undefined || b === undefined) {
+      return undefined;
+    }
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val + b_val;
   };
   imports["sum"] = (_context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
     if (Array.isArray(value)) {
