@@ -21,6 +21,7 @@ import {
   Link,
   NativeSelect,
   Popover,
+  Skeleton,
   Spinner,
   Table,
   Text,
@@ -83,6 +84,27 @@ function StudentNameCell({
       </Box>
     </HStack>
   );
+}
+
+function ScoreLink({
+  score,
+  private_profile_id,
+  submission_id,
+  course_id,
+  assignment_id
+}: {
+  score: number;
+  private_profile_id: string;
+  submission_id: number;
+  course_id: string;
+  assignment_id: string;
+}) {
+  const isObfuscated = useObfuscatedGradesMode();
+  const canShowGradeFor = useCanShowGradeFor(private_profile_id);
+  if (isObfuscated && !canShowGradeFor) {
+    return <Skeleton w="50px" h="1em" />;
+  }
+  return <Link href={`/course/${course_id}/assignments/${assignment_id}/submissions/${submission_id}`}>{score}</Link>;
 }
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
@@ -149,16 +171,15 @@ export default function AssignmentsTable() {
         accessorKey: "autograder_score",
         header: "Autograder Score",
         cell: (props) => {
-          if (props.row.original.activesubmissionid) {
-            return (
-              <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
-              >
-                {props.getValue() as number}
-              </Link>
-            );
-          }
-          return props.getValue();
+          return (
+            <ScoreLink
+              score={props.getValue() as number}
+              private_profile_id={props.row.original.student_private_profile_id!}
+              submission_id={props.row.original.activesubmissionid!}
+              course_id={course_id as string}
+              assignment_id={assignment_id as string}
+            />
+          );
         }
       },
       {
@@ -166,23 +187,22 @@ export default function AssignmentsTable() {
         accessorKey: "total_score",
         header: "Total Score",
         cell: (props) => {
-          if (props.row.original.activesubmissionid) {
-            return (
-              <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
-              >
-                {props.getValue() as number}
-              </Link>
-            );
-          }
-          return props.getValue();
+          return (
+            <ScoreLink
+              score={props.getValue() as number}
+              private_profile_id={props.row.original.student_private_profile_id!}
+              submission_id={props.row.original.activesubmissionid!}
+              course_id={course_id as string}
+              assignment_id={assignment_id as string}
+            />
+          );
         }
       },
-      {
-        id: "tweak",
-        accessorKey: "tweak",
-        header: "Total Score Tweak"
-      },
+      // {
+      //   id: "tweak",
+      //   accessorKey: "tweak",
+      //   header: "Total Score Tweak"
+      // },
       {
         id: "created_at",
         accessorKey: "created_at",

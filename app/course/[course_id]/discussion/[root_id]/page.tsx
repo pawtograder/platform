@@ -166,8 +166,8 @@ function DiscussionPost({ root_id, course_id }: { root_id: number; course_id: nu
       });
       setEditing(false);
       // OMG refine.dev mutateAsync is not stable!?
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [root_id]
   );
 

@@ -64,6 +64,12 @@ export default class TableController<
   private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
   private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
+  private _closed: boolean = false;
+  /**
+   * Optional select clause to use when fetching a single row (e.g., after realtime events).
+   * This enables preserving joined columns for controllers initialized with joined selects.
+   */
+  private _selectForSingleRow: Query | undefined;
   private _isRefetching: boolean = false;
   private _refetchListeners: ((isRefetching: boolean) => void)[] = [];
 
@@ -99,11 +105,12 @@ export default class TableController<
   }
 
   async _fetchRow(id: IDType): Promise<ResultOne | undefined> {
-    const { data, error } = await this._client.from(this._table).select("*").eq("id", id).single();
+    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
+    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
     if (error) {
       throw error;
     }
-    return data;
+    return data as unknown as ResultOne | undefined;
   }
 
   /**
@@ -117,8 +124,7 @@ export default class TableController<
 
     // Load initial data, do all of the pages.
     // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
-    while (true) {
-      // If nRows is specified, only fetch up to nRows
+    while (!this._closed) {
       const rangeStart = page * pageSize;
       let rangeEnd = (page + 1) * pageSize - 1;
       if (typeof nRows === "number") {
@@ -126,13 +132,16 @@ export default class TableController<
         rangeEnd = Math.min(rangeEnd, nRows - 1);
       }
       const { data, error } = await this._query.range(rangeStart, rangeEnd);
+      if (this._closed) {
+        return [];
+      }
       if (error) {
         throw error;
       }
       if (!data || data.length === 0) {
         break;
       }
-      rows.push(...data);
+      rows.push(...(data as unknown as ResultOne[]));
       if (data.length < pageSize) {
         break;
       }
@@ -222,6 +231,7 @@ export default class TableController<
     client,
     table,
     classRealTimeController,
+    selectForSingleRow,
     submissionId,
     officeHoursRealTimeController
   }: {
@@ -236,6 +246,8 @@ export default class TableController<
     table: RelationName;
     classRealTimeController?: ClassRealTimeController;
     officeHoursRealTimeController?: OfficeHoursRealTimeController;
+    /** Select clause to use for single-row refetches (preserves joins) */
+    selectForSingleRow?: Query;
     submissionId?: number;
   }) {
     this._rows = [];
@@ -245,10 +257,12 @@ export default class TableController<
     this._classRealTimeController = classRealTimeController || null;
     this._officeHoursRealTimeController = officeHoursRealTimeController || null;
     this._submissionId = submissionId || null;
+    this._selectForSingleRow = selectForSingleRow;
 
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         const messageHandler = (message: BroadcastMessage) => {
+          if (this._closed) return;
           // Filter by table name
           if (message.table !== table) {
             return;
@@ -266,9 +280,24 @@ export default class TableController<
               break;
           }
         };
+
+        // Fetch initial data first, respecting cancellation
+        if (this._closed) {
+          resolve();
+          return;
+        }
+        const initialData = await this._fetchInitialData();
+        if (this._closed) {
+          resolve();
+          return;
+        }
+        this._rows = initialData.map((row) => ({
+          ...row,
+          __db_pending: false
+        }));
+
         // Set up realtime subscription if controller is provided
-        if (this._classRealTimeController) {
-          // Subscribe to messages for this table, optionally filtered by submission
+        if (!this._closed && this._classRealTimeController) {
           if (this._submissionId) {
             this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
               table,
@@ -281,22 +310,24 @@ export default class TableController<
 
           // Subscribe to connection status changes for reconnection handling
           this._statusUnsubscribe = this._classRealTimeController.subscribeToStatus((status) => {
+            if (this._closed) return;
             this._handleConnectionStatusChange(status);
           });
 
           // Get initial connection status
           this._lastConnectionStatus = this._classRealTimeController.getConnectionStatus().overall;
         }
-        if (this._officeHoursRealTimeController) {
+        if (!this._closed && this._officeHoursRealTimeController) {
           this._realtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(table, messageHandler);
         }
-        const initialData = await this._fetchInitialData();
-        this._rows = initialData.map((row) => ({
-          ...row,
-          __db_pending: false
-        }));
+
+        if (this._closed) {
+          resolve();
+          return;
+        }
+
         this._ready = true;
-        //Emit a change event
+        // Emit a change event
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered: this._rows, left: [] }));
         this._itemDataListeners.forEach((listeners, id) => {
           const row = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
@@ -308,12 +339,17 @@ export default class TableController<
         });
         resolve();
       } catch (error) {
-        reject(error);
+        if (!this._closed) {
+          reject(error);
+        } else {
+          resolve();
+        }
       }
     });
   }
 
   close() {
+    this._closed = true;
     if (this._realtimeUnsubscribe) {
       this._realtimeUnsubscribe();
     }
@@ -327,6 +363,7 @@ export default class TableController<
   }
 
   private _handleInsert(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -334,6 +371,14 @@ export default class TableController<
       // Check for exact ID match first
       const existingRowById = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
       if (existingRowById) {
+        // If we have a custom select for single row (joins), refresh the full row to keep joins in sync
+        if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+          this._fetchRow(data.id as IDType).then((fullRow) => {
+            if (fullRow) {
+              this._updateRow(data.id as IDType, fullRow as ResultOne & { id: IDType }, false);
+            }
+          });
+        }
         return;
       }
 
@@ -348,20 +393,64 @@ export default class TableController<
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
         pendingRowWithId.id = data.id as IDType;
-
-        this._updateRow(
-          data.id as IDType,
-          {
-            ...data,
-            id: data.id
-          } as ResultOne & { id: IDType },
-          false
-        );
+        // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
+        if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+          this._fetchRow(data.id as IDType).then((fullRow) => {
+            if (fullRow) {
+              this._updateRow(data.id as IDType, fullRow as ResultOne & { id: IDType }, false);
+            } else {
+              this._updateRow(
+                data.id as IDType,
+                {
+                  ...(data as ResultOne),
+                  id: data.id
+                } as ResultOne & { id: IDType },
+                false
+              );
+            }
+          });
+        } else {
+          this._updateRow(
+            data.id as IDType,
+            {
+              ...data,
+              id: data.id
+            } as ResultOne & { id: IDType },
+            false
+          );
+        }
       } else {
-        this._addRow({
-          ...data,
-          __db_pending: false
-        } as PossiblyTentativeResult<ResultOne>);
+        // Re-check to avoid duplicates if another concurrent event already added this row
+        const isDuplicate = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === (data.id as IDType));
+        // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
+        if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+          this._fetchRow(data.id as IDType).then((fullRow) => {
+            // Re-check to avoid duplicates if another concurrent event already added this row
+            if (isDuplicate) {
+              return;
+            }
+            if (fullRow) {
+              this._addRow({
+                ...(fullRow as ResultOne),
+                __db_pending: false
+              } as PossiblyTentativeResult<ResultOne>);
+            } else {
+              this._addRow({
+                ...(data as ResultOne),
+                __db_pending: false
+              } as PossiblyTentativeResult<ResultOne>);
+            }
+          });
+        } else {
+          // Re-check to avoid duplicates if another concurrent event already added this row
+          if (isDuplicate) {
+            return;
+          }
+          this._addRow({
+            ...data,
+            __db_pending: false
+          } as PossiblyTentativeResult<ResultOne>);
+        }
       }
     } else if (message.row_id) {
       // Handle ID-only broadcasts - fetch the data
@@ -388,10 +477,13 @@ export default class TableController<
 
             this._updateRow(message.row_id as IDType, row as ResultOne & { id: IDType }, false);
           } else {
-            this._addRow({
-              ...row,
-              __db_pending: false
-            });
+            // Re-check before add in case another event already inserted it
+            if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === (message.row_id as IDType))) {
+              this._addRow({
+                ...row,
+                __db_pending: false
+              });
+            }
           }
         });
       }
@@ -480,17 +572,36 @@ export default class TableController<
   }
 
   private _handleUpdate(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
-      if (existingRow) {
-        this._updateRow(data.id as IDType, { ...data, id: data.id } as ResultOne & { id: IDType }, false);
+      const applyUpdate = (rowLike: Record<string, unknown>) => {
+        if (existingRow) {
+          this._updateRow(
+            data.id as IDType,
+            { ...(rowLike as ResultOne), id: data.id } as ResultOne & { id: IDType },
+            false
+          );
+        } else {
+          this._addRow({
+            ...(rowLike as ResultOne),
+            __db_pending: false
+          } as PossiblyTentativeResult<ResultOne>);
+        }
+      };
+
+      if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+        this._fetchRow(data.id as IDType).then((fullRow) => {
+          if (fullRow) {
+            applyUpdate(fullRow as unknown as Record<string, unknown>);
+          } else {
+            applyUpdate(data);
+          }
+        });
       } else {
-        this._addRow({
-          ...data,
-          __db_pending: false
-        } as PossiblyTentativeResult<ResultOne>);
+        applyUpdate(data);
       }
     } else if (message.row_id) {
       // Handle ID-only broadcasts - fetch the data
@@ -512,6 +623,7 @@ export default class TableController<
   }
 
   private _handleDelete(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       const data = message.data as Record<string, unknown>;
       this._removeRow(data.id as IDType);
@@ -591,25 +703,41 @@ export default class TableController<
   }
 
   async invalidate(id: IDType) {
-    const { data, error } = await this._client.from(this._table).select("*").eq("id", id).single();
+    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
+    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
     if (error) {
       throw error;
     }
     if (!data) {
       return;
     }
+    const typedData = data as unknown as ResultOne;
     const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
     if (existingRow) {
-      this._updateRow(id as IDType, data as ResultOne & { id: IDType }, false);
+      this._updateRow(id as IDType, typedData as ResultOne & { id: IDType }, false);
     } else {
       this._addRow({
-        ...data,
+        ...(typedData as ResultOne),
         __db_pending: false
-      });
+      } as PossiblyTentativeResult<ResultOne>);
     }
   }
 
   private _addRow(row: PossiblyTentativeResult<ResultOne>) {
+    // Enforce uniqueness by ID. If a row with the same ID already exists, treat this as an update.
+    if ("id" in row) {
+      const id = (row as { id: IDType }).id;
+      const existingIndex = this._rows.findIndex((r) => (r as ResultOne & { id: IDType }).id === id);
+      if (existingIndex !== -1) {
+        this._updateRow(
+          id,
+          row as unknown as ResultOne & { id: IDType },
+          !!(row as { __db_pending?: boolean }).__db_pending
+        );
+        return;
+      }
+    }
+
     this._rows = [...this._rows, row];
 
     this._listDataListeners.forEach((listener) => listener(this._rows, { entered: [row], left: [] }));
