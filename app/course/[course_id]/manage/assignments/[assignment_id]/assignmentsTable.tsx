@@ -27,19 +27,14 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useInvalidate } from "@refinedev/core";
-import { useTable } from "@refinedev/react-table";
+import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import TableController from "@/lib/TableController";
+import { useCourseController } from "@/hooks/useCourseController";
 import { SupabaseClient } from "@supabase/supabase-js";
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel
-} from "@tanstack/react-table";
+import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
 import Papa from "papaparse";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
 
@@ -92,9 +87,9 @@ function StudentNameCell({
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
   const course = useCourse();
+  const { classRealTimeController } = useCourseController();
   const timeZone = course.classes.time_zone || "America/New_York";
-  const [pageCount, setPageCount] = useState(0);
-  const invalidate = useInvalidate();
+  const supabase = createClient();
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
       {
@@ -235,6 +230,23 @@ export default function AssignmentsTable() {
     ],
     [timeZone, course_id, assignment_id]
   );
+
+  const tableController = useMemo(() => {
+    const query = supabase
+      .from("submissions_with_grades_for_assignment")
+      .select("*")
+      .eq("assignment_id", Number(assignment_id));
+
+    return new TableController({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      query: query as any,
+      client: supabase,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      table: "submissions_with_grades_for_assignment" as any,
+      classRealTimeController
+    });
+  }, [supabase, assignment_id, classRealTimeController]);
+
   const {
     getHeaderGroups,
     getRowModel,
@@ -247,9 +259,13 @@ export default function AssignmentsTable() {
     nextPage,
     previousPage,
     setPageSize,
-    refineCore
-  } = useTable({
+    isLoading,
+    refetch
+  } = useTableControllerTable({
     columns,
+    //TODO: Longer term, we should fix to make this work with views!
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tableController: tableController as any,
     initialState: {
       columnFilters: [{ id: "assignment_id", value: assignment_id as string }],
       pagination: {
@@ -257,33 +273,9 @@ export default function AssignmentsTable() {
         pageSize: 200
       },
       sorting: [{ id: "name", desc: false }]
-    },
-    manualPagination: false,
-    manualFiltering: false,
-    getPaginationRowModel: getPaginationRowModel(),
-    pageCount,
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    refineCoreProps: {
-      resource: "submissions_with_grades_for_assignment",
-      syncWithLocation: false,
-      pagination: {
-        mode: "off"
-      },
-      filters: {
-        mode: "off"
-      },
-      meta: {
-        select: "*"
-      }
     }
   });
-  const nRows = getRowCount();
   const isInstructor = course.role === "instructor";
-  const pageSize = getState().pagination.pageSize;
-  useEffect(() => {
-    setPageCount(Math.ceil(nRows / pageSize));
-  }, [nRows, pageSize]);
   return (
     <VStack w="100%">
       <VStack paddingBottom="55px" w="100%">
@@ -303,7 +295,7 @@ export default function AssignmentsTable() {
                   .update({ released: true })
                   .in("submission_id", submissionIds)
                   .select("*");
-                invalidate({ resource: "submissions_with_grades_for_assignment", invalidates: ["list"] });
+                refetch();
 
                 if (error) {
                   toaster.error({ title: "Error", description: error.message });
@@ -328,7 +320,7 @@ export default function AssignmentsTable() {
                   .update({ released: false })
                   .in("submission_id", submissionIds)
                   .select("*");
-                invalidate({ resource: "submissions_with_grades_for_assignment", invalidates: ["list"] });
+                refetch();
 
                 if (error) {
                   toaster.error({ title: "Error", description: error.message });
@@ -398,7 +390,7 @@ export default function AssignmentsTable() {
               ))}
             </Table.Header>
             <Table.Body>
-              {refineCore.tableQuery.isLoading && (
+              {isLoading && (
                 <Table.Row>
                   <Table.Cell
                     colSpan={
@@ -576,6 +568,7 @@ async function exportGrades({
     .eq("submissions.is_active", true)
     .eq("submissions.assignment_id", assignment_id);
   if (autograder_test_results_error) {
+    // eslint-disable-next-line no-console
     console.error(autograder_test_results_error);
     throw new Error("Error fetching autograder test results");
   }
