@@ -51,8 +51,8 @@ test.describe("Lab Sections Page", () => {
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page.getByText(labSectionName, { exact: true })).toBeVisible();
     await expect(page.getByText(labSectionDescription)).toBeVisible();
-    await expect(page.getByText(instructor2?.private_profile_name ?? "")).toBeVisible();
-    await expect(page.getByText("Monday")).toBeVisible();
+    await expect(page.getByText(instructor2?.private_profile_name ?? "", { exact: true })).toBeVisible();
+    await expect(page.getByRole("paragraph").filter({ hasText: "Monday" })).toBeVisible();
     await expect(page.getByText("10:00 AM - 11:00 AM")).toBeVisible();
     await expect(page.getByText("0 Students")).toBeVisible();
     await expect(page.getByRole("button", { name: "Create your first lab section" })).not.toBeVisible();
