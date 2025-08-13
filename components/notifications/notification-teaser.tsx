@@ -337,11 +337,7 @@ function CourseEnrollmentNotificationTeaser({ notification }: { notification: No
 /**
  * Gets the navigation URL for a notification based on its type
  */
-function getNotificationUrl(
-  notification: Notification,
-  course_id: string,
-  rootThread?: { class_id: number }
-): string | undefined {
+function getNotificationUrl(notification: Notification, course_id: string): string | undefined {
   const body = notification.body as NotificationEnvelope;
 
   if (body.type === "help_request" || body.type === "help_request_message") {
@@ -353,8 +349,7 @@ function getNotificationUrl(
   } else if (body.type === "discussion_thread") {
     const discussionBody = body as DiscussionThreadNotification;
     const replyIdx = discussionBody.new_comment_number ? `#post-${discussionBody.new_comment_number}` : "";
-    const threadCourseId = rootThread?.class_id || course_id;
-    return `/course/${threadCourseId}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
+    return `/course/${course_id}/discussion/${discussionBody.root_thread_id}${replyIdx}`;
   } else if (body.type === "course_enrollment") {
     const enrollmentBody = body as CourseEnrollmentNotification;
     return `/course/${enrollmentBody.course_id}`;
@@ -379,9 +374,7 @@ export default function NotificationTeaser({
   const { course_id } = useParams();
   const router = useRouter();
 
-  // Get thread data for discussion notifications to get the correct course_id
-  const discussionBody = body?.type === "discussion_thread" ? (body as DiscussionThreadNotification) : null;
-  const rootThread = useDiscussionThreadTeaser(discussionBody?.root_thread_id || 0, ["class_id"]);
+  // No cross-course routing: use current course_id for all notification types
 
   if (!notification) {
     return <Skeleton height="60px" width="100%" />;
@@ -443,7 +436,7 @@ export default function NotificationTeaser({
         }
       } else {
         // Navigate to other notification URLs normally
-        const url = getNotificationUrl(notification, course_id as string, rootThread);
+        const url = getNotificationUrl(notification, course_id as string);
         if (url) {
           router.push(url);
         }

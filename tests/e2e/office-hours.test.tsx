@@ -18,6 +18,7 @@ let course: Course;
 let student: TestingUser | undefined;
 let student2: TestingUser | undefined;
 let instructor: TestingUser | undefined;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let submission_id: number | undefined;
 let assignment: Assignment | undefined;
 
@@ -87,7 +88,6 @@ test.describe("Office Hours", () => {
   });
   test("Another student can view the public request and comment on it, but cant see the private", async ({ page }) => {
     await loginAsUser(page, student2!, course);
-
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.getByRole("button", { name: "View Chat" }).click();
     await percySnapshot(page, "Office Hours - View Queue with a public request");

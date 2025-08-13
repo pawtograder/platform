@@ -76,9 +76,6 @@ export class OfficeHoursRealTimeController {
     this._isStaff = isStaff;
     this._channelManager = RealtimeChannelManager.getInstance();
 
-    // Set the client on the channel manager
-    this._channelManager.setClient(client);
-
     // Start async initialization immediately
     this._initializationPromise = this._initializeGlobalChannels();
   }
@@ -118,10 +115,13 @@ export class OfficeHoursRealTimeController {
     // Initialize global help_queues channel
     const helpQueuesUnsubscriber = await this._channelManager.subscribe(
       "help_queues",
+      this._client,
       (message: OfficeHoursBroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
       async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
+        console.debug("Office Hours Client all channels:", this._client.getChannels());
+        console.debug("Help queues channel manager: ", this._channelManager.getDebugInfo());
         console.log(`Help queues channel status: help_queues`, status, err);
         this._notifyStatusChange();
       }
@@ -135,6 +135,7 @@ export class OfficeHoursRealTimeController {
       const staffChannelTopic = `class:${this._classId}:staff`;
       const staffUnsubscriber = await this._channelManager.subscribe(
         staffChannelTopic,
+        this._client,
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
@@ -161,6 +162,7 @@ export class OfficeHoursRealTimeController {
     if (!this._channelUnsubscribers.has(mainChannelName)) {
       const mainUnsubscriber = await this._channelManager.subscribe(
         mainChannelName,
+        this._client,
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
@@ -179,6 +181,7 @@ export class OfficeHoursRealTimeController {
       if (!this._channelUnsubscribers.has(staffChannelName)) {
         const staffUnsubscriber = await this._channelManager.subscribe(
           staffChannelName,
+          this._client,
           (message: OfficeHoursBroadcastMessage) => {
             this._handleBroadcastMessage(message);
           },
@@ -205,6 +208,7 @@ export class OfficeHoursRealTimeController {
     if (!this._channelUnsubscribers.has(channelName)) {
       const unsubscriber = await this._channelManager.subscribe(
         channelName,
+        this._client,
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },

@@ -49,6 +49,7 @@
     "@refinedev/react-hook-form": "^4.9.3",
     "@refinedev/react-table": "^5.6.15",
     "@refinedev/supabase": "^5.9.6",
+    "@sentry/nextjs": "^10.3.0",
     "@stefanprobst/remark-excerpt": "^2.0.2",
     "@supabase/auth-helpers-react": "^0.5.0",
     "@supabase/realtime-js": "^2.12.2",
