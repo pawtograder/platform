@@ -147,7 +147,7 @@ export default function OfficeHoursPage() {
   return (
     <ClassProfileProvider>
       <ModerationBanNotice classId={classId}>
-        <Container maxW={{ base: "md", md: "4xl" }} px={{ base: 3, md: 0 }} my={{ base: 2, md: 4 }}>
+        <Container maxW={{ base: "md", md: "6xl" }} px={{ base: 3, md: 0 }} my={{ base: 2, md: 4 }}>
           <Stack spaceY={{ base: 4, md: 6 }}>
             <Box textAlign="center">
               <Heading size={{ base: "md", md: "lg" }} mb={{ base: 1, md: 2 }}>
@@ -163,7 +163,7 @@ export default function OfficeHoursPage() {
                 </Card.Body>
               </Card.Root>
             ) : (
-              <Box maxW={{ base: "md", md: "full" }} mx="auto">
+              <Box maxW={{ base: "md", md: "full" }} w={{ base: "auto", md: "full" }} mx="auto">
                 <Grid columns={{ base: 1, md: 2 }} gap={{ base: 3, md: 4 }}>
                   {availableQueues.map((queue) => {
                     const queueRequests = activeRequestsByQueue[Number(queue.id)] || [];
@@ -176,6 +176,7 @@ export default function OfficeHoursPage() {
                       <Card.Root
                         key={`queue-${queue.id}-${queue.name}`}
                         variant="outline"
+                        w="full"
                         role="region"
                         aria-label={`Help queue: ${queue.name}`}
                         _hover={{ borderColor: "border.emphasized" }}

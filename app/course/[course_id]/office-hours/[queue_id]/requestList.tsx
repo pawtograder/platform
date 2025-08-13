@@ -118,7 +118,13 @@ export default function HelpRequestHistory({
   }
 
   return (
-    <Stack spaceY={4} maxW={{ base: "md", md: "full" }} mx="auto" px={{ base: 2, md: 0 }}>
+    <Stack
+      spaceY={4}
+      maxW={{ base: "md", md: "full" }}
+      w={{ base: "auto", md: "full" }}
+      mx="auto"
+      px={{ base: 2, md: 0 }}
+    >
       <Text fontSize="lg" fontWeight="medium">
         {`Help Requests (${requests.length})`}
       </Text>
@@ -134,6 +140,7 @@ export default function HelpRequestHistory({
             <Card.Root
               key={request.id}
               variant="outline"
+              w="full"
               cursor="pointer"
               role="listitem"
               aria-label={`Help request ${request.id}`}
