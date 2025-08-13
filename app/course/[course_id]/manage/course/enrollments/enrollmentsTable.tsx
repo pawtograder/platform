@@ -383,7 +383,6 @@ export default function EnrollmentsTable() {
 
   // Get user roles data from CourseController (realtime)
   const userRolesData = useUserRolesWithProfiles();
-  console.log("userRolesData", userRolesData);
 
   // Create local table using react-table
   const table = useReactTable({
@@ -574,17 +573,26 @@ export default function EnrollmentsTable() {
                 {strategy === "add" && (
                   <TagAddForm
                     addTag={async (name: string, color?: string) => {
-                      checkedBoxes.forEach(async (profile) => {
-                        await addTag({
-                          name: name.startsWith("~") ? name.slice(1) : name,
-                          color: color || "gray",
-                          visible: !name.startsWith("~"),
-                          profile_id: profile.private_profile_id,
-                          class_id: parseInt(course_id as string),
-                          creator_id: currentUser?.id || ""
+                      try {
+                        await Promise.all(
+                          Array.from(checkedBoxes).map((profile) =>
+                            addTag({
+                              name: name.startsWith("~") ? name.slice(1) : name,
+                              color: color || "gray",
+                              visible: !name.startsWith("~"),
+                              profile_id: profile.private_profile_id,
+                              class_id: parseInt(course_id as string),
+                              creator_id: currentUser?.id || ""
+                            })
+                          )
+                        );
+                        setStrategy("none");
+                      } catch (error) {
+                        toaster.error({
+                          title: "Error adding tag(s)",
+                          description: error instanceof Error ? error.message : "Unknown error"
                         });
-                      });
-                      setStrategy("none");
+                      }
                     }}
                     currentTags={tagData.filter((tag) => {
                       return Array.from(checkedBoxes)
@@ -624,28 +632,38 @@ export default function EnrollmentsTable() {
                           })
                     }
                     removeTag={(tagName: string, tagColor: string, tagVisibility: boolean) => {
-                      checkedBoxes.forEach(async (profile) => {
-                        const findTag = tagData.find((tag) => {
-                          return (
-                            tag.name === tagName &&
-                            tag.color === tagColor &&
-                            tagVisibility === tag.visible &&
-                            tag.profile_id === profile.private_profile_id
-                          );
-                        });
-                        if (!findTag) {
-                          toaster.error({
-                            title: "Error removing tag",
-                            type: "Tag not found on profile " + (profile.profiles?.name || "Unknown")
+                      Promise.all(
+                        Array.from(checkedBoxes).map(async (profile) => {
+                          const findTag = tagData.find((tag) => {
+                            return (
+                              tag.name === tagName &&
+                              tag.color === tagColor &&
+                              tagVisibility === tag.visible &&
+                              tag.profile_id === profile.private_profile_id
+                            );
                           });
-                          return;
-                        }
-                        deleteMutation({
-                          resource: "tags",
-                          id: findTag.id
+                          if (!findTag) {
+                            toaster.error({
+                              title: "Error removing tag",
+                              description: "Tag not found on profile " + (profile.profiles?.name || "Unknown")
+                            });
+                            return;
+                          }
+                          return deleteMutation({
+                            resource: "tags",
+                            id: findTag.id
+                          });
+                        })
+                      )
+                        .then(() => {
+                          setStrategy("none");
+                        })
+                        .catch((error: unknown) => {
+                          toaster.error({
+                            title: "Error removing tags",
+                            description: error instanceof Error ? error.message : "Unknown error"
+                          });
                         });
-                      });
-                      setStrategy("none");
                     }}
                   />
                 )}

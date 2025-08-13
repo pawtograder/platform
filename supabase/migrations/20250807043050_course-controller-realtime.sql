@@ -258,11 +258,11 @@ begin
             'operation', TG_OP,
             'table', TG_TABLE_NAME,
             'row_id', case
-                when TG_OP = 'delete' then OLD.id
+                when TG_OP = 'DELETE' then OLD.id
                 else NEW.id
             end,
             'data', case
-                when TG_OP = 'delete' then to_jsonb(OLD)
+                when TG_OP = 'DELETE' then to_jsonb(OLD)
                 else to_jsonb(NEW)
             end,
             'class_id', target_class_id,

@@ -12,8 +12,27 @@ export async function POST(request: NextRequest) {
 
     // Parse the envelope to extract the DSN project ID
     const pieces = envelope.split("\n");
-    const header = JSON.parse(pieces[0]);
-    const dsn = new URL(header.dsn);
+    if (pieces.length === 0) {
+      console.error("Invalid envelope format: empty envelope");
+      return new NextResponse("Bad Request: invalid envelope format", { status: 400 });
+    }
+
+    let header;
+    let dsn;
+    try {
+      header = JSON.parse(pieces[0]);
+      if (!header?.dsn || typeof header.dsn !== "string") {
+        throw new Error("Missing DSN in envelope header");
+      }
+      dsn = new URL(header.dsn);
+    } catch (parseError) {
+      console.error("Invalid envelope header:", parseError);
+      return new NextResponse(
+        `Bad Request: ${parseError instanceof Error ? parseError.message : "Invalid envelope header"}`,
+        { status: 400 }
+      );
+    }
+
     const projectId = dsn.pathname.replace("/", "");
 
     // Forward to Bugsink

@@ -43,9 +43,16 @@ test.describe("Lab Sections Page", () => {
     // Create a lab section
     await page.getByRole("button", { name: "Create Lab Section" }).click();
     await page.getByPlaceholder("e.g., Lab Section A").fill(labSectionName);
-    await page.waitForSelector(`select[name="lab_leader_id"] option[value="${instructor2!.private_profile_id}"]`, {
-      state: "attached"
-    });
+    await page.waitForFunction(
+      (profileId) => {
+        const select = document.querySelector('select[name="lab_leader_id"]');
+        if (!select) return false;
+        const option = select.querySelector(`option[value="${profileId}"]`);
+        return option !== null;
+      },
+      instructor2!.private_profile_id,
+      { timeout: 10000 }
+    );
     await page.locator('select[name="lab_leader_id"]').selectOption(instructor2!.private_profile_id);
     await page.getByPlaceholder("Optional description").fill(labSectionDescription);
     await page.getByRole("button", { name: "Create" }).click();
