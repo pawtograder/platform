@@ -119,19 +119,33 @@ export default function HelpRequestList() {
   }
 
   return (
-    <Flex height="100vh" overflow="hidden">
-      <Stack spaceY="4" width="320px" borderEndWidth="1px" pt="6">
-        <Box px="5">
+    <Flex height={{ base: "auto", md: "100vh" }} overflow={{ base: "visible", md: "hidden" }}>
+      <Stack
+        spaceY="4"
+        width={{ base: "100%", md: "320px" }}
+        borderEndWidth={{ base: "0px", md: "1px" }}
+        borderBottomWidth={{ base: "1px", md: "0px" }}
+        borderColor="border.emphasized"
+        pt={{ base: "4", md: "6" }}
+      >
+        <Box px={{ base: "4", md: "5" }}>
           <Text fontSize="lg" fontWeight="medium">
             Requests ({enhancedRequests?.length || 0})
           </Text>
         </Box>
 
-        <Box px="5">
+        <Box px={{ base: "4", md: "5" }}>
           <SearchInput value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
         </Box>
 
-        <Stack spaceY="6" flex="1" overflowY="auto" px="5" pb="5" pt="2">
+        <Stack
+          spaceY="6"
+          flex={{ base: "0 0 auto", md: "1 1 auto" }}
+          overflowY={{ base: "visible", md: "auto" }}
+          px={{ base: "4", md: "5" }}
+          pb={{ base: "4", md: "5" }}
+          pt={{ base: "2", md: "2" }}
+        >
           <ChatGroupHeader
             icon={BsClipboardCheckFill}
             title="Working"

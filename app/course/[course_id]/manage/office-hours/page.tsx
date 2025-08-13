@@ -21,7 +21,13 @@ export default function OfficeHoursAdminPage() {
   return (
     <Box>
       <Tabs.Root defaultValue="dashboard" variant="enclosed">
-        <Tabs.List>
+        <Tabs.List
+          overflowX={{ base: "auto", md: "visible" }}
+          whiteSpace={{ base: "nowrap", md: "normal" }}
+          display="flex"
+          columnGap={{ base: 2, md: 3 }}
+          px={{ base: 2, md: 0 }}
+        >
           <Tabs.Trigger value="dashboard">TA Dashboard</Tabs.Trigger>
           <Tabs.Trigger value="queues">Queue Management</Tabs.Trigger>
           <Tabs.Trigger value="assignments">Assignment Management</Tabs.Trigger>
@@ -32,7 +38,7 @@ export default function OfficeHoursAdminPage() {
           {isInstructor && <Tabs.Trigger value="feedback">Feedback</Tabs.Trigger>}
         </Tabs.List>
 
-        <Box mt={6}>
+        <Box mt={{ base: 3, md: 6 }}>
           <Tabs.Content value="dashboard">
             <HelpQueuesDashboard />
           </Tabs.Content>

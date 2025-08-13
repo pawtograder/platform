@@ -79,15 +79,17 @@ export default function QueueLayout({ children }: LayoutProps) {
 
   return (
     <ModerationBanNotice classId={Number(course_id)}>
-      <Box m={4}>
-        <Heading mb={4}>Help Queue: {helpQueue.name}</Heading>
-        <Box display="flex" gap={6}>
+      <Box m={{ base: 2, md: 4 }} maxW={{ base: "md", md: "6xl" }} mx="auto">
+        <Heading mb={{ base: 2, md: 4 }} size={{ base: "md", md: "lg" }}>
+          Help Queue: {helpQueue.name}
+        </Heading>
+        <Box display="flex" gap={{ base: 4, md: 6 }} flexDirection={{ base: "column", md: "row" }}>
           {/* Navigation Sidebar */}
-          <VStack align="stretch" width="300px" gap={2}>
+          <VStack align="stretch" width={{ base: "100%", md: "300px" }} gap={2}>
             {navigationItems.map((item) => (
               <Link key={item.href} href={item.href}>
                 <Box
-                  p={3}
+                  p={{ base: 3, md: 3 }}
                   borderRadius="md"
                   bg={item.isActive ? "bg.info" : "bg.muted"}
                   color={item.isActive ? "fg.info" : "fg.muted"}
@@ -102,7 +104,9 @@ export default function QueueLayout({ children }: LayoutProps) {
           </VStack>
 
           {/* Main Content */}
-          <Box flex="1">{children}</Box>
+          <Box flex="1" maxW={{ base: "md", md: "full" }} mx={{ base: "auto", md: "0" }}>
+            {children}
+          </Box>
         </Box>
       </Box>
     </ModerationBanNotice>

@@ -314,7 +314,7 @@ export const RealtimeChat = ({
   }
 
   return (
-    <Flex direction="column" height="100%" width="100%" bg="bg.subtle">
+    <Flex direction="column" height="100%" width="100%" maxW={{ base: "md", md: "full" }} mx="auto" bg="bg.subtle">
       {/* Connection status indicator */}
       {!isConnected && (
         <Box p={2} bg="bg.warning" borderBottom="1px" borderColor="border.emphasized">
@@ -329,7 +329,7 @@ export const RealtimeChat = ({
         ref={containerRef}
         flex="1"
         overflowY="auto"
-        p={4}
+        p={{ base: 2, md: 4 }}
         style={{
           animation: allMessages.length > 0 ? "fadeIn 0.3s ease-in" : undefined
         }}
@@ -410,13 +410,13 @@ export const RealtimeChat = ({
       </Box>
 
       {readOnly ? (
-        <Box p={4} borderTop="1px" borderColor="border.emphasized" bg="bg.muted">
+        <Box p={{ base: 3, md: 4 }} borderTop="1px" borderColor="border.emphasized" bg="bg.muted">
           <Text fontSize="sm" color="fg.muted" textAlign="center">
             This is a historical chat view. New messages cannot be sent.
           </Text>
         </Box>
       ) : moderationStatus.isBanned ? (
-        <Box p={4} borderTop="1px" borderColor="border.emphasized" bg="bg.error">
+        <Box p={{ base: 3, md: 4 }} borderTop="1px" borderColor="border.emphasized" bg="bg.error">
           <Text fontSize="sm" color="red.fg" textAlign="center">
             {moderationStatus.isPermanentBan
               ? "You are permanently banned from sending messages in office hours."
@@ -433,7 +433,7 @@ export const RealtimeChat = ({
           )}
 
           {/* Message Input */}
-          <Box p={4}>
+          <Box p={{ base: 2, md: 4 }}>
             <MessageInput
               sendMessage={handleSendMessage}
               enableFilePicker={true}

@@ -147,10 +147,10 @@ export default function OfficeHoursPage() {
   return (
     <ClassProfileProvider>
       <ModerationBanNotice classId={classId}>
-        <Container maxW="4xl" my={4}>
-          <Stack spaceY={6}>
+        <Container maxW={{ base: "md", md: "4xl" }} px={{ base: 3, md: 0 }} my={{ base: 2, md: 4 }}>
+          <Stack spaceY={{ base: 4, md: 6 }}>
             <Box textAlign="center">
-              <Heading size="lg" mb={2}>
+              <Heading size={{ base: "md", md: "lg" }} mb={{ base: 1, md: 2 }}>
                 Ask for Help
               </Heading>
               <Text>Choose a help queue to get assistance from course staff</Text>
@@ -163,101 +163,107 @@ export default function OfficeHoursPage() {
                 </Card.Body>
               </Card.Root>
             ) : (
-              <Grid columns={{ base: 1, md: 2 }} gap={4}>
-                {availableQueues.map((queue) => {
-                  const queueRequests = activeRequestsByQueue[Number(queue.id)] || [];
-                  // Flatten all student IDs from all requests in this queue
-                  const activeUsers = queueRequests.flatMap((request) => request.students);
-                  const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
-                  const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
+              <Box maxW={{ base: "md", md: "full" }} mx="auto">
+                <Grid columns={{ base: 1, md: 2 }} gap={{ base: 3, md: 4 }}>
+                  {availableQueues.map((queue) => {
+                    const queueRequests = activeRequestsByQueue[Number(queue.id)] || [];
+                    // Flatten all student IDs from all requests in this queue
+                    const activeUsers = queueRequests.flatMap((request) => request.students);
+                    const queueAssignments = activeAssignmentsByQueue[queue.id] || [];
+                    const activeStaff = queueAssignments.map((assignment) => assignment.ta_profile_id);
 
-                  return (
-                    <Card.Root
-                      key={`queue-${queue.id}-${queue.name}`}
-                      variant="outline"
-                      role="region"
-                      aria-label={`Help queue: ${queue.name}`}
-                      _hover={{ borderColor: "border.emphasized" }}
-                    >
-                      <Card.Body>
-                        <Stack spaceY={4}>
-                          <Stack direction="row" align="center" justify="space-between">
-                            <Stack direction="row" align="center" spaceX={2}>
-                              <Box color={queue.color || "fg.default"}>{getQueueIcon(queue.queue_type)}</Box>
-                              <Heading size="sm">{queue.name}</Heading>
+                    return (
+                      <Card.Root
+                        key={`queue-${queue.id}-${queue.name}`}
+                        variant="outline"
+                        role="region"
+                        aria-label={`Help queue: ${queue.name}`}
+                        _hover={{ borderColor: "border.emphasized" }}
+                      >
+                        <Card.Body>
+                          <Stack spaceY={4}>
+                            <Stack direction="row" align="center" justify="space-between">
+                              <Stack direction="row" align="center" spaceX={2}>
+                                <Box color={queue.color || "fg.default"}>{getQueueIcon(queue.queue_type)}</Box>
+                                <Heading size="sm">{queue.name}</Heading>
+                              </Stack>
+                              <Badge
+                                colorPalette={
+                                  queue.queue_type === "video"
+                                    ? "green"
+                                    : queue.queue_type === "in_person"
+                                      ? "orange"
+                                      : "blue"
+                                }
+                              >
+                                {queue.queue_type}
+                              </Badge>
                             </Stack>
-                            <Badge
-                              colorPalette={
-                                queue.queue_type === "video"
-                                  ? "green"
-                                  : queue.queue_type === "in_person"
-                                    ? "orange"
-                                    : "blue"
-                              }
-                            >
-                              {queue.queue_type}
-                            </Badge>
+
+                            <Text fontSize="sm">{queue.description || getQueueDescription(queue.queue_type)}</Text>
+
+                            {/* Active staff in queue */}
+                            <VStack align="stretch" spaceY={2}>
+                              <HStack align="center" spaceX={2}>
+                                <BsPersonBadge />
+                                <Text fontSize="sm" fontWeight="medium">
+                                  Staff on duty ({activeStaff.length})
+                                </Text>
+                              </HStack>
+
+                              {activeStaff.length > 0 ? (
+                                <HStack wrap="wrap" gap={2}>
+                                  {activeStaff.slice(0, 4).map((staffId, index) => (
+                                    <PersonAvatar
+                                      key={`staff-${staffId}-${index}-${queue.id}`}
+                                      uid={staffId}
+                                      size="sm"
+                                    />
+                                  ))}
+                                  {activeStaff.length > 4 && <Text fontSize="xs">+{activeStaff.length - 4} more</Text>}
+                                </HStack>
+                              ) : (
+                                <Text fontSize="xs" color="gray.500">
+                                  No staff currently on duty
+                                </Text>
+                              )}
+                            </VStack>
+
+                            {/* Active students in queue */}
+                            <VStack align="stretch" spaceY={2}>
+                              <HStack align="center" spaceX={2}>
+                                <BsPeople />
+                                <Text fontSize="sm" fontWeight="medium">
+                                  Currently in queue ({queueRequests.length})
+                                </Text>
+                              </HStack>
+
+                              {activeUsers.length > 0 ? (
+                                <HStack wrap="wrap" gap={2}>
+                                  {activeUsers.slice(0, 6).map((userId, index) => (
+                                    <PersonAvatar key={`user-${userId}-${index}-${queue.id}`} uid={userId} size="xs" />
+                                  ))}
+                                  {activeUsers.length > 6 && <Text fontSize="xs">+{activeUsers.length - 6} more</Text>}
+                                </HStack>
+                              ) : (
+                                <Text fontSize="xs" color="gray.500">
+                                  No one currently in queue
+                                </Text>
+                              )}
+                            </VStack>
+
+                            <NextLink href={`/course/${course_id}/office-hours/${queue.id}`} passHref>
+                              <Button variant="outline" size="sm" width="full">
+                                Join Queue
+                              </Button>
+                            </NextLink>
                           </Stack>
-
-                          <Text fontSize="sm">{queue.description || getQueueDescription(queue.queue_type)}</Text>
-
-                          {/* Active staff in queue */}
-                          <VStack align="stretch" spaceY={2}>
-                            <HStack align="center" spaceX={2}>
-                              <BsPersonBadge />
-                              <Text fontSize="sm" fontWeight="medium">
-                                Staff on duty ({activeStaff.length})
-                              </Text>
-                            </HStack>
-
-                            {activeStaff.length > 0 ? (
-                              <HStack wrap="wrap" gap={2}>
-                                {activeStaff.slice(0, 4).map((staffId, index) => (
-                                  <PersonAvatar key={`staff-${staffId}-${index}-${queue.id}`} uid={staffId} size="sm" />
-                                ))}
-                                {activeStaff.length > 4 && <Text fontSize="xs">+{activeStaff.length - 4} more</Text>}
-                              </HStack>
-                            ) : (
-                              <Text fontSize="xs" color="gray.500">
-                                No staff currently on duty
-                              </Text>
-                            )}
-                          </VStack>
-
-                          {/* Active students in queue */}
-                          <VStack align="stretch" spaceY={2}>
-                            <HStack align="center" spaceX={2}>
-                              <BsPeople />
-                              <Text fontSize="sm" fontWeight="medium">
-                                Currently in queue ({queueRequests.length})
-                              </Text>
-                            </HStack>
-
-                            {activeUsers.length > 0 ? (
-                              <HStack wrap="wrap" gap={2}>
-                                {activeUsers.slice(0, 6).map((userId, index) => (
-                                  <PersonAvatar key={`user-${userId}-${index}-${queue.id}`} uid={userId} size="xs" />
-                                ))}
-                                {activeUsers.length > 6 && <Text fontSize="xs">+{activeUsers.length - 6} more</Text>}
-                              </HStack>
-                            ) : (
-                              <Text fontSize="xs" color="gray.500">
-                                No one currently in queue
-                              </Text>
-                            )}
-                          </VStack>
-
-                          <NextLink href={`/course/${course_id}/office-hours/${queue.id}`} passHref>
-                            <Button variant="outline" size="sm" width="full">
-                              Join Queue
-                            </Button>
-                          </NextLink>
-                        </Stack>
-                      </Card.Body>
-                    </Card.Root>
-                  );
-                })}
-              </Grid>
+                        </Card.Body>
+                      </Card.Root>
+                    );
+                  })}
+                </Grid>
+              </Box>
             )}
           </Stack>
         </Container>
