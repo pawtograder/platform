@@ -100,10 +100,10 @@ export class OfficeHoursController {
       officeHoursRealTimeController
     });
 
-    // Ensure we subscribe to per-request channels so related table broadcasts (messages/students)
-    // are delivered to the list UIs without requiring a hard refresh
+    // Ensure we subscribe to per-request channels so related table broadcasts (messages/students/etc.)
+    // are delivered to the list UIs for newly created help requests in realtime without requiring a hard refresh
     this.helpRequests.list((data, { entered, left }) => {
-      // Unsubscribe channels for requests that disappeared
+      // Unsubscribe channels for help requests that disappeared
       for (const req of left) {
         const existing = this._helpRequestChannelSubscriptions.get(req.id);
         if (existing) {
@@ -112,7 +112,7 @@ export class OfficeHoursController {
         }
       }
 
-      // Subscribe channels for newly seen requests
+      // Subscribe channels for newly seen help requests
       for (const req of entered) {
         if (!this._helpRequestChannelSubscriptions.has(req.id)) {
           const unsubscribe = this.officeHoursRealTimeController.subscribeToHelpRequest(req.id, () => {
@@ -280,11 +280,7 @@ export class OfficeHoursController {
     // Unsubscribe all per-request channel subscriptions we created
     if (this._helpRequestChannelSubscriptions.size > 0) {
       for (const unsubscribe of this._helpRequestChannelSubscriptions.values()) {
-        try {
-          unsubscribe();
-        } catch {
-          // ignore
-        }
+        unsubscribe();
       }
       this._helpRequestChannelSubscriptions.clear();
     }
