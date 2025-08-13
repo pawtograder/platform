@@ -235,7 +235,7 @@ function CreateLabSectionModal({
                   Cancel
                 </Button>
               </Dialog.ActionTrigger>
-              <Button onClick={handleSubmit(onSubmit)} loading={isCreating || isUpdating} colorPalette="blue">
+              <Button onClick={handleSubmit(onSubmit)} loading={isCreating || isUpdating} colorPalette="green">
                 {initialData ? "Update" : "Create"}
               </Button>
             </Dialog.Footer>
