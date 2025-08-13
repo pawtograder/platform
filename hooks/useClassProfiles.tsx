@@ -162,29 +162,30 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         </Stack>
       </Container>
     );
-  }
-  else if (!myRole) {
-    return <Container maxW="md" py={{ base: "12", md: "24" }}>
-      <Stack gap="6">
-        <VStack gap="2" textAlign="center" mt="4">
-          <Logo width={100} />
-          <Heading size="3xl">Pawtograder</Heading>
-          <Text color="fg.muted">Your pawsome course companion</Text>
-        </VStack>
-        <Card.Root p="4" colorPalette="red" variant="subtle">
-          <Card.Body>
-            <Card.Title>You don&apos;t have access to this course</Card.Title>
-            <Card.Description>
-              You do not currently have access to this course on Pawtograder. Please check with your instructor if you
-              think you should have access to this course.
-            </Card.Description>
-          </Card.Body>
-        </Card.Root>
-        <Button onClick={signOutAction} variant="outline" width="100%">
-          Sign out
-        </Button>
-      </Stack>
-    </Container>;
+  } else if (!myRole) {
+    return (
+      <Container maxW="md" py={{ base: "12", md: "24" }}>
+        <Stack gap="6">
+          <VStack gap="2" textAlign="center" mt="4">
+            <Logo width={100} />
+            <Heading size="3xl">Pawtograder</Heading>
+            <Text color="fg.muted">Your pawsome course companion</Text>
+          </VStack>
+          <Card.Root p="4" colorPalette="red" variant="subtle">
+            <Card.Body>
+              <Card.Title>You don&apos;t have access to this course</Card.Title>
+              <Card.Description>
+                You do not currently have access to this course on Pawtograder. Please check with your instructor if you
+                think you should have access to this course.
+              </Card.Description>
+            </Card.Body>
+          </Card.Root>
+          <Button onClick={signOutAction} variant="outline" width="100%">
+            Sign out
+          </Button>
+        </Stack>
+      </Container>
+    );
   }
 
   return (
