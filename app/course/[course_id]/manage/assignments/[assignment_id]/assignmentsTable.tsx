@@ -158,7 +158,6 @@ export default function AssignmentsTable() {
             return (
               <Link
                 href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
-                target="_blank"
               >
                 {props.getValue() as number}
               </Link>
@@ -176,7 +175,6 @@ export default function AssignmentsTable() {
             return (
               <Link
                 href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
-                target="_blank"
               >
                 {props.getValue() as number}
               </Link>
@@ -202,7 +200,6 @@ export default function AssignmentsTable() {
             return (
               <Link
                 href={`/course/${course_id}/assignments/${assignment_id}/submissions/${props.row.original.activesubmissionid}`}
-                target="_blank"
               >
                 {new TZDate(props.getValue() as string, timeZone).toLocaleString()}
               </Link>
