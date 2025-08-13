@@ -1,8 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.ts";
 import { emailTemplates } from "./emailTemplates.ts";
-import { Notification } from "../_shared/FunctionTypes.d.ts";
+import type { Notification } from "../_shared/FunctionTypes.ts";
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -303,7 +303,20 @@ function isInternalTestEmail(email: string): boolean {
   return email.toLowerCase().endsWith("@pawtograder.net");
 }
 
-// Helper function to check if notification should be skipped (help requests)
+// Classify notifications to handle help request digests
+function classifyNotification(body: NotificationEnvelope): "help_request_created" | "skip" | "standard" {
+  if (body.type === "help_request") {
+    const action = (body as unknown as { action?: string }).action;
+    if (action === "created") return "help_request_created";
+    return "skip";
+  }
+  if ("help_queue_id" in body || "help_request_id" in body) {
+    return "skip";
+  }
+  return "standard";
+}
+
+// Helper function to check if notification should be skipped (legacy behavior)
 function shouldSkipNotification(body: NotificationEnvelope): boolean {
   return "help_queue_id" in body || "help_request_id" in body;
 }
@@ -606,10 +619,107 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       }
     });
 
-    // Process emails in parallel
+    // Partition notifications for special handling of help request creation
+    const helpCreated: QueueMessage<Notification>[] = [];
+    const standard: QueueMessage<Notification>[] = [];
+    for (const n of notifications) {
+      const body = n.message.body as NotificationEnvelope | null;
+      if (!body) {
+        standard.push(n);
+        continue;
+      }
+      const kind = classifyNotification(body);
+      if (kind === "help_request_created") helpCreated.push(n);
+      else if (kind === "standard") standard.push(n);
+      else {
+        // Archive skipped help notifications to prevent reprocessing
+        await archiveMessage(adminSupabase, n.msg_id, scope);
+      }
+    }
+
+    // Build batched digests for help request creation per user and class
+    type DigestItem = {
+      help_request_id: number;
+      help_queue_name: string;
+      creator_name: string;
+      request_subject?: string;
+      request_body?: string;
+      help_request_url?: string;
+    };
+    const digests = new Map<string, { user_id: string; class_id: number; items: DigestItem[]; msg_ids: number[] }>();
+    for (const n of helpCreated) {
+      const body = n.message.body as unknown as NotificationEnvelope & {
+        action: string;
+        help_request_id: number;
+        help_queue_name?: string;
+        creator_name?: string;
+        request_subject?: string;
+        request_body?: string;
+      };
+      const key = `${n.message.user_id}|${n.message.class_id}`;
+      if (!digests.has(key)) {
+        digests.set(key, {
+          user_id: n.message.user_id as string,
+          class_id: n.message.class_id as number,
+          items: [],
+          msg_ids: []
+        });
+      }
+      const entry = digests.get(key)!;
+      if (!entry.items.some((it) => it.help_request_id === body.help_request_id)) {
+        const urls = buildEmailUrls(body, n.message.class_id);
+        entry.items.push({
+          help_request_id: body.help_request_id,
+          help_queue_name: body.help_queue_name || "",
+          creator_name: body.creator_name || "",
+          request_subject: body.request_subject,
+          request_body: body.request_body,
+          help_request_url: urls.help_request_url
+        });
+      }
+      entry.msg_ids.push(n.msg_id);
+    }
+
+    // Helper to find recipient by user_id
+    const recipientByUserId = (userId: string) => emails?.find((e) => e.user_id === userId) || null;
+
+    // Send digests
+    for (const { user_id, class_id, items, msg_ids } of digests.values()) {
+      const recipient = recipientByUserId(user_id);
+      const course = courses?.find((c) => c.id === class_id);
+      const emailScope = scope.clone();
+      emailScope.setTag("digest", "help_request_created");
+      emailScope.setContext("digest_meta", { user_id, class_id, count: items.length });
+
+      if (!recipient || !recipient.email) {
+        await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+        continue;
+      }
+      if (isInternalTestEmail(recipient.email)) {
+        await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+        continue;
+      }
+
+      const subject = `${course?.name || "Course"} - Help requests digest (${items.length})`;
+      const lines: string[] = [];
+      lines.push(`You have ${items.length} new help request(s).`);
+      lines.push("");
+      for (const it of items) {
+        const title = `${it.creator_name || "Student"}: ${it.request_subject || "General"}`;
+        const queue = it.help_queue_name ? ` [${it.help_queue_name}]` : "";
+        const urlLine = it.help_request_url ? `\n  ${it.help_request_url}` : "";
+        lines.push(`- ${title}${queue}${urlLine}`);
+      }
+      const bodyText = lines.join("\n");
+
+      await sendEmailViaTransporter(transporter, recipient.email, subject, bodyText, [], undefined, emailScope);
+
+      await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+    }
+
+    // Process standard notifications in parallel
     await Promise.all(
-      notifications.map((notification) => {
-        // Create a new scope for each email to isolate context
+      standard.map((notification) => {
         const emailScope = scope.clone();
         emailScope.setTag("msg_id", notification.msg_id);
         return sendEmail({
