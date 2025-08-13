@@ -486,7 +486,7 @@ export default function AssignmentForm({
             >
               <Input name="description" />
             </Field>
-          </Fieldset.Content>
+          </Fieldset.Content> */}
           <Fieldset.Content>
             <Field
               label="Points Possible"
@@ -502,7 +502,7 @@ export default function AssignmentForm({
                 })}
               />
             </Field>
-          </Fieldset.Content> */}
+          </Fieldset.Content>
           <GroupConfigurationSubform form={form} timezone={timezone} />
           <SelfEvaluationSubform form={form} />
           <Fieldset.Content>
