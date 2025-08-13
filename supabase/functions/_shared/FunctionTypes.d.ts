@@ -116,6 +116,7 @@ export type AddEnrollmentRequest = {
   courseId: number;
   canvasId?: number;
   classSectionId?: number;
+  notify?: boolean;
 };
 
 export type LiveMeetingForHelpRequestRequest = {

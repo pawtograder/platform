@@ -38,8 +38,7 @@ BEGIN
         WHERE sr.submission_id = s.id 
         AND sr.class_id = a.class_id 
         AND sr.rubric_id = a.self_review_rubric_id
-    )
-    ON CONFLICT (submission_id, rubric_id) DO NOTHING;
+    );
 
     -- Then, insert review assignments for students who need them but don't have them yet
     INSERT INTO review_assignments (
@@ -84,8 +83,7 @@ BEGIN
     AND NOT EXISTS (
         SELECT 1 FROM review_assignments ra 
         WHERE ra.assignment_id = a.id AND ra.assignee_profile_id = prof.id
-    )
-    ON CONFLICT (submission_review_id, assignee_profile_id) DO NOTHING;
+    );
 END;
 $$;
 
