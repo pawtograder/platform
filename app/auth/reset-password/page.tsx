@@ -1,6 +1,6 @@
 import { setNewPasswordAction } from "@/app/actions";
 import { FormMessage, Message } from "@/components/form-message";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/ui/submit-button";
 import { Box, Container, HStack, Heading, Input, Separator, Stack, Text, VStack } from "@chakra-ui/react";
 import Logo from "@/components/ui/logo";
 
@@ -33,9 +33,9 @@ export default async function ResetPassword(props: { searchParams: Promise<Searc
               <Input name="password" placeholder="new password" type="password" aria-label="Sign in password" />
             </Box>
             <Box mt="4">
-              <Button type="submit" name="action" value="set-new-password" width="100%">
+              <SubmitButton name="action" value="set-new-password" width="100%" pendingText="Setting password…">
                 Reset Password
-              </Button>
+              </SubmitButton>
             </Box>
           </form>
         </Stack>
