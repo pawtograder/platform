@@ -148,8 +148,8 @@ create table "public"."notification_preferences" (
     "user_id" uuid not null,
     "class_id" bigint not null,
     "help_request_notifications" notification_type not null default 'digest'::notification_type,
-    "help_request_message_notifications" notification_type not null default 'immediate'::notification_type,
-    "email_digest_frequency" email_digest_frequency not null default 'daily'::email_digest_frequency,
+    "help_request_message_notifications" notification_type not null default 'digest'::notification_type,
+    "email_digest_frequency" email_digest_frequency not null default 'weekly'::email_digest_frequency,
     "updated_at" timestamp with time zone
 );
 
