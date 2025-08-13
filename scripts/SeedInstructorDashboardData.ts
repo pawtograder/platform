@@ -3912,7 +3912,7 @@ async function runSmallScale() {
     firstAssignmentDate: subDays(now, 30), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
     numManualGradedColumns: 5, // 5 manual graded columns for small scale
-    gradingScheme: "current", // Use current grading scheme
+    gradingScheme: "specification", // Use specification grading scheme
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
