@@ -98,37 +98,41 @@ AS $function$
     end;
 $function$;
 
--- Update authorize_for_submission_review_readable function
-CREATE OR REPLACE FUNCTION public.authorize_for_submission_review_readable(requested_submission_review_id bigint)
+-- Update authorize_for_submission_reviewable function
+CREATE OR REPLACE FUNCTION public.authorize_for_submission_reviewable(requested_submission_id bigint, requested_submission_review_id bigint)
  RETURNS boolean
- LANGUAGE plpgsql
- SECURITY DEFINER
+ LANGUAGE plpgsql STABLE SECURITY DEFINER
+ SET search_path TO ''
 AS $function$
-  declare
-    bind_permissions INTEGER := 0;
-  begin
-    -- Check if user owns the submission being reviewed
-    select count(*) into bind_permissions
-    from public.submission_reviews as review
-    inner join public.submissions as s on s.id=review.submission_id
+declare
+  bind_permissions int;
+  jwtRoles public.user_roles;
+begin
+  if requested_submission_review_id is null then
+  -- check for direct ownership of assignment
+    select count(*)
+    into bind_permissions
+    from public.submissions as s
     inner join public.user_roles as r on r.private_profile_id=s.profile_id
     where r.user_id=(select auth.uid());
     if bind_permissions > 0 then
       return true;
     end if;
 
-    -- Check if user is in group that owns the submission being reviewed  
-    select count(*) into bind_permissions
-    from public.submission_reviews as review
-    inner join public.submissions as s on s.id=review.submission_id
-    inner join public.user_roles as r on r.private_profile_id=s.profile_id
+  -- check through assignment groups
+    select count(*)
+    into bind_permissions
+    from public.submissions as s
+    inner join public.assignment_groups_members mem on mem.assignment_group_id=s.assignment_group_id
+    inner join public.user_roles as r on r.private_profile_id=mem.profile_id
     where r.user_id=(select auth.uid());
     if bind_permissions > 0 then
       return true;
     end if;
-
-    -- Check if user owns the submission and review is released
-    select count(*) into bind_permissions
+  else 
+    -- check for direct ownership of assignment
+    select count(*)
+    into bind_permissions
     from public.submission_reviews as review
     inner join public.submissions as s on s.id=r.submission_id
     inner join public.user_roles as r on r.private_profile_id=s.profile_id
@@ -137,39 +141,42 @@ AS $function$
       return true;
     end if;
 
-    -- Check if user is in group and review is released
-    select count(*) into bind_permissions
+  -- check through assignment groups
+    select count(*)
+    into bind_permissions
     from public.submission_reviews as review
-    inner join public.submissions as s on s.id=review.submission_id
+    inner join public.submissions as s on s.id=r.submission_id
     inner join public.assignment_groups_members mem on mem.assignment_group_id=s.assignment_group_id
     inner join public.user_roles as r on r.private_profile_id=mem.profile_id
-    where r.user_id=(select auth.uid()) and review.id=requested_submission_review_id and review.released;
+    where r.user_id=(select auth.uid()) and review.id=requested_submission_review_id  and review.released;
     if bind_permissions > 0 then
       return true;
     end if;
+  end if;
 
-    return false;
-  end;
+  return false;
+end;
 $function$;
 
 -- Update authorize_to_create_own_due_date_extension function
-CREATE OR REPLACE FUNCTION public.authorize_to_create_own_due_date_extension(_student_id uuid, _assignment_group_id bigint, _assignment_id bigint, _class_id bigint, _creator_id uuid, _hours double precision, _tokens_consumed integer)
+CREATE OR REPLACE FUNCTION public.authorize_to_create_own_due_date_extension(_student_id uuid, _assignment_group_id bigint, _assignment_id bigint, _class_id bigint, _creator_id uuid, _hours_to_extend integer, _tokens_consumed integer)
  RETURNS boolean
- LANGUAGE plpgsql
- SECURITY DEFINER
+ LANGUAGE plpgsql STABLE SECURITY DEFINER
+ SET search_path TO ''
 AS $function$
 declare
+  tokens_used_this_assignment int;
+  tokens_used_all_assignments int;
+  tokens_remaining int;
+  tokens_needed int;
+  max_tokens_for_assignment int;
   private_profile_id uuid;
-  late_tokens_available integer;
-  tokens_required integer;
+  existing_negative_exception boolean;
 begin
-  -- Early return if no late tokens feature
-  if not exists (
-    select 1 from assignment_groups ag
-    inner join assignments a on a.id = ag.assignment_id
-    where ag.id = _assignment_group_id
-    and a.use_late_tokens
-  ) then
+
+  -- Validate that the declared number of tokens consumed is correct
+  tokens_needed := ceil(_hours_to_extend/24);
+  if tokens_needed != _tokens_consumed then
     return false;
   end if;
 
@@ -179,24 +186,54 @@ begin
     return false;
   end if;
 
-  -- Make sure creator is the student for whom extension is created
-  if _student_id != private_profile_id then
+  -- Check if there's already a negative exception for this student/assignment_group + assignment + class
+  -- Prevent ANY additional exception in that case
+    select exists (
+      select 1 from public.assignment_due_date_exceptions adde
+      where (
+        (_student_id is not null and adde.student_id is not null and _student_id = adde.student_id) or
+        (_assignment_group_id is not null and adde.assignment_group_id is not null and _assignment_group_id = adde.assignment_group_id)
+      )
+      and adde.assignment_id = _assignment_id 
+      and adde.class_id = _class_id 
+      and adde.hours < 0
+    ) into existing_negative_exception;
+    
+    if existing_negative_exception then
+      return false;
+    end if;
+
+  select late_tokens_per_student from public.classes where id = _class_id into tokens_remaining;
+
+  -- Make sure that the student is in the assignment group or matches the student_id
+  if _assignment_group_id is not null then
+    if not exists (select 1 from public.assignment_groups_members where assignment_group_id = _assignment_group_id and profile_id = private_profile_id) then
+      return false;
+    end if;
+    select coalesce(sum(tokens_consumed), 0) from public.assignment_due_date_exceptions where assignment_group_id = _assignment_group_id and assignment_id = _assignment_id into tokens_used_this_assignment;
+  else
+    if private_profile_id != _student_id then
+      return false;
+    end if;
+      select coalesce(sum(tokens_consumed), 0) from public.assignment_due_date_exceptions where student_id = _student_id and assignment_id = _assignment_id into tokens_used_this_assignment;
+  end if;
+
+  -- Calculate total tokens used across all assignments for this student
+  -- Join with assignment_groups_members to get all assignment groups the student is in
+  select coalesce(sum(adde.tokens_consumed), 0) 
+  from public.assignment_due_date_exceptions adde
+  left join public.assignment_groups_members agm on agm.assignment_group_id = adde.assignment_group_id
+  where adde.student_id = _student_id 
+     or agm.profile_id = private_profile_id
+  into tokens_used_all_assignments;
+
+  if tokens_used_all_assignments > tokens_remaining then
     return false;
   end if;
 
-  -- Calculate tokens required and check if student has enough
-  tokens_required := ceil(_hours / 24.0)::integer;
-  
-  select coalesce(available_late_tokens, 0) into late_tokens_available
-  from public.late_token_balances
-  where profile_id = _student_id and class_id = _class_id;
+  select max_late_tokens from public.assignments where id=_assignment_id into max_tokens_for_assignment;
 
-  if late_tokens_available < tokens_required then
-    return false;
-  end if;
-
-  -- Validate tokens_consumed matches calculated requirement
-  if _tokens_consumed != tokens_required then
+  if tokens_used_this_assignment > max_tokens_for_assignment then
     return false;
   end if;
 
@@ -204,22 +241,21 @@ begin
 end;
 $function$;
 
--- Update authorize_for_assignment_group function
-CREATE OR REPLACE FUNCTION public.authorize_for_assignment_group(_assignment_group_id bigint)
+-- Update authorizeforassignmentgroup function
+CREATE OR REPLACE FUNCTION public.authorizeforassignmentgroup(_assignment_group_id bigint)
  RETURNS boolean
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-  declare
-    bind_permissions INTEGER := 0;
-  begin
+ LANGUAGE plpgsql STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$declare
+  bind_permissions int;
+begin
   select count(*) into bind_permissions
   from public.user_roles as r
   inner join public.assignment_groups_members m on m.profile_id=r.private_profile_id
   where m.assignment_group_id=_assignment_group_id and r.user_id=(select auth.uid());
 
   return bind_permissions > 0;
-  end;
+end;
 $function$;
 
 -- Update authorizeforclass function
