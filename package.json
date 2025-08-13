@@ -17,7 +17,9 @@
     "client-local": "npx supabase gen types typescript --local --schema public,pgmq_public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
     "rubric-schema": "npx typescript-json-schema --required --noExtraProps tsconfig.json YmlRubricType > public/RubricSchema.json",
     "lint": "next lint && prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@aws-sdk/client-chime-sdk-meetings": "^3.750.0",
@@ -126,6 +128,8 @@
     "@playwright/test": "^1.53.2",
     "@snaplet/copycat": "^6.0.0",
     "@snaplet/seed": "^0.98.0",
+    "@storybook/addon-essentials": "^8.6.14",
+    "@storybook/nextjs": "^8.6.14",
     "@tanstack/eslint-plugin-query": "^5.66.0",
     "@types/diff": "^7.0.2",
     "@types/lodash.isequal": "^4.5.8",
@@ -150,6 +154,7 @@
     "pg": "^8.13.3",
     "postcss": "8.4.49",
     "prettier": "^3.5.3",
+    "storybook": "^8.6.14",
     "supabase": "^2.23.4",
     "tailwind-merge": "^2.5.2",
     "tailwindcss": "3.4.17",
