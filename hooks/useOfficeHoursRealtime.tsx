@@ -49,8 +49,6 @@ export class OfficeHoursController {
   private _isLoaded = false;
   private _officeHoursRealTimeController: OfficeHoursRealTimeController | null = null;
   private _broadcastUnsubscribe: (() => void) | null = null;
-  // Track subscriptions to per-request channels to ensure table change broadcasts are received
-  private _helpRequestChannelSubscriptions: Map<number, () => void> = new Map();
 
   // Track read receipts that have been marked to prevent duplicates across component mounts
   private _markedAsReadSet: Set<number> = new Set();
@@ -98,29 +96,6 @@ export class OfficeHoursController {
       table: "help_requests",
       query: client.from("help_requests").select("*").eq("class_id", classId),
       officeHoursRealTimeController
-    });
-
-    // Ensure we subscribe to per-request channels so related table broadcasts (messages/students/etc.)
-    // are delivered to the list UIs for newly created help requests in realtime without requiring a hard refresh
-    this.helpRequests.list((data, { entered, left }) => {
-      // Unsubscribe channels for help requests that disappeared
-      for (const req of left) {
-        const existing = this._helpRequestChannelSubscriptions.get(req.id);
-        if (existing) {
-          existing();
-          this._helpRequestChannelSubscriptions.delete(req.id);
-        }
-      }
-
-      // Subscribe channels for newly seen help requests
-      for (const req of entered) {
-        if (!this._helpRequestChannelSubscriptions.has(req.id)) {
-          const unsubscribe = this.officeHoursRealTimeController.subscribeToHelpRequest(req.id, () => {
-            // No-op; TableControllers that subscribed by table name will receive broadcasts
-          });
-          this._helpRequestChannelSubscriptions.set(req.id, unsubscribe);
-        }
-      }
     });
 
     this.helpQueues = new TableController({
@@ -275,14 +250,6 @@ export class OfficeHoursController {
     if (this._broadcastUnsubscribe) {
       this._broadcastUnsubscribe();
       this._broadcastUnsubscribe = null;
-    }
-
-    // Unsubscribe all per-request channel subscriptions we created
-    if (this._helpRequestChannelSubscriptions.size > 0) {
-      for (const unsubscribe of this._helpRequestChannelSubscriptions.values()) {
-        unsubscribe();
-      }
-      this._helpRequestChannelSubscriptions.clear();
     }
 
     if (this._officeHoursRealTimeController) {
