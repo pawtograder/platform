@@ -259,7 +259,9 @@ export default function ReviewAssignmentsPage() {
           <Link href={`/course/${course_id}/manage/assignments/${assignment_id}/reviews/reassign`}>
             Reassign Grading by Grader
           </Link>
-          <Button onClick={() => openAssignModal(null)} variant="ghost" size="sm">Assign Single Review</Button>
+          <Button onClick={() => openAssignModal(null)} variant="ghost" size="sm">
+            Assign Single Review
+          </Button>
           <ClearAssignmentsDialog onAssignmentCleared={handleReviewAssignmentChange} />
         </HStack>
       </VStack>

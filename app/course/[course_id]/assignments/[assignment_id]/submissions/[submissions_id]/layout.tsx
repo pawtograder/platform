@@ -393,7 +393,6 @@ function ReviewActions() {
                 Mark as Checked
               </Button>
             )}
-            
           </HStack>
         </VStack>
       )}
