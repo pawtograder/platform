@@ -559,7 +559,7 @@ export default function AssignReviewModal({
                       {...field}
                       inputId="rubric_part_ids"
                       options={rubricPartOptions}
-                      isLoading={isLoadingRubricParts}
+                      isLoading={selectedRubricId !== undefined && isLoadingRubricParts}
                       isDisabled={!selectedRubricId || isLoadingRubricParts}
                       placeholder={!selectedRubricId ? "Select a Rubric first" : "Select specific parts..."}
                       onChange={(options: readonly { label: string; value: number }[] | null) =>
@@ -577,16 +577,16 @@ export default function AssignReviewModal({
                 )}
               </Field>
 
-              <Field label="Release Date (Optional)" invalid={!!errors.release_date}>
+              {/* <Field label="Release Date (Optional)" invalid={!!errors.release_date}>
                 <Input id="release_date" type="datetime-local" {...control.register("release_date")} />
                 {errors.release_date && (
                   <Text color="red.500" fontSize="sm">
                     {errors.release_date.message}
                   </Text>
                 )}
-              </Field>
+              </Field> */}
 
-              <Field label="Max Late Tokens (Optional)" invalid={!!errors.max_allowable_late_tokens}>
+              {/* <Field label="Max Late Tokens (Optional)" invalid={!!errors.max_allowable_late_tokens}>
                 <Input
                   id="max_allowable_late_tokens"
                   type="number"
@@ -597,7 +597,7 @@ export default function AssignReviewModal({
                     {errors.max_allowable_late_tokens.message}
                   </Text>
                 )}
-              </Field>
+              </Field> */}
             </VStack>
           </form>
         </DialogBody>

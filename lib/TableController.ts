@@ -1,9 +1,10 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { SupabaseClient } from "@supabase/supabase-js";
+import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
+import { SupabaseClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeController";
 import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
-import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -12,6 +13,201 @@ type TablesThatHaveAnIDField = {
 
 type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["Row"]["id"];
 
+/**
+ * Hook that returns all values from a TableController that match a predicate.
+ * Automatically subscribes to real-time updates for each matching item.
+ * Uses memoization to prevent unnecessary re-renders.
+ *
+ * @example
+ * ```tsx
+ * // Get all unread discussion threads for a user
+ * const unreadThreads = useListTableControllerValues(
+ *   controller.discussionThreadReadStatus,
+ *   useCallback((data) => data.read_at === null && data.user_id === currentUserId, [currentUserId])
+ * );
+ *
+ * // Get all assignments due in the next week
+ * const upcomingAssignments = useListTableControllerValues(
+ *   controller.assignments,
+ *   useCallback((assignment) => {
+ *     const dueDate = new Date(assignment.due_at);
+ *     const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+ *     return dueDate <= nextWeek;
+ *   }, [])
+ * );
+ * ```
+ */
+export function useListTableControllerValues<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType>,
+  predicate: (row: PossiblyTentativeResult<ResultType>) => boolean
+) {
+  const [matchingIds, setMatchingIds] = useState<Set<ExtractIdType<T>>>(new Set());
+  const [values, setValues] = useState<Map<ExtractIdType<T>, PossiblyTentativeResult<ResultType>>>(new Map());
+
+  // Keep track of individual ID subscriptions
+  const subscriptionsRef = useRef<Map<ExtractIdType<T>, () => void>>(new Map());
+
+  // Effect to subscribe to the list and detect matching items
+  useEffect(() => {
+    const { unsubscribe } = controller.list((data) => {
+      // Find all rows that match the predicate
+      const matchingRows = data.filter((row) => predicate(row as PossiblyTentativeResult<ResultType>));
+      const newMatchingIds = new Set(matchingRows.map((row) => (row as { id: ExtractIdType<T> }).id));
+
+      // Update matching IDs
+      setMatchingIds(newMatchingIds);
+
+      // Update values map with current matching rows
+      setValues((prevValues) => {
+        const newValues = new Map(prevValues);
+
+        // Add/update all matching rows
+        matchingRows.forEach((row) => {
+          const id = (row as { id: ExtractIdType<T> }).id;
+          newValues.set(id, row as PossiblyTentativeResult<ResultType>);
+        });
+
+        // Remove rows that no longer match
+        for (const [id] of prevValues) {
+          if (!newMatchingIds.has(id)) {
+            newValues.delete(id);
+          }
+        }
+
+        return newValues;
+      });
+    });
+
+    return unsubscribe;
+  }, [controller, predicate]);
+
+  // Effect to manage individual ID subscriptions
+  useEffect(() => {
+    const subscriptions = subscriptionsRef.current;
+
+    // Subscribe to new IDs
+    for (const id of matchingIds) {
+      if (!subscriptions.has(id)) {
+        const { unsubscribe } = controller.getById(id as IDType, (data) => {
+          if (data) {
+            // Only update if the row still matches the predicate
+            if (predicate(data)) {
+              setValues((prevValues) => {
+                const newValues = new Map(prevValues);
+                newValues.set(id, data);
+                return newValues;
+              });
+            } else {
+              // Row no longer matches, remove it
+              setValues((prevValues) => {
+                const newValues = new Map(prevValues);
+                newValues.delete(id);
+                return newValues;
+              });
+              setMatchingIds((prevIds) => {
+                const newIds = new Set(prevIds);
+                newIds.delete(id);
+                return newIds;
+              });
+            }
+          } else {
+            // Row was deleted, remove it
+            setValues((prevValues) => {
+              const newValues = new Map(prevValues);
+              newValues.delete(id);
+              return newValues;
+            });
+            setMatchingIds((prevIds) => {
+              const newIds = new Set(prevIds);
+              newIds.delete(id);
+              return newIds;
+            });
+          }
+        });
+
+        subscriptions.set(id, unsubscribe);
+      }
+    }
+
+    // Unsubscribe from IDs that are no longer matching
+    for (const [id, unsubscribe] of subscriptions) {
+      if (!matchingIds.has(id)) {
+        unsubscribe();
+        subscriptions.delete(id);
+      }
+    }
+
+    // Cleanup on unmount
+    return () => {
+      for (const [, unsubscribe] of subscriptions) {
+        unsubscribe();
+      }
+      subscriptions.clear();
+    };
+  }, [controller, matchingIds, predicate]);
+
+  // Memoize the final result to avoid unnecessary re-renders
+  const result = useMemo(() => {
+    return Array.from(values.values());
+  }, [values]);
+
+  return result;
+}
+
+export function useFindTableControllerValue<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType>,
+  predicate: (row: PossiblyTentativeResult<ResultType>) => boolean
+) {
+  const [id, setID] = useState<ExtractIdType<T> | undefined>(undefined);
+  const [value, setValue] = useState<PossiblyTentativeResult<ResultType> | undefined>(undefined);
+
+  useEffect(() => {
+    if (id) {
+      return;
+    }
+    const { unsubscribe } = controller.list((data) => {
+      const row = data.find((row) => predicate(row as PossiblyTentativeResult<ResultType>));
+      if (row && typeof row === "object" && row !== null && "id" in row) {
+        setID((row as { id: ExtractIdType<T> }).id);
+        setValue(row as PossiblyTentativeResult<ResultType>);
+      }
+    });
+    return unsubscribe;
+  }, [controller, predicate, id]);
+
+  useEffect(() => {
+    if (id) {
+      const { unsubscribe } = controller.getById(id as IDType, (data) => {
+        setValue(data);
+      });
+      return unsubscribe;
+    }
+  }, [controller, id]);
+
+  return value;
+}
 export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };

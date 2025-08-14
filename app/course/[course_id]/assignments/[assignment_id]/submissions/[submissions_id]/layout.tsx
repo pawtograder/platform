@@ -393,37 +393,6 @@ function ReviewActions() {
                 Mark as Checked
               </Button>
             )}
-            {review.released ? (
-              <Button
-                loading={updatingReview}
-                variant="surface"
-                onClick={async () => {
-                  try {
-                    setUpdatingReview(true);
-                    await submissionController.submission_reviews.update(review.id, { released: false });
-                  } finally {
-                    setUpdatingReview(false);
-                  }
-                }}
-              >
-                Unrelease
-              </Button>
-            ) : (
-              <Button
-                variant="surface"
-                loading={updatingReview}
-                onClick={async () => {
-                  try {
-                    setUpdatingReview(true);
-                    await submissionController.submission_reviews.update(review.id, { released: true });
-                  } finally {
-                    setUpdatingReview(false);
-                  }
-                }}
-              >
-                Release To Student
-              </Button>
-            )}
           </HStack>
         </VStack>
       )}

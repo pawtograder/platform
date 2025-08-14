@@ -17,7 +17,11 @@ import {
   UserRoleWithPrivateProfileAndUser
 } from "@/utils/supabase/DatabaseTypes";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController from "@/lib/TableController";
+import TableController, {
+  PossiblyTentativeResult,
+  useFindTableControllerValue,
+  useListTableControllerValues
+} from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
@@ -53,6 +57,15 @@ export function useUpdateThreadTeaser() {
     [updateThread]
   );
 }
+export function useRootDiscussionThreadReadStatuses(threadId: number) {
+  const controller = useCourseController();
+  const rootPredicate = useMemo(
+    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) => data.discussion_thread_root_id === threadId,
+    [threadId]
+  );
+  const readStatuses = useListTableControllerValues(controller.discussionThreadReadStatus, rootPredicate);
+  return readStatuses;
+}
 /**
  * Returns a hook that returns the read status of a thread.
  * @param threadId The id of the thread to get the read status of.
@@ -63,39 +76,27 @@ export function useUpdateThreadTeaser() {
 export function useDiscussionThreadReadStatus(threadId: number) {
   const controller = useCourseController();
   const { user } = useAuthState();
-  const [readStatus, setReadStatus] = useState<DiscussionThreadReadWithAllDescendants | null | undefined>(undefined);
-  useEffect(() => {
-    const { unsubscribe, data } = controller.getDiscussionThreadReadStatus(threadId, (data) => {
-      setReadStatus(data);
-    });
-    setReadStatus(data);
-    return unsubscribe;
-  }, [controller, threadId]);
+  const predicate = useMemo(
+    () => (data: PossiblyTentativeResult<DiscussionThreadReadStatus>) => data.discussion_thread_id === threadId,
+    [threadId]
+  );
+  const readStatus = useFindTableControllerValue(controller.discussionThreadReadStatus, predicate);
+
   const createdThreadReadStatuses = useRef<Set<number>>(new Set<number>());
-  const { mutateAsync: createThreadReadStatus } = useCreate<DiscussionThreadReadStatus>({
-    resource: "discussion_thread_read_status"
-  });
-  const { mutateAsync: updateThreadReadStatus } = useUpdate<DiscussionThreadReadStatus>({
-    resource: "discussion_thread_read_status",
-    mutationMode: "optimistic"
-  });
 
   const setUnread = useCallback(
     (root_threadId: number, threadId: number, isUnread: boolean) => {
-      if (!controller.isLoaded) {
+      if (!controller.discussionThreadReadStatus.ready) {
         return;
       }
-      const { data: threadReadStatus } = controller.getDiscussionThreadReadStatus(threadId);
-      if (threadReadStatus) {
-        if (isUnread && threadReadStatus.read_at) {
-          updateThreadReadStatus({
-            id: threadReadStatus.id,
-            values: { read_at: null }
+      if (readStatus) {
+        if (isUnread && readStatus.read_at) {
+          controller.discussionThreadReadStatus.update(readStatus.id, {
+            read_at: null
           });
-        } else if (!isUnread && !threadReadStatus.read_at) {
-          updateThreadReadStatus({
-            id: threadReadStatus.id,
-            values: { read_at: new Date() }
+        } else if (!isUnread && !readStatus.read_at) {
+          controller.discussionThreadReadStatus.update(readStatus.id, {
+            read_at: new Date().toISOString()
           });
         }
       } else {
@@ -103,24 +104,22 @@ export function useDiscussionThreadReadStatus(threadId: number) {
           return;
         }
         createdThreadReadStatuses.current.add(threadId);
-        createThreadReadStatus({
-          values: {
+        controller.discussionThreadReadStatus
+          .create({
             discussion_thread_id: threadId,
-            user_id: user?.id,
+            user_id: user?.id || "",
             discussion_thread_root_id: root_threadId,
-            read_at: isUnread ? null : new Date()
-          }
-        }).catch(() => {
-          toaster.error({
-            title: "Error creating thread read status",
-            description: "Please try again later"
+            read_at: isUnread ? null : new Date().toISOString()
+          })
+          .catch(() => {
+            toaster.error({
+              title: "Error creating thread read status",
+              description: "Please try again later"
+            });
           });
-        });
       }
     },
-    // OMG refine.dev mutateAsync is not stable!?
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user?.id, createdThreadReadStatuses, controller]
+    [user?.id, createdThreadReadStatuses, controller, readStatus]
   );
   return { readStatus, setUnread };
 }
@@ -146,7 +145,7 @@ export function useDiscussionThreadTeasers() {
   const controller = useCourseController();
   const [teasers, setTeasers] = useState<DiscussionThreadTeaser[]>([]);
   useEffect(() => {
-    const { data, unsubscribe } = controller.discussionThreads.list((data) => {
+    const { data, unsubscribe } = controller.discussionThreadTeasers.list((data) => {
       setTeasers(data as DiscussionThreadTeaser[]);
     });
     setTeasers(data as DiscussionThreadTeaser[]);
@@ -163,7 +162,7 @@ export function useDiscussionThreadTeaser(id: number | undefined, watchFields?: 
       setTeaser(undefined);
       return;
     }
-    const { unsubscribe, data } = controller.discussionThreads.getById(id, (data) => {
+    const { unsubscribe, data } = controller.discussionThreadTeasers.getById(id, (data) => {
       if (watchFields) {
         setTeaser((oldTeaser) => {
           if (!oldTeaser) {
@@ -210,7 +209,6 @@ export type UserProfileWithPrivateProfile = UserProfile & {
  * This class is responsible for managing realtime course data.
  */
 export class CourseController {
-  private _isLoaded = false;
   private _isObfuscatedGrades: boolean = false;
   private _onlyShowGradesFor: string = "";
   private isObfuscatedGradesListeners: ((val: boolean) => void)[] = [];
@@ -220,7 +218,7 @@ export class CourseController {
 
   // Lazily created TableController instances to avoid realtime subscription bursts
   private _profiles?: TableController<"profiles">;
-  private _discussionThreads?: TableController<"discussion_threads">;
+  private _discussionThreadTeasers?: TableController<"discussion_threads">;
   private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
@@ -256,16 +254,16 @@ export class CourseController {
     return this._profiles;
   }
 
-  get discussionThreads(): TableController<"discussion_threads"> {
-    if (!this._discussionThreads) {
-      this._discussionThreads = new TableController({
+  get discussionThreadTeasers(): TableController<"discussion_threads"> {
+    if (!this._discussionThreadTeasers) {
+      this._discussionThreadTeasers = new TableController({
         client: this._client,
         table: "discussion_threads",
-        query: this._client.from("discussion_threads").select("*").eq("class_id", this.courseId),
+        query: this._client.from("discussion_threads").select("*").eq("root_class_id", this.courseId),
         classRealTimeController: this.classRealTimeController
       });
     }
-    return this._discussionThreads;
+    return this._discussionThreadTeasers;
   }
 
   get discussionThreadReadStatus(): TableController<"discussion_thread_read_status"> {
@@ -462,11 +460,11 @@ export class CourseController {
     callback?: UpdateCallback<DiscussionThreadTeaser>
   ): { unsubscribe: Unsubscribe; data: DiscussionThreadTeaser | undefined } {
     if (callback) {
-      return this.discussionThreads.getById(id, (data) => {
+      return this.discussionThreadTeasers.getById(id, (data) => {
         if (data) callback(data as DiscussionThreadTeaser);
       });
     }
-    return this.discussionThreads.getById(id);
+    return this.discussionThreadTeasers.getById(id);
   }
 
   listDiscussionThreadTeasers(callback?: UpdateCallback<DiscussionThreadTeaser[]>): {
@@ -474,19 +472,15 @@ export class CourseController {
     data: DiscussionThreadTeaser[];
   } {
     if (callback) {
-      return this.discussionThreads.list((data) => {
+      return this.discussionThreadTeasers.list((data) => {
         callback(data as DiscussionThreadTeaser[]);
       });
     }
-    const result = this.discussionThreads.list();
+    const result = this.discussionThreadTeasers.list();
     return {
       unsubscribe: result.unsubscribe,
       data: result.data as DiscussionThreadTeaser[]
     };
-  }
-
-  get isLoaded() {
-    return this._isLoaded;
   }
 
   getDiscussionThreadReadStatus(
@@ -724,7 +718,7 @@ export class CourseController {
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
-    if (this._discussionThreads) createdControllers.push(this._discussionThreads);
+    if (this._discussionThreadTeasers) createdControllers.push(this._discussionThreadTeasers);
     if (this._discussionThreadReadStatus) createdControllers.push(this._discussionThreadReadStatus);
     if (this._tags) createdControllers.push(this._tags);
     if (this._labSections) createdControllers.push(this._labSections);
@@ -736,7 +730,7 @@ export class CourseController {
   // Close method to clean up TableController instances
   close(): void {
     this._profiles?.close();
-    this._discussionThreads?.close();
+    this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
     this._tags?.close();
     this._labSections?.close();
