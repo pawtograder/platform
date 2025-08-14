@@ -5,6 +5,7 @@ import { DiscussionThreadNotification } from "@/components/notifications/notific
 import { Skeleton, SkeletonCircle } from "@/components/ui/skeleton";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
+  useCourseController,
   useDiscussionThreadReadStatus,
   useDiscussionThreadTeaser,
   useUpdateThreadTeaser
@@ -91,7 +92,10 @@ function NotificationAndReadStatusUpdater({
   const { notifications, set_read } = useNotifications("discussion_thread", thread_id);
   const ref = useRef<HTMLDivElement>(null);
   const isVisible = useIntersection(ref, { delay: 1000, rootMargin: "0px" });
-  const threadIsUnread = !readStatus?.read_at;
+  const courseController = useCourseController();
+  const isDiscussionThreadReadStatusLoaded = courseController.discussionThreadReadStatus.ready;
+
+  const threadIsUnread = !readStatus?.read_at && isDiscussionThreadReadStatusLoaded;
   useEffect(() => {
     if (isVisible && threadIsUnread && thread_id && root_thread_id) {
       setUnread(root_thread_id, thread_id, false);

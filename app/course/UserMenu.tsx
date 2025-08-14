@@ -43,7 +43,7 @@ function SupportMenu() {
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
-        <IconButton variant="outline" colorPalette="gray" size="sm">
+        <IconButton variant="outline" colorPalette="gray" size="sm" aria-label="Support & Documentation">
           <HiOutlineSupport />
         </IconButton>
       </Menu.Trigger>
