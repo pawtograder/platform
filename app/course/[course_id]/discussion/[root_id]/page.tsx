@@ -16,7 +16,7 @@ import { useList, useOne, useUpdate } from "@refinedev/core";
 import { formatRelative } from "date-fns";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { FaEye, FaEyeSlash, FaPencilAlt, FaReply, FaSmile } from "react-icons/fa";
+import { FaEye, FaEyeSlash, FaPencilAlt, FaReply } from "react-icons/fa";
 import Markdown from "react-markdown";
 import { DiscussionThread, DiscussionThreadReply } from "../discussion_thread";
 
@@ -105,11 +105,11 @@ function ThreadActions({
           <FaReply />
         </Button>
       </Tooltip>
-      <Tooltip content="Emote">
+      {/* <Tooltip content="Emote">
         <Button aria-label="Emote" variant="ghost" size="sm">
           <FaSmile />
         </Button>
-      </Tooltip>
+      </Tooltip> */}
       <DiscussionThreadReply thread={thread} visible={replyVisible} setVisible={setReplyVisible} />
     </Box>
   );
