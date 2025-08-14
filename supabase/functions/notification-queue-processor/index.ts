@@ -316,11 +316,6 @@ function classifyNotification(body: NotificationEnvelope): "help_request_created
   return "standard";
 }
 
-// Helper function to check if notification should be skipped (legacy behavior)
-function shouldSkipNotification(body: NotificationEnvelope): boolean {
-  return "help_queue_id" in body || "help_request_id" in body;
-}
-
 // Helper function to actually send the email
 async function sendEmailViaTransporter(
   transporter: nodemailer.Transporter,
@@ -403,16 +398,6 @@ async function sendEmail(params: {
     const body = validateNotificationBody(notification, scope);
     if (!body) {
       skipReason = "invalid_notification_body";
-      return;
-    }
-
-    // Check if this should be skipped (help requests)
-    if (shouldSkipNotification(body)) {
-      Sentry.captureMessage(
-        "Ignoring help notification until the bug that generates too many notifications is fixed",
-        scope
-      );
-      skipReason = "help_notification_skipped";
       return;
     }
 
