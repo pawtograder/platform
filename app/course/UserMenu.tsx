@@ -43,11 +43,13 @@ function SupportMenu() {
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
-        <Tooltip content="Support & Documentation" showArrow>
-          <IconButton variant="outline" colorPalette="gray" size="sm">
-            <HiOutlineSupport />
-          </IconButton>
-        </Tooltip>
+        <Box>
+          <Tooltip content="Support & Documentation" showArrow>
+            <IconButton variant="outline" colorPalette="gray" size="sm">
+              <HiOutlineSupport />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Menu.Trigger>
       <Portal>
         <Menu.Positioner>

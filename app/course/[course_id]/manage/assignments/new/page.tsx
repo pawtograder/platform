@@ -36,11 +36,13 @@ export default function NewAssignmentPage() {
 
       // Update the message after 5 seconds
       const messageUpdateTimer = setTimeout(() => {
-        toaster.update(loadingToast, {
-          title: "Creating Assignment",
-          description: "Finishing up creating assignment resources...",
-          type: "loading"
-        });
+        if (loadingToast) {
+          toaster.update(loadingToast, {
+            title: "Creating Assignment",
+            description: "Finishing up creating assignment resources...",
+            type: "loading"
+          });
+        }
       }, 5000);
 
       try {

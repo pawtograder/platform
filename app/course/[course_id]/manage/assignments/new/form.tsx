@@ -407,9 +407,13 @@ export default function AssignmentForm({
                   required: "This is required",
                   validate: (value: string) => {
                     if (!value) return "This is required";
-                    const selected = new TZDate(value, timezone).getTime();
-                    const now = TZDate.tz(timezone).getTime();
-                    return selected > now || "Release date must be in the future";
+                    // Only enforce future date requirement when creating new assignments
+                    if (!isEditing) {
+                      const selected = new TZDate(value, timezone).getTime();
+                      const now = TZDate.tz(timezone).getTime();
+                      return selected > now || "Release date must be in the future";
+                    }
+                    return true;
                   }
                 }}
                 render={({ field }) => {
@@ -424,7 +428,7 @@ export default function AssignmentForm({
                   return (
                     <Input
                       type="datetime-local"
-                      min={minReleaseLocal}
+                      min={isEditing ? undefined : minReleaseLocal}
                       value={localValue || ""}
                       onChange={field.onChange}
                       onBlur={field.onBlur}
