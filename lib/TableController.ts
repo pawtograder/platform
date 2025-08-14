@@ -209,6 +209,15 @@ export default class TableController<
   }
 
   /**
+   * Public method to refetch all data for this controller's query and notify subscribers.
+   * Useful when entries may have been created after the initial fetch but before
+   * realtime subscriptions were established by the consumer.
+   */
+  async refetchAll(): Promise<void> {
+    await this._refetchAllData();
+  }
+
+  /**
    * Handle connection status changes
    */
   private _handleConnectionStatusChange(status: ConnectionStatus): void {
