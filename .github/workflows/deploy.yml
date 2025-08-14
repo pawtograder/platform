@@ -25,7 +25,7 @@ jobs:
           coolify_environment_uuid: ${{ secrets.COOLIFY_ENVIRONMENT_UUID }}
           coolify_supabase_api_url: ${{ secrets.COOLIFY_SUPABASE_API_URL }}
           deployment_app_uuid: ${{ secrets.COOLIFY_DEPLOYMENT_APP_UUID }}
-          sentry_dsn: ${{ secrets.SENTRY_DSN }}
+          bugsink_dsn: ${{ secrets.BUGSINK_DSN }}
         env:
           GITHUB_APP_ID: ${{ secrets.PAWTOGRADER_GITHUB_APP_ID }}
           GITHUB_OAUTH_CLIENT_ID: ${{ secrets.PAWTOGRADER_GITHUB_OAUTH_CLIENT_ID }}
