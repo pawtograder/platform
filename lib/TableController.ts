@@ -410,6 +410,9 @@ export default class TableController<
    * realtime subscriptions were established by the consumer.
    */
   async refetchAll(): Promise<void> {
+    if (this._isRefetching) {
+      return;
+    }
     await this._refetchAllData();
   }
 

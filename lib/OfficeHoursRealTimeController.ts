@@ -53,6 +53,7 @@ export class OfficeHoursRealTimeController {
   private _subscriptions: Map<string, MessageSubscription> = new Map();
   private _subscriptionCounter = 0;
   private _statusChangeListeners: ((status: ConnectionStatus) => void)[] = [];
+  private _statusNotifyTimer?: ReturnType<typeof setTimeout>;
   private _objDebugId = `${new Date().getTime()}-${Math.random()}`;
   private _closed = false;
   private _started = false;
@@ -419,8 +420,12 @@ export class OfficeHoursRealTimeController {
    * Notify status change listeners
    */
   private _notifyStatusChange() {
-    const status = this.getConnectionStatus();
-    this._statusChangeListeners.forEach((listener) => listener(status));
+    if (this._statusNotifyTimer) clearTimeout(this._statusNotifyTimer);
+    this._statusNotifyTimer = setTimeout(() => {
+      const status = this.getConnectionStatus();
+      this._statusChangeListeners.forEach((listener) => listener(status));
+      this._statusNotifyTimer = undefined;
+    }, 50);
   }
 
   /**
@@ -451,6 +456,7 @@ export class OfficeHoursRealTimeController {
    * Clean up channels and subscriptions
    */
   close() {
+    if (this._statusNotifyTimer) clearTimeout(this._statusNotifyTimer);
     this._closed = true;
     this._subscriptions.clear();
     this._statusChangeListeners = [];

@@ -108,19 +108,31 @@ export const HelpRequestTeaser = (props: Props) => {
       );
     }
 
-    const profiles = [
-      student1Profile || (rosterProfile1 as unknown as typeof student1Profile),
-      student2Profile || (rosterProfile2 as unknown as typeof student2Profile),
-      student3Profile || (rosterProfile3 as unknown as typeof student3Profile)
-    ].filter(Boolean);
     const maxAvatars = Math.min(3, students.length);
+    const avatars = [
+      {
+        id: students[0],
+        name: student1Profile?.name || getBestName(rosterProfile1),
+        avatar_url: (student1Profile?.avatar_url || rosterProfile1?.avatar_url) as string | undefined
+      },
+      {
+        id: students[1],
+        name: student2Profile?.name || getBestName(rosterProfile2),
+        avatar_url: (student2Profile?.avatar_url || rosterProfile2?.avatar_url) as string | undefined
+      },
+      {
+        id: students[2],
+        name: student3Profile?.name || getBestName(rosterProfile3),
+        avatar_url: (student3Profile?.avatar_url || rosterProfile3?.avatar_url) as string | undefined
+      }
+    ].slice(0, maxAvatars);
 
     return (
       <AvatarGroup size="sm">
-        {profiles.slice(0, maxAvatars).map((profile, index) => (
-          <Avatar.Root key={students[index]} size="sm">
-            <Avatar.Image src={profile?.avatar_url} />
-            <Avatar.Fallback>{profile?.name?.charAt(0) || "?"}</Avatar.Fallback>
+        {avatars.map((p) => (
+          <Avatar.Root key={p.id} size="sm">
+            <Avatar.Image src={p.avatar_url} />
+            <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}
       </AvatarGroup>

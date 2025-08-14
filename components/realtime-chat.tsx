@@ -314,7 +314,15 @@ export const RealtimeChat = ({
   }
 
   return (
-    <Flex direction="column" height="100%" width="100%" maxW={{ base: "md", md: "full" }} mx="auto" bg="bg.subtle">
+    <Flex
+      direction="column"
+      height="100%"
+      width="100%"
+      maxW={{ base: "md", md: "full" }}
+      mx="auto"
+      bg="bg.subtle"
+      minH={0}
+    >
       {/* Connection status indicator */}
       {!isConnected && (
         <Box p={2} bg="bg.warning" borderBottom="1px" borderColor="border.emphasized">

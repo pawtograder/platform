@@ -3,7 +3,7 @@ import HelpRequestList from "./helpRequestList";
 export default function HelpManageLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <Box>
-      <Flex flex="1" direction={{ base: "column", md: "row" }}>
+      <Flex flex="1" direction={{ base: "column", md: "row" }} minH={0}>
         <Box
           w={{ base: "100%", md: "314px" }}
           borderRightWidth={{ base: "0px", md: "1px" }}
@@ -19,6 +19,7 @@ export default function HelpManageLayout({ children }: Readonly<{ children: Reac
           overflowY={{ base: "visible", md: "auto" }}
           width="100%"
           height={{ base: "auto", md: "100vh" }}
+          minH={0}
         >
           {children}
         </Box>

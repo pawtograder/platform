@@ -17,6 +17,7 @@ import {
   HelpRequest,
   HelpRequestLocationType,
   HelpRequestTemplate,
+  HelpRequestMessage,
   HelpRequestWithStudentCount,
   Submission,
   SubmissionFile
@@ -45,9 +46,12 @@ export default function HelpRequestForm() {
   const [userPreviousRequests, setUserPreviousRequests] = useState<HelpRequest[]>([]);
   const [userActiveRequests, setUserActiveRequests] = useState<HelpRequestWithStudentCount[]>([]);
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  const [isSubmittingGuard, setIsSubmittingGuard] = useState<boolean>(false);
 
   // Use ref to avoid closure issues with selectedStudents in async callbacks
   const selectedStudentsRef = useRef<string[]>([]);
+  // Track if we've created the initial message to avoid duplicates on retries
+  const createdInitialMessageRef = useRef<boolean>(false);
 
   // Update ref whenever selectedStudents changes
   useEffect(() => {
@@ -251,205 +255,226 @@ export default function HelpRequestForm() {
   const selectedHelpQueue = watch("help_queue");
 
   const onSubmit = useCallback(
-    (e: React.FormEvent<HTMLFormElement>) => {
+    async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
 
-      if (!private_profile_id) {
-        toaster.error({
-          title: "Error",
-          description: "You must be logged in to submit a help request"
-        });
-        return;
-      }
+      // Lightweight re-entrancy guard to prevent double submissions from rapid clicks
+      if (isSubmittingGuard) return;
+      setIsSubmittingGuard(true);
 
-      // Check if selected students are valid
-      if (selectedStudents.length === 0) {
-        toaster.error({
-          title: "Error",
-          description: "At least one student must be selected for the help request."
-        });
-        return;
-      }
-
-      // Check for conflicts based on solo vs group request rules
-      const selectedQueueId = getValues("help_queue");
-      const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
-      const is_private = getValues("is_private");
-      if (isCreatingSoloRequest) {
-        // For solo requests, check if user already has a solo request in this queue with the same privacy setting
-        const hasSoloRequestInQueue = userActiveRequests.some(
-          (request) =>
-            Number(request.help_queue) === Number(selectedQueueId) &&
-            request.student_count === 1 &&
-            Boolean(request.is_private) === Boolean(is_private)
-        );
-
-        if (hasSoloRequestInQueue) {
+      try {
+        if (!private_profile_id) {
           toaster.error({
             title: "Error",
-            description: `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`
+            description: "You must be logged in to submit a help request"
           });
           return;
         }
-      }
-      // Group requests are always allowed - no validation needed
 
-      // Create a custom onFinish function that excludes file_references and adds required fields
-      const customOnFinish = async (values: Record<string, unknown>) => {
-        // Exclude file_references from the submission data since it's not a column in help_requests table
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { _intended_privacy, file_references, ...helpRequestData } = values;
-
-        // Add required fields that may not be set in the form
-        const finalData = {
-          ...helpRequestData,
-          assignee: null,
-          class_id: Number.parseInt(course_id as string),
-          created_by: private_profile_id, // Set the created_by field
-          // Ensure these fields have proper defaults
-          status: "open" as const,
-          is_video_live: false,
-          is_private: values.is_private || false
-        };
-
-        try {
-          const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
-          // Get current selected students from ref to avoid closure issues
-          const currentSelectedStudents = selectedStudentsRef.current;
-
-          if (!createdHelpRequest.id) {
-            throw new Error("Help request ID not found in response data");
-          }
-
-          // Add all selected students to help_request_students
-          if (currentSelectedStudents.length > 0) {
-            for (const studentId of currentSelectedStudents) {
-              try {
-                await helpRequestStudents.create({
-                  help_request_id: createdHelpRequest.id,
-                  profile_id: studentId,
-                  class_id: Number.parseInt(course_id as string)
-                });
-              } catch (error) {
-                toaster.error({
-                  title: "Error",
-                  description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
-                });
-                throw new Error(
-                  `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
-                );
-              }
-            }
-
-            // Log activity for all students in the help request
-            for (const studentId of currentSelectedStudents) {
-              try {
-                await studentHelpActivity.create({
-                  student_profile_id: studentId,
-                  class_id: Number.parseInt(course_id as string),
-                  help_request_id: createdHelpRequest.id,
-                  activity_type: "request_created",
-                  activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown"}`
-                });
-              } catch {
-                // Don't throw here - activity logging shouldn't block request creation
-              }
-            }
-          } else {
-            toaster.error({
-              title: "Error",
-              description: "No students selected for help request"
-            });
-            throw new Error("No students selected for help request");
-          }
-
-          // Create the initial chat message from the request description so it shows in the conversation view
-          try {
-            const requestText = (getValues("request") as string) || "";
-            if (requestText.trim().length > 0 && private_profile_id) {
-              await helpRequestMessages.create({
-                message: requestText,
-                help_request_id: createdHelpRequest.id,
-                author: private_profile_id,
-                class_id: Number.parseInt(course_id as string),
-                instructors_only: false,
-                reply_to_message_id: null
-              });
-            }
-          } catch {
-            toaster.error({
-              title: "Error",
-              description: "Failed to create initial chat message with help request description."
-            });
-          }
-
-          // Create file references if any
-          const fileReferences = getValues("file_references") || [];
-          if (fileReferences.length > 0) {
-            // Get assignment_id from the selected submission
-            const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
-            if (!selectedSubmission?.assignment_id) {
-              throw new Error("Assignment ID not found for the selected submission");
-            }
-
-            for (const ref of fileReferences) {
-              try {
-                await helpRequestFileReferences.create({
-                  help_request_id: createdHelpRequest.id,
-                  class_id: Number.parseInt(course_id as string),
-                  assignment_id: selectedSubmission.assignment_id,
-                  submission_file_id: ref.submission_file_id,
-                  submission_id: getValues("referenced_submission_id"),
-                  line_number: ref.line_number
-                });
-              } catch (error) {
-                toaster.error({
-                  title: "Error",
-                  description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                });
-                throw new Error(
-                  `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
-                );
-              }
-            }
-          }
-
-          toaster.success({
-            title: "Success",
-            description: "Help request successfully created. Redirecting to queue view..."
-          });
-
-          // Reset form state after successful submission
-          reset({
-            help_queue: Number.parseInt(queue_id as string),
-            file_references: [],
-            location_type: "remote" as HelpRequestLocationType,
-            request: "",
-            is_private: false,
-            template_id: undefined,
-            referenced_submission_id: undefined,
-            followup_to: undefined
-          });
-
-          // Reset local state variables
-          setSelectedStudents(private_profile_id ? [private_profile_id] : []);
-          setSelectedAssignmentId(null);
-          setSelectedSubmissionId(null);
-
-          // Navigate to queue view
-          router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
-        } catch (error) {
+        // Check if selected students are valid
+        if (selectedStudents.length === 0) {
           toaster.error({
             title: "Error",
-            description: error instanceof Error ? error.message : "Failed to complete help request creation"
+            description: "At least one student must be selected for the help request."
           });
+          return;
         }
-      };
 
-      handleSubmit(customOnFinish)();
+        // Check for conflicts based on solo vs group request rules
+        const selectedQueueId = getValues("help_queue");
+        const isCreatingSoloRequest = selectedStudents.length === 1 && selectedStudents[0] === private_profile_id;
+        const is_private = getValues("is_private");
+        if (isCreatingSoloRequest) {
+          // For solo requests, check if user already has a solo request in this queue with the same privacy setting
+          const hasSoloRequestInQueue = userActiveRequests.some(
+            (request) =>
+              Number(request.help_queue) === Number(selectedQueueId) &&
+              request.student_count === 1 &&
+              Boolean(request.is_private) === Boolean(is_private)
+          );
+
+          if (hasSoloRequestInQueue) {
+            toaster.error({
+              title: "Error",
+              description: `You already have a ${is_private ? "private" : "public"} solo help request in this queue. You can have up to 2 solo requests per queue (1 private + 1 public). Please resolve or close your current request(s) or switch privacy settings.`
+            });
+            return;
+          }
+        }
+        // Group requests are always allowed - no validation needed
+
+        // Create a custom onFinish function that excludes file_references and adds required fields
+        const customOnFinish = async (values: Record<string, unknown>) => {
+          // Exclude file_references from the submission data since it's not a column in help_requests table
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { _intended_privacy, file_references, ...helpRequestData } = values;
+
+          // Add required fields that may not be set in the form
+          const finalData = {
+            ...helpRequestData,
+            assignee: null,
+            class_id: Number.parseInt(course_id as string),
+            created_by: private_profile_id, // Set the created_by field
+            // Ensure these fields have proper defaults
+            status: "open" as const,
+            is_video_live: false,
+            is_private: values.is_private || false
+          };
+
+          try {
+            const createdHelpRequest = await helpRequests.create(finalData as unknown as HelpRequest);
+            // Get current selected students from ref to avoid closure issues
+            const currentSelectedStudents = selectedStudentsRef.current;
+
+            if (!createdHelpRequest.id) {
+              throw new Error("Help request ID not found in response data");
+            }
+
+            // Add all selected students to help_request_students
+            if (currentSelectedStudents.length > 0) {
+              for (const studentId of currentSelectedStudents) {
+                try {
+                  await helpRequestStudents.create({
+                    help_request_id: createdHelpRequest.id,
+                    profile_id: studentId,
+                    class_id: Number.parseInt(course_id as string)
+                  });
+                } catch (error) {
+                  toaster.error({
+                    title: "Error",
+                    description: `Failed to create student association for ${studentId}: ${error instanceof Error ? error.message : "Unknown error"}`
+                  });
+                  throw new Error(
+                    `Failed to create student associations: ${error instanceof Error ? error.message : "Unknown error"}`
+                  );
+                }
+              }
+
+              // Log activity for all students in the help request
+              for (const studentId of currentSelectedStudents) {
+                try {
+                  await studentHelpActivity.create({
+                    student_profile_id: studentId,
+                    class_id: Number.parseInt(course_id as string),
+                    help_request_id: createdHelpRequest.id,
+                    activity_type: "request_created",
+                    activity_description: `Student created a new help request in queue: ${helpQueues.find((q) => q.id === createdHelpRequest.help_queue)?.name || "Unknown"}`
+                  });
+                } catch {
+                  // Don't throw here - activity logging shouldn't block request creation
+                }
+              }
+            } else {
+              toaster.error({
+                title: "Error",
+                description: "No students selected for help request"
+              });
+              throw new Error("No students selected for help request");
+            }
+
+            // Create the initial chat message from the request description so it shows in the conversation view
+            try {
+              const requestText = (getValues("request") as string) || "";
+              if (requestText.trim().length > 0 && private_profile_id) {
+                const trimmedText = requestText.trim();
+                // Check existing cached messages and local ref to prevent duplicates on retry
+                const existingLocal = (helpRequestMessages.rows || []).some(
+                  (m: HelpRequestMessage) =>
+                    Number(m.help_request_id) === Number(createdHelpRequest.id) &&
+                    String(m.author) === String(private_profile_id) &&
+                    ((m.message as string) || "").trim() === trimmedText
+                );
+                if (!createdInitialMessageRef.current && !existingLocal) {
+                  await helpRequestMessages.create({
+                    message: requestText,
+                    help_request_id: createdHelpRequest.id,
+                    author: private_profile_id,
+                    class_id: Number.parseInt(course_id as string),
+                    instructors_only: false,
+                    reply_to_message_id: null
+                  });
+                  createdInitialMessageRef.current = true;
+                }
+              }
+            } catch {
+              toaster.error({
+                title: "Error",
+                description: "Failed to create initial chat message with help request description."
+              });
+            }
+
+            // Create file references if any
+            const fileReferences = getValues("file_references") || [];
+            if (fileReferences.length > 0) {
+              // Get assignment_id from the selected submission
+              const selectedSubmission = submissions?.data?.find((s) => s.id === getValues("referenced_submission_id"));
+              if (!selectedSubmission?.assignment_id) {
+                throw new Error("Assignment ID not found for the selected submission");
+              }
+
+              for (const ref of fileReferences) {
+                try {
+                  await helpRequestFileReferences.create({
+                    help_request_id: createdHelpRequest.id,
+                    class_id: Number.parseInt(course_id as string),
+                    assignment_id: selectedSubmission.assignment_id,
+                    submission_file_id: ref.submission_file_id,
+                    submission_id: getValues("referenced_submission_id"),
+                    line_number: ref.line_number
+                  });
+                } catch (error) {
+                  toaster.error({
+                    title: "Error",
+                    description: `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                  });
+                  throw new Error(
+                    `Failed to create file reference: ${error instanceof Error ? error.message : "Unknown error"}`
+                  );
+                }
+              }
+            }
+
+            toaster.success({
+              title: "Success",
+              description: "Help request successfully created. Redirecting to queue view..."
+            });
+
+            // Reset form state after successful submission
+            reset({
+              help_queue: Number.parseInt(queue_id as string),
+              file_references: [],
+              location_type: "remote" as HelpRequestLocationType,
+              request: "",
+              is_private: false,
+              template_id: undefined,
+              referenced_submission_id: undefined,
+              followup_to: undefined
+            });
+
+            // Reset local state variables
+            setSelectedStudents(private_profile_id ? [private_profile_id] : []);
+            setSelectedAssignmentId(null);
+            setSelectedSubmissionId(null);
+
+            // Navigate to queue view
+            router.push(`/course/${course_id}/office-hours/${queue_id}/${createdHelpRequest.id}`);
+          } catch (error) {
+            toaster.error({
+              title: "Error",
+              description: error instanceof Error ? error.message : "Failed to complete help request creation"
+            });
+          }
+        };
+
+        await handleSubmit(customOnFinish)();
+      } finally {
+        setIsSubmittingGuard(false);
+      }
     },
     [
       handleSubmit,
+      isSubmittingGuard,
+      setIsSubmittingGuard,
       private_profile_id,
       course_id,
       userActiveRequests,
@@ -936,7 +961,12 @@ export default function HelpRequestForm() {
           </Fieldset.Content>
         )}
       </Fieldset.Root>
-      <Button type="submit" loading={isSubmitting} disabled={wouldConflict || selectedStudents.length === 0} mt={4}>
+      <Button
+        type="submit"
+        loading={isSubmitting || isSubmittingGuard}
+        disabled={isSubmitting || isSubmittingGuard || wouldConflict || selectedStudents.length === 0}
+        mt={4}
+      >
         Submit Request
       </Button>
     </form>

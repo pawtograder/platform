@@ -307,6 +307,17 @@ export class RealtimeChannelManager {
 
     // Return unsubscribe function that removes this specific subscription
     return () => {
+      const wasLastSubscriber = managedChannel.subscriptions.length === 1;
+
+      // If this is the last subscriber, proactively notify CLOSED before teardown
+      if (wasLastSubscriber) {
+        try {
+          subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
+        } catch (error) {
+          console.error("Error notifying last subscription of close:", error);
+        }
+      }
+
       const index = managedChannel.subscriptions.indexOf(subscription);
       if (index > -1) {
         managedChannel.subscriptions.splice(index, 1);
@@ -346,18 +357,8 @@ export class RealtimeChannelManager {
 
     // Handle reconnection logic for certain error states
     if (status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR) {
-      // If the tab is hidden, we don't really care about reconnection
-      if (document.hidden) {
-        return;
-      }
-
-      // Prevent multiple simultaneous reconnection attempts
-      if (managedChannel.isReconnecting) {
-        return;
-      }
-
-      // Check if we should attempt reconnection based on retry policy
-      if (this._shouldAttemptReconnection(managedChannel)) {
+      // Only attempt reconnection if the tab is visible and we're not already reconnecting
+      if (!document.hidden && !managedChannel.isReconnecting && this._shouldAttemptReconnection(managedChannel)) {
         this._resubscribeToChannelWithBackoff(topic);
       }
     } else if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
