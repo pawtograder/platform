@@ -91,7 +91,7 @@ function NotificationAndReadStatusUpdater({
   const { notifications, set_read } = useNotifications("discussion_thread", thread_id);
   const ref = useRef<HTMLDivElement>(null);
   const isVisible = useIntersection(ref, { delay: 1000, rootMargin: "0px" });
-  const threadIsUnread = readStatus !== undefined && !readStatus?.read_at;
+  const threadIsUnread = !readStatus?.read_at;
   useEffect(() => {
     if (isVisible && threadIsUnread && thread_id && root_thread_id) {
       setUnread(root_thread_id, thread_id, false);
