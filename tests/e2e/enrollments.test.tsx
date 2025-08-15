@@ -65,6 +65,8 @@ test.describe("Enrollments Page", () => {
     await expect(page.getByText(instructor1?.private_profile_name ?? "")).toBeVisible();
   });
 
+  // Note: Creating users is expensive and can overwhelm supabase auth connections.
+
   test("Instructors can add individual course members", async ({ page }) => {
     // Test Add Course Member Dialog With Student Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
@@ -80,6 +82,8 @@ test.describe("Enrollments Page", () => {
     await expect(page.getByText(student2Email)).toBeVisible();
     await expect(page.getByText(student2Name)).toBeVisible();
 
+    await page.waitForTimeout(300);
+
     // Test Add Course Member Dialog With Grader Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
     await expect(page.getByLabel("Add Course Member Dialog")).toBeVisible();
@@ -89,6 +93,8 @@ test.describe("Enrollments Page", () => {
     await page.getByRole("button", { name: "Add" }).click();
     await expect(page.getByText(graderEmail)).toBeVisible();
     await expect(page.getByText(graderName)).toBeVisible();
+
+    await page.waitForTimeout(300);
 
     // Test Add Course Member Dialog With Instructor Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
