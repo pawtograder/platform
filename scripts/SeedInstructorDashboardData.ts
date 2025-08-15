@@ -523,37 +523,35 @@ async function batchGradeSubmissions(
     });
   }
 
-  // Batch insert comments in parallel chunks of 500
-  const COMMENT_BATCH_SIZE = 500;
+  // Batch insert comments sequentially in chunks of 50
+  const COMMENT_BATCH_SIZE = 50;
 
   if (submissionComments.length > 0) {
     const commentChunks = chunkArray(submissionComments, COMMENT_BATCH_SIZE);
 
-    await Promise.all(
-      commentChunks.map(async (chunk, index) => {
-        const { error: commentsError } = await supabase.from("submission_comments").insert(chunk);
+    for (let index = 0; index < commentChunks.length; index++) {
+      const chunk = commentChunks[index];
+      const { error: commentsError } = await supabase.from("submission_comments").insert(chunk);
 
-        if (commentsError) {
-          throw new Error(`Failed to batch create submission comments (batch ${index + 1}): ${commentsError.message}`);
-        }
-      })
-    );
+      if (commentsError) {
+        throw new Error(`Failed to batch create submission comments (batch ${index + 1}): ${commentsError.message}`);
+      }
+    }
   }
 
   if (submissionFileComments.length > 0) {
     const fileCommentChunks = chunkArray(submissionFileComments, COMMENT_BATCH_SIZE);
 
-    await Promise.all(
-      fileCommentChunks.map(async (chunk, index) => {
-        const { error: fileCommentsError } = await supabase.from("submission_file_comments").insert(chunk);
+    for (let index = 0; index < fileCommentChunks.length; index++) {
+      const chunk = fileCommentChunks[index];
+      const { error: fileCommentsError } = await supabase.from("submission_file_comments").insert(chunk);
 
-        if (fileCommentsError) {
-          throw new Error(
-            `Failed to batch create submission file comments (batch ${index + 1}): ${fileCommentsError.message}`
-          );
-        }
-      })
-    );
+      if (fileCommentsError) {
+        throw new Error(
+          `Failed to batch create submission file comments (batch ${index + 1}): ${fileCommentsError.message}`
+        );
+      }
+    }
   }
 
   // Batch update reviews in parallel chunks (Supabase doesn't support bulk updates)
@@ -1677,7 +1675,7 @@ async function insertEnhancedAssignment({
 
   const self_review_setting_id = selfReviewSettingData.id;
 
-  console.log(`Creating assignment ${title}`);
+  console.log(`✓ Created assignment ${title}`);
   // Create assignment
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
@@ -3043,8 +3041,22 @@ async function seedDiscussionThreads({
 
   console.log(`✓ Created ${createdThreads.length} root discussion threads`);
 
-  // Create replies to the root posts
-  let totalReplies = 0;
+  // Create replies to the root posts in batches
+  const repliesToInsert: Array<{
+    author: string;
+    subject: string;
+    body: string;
+    class_id: number;
+    topic_id: number;
+    parent: number;
+    root: number;
+    is_question: boolean;
+    instructors_only: boolean;
+    draft: boolean;
+  }> = [];
+  const potentialAnswers: Array<{ rootThreadId: number; replyIndex: number }> = [];
+  
+  // First, collect all replies that need to be inserted
   for (const rootThread of createdThreads) {
     const numReplies = faker.number.int({ min: 1, max: maxRepliesPerPost });
 
@@ -3055,38 +3067,75 @@ async function seedDiscussionThreads({
 
       const body = faker.helpers.arrayElement(replyBodies);
 
-      const { data: reply, error: replyError } = await supabase
-        .from("discussion_threads")
-        .insert({
-          author: authorId,
-          subject: "Re: Discussion Reply",
-          body,
-          class_id,
-          topic_id: rootThread.topic_id,
-          parent: rootThread.id,
-          root: rootThread.id,
-          is_question: false, // Replies are typically not questions
-          instructors_only: false,
-          draft: false
-          // root_class_id stays null for non-root threads
-        })
-        .select("id")
-        .single();
+      repliesToInsert.push({
+        author: authorId,
+        subject: "Re: Discussion Reply",
+        body,
+        class_id,
+        topic_id: rootThread.topic_id,
+        parent: rootThread.id,
+        root: rootThread.id,
+        is_question: false, // Replies are typically not questions
+        instructors_only: false,
+        draft: false
+        // root_class_id stays null for non-root threads
+      });
 
-      if (replyError) {
-        console.error(`Error creating reply to thread ${rootThread.id}:`, replyError);
-        throw new Error(`Failed to create reply to thread ${rootThread.id}: ${replyError.message}`);
-      }
-
-      totalReplies++;
-
-      // Sometimes mark a reply as an answer if the root post was a question
-      if (reply && rootThread.is_question && faker.datatype.boolean(0.3)) {
-        // 30% chance
-        await supabase.from("discussion_threads").update({ answer: reply.id }).eq("id", rootThread.id);
+      // Track which replies could potentially become answers (30% chance for questions)
+      if (rootThread.is_question && faker.datatype.boolean(0.3)) {
+        potentialAnswers.push({ 
+          rootThreadId: rootThread.id, 
+          replyIndex: repliesToInsert.length - 1 // Index of the reply we just added
+        });
       }
     }
   }
+
+  // Insert replies in batches of 20
+  console.log(`Inserting ${repliesToInsert.length} replies in batches of 20...`);
+  const insertedReplies: Array<{ id: number }> = [];
+  const batchSize = 20;
+  
+  for (let i = 0; i < repliesToInsert.length; i += batchSize) {
+    const batch = repliesToInsert.slice(i, i + batchSize);
+    const batchNumber = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(repliesToInsert.length / batchSize);
+    
+    console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} replies)...`);
+    
+    const { data: batchReplies, error: batchError } = await supabase
+      .from("discussion_threads")
+      .insert(batch)
+      .select("id");
+
+    if (batchError) {
+      console.error(`Error inserting batch ${batchNumber}/${totalBatches}:`, batchError);
+      throw new Error(`Failed to insert batch ${batchNumber}: ${batchError.message}`);
+    }
+
+    if (batchReplies) {
+      insertedReplies.push(...batchReplies);
+      console.log(`✓ Batch ${batchNumber}/${totalBatches} completed (${batchReplies.length} replies inserted)`);
+    }
+
+    // Add a small delay between batches to avoid overwhelming the database
+    if (i + batchSize < repliesToInsert.length) {
+      await new Promise(resolve => setTimeout(resolve, 250)); // 250ms delay
+    }
+  }
+
+  // Mark some replies as answers for question threads
+  for (const { rootThreadId, replyIndex } of potentialAnswers) {
+    if (replyIndex < insertedReplies.length) {
+      const replyId = insertedReplies[replyIndex].id;
+      await supabase
+        .from("discussion_threads")
+        .update({ answer: replyId })
+        .eq("id", rootThreadId);
+    }
+  }
+
+  const totalReplies = insertedReplies.length;
 
   console.log(`✓ Created ${totalReplies} replies to discussion threads`);
   console.log(`✓ Discussion threads seeding completed`);
@@ -3436,12 +3485,13 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`   Pattern: ${testPattern.join("-")} (L=Lab, A=Assignment)`);
     console.log(`   Labs created: ${testLabsCreated}, Regular assignments: ${testRegularAssignmentsCreated}`);
 
-    // Create all assignments in parallel with alternating lab/assignment pattern
+    // Create all assignments serially with alternating lab/assignment pattern
     let labAssignmentIdx = 1;
     let assignmentIdx = 1;
     let labsCreated = 0;
     let regularAssignmentsCreated = 0;
-    const assignmentPromises = Array.from({ length: numAssignments }, async (_, i) => {
+    
+    for (let i = 0; i < numAssignments; i++) {
       const assignmentDate = new Date(firstAssignmentDate.getTime() + timeStep * i);
 
       // Alternate between lab and regular assignments
@@ -3488,7 +3538,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         assignmentIdx++;
       }
 
-      const assignment = await insertEnhancedAssignment({
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      const assignment = await smallLimiter.schedule(async () => insertEnhancedAssignment({
         due_date: assignmentDate.toISOString(),
         lab_due_date_offset: isLabAssignment ? effectiveLabAssignmentConfig.minutesDueAfterLab : undefined,
         class_id,
@@ -3496,7 +3547,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         rubricConfig: effectiveRubricConfig,
         groupConfig,
         name
-      });
+      }));
 
       // Create assignment groups for group assignments
       let groups: Array<{
@@ -3509,7 +3560,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         groups = await createAssignmentGroups(assignment.id, class_id, students, groupSize);
       }
 
-      return {
+      const result = {
         assignment,
         isLabAssignment,
         isGroupAssignment,
@@ -3524,12 +3575,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
           isGroupAssignment: isGroupAssignment || isLabGroupAssignment
         }
       };
-    });
 
-    const assignmentResults = await Promise.all(assignmentPromises);
-
-    // Process results
-    assignmentResults.forEach((result) => {
+      // Process result immediately
       assignments.push({ ...result.assignment, groups: result.groups });
       assignmentRubricSummaries.push(result.rubricSummary);
 
@@ -3547,8 +3594,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
       if (result.groups.length > 0) {
         console.log(`  ✓ Created ${result.groups.length} groups for ${result.assignment.title}`);
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
-    });
+    }
 
     console.log(`✓ Created ${assignments.length} assignments with diverse rubric structures`);
     console.log(`✓ Created ${labAssignments.length} lab assignments with due dates after lab meetings`);
@@ -3894,8 +3942,8 @@ export async function runLargeScale() {
       maxMembersPerRequest: 5
     },
     discussionConfig: {
-      postsPerTopic: faker.number.int({ min: 50, max: 100 }), // 50-100 posts per topic
-      maxRepliesPerPost: 100 // up to 100 replies per root post
+      postsPerTopic: 0, //faker.number.int({ min: 10, max: 20 }), // 10-20 posts per topic
+      maxRepliesPerPost: 0 // up to 20 replies per root post
     }
   });
 }
@@ -3991,9 +4039,9 @@ async function runMicro() {
 // Run the large-scale example by default
 // To run small-scale instead, change this to: runSmallScale()
 async function main() {
-  // await runLargeScale();
+  await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  await runSmallScale();
+  // await runSmallScale();
   // await runMicro();
 }
 main();

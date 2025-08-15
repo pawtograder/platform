@@ -7,6 +7,7 @@ declare const __ENV: Record<string, string>;
 export interface SupabaseConfig {
   url: string;
   serviceRoleKey: string;
+  anonKey: string;
 }
 
 export interface AuthHeaders {
@@ -51,6 +52,11 @@ export interface StudentData {
   user_id: string;
   public_profile_id: string;
   private_profile_id: string;
+  magic_link: {
+    hashed_token: string;
+    verification_type: string;
+    redirect_to?: string;
+  };
 }
 
 export interface RepositoryData {
@@ -89,12 +95,13 @@ export function safeJsonParse(body: string | null): unknown {
 export function getSupabaseConfig(): SupabaseConfig {
   const url = __ENV.SUPABASE_URL;
   const serviceRoleKey = __ENV.SUPABASE_SERVICE_ROLE_KEY;
+  const anonKey = __ENV.SUPABASE_ANON_KEY;
 
-  if (!url || !serviceRoleKey) {
-    throw new Error("Missing required environment variables: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !serviceRoleKey || !anonKey) {
+    throw new Error("Missing required environment variables: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY");
   }
 
-  return { url, serviceRoleKey };
+  return { url, serviceRoleKey, anonKey };
 }
 
 /**
@@ -221,6 +228,57 @@ export function selectAllRows(endpoint: string, config: SupabaseConfig, queryPar
 
   console.log(`🎉 Completed pagination: fetched ${allData.length} total rows across ${currentPage} pages`);
   return allData;
+}
+
+/**
+ * Generate a magic link for a user using Supabase auth admin API
+ */
+export function generateMagicLink(
+  email: string,
+  config: SupabaseConfig
+): { hashed_token: string; verification_type: string; redirect_to?: string } {
+  console.log(`🔗 Generating magic link for: ${email}`);
+
+  const magicLinkPayload = {
+    type: "magiclink",
+    email: email,
+    options: {
+      redirect_to: `${config.url.replace('/supabase', '')}/auth/callback`
+    }
+  };
+
+  const authHeaders = createAuthHeaders(config.serviceRoleKey);
+  const response = http.post(
+    `${config.url}/auth/v1/admin/generate_link`,
+    JSON.stringify(magicLinkPayload),
+    {
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  if (response.status !== 200) {
+    throw new Error(`Failed to generate magic link for ${email}: ${response.status} - ${response.body}`);
+  }
+
+  const responseData = safeJsonParse(response.body as string) as {
+    hashed_token: string;
+    verification_type: string;
+    redirect_to?: string;
+  } | null;
+
+  if (!responseData || !responseData.hashed_token || !responseData.verification_type) {
+    console.log(responseData);
+    throw new Error(`Magic link generation returned invalid data for ${email}`);
+  }
+
+  console.log(`✅ Generated magic link for ${email}`);
+  console.log(`   Hashed token: ${responseData.hashed_token}`);
+  console.log(`   Verification token: ${responseData.verification_type}`);
+
+  return responseData;
 }
 
 /**
@@ -370,7 +428,7 @@ export function createTestStudent(
   const email = `student-${testRunPrefix}-${workerIndex}-${studentNumber}@pawtograder.net`;
   const privateName = `Student #${studentNumber} Test`;
   const publicName = `Pseudonym #${studentNumber}`;
-  const password = process.env.TEST_PASSWORD || "change-it";
+  const password = __ENV.TEST_PASSWORD || "change-it";
 
   console.log(`👤 Creating student: ${email}`);
 
@@ -462,13 +520,17 @@ export function createTestStudent(
 
   console.log(`✅ Enrolled student ${email} in class`);
 
+  // Step 5: Generate magic link for the student
+  const magicLinkData = generateMagicLink(email, config);
+
   return {
     id: `student-${testRunPrefix}-${studentNumber}`,
     profile_id: privateProfileId,
     email,
     user_id: userId,
     public_profile_id: publicProfileId,
-    private_profile_id: privateProfileId
+    private_profile_id: privateProfileId,
+    magic_link: magicLinkData
   };
 }
 
@@ -589,6 +651,65 @@ export function createSubmission(
     status: response.status,
     body: response.body as string | null,
     data: safeJsonParse(response.body as string | null)
+  };
+}
+
+/**
+ * Exchange magic link token for access token using Supabase auth API
+ */
+export function exchangeMagicLinkForAccessToken(
+  hashedToken: string,
+  config: SupabaseConfig
+): { access_token: string; refresh_token: string; user: any } {
+  console.log(`🔄 Exchanging magic link token for access token...`);
+
+  const exchangePayload = {
+    token_hash: hashedToken,
+    type: "magiclink"
+  };
+
+  const response = http.post(
+    `${config.url}/auth/v1/verify`,
+    JSON.stringify(exchangePayload),
+    {
+      headers: {
+        "Content-Type": "application/json",
+        apikey: config.serviceRoleKey
+      }
+    }
+  );
+
+  if (response.status !== 200) {
+    console.log(`Exchange response: ${response.status} - ${response.body}`);
+    throw new Error(`Failed to exchange magic link token: ${response.status} - ${response.body}`);
+  }
+
+  const responseData = safeJsonParse(response.body as string) as {
+    access_token: string;
+    refresh_token: string;
+    user: any;
+  } | null;
+
+  if (!responseData || !responseData.access_token) {
+    console.log(`Exchange response data:`, responseData);
+    throw new Error(`Magic link token exchange returned invalid data`);
+  }
+
+  console.log(`✅ Successfully exchanged magic link for access token`);
+  console.log(`   Access token: ${responseData.access_token.substring(0, 20)}...`);
+  
+  return responseData;
+}
+
+/**
+ * Create authenticated headers for user requests (not admin)
+ * Uses anonymous key to respect RLS policies
+ */
+export function createUserAuthHeaders(accessToken: string, anonKey: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    apikey: anonKey
   };
 }
 
