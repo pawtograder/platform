@@ -184,6 +184,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // Release All Submission Reviews
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
     await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
+    await page.waitForTimeout(1000);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
