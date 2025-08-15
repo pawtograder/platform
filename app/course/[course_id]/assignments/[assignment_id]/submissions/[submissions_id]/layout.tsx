@@ -393,37 +393,6 @@ function ReviewActions() {
                 Mark as Checked
               </Button>
             )}
-            {review.released ? (
-              <Button
-                loading={updatingReview}
-                variant="surface"
-                onClick={async () => {
-                  try {
-                    setUpdatingReview(true);
-                    await submissionController.submission_reviews.update(review.id, { released: false });
-                  } finally {
-                    setUpdatingReview(false);
-                  }
-                }}
-              >
-                Unrelease
-              </Button>
-            ) : (
-              <Button
-                variant="surface"
-                loading={updatingReview}
-                onClick={async () => {
-                  try {
-                    setUpdatingReview(true);
-                    await submissionController.submission_reviews.update(review.id, { released: true });
-                  } finally {
-                    setUpdatingReview(false);
-                  }
-                }}
-              >
-                Release To Student
-              </Button>
-            )}
           </HStack>
         </VStack>
       )}
@@ -544,11 +513,14 @@ function RubricView() {
             )}
           </Box>
         )}
-        {submission.assignments.total_points !== null && (
-          <Heading size="xl">
-            Overall Score ({gradingReview?.total_score}/{submission.assignments.total_points})
-          </Heading>
-        )}
+        {submission.assignments.total_points !== null &&
+          gradingReview &&
+          gradingReview.total_score !== null &&
+          gradingReview.total_score !== undefined && (
+            <Heading size="xl">
+              Overall Score ({gradingReview.total_score}/{submission.assignments.total_points})
+            </Heading>
+          )}
         {!activeReviewAssignmentId && !gradingReview && <UnGradedGradingSummary />}
         {isGraderOrInstructor && <ReviewActions />}
         <TestResults />
@@ -658,10 +630,10 @@ function SubmissionsLayout({ children }: { children: React.ReactNode }) {
         </NextLink>
       </Box>
       <Flex flexDirection={"row"} wrap="wrap">
-        <Box flex={10} pr={4}>
+        <Box flex={{ base: "1 1 100%", lg: "1 1 0" }} minWidth={0} pr={4}>
           {children}
         </Box>
-        <Box flex={1} minWidth={{ base: "100%", lg: "md" }}>
+        <Box flex={{ base: "0 0 100%", lg: "0 0 28rem" }}>
           <RubricView />
         </Box>
       </Flex>

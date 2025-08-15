@@ -7428,6 +7428,7 @@ export type Database = {
           assignedgradername: string | null;
           assignedmetagradername: string | null;
           assignment_id: number | null;
+          assignment_slug: string | null;
           autograder_score: number | null;
           checked_at: string | null;
           checked_by: string | null;
@@ -7833,13 +7834,80 @@ export type Database = {
           id: string;
         }[];
       };
+      gradebook_auto_layout: {
+        Args: { p_gradebook_id: number };
+        Returns: undefined;
+      };
+      gradebook_column_move_left: {
+        Args: { p_column_id: number };
+        Returns: {
+          class_id: number;
+          created_at: string;
+          dependencies: Json | null;
+          description: string | null;
+          external_data: Json | null;
+          gradebook_id: number;
+          id: number;
+          max_score: number | null;
+          name: string;
+          released: boolean;
+          render_expression: string | null;
+          score_expression: string | null;
+          show_calculated_ranges: boolean;
+          show_max_score: boolean;
+          slug: string;
+          sort_order: number | null;
+        };
+      };
+      gradebook_column_move_right: {
+        Args: { p_column_id: number };
+        Returns: {
+          class_id: number;
+          created_at: string;
+          dependencies: Json | null;
+          description: string | null;
+          external_data: Json | null;
+          gradebook_id: number;
+          id: number;
+          max_score: number | null;
+          name: string;
+          released: boolean;
+          render_expression: string | null;
+          score_expression: string | null;
+          show_calculated_ranges: boolean;
+          show_max_score: boolean;
+          slug: string;
+          sort_order: number | null;
+        };
+      };
       help_request_is_private: {
         Args: { p_help_request_id: number };
         Returns: boolean;
       };
+      help_request_notification: {
+        Args: {
+          p_help_request_id: number;
+          p_action: string;
+          p_class_id: number;
+          p_help_queue_id: number;
+          p_help_queue_name: string;
+          p_creator_profile_id: string;
+          p_creator_name: string;
+          p_assignee_profile_id: string;
+          p_assignee_name: string;
+          p_status: string;
+          p_request_preview: string;
+          p_is_private: boolean;
+        };
+        Returns: undefined;
+      };
       intval: {
         Args: { "": string };
         Returns: number;
+      };
+      invoke_email_batch_processor_background_task: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
       };
       invoke_gradebook_recalculation_background_task: {
         Args: Record<PropertyKey, never>;
