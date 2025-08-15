@@ -5,7 +5,6 @@ import { toaster } from "@/components/ui/toaster";
 import { useCourse } from "@/hooks/useAuthState";
 import { useCanShowGradeFor, useObfuscatedGradesMode, useSetOnlyShowGradesFor } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
-import JSZip from "jszip";
 import {
   ActiveSubmissionsWithGradesForAssignment,
   GraderResultTest,
@@ -961,8 +960,41 @@ function DownloadAllButton() {
       }
 
       // 4) Build the zip: one folder per student, with their submission files
+      const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
-      const sanitize = (s: string) => s.replace(/[\\/:*?"<>|]/g, "_");
+      const sanitizeFolderName = (s: string) => s.replace(/[\\/:*?"<>|]/g, "_").trim() || "student";
+      // Prevent zip-slip and absolute paths while preserving valid nested dirs
+      const sanitizeEntryPath = (p: string) => {
+        // strip Windows drive letters and leading slashes
+        let cleaned = (p ?? "")
+          .toString()
+          .replace(/^[a-zA-Z]:/, "")
+          .replace(/^[/\\]+/, "");
+        // normalize separators to /
+        cleaned = cleaned.replace(/[\\]+/g, "/");
+        // remove ., .. segments and illegal chars in segments
+        const parts = [];
+        for (const seg of cleaned.split("/")) {
+          if (!seg || seg === ".") continue;
+          if (seg === "..") {
+            if (parts.length) parts.pop();
+            continue;
+          }
+          parts.push(seg.replace(/[<>:"|?*\x00-\x1F]/g, "_"));
+        }
+        return parts.join("/");
+      };
+
+      // Index files by submission_id for faster lookups
+      const filesBySubmissionId = new Map<
+        number,
+        { submission_id: number; name: string | null; contents: string | null }[]
+      >();
+      for (const f of files || []) {
+        const arr = filesBySubmissionId.get(f.submission_id) ?? [];
+        arr.push(f);
+        filesBySubmissionId.set(f.submission_id, arr);
+      }
 
       // We may have multiple students for the same submission (group work).
       // We still create one folder per student as requested, even if files duplicate.
@@ -971,7 +1003,7 @@ function DownloadAllButton() {
         const profileSuffix = s.student_private_profile_id
           ? `_${String(s.student_private_profile_id).slice(0, 8)}`
           : "";
-        const studentFolder = sanitize(`${folderLabelBase}${profileSuffix}`);
+        const studentFolder = sanitizeFolderName(`${folderLabelBase}${profileSuffix}`);
         const folder = zip.folder(studentFolder);
 
         if (!folder) continue;
@@ -982,19 +1014,24 @@ function DownloadAllButton() {
           continue;
         }
 
-        const theseFiles = (files || []).filter((f) => f.submission_id === s.activesubmissionid);
+        const theseFiles = filesBySubmissionId.get(s.activesubmissionid) || [];
         if (theseFiles.length === 0) {
           folder.file("NO_FILES.txt", "No files recorded in the database for this submission.");
           continue;
         }
 
         for (const f of theseFiles) {
-          // JSZip will create nested directories automatically from path separators in the file name
-          folder.file(f.name || "unnamed", f.contents ?? "");
+          const entryName = sanitizeEntryPath(f.name || "unnamed");
+          // JSZip will create nested directories automatically from safe path separators
+          folder.file(entryName, f.contents ?? "");
         }
       }
 
-      const blob = await zip.generateAsync({ type: "blob" });
+      const blob = await zip.generateAsync({
+        type: "blob",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 }
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
