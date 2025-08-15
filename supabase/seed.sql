@@ -254,18 +254,18 @@ INSERT INTO auth.users (
   raw_user_meta_data,
   is_super_admin
 ) VALUES
-  ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111111', 'authenticated', 'authenticated', 'test1@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '22222222-2222-2222-2222-222222222222', 'authenticated', 'authenticated', 'test2@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333331', 'authenticated', 'authenticated', 'nullpointer@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333332', 'authenticated', 'authenticated', 'segfault@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333333', 'authenticated', 'authenticated', 'infiniteloop@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333334', 'authenticated', 'authenticated', 'offbyone@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333335', 'authenticated', 'authenticated', 'racecondition@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333336', 'authenticated', 'authenticated', 'rubberduck@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333337', 'authenticated', 'authenticated', 'stackoverflow@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333338', 'authenticated', 'authenticated', 'syntaxerror@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333339', 'authenticated', 'authenticated', 'foobar@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE),
-  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333340', 'authenticated', 'authenticated', 'helloworld@pawtograder.com', 'dummyhash', NOW(), '{}', '{}', FALSE);
+  ('00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111111', 'authenticated', 'authenticated', 'test1@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '22222222-2222-2222-2222-222222222222', 'authenticated', 'authenticated', 'test2@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333331', 'authenticated', 'authenticated', 'nullpointer@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333332', 'authenticated', 'authenticated', 'segfault@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333333', 'authenticated', 'authenticated', 'infiniteloop@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333334', 'authenticated', 'authenticated', 'offbyone@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333335', 'authenticated', 'authenticated', 'racecondition@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333336', 'authenticated', 'authenticated', 'rubberduck@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333337', 'authenticated', 'authenticated', 'stackoverflow@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333338', 'authenticated', 'authenticated', 'syntaxerror@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333339', 'authenticated', 'authenticated', 'foobar@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE),
+  ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333340', 'authenticated', 'authenticated', 'helloworld@pawtograder.net', 'dummyhash', NOW(), '{}', '{}', FALSE);
 
 DO $$
 DECLARE
@@ -872,7 +872,7 @@ BEGIN
     FOR i IN 1..20 LOOP
         EXECUTE format('
             INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, is_super_admin)
-            VALUES (''00000000-0000-0000-0000-000000000000'', ''33333333-3333-3333-3333-%s'', ''authenticated'', ''authenticated'', ''student%s@pawtograder.com'', ''dummyhash'', NOW(), ''{}'', ''{}'', FALSE);
+            VALUES (''00000000-0000-0000-0000-000000000000'', ''33333333-3333-3333-3333-%s'', ''authenticated'', ''authenticated'', ''student%s@pawtograder.net'', ''dummyhash'', NOW(), ''{}'', ''{}'', FALSE);
         ', lpad(i::text, 12, '0'), i);
     END LOOP;
 
@@ -888,7 +888,7 @@ BEGIN
                 JOIN
                     public.user_roles ur ON u.id = ur.user_id
                 WHERE
-                    u.email = ''student%s@pawtograder.com''
+                    u.email = ''student%s@pawtograder.net''
             )
             UPDATE public.profiles
             SET
@@ -904,26 +904,26 @@ BEGIN
     END LOOP;
     
     -- Get student IDs
-    SELECT id INTO student_1_id FROM auth.users WHERE email = 'student1@pawtograder.com';
-    SELECT id INTO student_2_id FROM auth.users WHERE email = 'student2@pawtograder.com';
-    SELECT id INTO student_3_id FROM auth.users WHERE email = 'student3@pawtograder.com';
-    SELECT id INTO student_4_id FROM auth.users WHERE email = 'student4@pawtograder.com';
-    SELECT id INTO student_5_id FROM auth.users WHERE email = 'student5@pawtograder.com';
-    SELECT id INTO student_6_id FROM auth.users WHERE email = 'student6@pawtograder.com';
-    SELECT id INTO student_7_id FROM auth.users WHERE email = 'student7@pawtograder.com';
-    SELECT id INTO student_8_id FROM auth.users WHERE email = 'student8@pawtograder.com';
-    SELECT id INTO student_9_id FROM auth.users WHERE email = 'student9@pawtograder.com';
-    SELECT id INTO student_10_id FROM auth.users WHERE email = 'student10@pawtograder.com';
-    SELECT id INTO student_11_id FROM auth.users WHERE email = 'student11@pawtograder.com';
-    SELECT id INTO student_12_id FROM auth.users WHERE email = 'student12@pawtograder.com';
-    SELECT id INTO student_13_id FROM auth.users WHERE email = 'student13@pawtograder.com';
-    SELECT id INTO student_14_id FROM auth.users WHERE email = 'student14@pawtograder.com';
-    SELECT id INTO student_15_id FROM auth.users WHERE email = 'student15@pawtograder.com';
-    SELECT id INTO student_16_id FROM auth.users WHERE email = 'student16@pawtograder.com';
-    SELECT id INTO student_17_id FROM auth.users WHERE email = 'student17@pawtograder.com';
-    SELECT id INTO student_18_id FROM auth.users WHERE email = 'student18@pawtograder.com';
-    SELECT id INTO student_19_id FROM auth.users WHERE email = 'student19@pawtograder.com';
-    SELECT id INTO student_20_id FROM auth.users WHERE email = 'student20@pawtograder.com';
+    SELECT id INTO student_1_id FROM auth.users WHERE email = 'student1@pawtograder.net';
+    SELECT id INTO student_2_id FROM auth.users WHERE email = 'student2@pawtograder.net';
+    SELECT id INTO student_3_id FROM auth.users WHERE email = 'student3@pawtograder.net';
+    SELECT id INTO student_4_id FROM auth.users WHERE email = 'student4@pawtograder.net';
+    SELECT id INTO student_5_id FROM auth.users WHERE email = 'student5@pawtograder.net';
+    SELECT id INTO student_6_id FROM auth.users WHERE email = 'student6@pawtograder.net';
+    SELECT id INTO student_7_id FROM auth.users WHERE email = 'student7@pawtograder.net';
+    SELECT id INTO student_8_id FROM auth.users WHERE email = 'student8@pawtograder.net';
+    SELECT id INTO student_9_id FROM auth.users WHERE email = 'student9@pawtograder.net';
+    SELECT id INTO student_10_id FROM auth.users WHERE email = 'student10@pawtograder.net';
+    SELECT id INTO student_11_id FROM auth.users WHERE email = 'student11@pawtograder.net';
+    SELECT id INTO student_12_id FROM auth.users WHERE email = 'student12@pawtograder.net';
+    SELECT id INTO student_13_id FROM auth.users WHERE email = 'student13@pawtograder.net';
+    SELECT id INTO student_14_id FROM auth.users WHERE email = 'student14@pawtograder.net';
+    SELECT id INTO student_15_id FROM auth.users WHERE email = 'student15@pawtograder.net';
+    SELECT id INTO student_16_id FROM auth.users WHERE email = 'student16@pawtograder.net';
+    SELECT id INTO student_17_id FROM auth.users WHERE email = 'student17@pawtograder.net';
+    SELECT id INTO student_18_id FROM auth.users WHERE email = 'student18@pawtograder.net';
+    SELECT id INTO student_19_id FROM auth.users WHERE email = 'student19@pawtograder.net';
+    SELECT id INTO student_20_id FROM auth.users WHERE email = 'student20@pawtograder.net';
 
     -- Create Python Deck
     INSERT INTO public.flashcard_decks (class_id, creator_id, name, description)
