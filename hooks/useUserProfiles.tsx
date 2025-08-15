@@ -48,11 +48,11 @@ export function useUserProfile(
     }
     return {
       id: profile.id,
-      name: profile.name!,
+      name: profile.name || "",
       avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
-      flair: profile.flair || undefined,
-      flair_color: profile.flair_color || undefined,
-      real_name: profile.private_profile?.name || undefined
+      flair: profile.flair || "",
+      flair_color: profile.flair_color || "",
+      real_name: profile.private_profile?.name || ""
     };
   }, [profile]);
   return ret;

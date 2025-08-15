@@ -60,7 +60,10 @@ export function useRealtimeChat({
   }, [allReadReceipts, messages, helpRequestId, private_profile_id]);
 
   useEffect(() => {
-    const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, () => {}); //Table controller will receive updates
+    const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, () => {});
+    // Proactively refetch messages once on mount/id change to backfill any rows
+    // created after controller initialization but before this subscription existed
+    controller.helpRequestMessages.refetchAll();
     return () => {
       unsubscribe();
     };

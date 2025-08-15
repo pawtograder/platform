@@ -1,6 +1,5 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import { REALTIME_SUBSCRIBE_STATES } from "@supabase/realtime-js";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { RealtimeChannelManager } from "./RealtimeChannelManager";
 import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 
@@ -54,6 +53,7 @@ export class OfficeHoursRealTimeController {
   private _subscriptions: Map<string, MessageSubscription> = new Map();
   private _subscriptionCounter = 0;
   private _statusChangeListeners: ((status: ConnectionStatus) => void)[] = [];
+  private _statusNotifyTimer?: ReturnType<typeof setTimeout>;
   private _objDebugId = `${new Date().getTime()}-${Math.random()}`;
   private _closed = false;
   private _started = false;
@@ -102,10 +102,6 @@ export class OfficeHoursRealTimeController {
    * Initialize global channels (help_queues and class staff channel)
    */
   private async _initializeGlobalChannels() {
-    console.log(
-      `Initializing global channels for class ${this._classId} with profile ${this._profileId} (Staff: ${this._isStaff})`
-    );
-
     if (this._closed) {
       return;
     }
@@ -119,10 +115,7 @@ export class OfficeHoursRealTimeController {
       (message: OfficeHoursBroadcastMessage) => {
         this._handleBroadcastMessage(message);
       },
-      async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-        console.debug("Office Hours Client all channels:", this._client.getChannels());
-        console.debug("Help queues channel manager: ", this._channelManager.getDebugInfo());
-        console.log(`Help queues channel status: help_queues`, status, err);
+      async () => {
         this._notifyStatusChange();
       }
     );
@@ -139,8 +132,7 @@ export class OfficeHoursRealTimeController {
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
-        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-          console.log(`Class staff channel status: ${staffChannelTopic}`, status, err);
+        async () => {
           this._notifyStatusChange();
         }
       );
@@ -166,8 +158,7 @@ export class OfficeHoursRealTimeController {
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
-        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-          console.log(`Help request channel status: ${mainChannelName}`, status, err);
+        async () => {
           this._notifyStatusChange();
         }
       );
@@ -185,8 +176,7 @@ export class OfficeHoursRealTimeController {
           (message: OfficeHoursBroadcastMessage) => {
             this._handleBroadcastMessage(message);
           },
-          async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-            console.log(`Help request staff channel status: ${staffChannelName}`, status, err);
+          async () => {
             this._notifyStatusChange();
           }
         );
@@ -212,8 +202,7 @@ export class OfficeHoursRealTimeController {
         (message: OfficeHoursBroadcastMessage) => {
           this._handleBroadcastMessage(message);
         },
-        async (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => {
-          console.log(`Help queue channel status: ${channelName}`, status, err);
+        async () => {
           this._notifyStatusChange();
         }
       );
@@ -431,8 +420,12 @@ export class OfficeHoursRealTimeController {
    * Notify status change listeners
    */
   private _notifyStatusChange() {
-    const status = this.getConnectionStatus();
-    this._statusChangeListeners.forEach((listener) => listener(status));
+    if (this._statusNotifyTimer) clearTimeout(this._statusNotifyTimer);
+    this._statusNotifyTimer = setTimeout(() => {
+      const status = this.getConnectionStatus();
+      this._statusChangeListeners.forEach((listener) => listener(status));
+      this._statusNotifyTimer = undefined;
+    }, 50);
   }
 
   /**
@@ -463,6 +456,7 @@ export class OfficeHoursRealTimeController {
    * Clean up channels and subscriptions
    */
   close() {
+    if (this._statusNotifyTimer) clearTimeout(this._statusNotifyTimer);
     this._closed = true;
     this._subscriptions.clear();
     this._statusChangeListeners = [];

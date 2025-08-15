@@ -2,6 +2,7 @@
 
 import { useParams } from "next/navigation";
 import HelpRequestHistory from "../requestList";
+import { Box } from "@chakra-ui/react";
 import { useQueueData } from "@/hooks/useQueueData";
 
 export default function ClosedRequestsPage() {
@@ -13,11 +14,13 @@ export default function ClosedRequestsPage() {
   });
 
   return (
-    <HelpRequestHistory
-      requests={similarQuestions}
-      readOnly={true}
-      requestCollaborators={requestCollaborators}
-      userRequestIds={userRequestIds}
-    />
+    <Box w={{ base: "auto", md: "full" }} maxW={{ base: "md", md: "full" }} mx={{ base: "auto", md: 0 }}>
+      <HelpRequestHistory
+        requests={similarQuestions}
+        readOnly={true}
+        requestCollaborators={requestCollaborators}
+        userRequestIds={userRequestIds}
+      />
+    </Box>
   );
 }

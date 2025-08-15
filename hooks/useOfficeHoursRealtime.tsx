@@ -5,7 +5,6 @@ import TableController from "@/lib/TableController";
 import { createClient } from "@/utils/supabase/client";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-
 import {
   HelpQueue,
   HelpQueueAssignment,

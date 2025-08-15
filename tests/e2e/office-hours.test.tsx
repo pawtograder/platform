@@ -55,7 +55,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
 
     //Make a private request first
-    await page.getByRole("link", { name: "Submit Request" }).click();
+    await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
     await page.getByRole("textbox").click();
     await page.getByRole("textbox").fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
@@ -73,7 +73,7 @@ test.describe("Office Hours", () => {
     await percySnapshot(page, "Office Hours - Private Request with Comment");
 
     //Make a public request
-    await page.getByRole("link", { name: "Submit Request" }).click();
+    await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
     await page.getByRole("textbox").click();
     await page.getByRole("textbox").fill(HELP_REQUEST_MESSAGE_1);
