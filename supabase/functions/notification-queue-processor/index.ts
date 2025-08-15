@@ -675,7 +675,9 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     for (const { user_id, class_id, items, msg_ids } of digests.values()) {
       const recipient = recipientByUserId(user_id);
       const course = courses?.find((c) => c.id === class_id);
-      const emailScope = scope.clone();
+      type MaybeClonableScope = { clone?: () => Sentry.Scope };
+      const baseScope = scope as unknown as MaybeClonableScope;
+      const emailScope: Sentry.Scope = typeof baseScope.clone === "function" ? baseScope.clone!() : new Sentry.Scope();
       emailScope.setTag("digest", "help_request_created");
       emailScope.setContext("digest_meta", { user_id, class_id, count: items.length });
 
@@ -700,7 +702,21 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       }
       const bodyText = lines.join("\n");
 
-      await sendEmailViaTransporter(transporter, recipient.email, subject, bodyText, [], undefined, emailScope);
+      const sent = await sendEmailViaTransporter(
+        transporter,
+        recipient.email,
+        subject,
+        bodyText,
+        [],
+        undefined,
+        emailScope
+      );
+      if (!sent) {
+        emailScope.setContext("email_not_sent", { reason: "smtp_send_failed", user_id, class_id, count: items.length });
+        Sentry.captureMessage("Digest email not sent", emailScope);
+        // do not archive on failed send; allow retry via queue visibility timeout
+        continue;
+      }
 
       await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
     }
@@ -708,7 +724,10 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
     // Process standard notifications in parallel
     await Promise.all(
       standard.map((notification) => {
-        const emailScope = scope.clone();
+        type MaybeClonableScope = { clone?: () => Sentry.Scope };
+        const baseScope = scope as unknown as MaybeClonableScope;
+        const emailScope: Sentry.Scope =
+          typeof baseScope.clone === "function" ? baseScope.clone!() : new Sentry.Scope();
         emailScope.setTag("msg_id", notification.msg_id);
         return sendEmail({
           adminSupabase,
