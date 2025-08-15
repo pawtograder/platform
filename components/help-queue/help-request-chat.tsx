@@ -1089,12 +1089,14 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
     <Flex
       direction="column"
       width="100%"
+      maxW={{ base: "md", md: "full" }}
+      mx="auto"
       height={isPopOut ? "100vh" : "calc(100vh - var(--nav-height))"}
       justify="space-between"
-      align="center"
+      align={{ base: "stretch", md: "center" }}
     >
-      <Flex width="100%" px="4" py="4">
-        <HStack spaceX="4" flex="1">
+      <Flex width="100%" px={{ base: 2, md: 4 }} py={{ base: 2, md: 4 }}>
+        <HStack gap={{ base: 2, md: 4 }} flex="1" flexWrap={{ base: "wrap", md: "nowrap" }}>
           {/* Back Button - Hide in popout mode */}
           {!isPopOut && pathname.includes("/manage/office-hours/request/") && (
             <IconButton aria-label="Go back" variant="ghost" onClick={handleBackNavigation} size="sm">
@@ -1114,7 +1116,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           </Stack>
 
           {/* Control Buttons */}
-          <HStack gap={2}>
+          <HStack gap={2} flexWrap={{ base: "wrap", md: "nowrap" }}>
             {/* Pop Out Button - Available to all users, hide if already popped out */}
             {!isPopOut && (
               <Tooltip content="Pop out chat to new window" showArrow>
@@ -1210,7 +1212,7 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
           </HStack>
         </HStack>
 
-        <AvatarGroup size="sm">
+        <AvatarGroup size="sm" display={{ base: "none", md: "flex" }}>
           {/* Show avatars of all participants who have sent messages and all students in the request */}
           {participantIds.map((participantId) => (
             <PersonAvatar key={`participant-${participantId}`} uid={participantId} size="sm" />
@@ -1219,11 +1221,17 @@ export default function HelpRequestChat({ request }: { request: HelpRequest }) {
       </Flex>
 
       {/* File References Section */}
-      <Box width="100%" px="4" borderBottomWidth="1px">
+      <Box width="100%" px={{ base: 2, md: 4 }} borderBottomWidth="1px">
         <HelpRequestFileReferences request={request} canEdit={!readOnly && canAccessRequestControls} />
       </Box>
 
-      <Flex width="100%" overflow="auto" height="full" justify="center" align="center">
+      <Flex
+        width="100%"
+        overflow="auto"
+        height={{ base: "auto", md: "full" }}
+        justify="center"
+        align={{ base: "stretch", md: "center" }}
+      >
         <RealtimeChat
           helpRequest={request}
           helpRequestStudentIds={studentIds} // Pass student IDs for OP labeling

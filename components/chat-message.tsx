@@ -519,7 +519,13 @@ export const ChatMessageItem = ({
 
   return (
     <Flex mt={2} justify={isOwnMessage ? "flex-end" : "flex-start"}>
-      <Flex maxW="75%" w="fit-content" direction="column" gap={1} align={isOwnMessage ? "flex-end" : "flex-start"}>
+      <Flex
+        maxW={{ base: "85%", md: "75%" }}
+        w="fit-content"
+        direction="column"
+        gap={1}
+        align={isOwnMessage ? "flex-end" : "flex-start"}
+      >
         {showHeader && (
           <Flex
             align="center"
