@@ -590,8 +590,8 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
       })) || [];
 
     if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
-      Sentry.captureMessage("No SMTP host found, skipping email processing", scope);
-      await Promise.all(notifications.map((notification) => archiveMessage(adminSupabase, notification.msg_id, scope)));
+      Sentry.captureMessage("No SMTP host found, deferring email processing", scope);
+      // Do not archive; allow messages to become visible again after VT expires.
       return false;
     }
     const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
@@ -685,7 +685,7 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
         continue;
       }
-      if (isInternalTestEmail(recipient.email)) {
+      if (isInternalTestEmail(recipient.email) && !isInbucketEmail) {
         await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
         continue;
       }
