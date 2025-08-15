@@ -1,10 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TZDate } from "npm:@date-fns/tz";
-import { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
+import type { AssignmentCreateAllReposRequest, AssignmentGroup } from "../_shared/FunctionTypes.d.ts";
 import * as github from "../_shared/GitHubWrapper.ts";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 type RepoToCreate = {
@@ -169,22 +169,6 @@ async function createAllRepos(courseId: number, assignmentId: number, scope: Sen
         {},
         scope
       );
-      // For no-submission assignments, disable Actions to avoid workflow runs
-      if (assignment.no_submission) {
-        try {
-          const repoFullName = `${assignment.classes!.github_org!}/${repoName}`;
-          const octokit = await github.getOctoKit(assignment.classes!.github_org!, scope);
-          if (octokit) {
-            await octokit.request("PUT /repos/{owner}/{repo}/actions/permissions", {
-              owner: assignment.classes!.github_org!,
-              repo: repoName,
-              enabled: false
-            } as any);
-          }
-        } catch (_e) {
-          // best-effort; ignore failure to disable actions
-        }
-      }
       await github.syncRepoPermissions(
         assignment.classes!.github_org!,
         repoName,
