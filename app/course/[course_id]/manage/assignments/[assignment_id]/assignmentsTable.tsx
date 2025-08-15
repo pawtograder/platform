@@ -1012,7 +1012,7 @@ function DownloadAllButton() {
 
   return (
     <Button variant="subtle" onClick={handleDownloadAllClick} disabled={isDownloading}>
-      {isDownloading ? "Preparing ZIP..." : "Download All"}
+      {isDownloading ? "Preparing ZIP..." : "Download All Submissions"}
     </Button>
   );
 }
