@@ -10,6 +10,7 @@ if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     dsn: Deno.env.get("SENTRY_DSN")!,
     release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
+    debug: Deno.env.get("SENTRY_DEBUG") === "true",
     sendDefaultPii: true,
     environment: Deno.env.get("ENVIRONMENT") || "development",
     integrations: [],
@@ -418,8 +419,8 @@ async function sendEmail(params: {
       return;
     }
 
-    // Skip internal test emails (but still archive them)
-    if (isInternalTestEmail(recipient.email)) {
+    // Unless inbucket, skip internal test emails (but still archive them)
+    if (isInternalTestEmail(recipient.email) && Deno.env.get("SMTP_PORT") !== "54325") {
       skipReason = "internal_test_email";
       return;
     }
@@ -588,16 +589,18 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         lab_section_name: role.lab_sections?.name || null
       })) || [];
 
-    if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "" || Deno.env.get("SMTP_HOST") === "127.0.0.1") {
+    if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
       Sentry.captureMessage("No SMTP host found, skipping email processing", scope);
       await Promise.all(notifications.map((notification) => archiveMessage(adminSupabase, notification.msg_id, scope)));
       return false;
     }
+    const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
     const transporter = nodemailer.createTransport({
       pool: false,
       host: Deno.env.get("SMTP_HOST") || "",
       port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
-      secure: true, // use TLS
+      secure: isInbucketEmail ? false : true, // use TLS
+      ignoreTLS: isInbucketEmail,
       auth: {
         user: Deno.env.get("SMTP_USER") || "",
         pass: Deno.env.get("SMTP_PASSWORD") || ""
