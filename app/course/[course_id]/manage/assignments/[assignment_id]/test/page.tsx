@@ -53,6 +53,9 @@ export default function TestAssignmentPage() {
         However, when you view the details of your submission, you will see the autograder results and the rubric
         (students may not see the rubric or hidden autograder results).
       </Text>
+      {/* {repository?.data.length ? (
+        <CreateStudentReposButton syncAllPermissions />
+      ): <></>} */}
       {repository?.data.length ? (
         <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
           <Heading size="md">Repository</Heading>
@@ -61,7 +64,7 @@ export default function TestAssignmentPage() {
           </Text>
         </Box>
       ) : (
-        <CreateStudentReposButton />
+        <CreateStudentReposButton assignmentId={Number.parseInt(assignment_id as string)} />
       )}
       <Box p={4} borderWidth={1} borderColor="fg.muted" borderRadius={4}>
         <Heading size="md">Submission History</Heading>

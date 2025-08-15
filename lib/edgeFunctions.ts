@@ -4,14 +4,29 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { CreateAttendeeCommandOutput, CreateMeetingCommandOutput } from "@aws-sdk/client-chime-sdk-meetings";
 import { Endpoints } from "@octokit/types";
 import { SupabaseClient } from "@supabase/supabase-js";
-export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>) {
-  const { data } = await supabase.functions.invoke("autograder-create-repos-for-student");
+export async function autograderCreateReposForStudent(supabase: SupabaseClient<Database>, assignmentId?: number) {
+  const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
+    body: {
+      assignment_id: assignmentId
+    }
+  });
   const { error } = data as FunctionTypes.GenericResponse;
   if (error) {
     throw new Error(error.message + ": " + error.details);
   }
 }
 
+export async function autograderSyncAllPermissionsForStudent(supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("autograder-create-repos-for-student", {
+    body: {
+      sync_all_permissions: true
+    }
+  });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new Error(error.message + ": " + error.details);
+  }
+}
 export async function autograderCreateAssignmentRepos(
   params: FunctionTypes.AssignmentCreateAllReposRequest,
   supabase: SupabaseClient<Database>
