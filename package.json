@@ -13,6 +13,8 @@
     "build": "next build",
     "start": "next start",
     "test:e2e": "npx playwright test",
+    "test:k6:build": "webpack --config webpack.k6.config.js",
+    "test:k6:submissions-api": "npm run test:k6:build && k6 run dist/k6-tests/db-tps.js -e SUPABASE_URL=$SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY -e END_TO_END_SECRET=$END_TO_END_SECRET ",
     "client": "npx supabase gen types typescript --project-id 'pveyalbiqnrpvuazgyuo' --schema public,pgmq_public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
     "client-local": "npx supabase gen types typescript --local --schema public,pgmq_public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
     "rubric-schema": "npx typescript-json-schema --required --noExtraProps tsconfig.json YmlRubricType > public/RubricSchema.json",
@@ -129,6 +131,7 @@
     "@snaplet/seed": "^0.98.0",
     "@tanstack/eslint-plugin-query": "^5.66.0",
     "@types/diff": "^7.0.2",
+    "@types/k6": "^1.2.0",
     "@types/lodash.isequal": "^4.5.8",
     "@types/mathjs": "^9.4.1",
     "@types/node": "22.10.2",
@@ -143,6 +146,8 @@
     "@types/styled-components": "^5.1.34",
     "@types/styled-system": "^5.1.23",
     "bottleneck": "^2.19.5",
+    "buffer": "^6.0.3",
+    "clean-webpack-plugin": "^4.0.0",
     "eslint": "^9.26.0",
     "eslint-config-next": "15.1.6",
     "eslint-config-prettier": "^10.1.2",
@@ -151,12 +156,16 @@
     "pg": "^8.13.3",
     "postcss": "8.4.49",
     "prettier": "^3.5.3",
+    "process": "^0.11.10",
     "supabase": "^2.23.4",
     "tailwind-merge": "^2.5.2",
     "tailwindcss": "3.4.17",
     "tailwindcss-animate": "^1.0.7",
+    "ts-loader": "^9.5.1",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.32.0",
-    "typescript-json-schema": "^0.65.1"
+    "typescript-json-schema": "^0.65.1",
+    "webpack": "^5.96.1",
+    "webpack-cli": "^5.1.4"
   }
 }
