@@ -1,8 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { emailTemplates } from "./emailTemplates.ts";
-import { Notification } from "../_shared/FunctionTypes.d.ts";
+import type { Notification } from "../_shared/FunctionTypes.d.ts";
 import nodemailer from "npm:nodemailer";
 import * as Sentry from "npm:@sentry/deno";
 
@@ -10,6 +10,7 @@ if (Deno.env.get("SENTRY_DSN")) {
   Sentry.init({
     dsn: Deno.env.get("SENTRY_DSN")!,
     release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
+    debug: Deno.env.get("SENTRY_DEBUG") === "true",
     sendDefaultPii: true,
     environment: Deno.env.get("ENVIRONMENT") || "development",
     integrations: [],
@@ -303,9 +304,17 @@ function isInternalTestEmail(email: string): boolean {
   return email.toLowerCase().endsWith("@pawtograder.net");
 }
 
-// Helper function to check if notification should be skipped (help requests)
-function shouldSkipNotification(body: NotificationEnvelope): boolean {
-  return "help_queue_id" in body || "help_request_id" in body;
+// Classify notifications to handle help request digests
+function classifyNotification(body: NotificationEnvelope): "help_request_created" | "skip" | "standard" {
+  if (body.type === "help_request") {
+    const action = (body as unknown as { action?: string }).action;
+    if (action === "created") return "help_request_created";
+    return "skip";
+  }
+  if ("help_queue_id" in body || "help_request_id" in body) {
+    return "skip";
+  }
+  return "standard";
 }
 
 // Helper function to actually send the email
@@ -393,16 +402,6 @@ async function sendEmail(params: {
       return;
     }
 
-    // Check if this should be skipped (help requests)
-    if (shouldSkipNotification(body)) {
-      Sentry.captureMessage(
-        "Ignoring help notification until the bug that generates too many notifications is fixed",
-        scope
-      );
-      skipReason = "help_notification_skipped";
-      return;
-    }
-
     // Extract CC emails
     const ccEmails = extractCCEmails(body);
 
@@ -420,8 +419,8 @@ async function sendEmail(params: {
       return;
     }
 
-    // Skip internal test emails (but still archive them)
-    if (isInternalTestEmail(recipient.email)) {
+    // Unless inbucket, skip internal test emails (but still archive them)
+    if (isInternalTestEmail(recipient.email) && Deno.env.get("SMTP_PORT") !== "54325") {
       skipReason = "internal_test_email";
       return;
     }
@@ -590,27 +589,145 @@ export async function processBatch(adminSupabase: ReturnType<typeof createClient
         lab_section_name: role.lab_sections?.name || null
       })) || [];
 
-    if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "" || Deno.env.get("SMTP_HOST") === "127.0.0.1") {
-      Sentry.captureMessage("No SMTP host found, skipping email processing", scope);
-      await Promise.all(notifications.map((notification) => archiveMessage(adminSupabase, notification.msg_id, scope)));
+    if (!Deno.env.get("SMTP_HOST") || Deno.env.get("SMTP_HOST") === "") {
+      Sentry.captureMessage("No SMTP host found, deferring email processing", scope);
+      // Do not archive; allow messages to become visible again after VT expires.
       return false;
     }
+    const isInbucketEmail = Deno.env.get("SMTP_PORT") === "54325";
     const transporter = nodemailer.createTransport({
       pool: false,
       host: Deno.env.get("SMTP_HOST") || "",
       port: parseInt(Deno.env.get("SMTP_PORT") || "465"),
-      secure: true, // use TLS
+      secure: isInbucketEmail ? false : true, // use TLS
+      ignoreTLS: isInbucketEmail,
       auth: {
         user: Deno.env.get("SMTP_USER") || "",
         pass: Deno.env.get("SMTP_PASSWORD") || ""
       }
     });
 
-    // Process emails in parallel
+    // Partition notifications for special handling of help request creation
+    const helpCreated: QueueMessage<Notification>[] = [];
+    const standard: QueueMessage<Notification>[] = [];
+    for (const n of notifications) {
+      const body = n.message.body as NotificationEnvelope | null;
+      if (!body) {
+        standard.push(n);
+        continue;
+      }
+      const kind = classifyNotification(body);
+      if (kind === "help_request_created") helpCreated.push(n);
+      else if (kind === "standard") standard.push(n);
+      else {
+        // Archive skipped help notifications to prevent reprocessing
+        await archiveMessage(adminSupabase, n.msg_id, scope);
+      }
+    }
+
+    // Build batched digests for help request creation per user and class
+    type DigestItem = {
+      help_request_id: number;
+      help_queue_name: string;
+      creator_name: string;
+      request_subject?: string;
+      request_body?: string;
+      help_request_url?: string;
+    };
+    const digests = new Map<string, { user_id: string; class_id: number; items: DigestItem[]; msg_ids: number[] }>();
+    for (const n of helpCreated) {
+      const body = n.message.body as unknown as NotificationEnvelope & {
+        action: string;
+        help_request_id: number;
+        help_queue_name?: string;
+        creator_name?: string;
+        request_subject?: string;
+        request_body?: string;
+      };
+      const key = `${n.message.user_id}|${n.message.class_id}`;
+      if (!digests.has(key)) {
+        digests.set(key, {
+          user_id: n.message.user_id as string,
+          class_id: n.message.class_id as number,
+          items: [],
+          msg_ids: []
+        });
+      }
+      const entry = digests.get(key)!;
+      if (!entry.items.some((it) => it.help_request_id === body.help_request_id)) {
+        const urls = buildEmailUrls(body, n.message.class_id);
+        entry.items.push({
+          help_request_id: body.help_request_id,
+          help_queue_name: body.help_queue_name || "",
+          creator_name: body.creator_name || "",
+          request_subject: body.request_subject,
+          request_body: body.request_body,
+          help_request_url: urls.help_request_url
+        });
+      }
+      entry.msg_ids.push(n.msg_id);
+    }
+
+    // Helper to find recipient by user_id
+    const recipientByUserId = (userId: string) => emails?.find((e) => e.user_id === userId) || null;
+
+    // Send digests
+    for (const { user_id, class_id, items, msg_ids } of digests.values()) {
+      const recipient = recipientByUserId(user_id);
+      const course = courses?.find((c) => c.id === class_id);
+      type MaybeClonableScope = { clone?: () => Sentry.Scope };
+      const baseScope = scope as unknown as MaybeClonableScope;
+      const emailScope: Sentry.Scope = typeof baseScope.clone === "function" ? baseScope.clone!() : new Sentry.Scope();
+      emailScope.setTag("digest", "help_request_created");
+      emailScope.setContext("digest_meta", { user_id, class_id, count: items.length });
+
+      if (!recipient || !recipient.email) {
+        await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+        continue;
+      }
+      if (isInternalTestEmail(recipient.email) && !isInbucketEmail) {
+        await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+        continue;
+      }
+
+      const subject = `${course?.name || "Course"} - Help requests digest (${items.length})`;
+      const lines: string[] = [];
+      lines.push(`You have ${items.length} new help request(s).`);
+      lines.push("");
+      for (const it of items) {
+        const title = `${it.creator_name || "Student"}: ${it.request_subject || "General"}`;
+        const queue = it.help_queue_name ? ` [${it.help_queue_name}]` : "";
+        const urlLine = it.help_request_url ? `\n  ${it.help_request_url}` : "";
+        lines.push(`- ${title}${queue}${urlLine}`);
+      }
+      const bodyText = lines.join("\n");
+
+      const sent = await sendEmailViaTransporter(
+        transporter,
+        recipient.email,
+        subject,
+        bodyText,
+        [],
+        undefined,
+        emailScope
+      );
+      if (!sent) {
+        emailScope.setContext("email_not_sent", { reason: "smtp_send_failed", user_id, class_id, count: items.length });
+        Sentry.captureMessage("Digest email not sent", emailScope);
+        // do not archive on failed send; allow retry via queue visibility timeout
+        continue;
+      }
+
+      await Promise.all(msg_ids.map((id) => archiveMessage(adminSupabase, id, emailScope)));
+    }
+
+    // Process standard notifications in parallel
     await Promise.all(
-      notifications.map((notification) => {
-        // Create a new scope for each email to isolate context
-        const emailScope = scope.clone();
+      standard.map((notification) => {
+        type MaybeClonableScope = { clone?: () => Sentry.Scope };
+        const baseScope = scope as unknown as MaybeClonableScope;
+        const emailScope: Sentry.Scope =
+          typeof baseScope.clone === "function" ? baseScope.clone!() : new Sentry.Scope();
         emailScope.setTag("msg_id", notification.msg_id);
         return sendEmail({
           adminSupabase,

@@ -180,7 +180,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await percySnapshot(page, "Instructor completes the grading review");
     await page.getByRole("button", { name: "Mark as Complete" }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
-    await page.getByRole("button", { name: "Release To Student" }).click();
+
+    // Release All Submission Reviews
+    await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
+    await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
+    await page.waitForTimeout(1000);
+    await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
   test("Students can view their grading results and request a regrade", async ({ page }) => {
