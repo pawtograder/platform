@@ -62,7 +62,7 @@ export default function QueueLayout({ children }: LayoutProps) {
     ...userRequestItems,
     {
       href: `${basePath}/new`,
-      label: "Submit Request",
+      label: "New Request",
       isActive: pathname === `${basePath}/new`
     },
     {
@@ -86,21 +86,36 @@ export default function QueueLayout({ children }: LayoutProps) {
         <Box display="flex" gap={{ base: 4, md: 6 }} flexDirection={{ base: "column", md: "row" }}>
           {/* Navigation Sidebar */}
           <VStack align="stretch" width={{ base: "100%", md: "300px" }} gap={2}>
-            {navigationItems.map((item) => (
-              <Link key={item.href} href={item.href}>
-                <Box
-                  p={{ base: 3, md: 3 }}
-                  borderRadius="md"
-                  bg={item.isActive ? "bg.info" : "bg.muted"}
-                  color={item.isActive ? "fg.info" : "fg.muted"}
-                  _hover={{ bg: item.isActive ? "blue.emphasized" : "bg.emphasized" }}
-                  cursor="pointer"
-                  fontWeight={item.isActive ? "semibold" : "normal"}
-                >
-                  {item.label}
-                </Box>
-              </Link>
-            ))}
+            {navigationItems.map((item) => {
+              const isNewRequest = item.label === "New Request";
+              return (
+                <Link key={item.href} href={item.href}>
+                  <Box
+                    p={{ base: 3, md: 3 }}
+                    borderRadius="md"
+                    bg={
+                      isNewRequest
+                        ? item.isActive
+                          ? "green.emphasized"
+                          : "green.muted"
+                        : item.isActive
+                          ? "bg.info"
+                          : "bg.muted"
+                    }
+                    color={
+                      isNewRequest ? (item.isActive ? "white" : "green.fg") : item.isActive ? "fg.info" : "fg.muted"
+                    }
+                    _hover={{
+                      bg: isNewRequest ? "green.emphasized" : item.isActive ? "blue.emphasized" : "bg.emphasized"
+                    }}
+                    cursor="pointer"
+                    fontWeight={item.isActive ? "semibold" : "normal"}
+                  >
+                    {item.label}
+                  </Box>
+                </Link>
+              );
+            })}
           </VStack>
 
           {/* Main Content */}
