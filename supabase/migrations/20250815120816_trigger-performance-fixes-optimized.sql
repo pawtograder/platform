@@ -13,7 +13,7 @@ CREATE TABLE "public"."submission_ordinal_counters" (
     "next_ordinal" integer DEFAULT 1 NOT NULL,
     "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT "submission_ordinal_counters_pkey" PRIMARY KEY ("assignment_id", "assignment_group_id", "profile_id"),
-    CONSTRAINT "submission_ordinal_counters_assignment_id_fkey" FOREIGN KEY ("assignment_id") REFERENCES "public"."assignments"("id") ON DELETE CASCADE,
+    CONSTRAINT "submission_ordinal_counters_assignment_id_fkey" FOREIGN KEY ("assignment_id") REFERENCES "public"."assignments"("id") ON DELETE CASCADE
     -- Removed check constraint to simplify debugging
     -- Logic is enforced in the trigger function instead
 );
