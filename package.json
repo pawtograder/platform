@@ -14,7 +14,7 @@
     "start": "next start",
     "test:e2e": "npx playwright test",
     "test:k6:build": "webpack --config webpack.k6.config.js",
-    "test:k6:submissions-api": "npm run test:k6:build && k6 run dist/k6-tests/db-tps.js -e SUPABASE_URL=$SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY -e END_TO_END_SECRET=$END_TO_END_SECRET ",
+    "test:k6:submissions-api": "npm run test:k6:build && k6 run dist/k6-tests/submissions-api.js -e SUPABASE_URL=$SUPABASE_URL -e SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY -e END_TO_END_SECRET=$END_TO_END_SECRET ",
     "client": "npx supabase gen types typescript --project-id 'pveyalbiqnrpvuazgyuo' --schema public,pgmq_public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
     "client-local": "npx supabase gen types typescript --local --schema public,pgmq_public > utils/supabase/SupabaseTypes.d.ts && cp utils/supabase/SupabaseTypes.d.ts supabase/functions/_shared/SupabaseTypes.d.ts",
     "rubric-schema": "npx typescript-json-schema --required --noExtraProps tsconfig.json YmlRubricType > public/RubricSchema.json",
