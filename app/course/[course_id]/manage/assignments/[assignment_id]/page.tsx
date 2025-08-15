@@ -4,6 +4,7 @@ import { Box, DataList, HStack, Link, Tabs, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { formatInTimeZone } from "date-fns-tz";
 import AssignmentsTable from "./assignmentsTable";
+import RepositoriesTable from "./repositoriesTable";
 import ReviewAssignmentsTable from "./reviewAssignmentsTable";
 export default async function AssignmentHome({
   params
@@ -95,7 +96,7 @@ export default async function AssignmentHome({
           <ReviewAssignmentsTable />
         </Tabs.Content>
         <Tabs.Content value="all-submissions">
-          <AssignmentsTable />
+          {assignment.no_submission ? <RepositoriesTable /> : <AssignmentsTable />}
         </Tabs.Content>
       </Tabs.Root>
     </Box>

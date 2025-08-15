@@ -1,14 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assertUserIsInstructor, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
-import { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
-import {
-  createRepo,
-  getFileFromRepo,
-  syncRepoPermissions,
-  updateAutograderWorkflowHash
-} from "../_shared/GitHubWrapper.ts";
+import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import type { AssignmentCreateHandoutRepoRequest } from "../_shared/FunctionTypes.d.ts";
+import { createRepo, syncRepoPermissions, updateAutograderWorkflowHash } from "../_shared/GitHubWrapper.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 const TEMPLATE_HANDOUT_REPO_NAME = "pawtograder/template-assignment-handout";
@@ -27,7 +22,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
   const { data: assignment } = await adminSupabase
     .from("assignments")
-    .select("slug,classes(slug,github_org)")
+    .select("slug,no_submission,classes(slug,github_org)")
     .eq("id", assignment_id)
     .eq("class_id", class_id)
     .single();
@@ -51,9 +46,14 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     .eq("id", assignment_id);
   scope.setTag("handout_repo_name", handoutRepoName);
   scope.setTag("handout_repo_org", handoutRepoOrg);
-  await createRepo(handoutRepoOrg, handoutRepoName, TEMPLATE_HANDOUT_REPO_NAME, { is_template_repo: true });
+  const baseTemplate = assignment.no_submission
+    ? Deno.env.get("TEMPLATE_HANDOUT_REPO_NAME_NO_ACTIONS") || "pawtograder/template-assignment-handout-noactions"
+    : TEMPLATE_HANDOUT_REPO_NAME;
+  await createRepo(handoutRepoOrg, handoutRepoName, baseTemplate, { is_template_repo: true });
   await syncRepoPermissions(handoutRepoOrg, handoutRepoName, assignment.classes.slug, []);
-  await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
+  if (!assignment.no_submission) {
+    await updateAutograderWorkflowHash(`${handoutRepoOrg}/${handoutRepoName}`);
+  }
 
   return {
     repo_name: handoutRepoName,
