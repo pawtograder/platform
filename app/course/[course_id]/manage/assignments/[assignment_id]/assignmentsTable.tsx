@@ -314,19 +314,22 @@ export default function AssignmentsTable() {
               onClick={async () => {
                 setIsReleasingAll(true);
                 try {
-                  const supabase = createClient();
-
-                  await supabase.rpc("release_all_grading_reviews_for_assignment", {
+                  const { error } = await supabase.rpc("release_all_grading_reviews_for_assignment", {
                     assignment_id: Number(assignment_id)
                   });
+
+                  if (error) {
+                    throw new Error(`Failed to release reviews: ${error.message}`);
+                  }
 
                   await tableController.refetchAll();
 
                   toaster.success({ title: "Success", description: "All submission reviews released" });
                 } catch (error) {
+                  console.error("Error releasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
-                    description: error instanceof Error ? error.message : "Unknown error"
+                    description: error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
                   });
                 } finally {
                   setIsReleasingAll(false);
@@ -343,15 +346,21 @@ export default function AssignmentsTable() {
               onClick={async () => {
                 setIsUnreleasingAll(true);
                 try {
-                  await supabase.rpc("unrelease_all_grading_reviews_for_assignment", {
+                  const { error } = await supabase.rpc("unrelease_all_grading_reviews_for_assignment", {
                     assignment_id: Number(assignment_id)
                   });
+
+                  if (error) {
+                    throw new Error(`Failed to unrelease reviews: ${error.message}`);
+                  }
+
                   await tableController.refetchAll();
                   toaster.success({ title: "Success", description: "All submission reviews unreleased" });
                 } catch (error) {
+                  console.error("Error unreleasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
-                    description: error instanceof Error ? error.message : "Unknown error"
+                    description: error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
                   });
                 } finally {
                   setIsUnreleasingAll(false);

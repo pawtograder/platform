@@ -580,11 +580,16 @@ export default function RegradeRequestWrapper({
     const supabase = createClient();
     try {
       if (regradeRequest.status === "draft") {
-        await supabase.rpc("update_regrade_request_status", {
+        const { error } = await supabase.rpc("update_regrade_request_status", {
           regrade_request_id: regradeRequest.id,
           new_status: "opened",
           profile_id: private_profile_id
         });
+
+        if (error) {
+          throw new Error(`Failed to open regrade request: ${error.message}`);
+        }
+
         await regradeRequests.invalidate(regradeRequest.id);
       }
       const values = {
@@ -597,10 +602,10 @@ export default function RegradeRequestWrapper({
       };
       await submission_regrade_request_comments.create(values);
     } catch (error) {
-      console.error("Error creating comment:", error);
+      console.error("Error creating comment or updating regrade request:", error);
       toaster.create({
         title: "Error",
-        description: "Failed to add comment. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to add comment. Please try again.",
         type: "error"
       });
     } finally {
@@ -613,11 +618,16 @@ export default function RegradeRequestWrapper({
     setIsUpdatingStatus(true);
     const supabase = createClient();
     try {
-      await supabase.rpc("update_regrade_request_status", {
+      const { error } = await supabase.rpc("update_regrade_request_status", {
         regrade_request_id: regradeRequest.id,
         new_status: "escalated",
         profile_id: private_profile_id
       });
+
+      if (error) {
+        throw new Error(`Failed to escalate regrade request: ${error.message}`);
+      }
+
       await regradeRequests.invalidate(regradeRequest.id);
       setIsEscalateDialogOpen(false);
       toaster.create({
@@ -629,7 +639,7 @@ export default function RegradeRequestWrapper({
       console.error("Error escalating request:", error);
       toaster.create({
         title: "Error",
-        description: "Failed to escalate request. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to escalate request. Please try again.",
         type: "error"
       });
     } finally {
