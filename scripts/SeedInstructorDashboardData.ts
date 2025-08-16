@@ -1,9 +1,12 @@
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { faker } from "@faker-js/faker";
+import { UnstableGetResult as GetResult, PostgrestTransformBuilder } from "@supabase/postgrest-js";
+import { PostgrestError } from "@supabase/supabase-js";
+import Bottleneck from "bottleneck";
 import { addDays, subDays } from "date-fns";
 import dotenv from "dotenv";
 import { all, ConstantNode, create, FunctionNode } from "mathjs";
 import { minimatch } from "minimatch";
-import Bottleneck from "bottleneck";
-import { faker } from "@faker-js/faker";
 
 import {
   createClass,
@@ -14,7 +17,6 @@ import {
   TEST_HANDOUT_REPO,
   type TestingUser
 } from "../tests/e2e/TestingUtils";
-import { Database } from "@/utils/supabase/SupabaseTypes";
 
 dotenv.config({ path: ".env.local" });
 
@@ -22,18 +24,324 @@ export const RANDOM_SEED = 100;
 const RECYCLE_USERS_KEY = process.env.RECYCLE_USERS_KEY || "demo";
 faker.seed(RANDOM_SEED);
 
-const limiter = new Bottleneck({
-  maxConcurrent: 200
+// ============================
+// RATE LIMITING CONFIGURATION
+// ============================
+
+interface RateLimitConfig {
+  maxInsertsPerSecond: number;
+  description: string;
+  batchSize?: number; // Optional batch size for operations that insert in batches
+}
+
+const RATE_LIMITS: Record<string, RateLimitConfig> = {
+  // User management operations (auth-sensitive)
+  users: { maxInsertsPerSecond: 5, description: "User creation (auth operations)" },
+  profiles: { maxInsertsPerSecond: 100, description: "Profile creation" },
+  user_roles: { maxInsertsPerSecond: 100, description: "User role assignments" },
+
+  // Assignment and rubric operations
+  assignments: { maxInsertsPerSecond: 2, description: "Assignment creation" },
+  rubric_parts: { maxInsertsPerSecond: 30, description: "Rubric parts" },
+  rubric_criteria: { maxInsertsPerSecond: 30, description: "Rubric criteria" },
+  rubric_checks: { maxInsertsPerSecond: 30, description: "Rubric checks" },
+
+  // Submission operations (high volume, batched)
+  repositories: { maxInsertsPerSecond: 1000, description: "Repository records", batchSize: 100 },
+  repository_check_runs: { maxInsertsPerSecond: 1000, description: "Repository check runs", batchSize: 100 },
+  submissions: { maxInsertsPerSecond: 400, description: "Submission records", batchSize: 100 },
+  submission_files: { maxInsertsPerSecond: 400, description: "Submission files", batchSize: 100 },
+
+  // Grading operations (moderate volume, batched)
+  grader_results: { maxInsertsPerSecond: 60, description: "Grader results", batchSize: 100 },
+  grader_result_tests: { maxInsertsPerSecond: 100, description: "Grader result tests", batchSize: 100 },
+  submission_reviews: { maxInsertsPerSecond: 40, description: "Submission reviews" },
+  submission_comments: { maxInsertsPerSecond: 80, description: "Submission comments", batchSize: 50 },
+  submission_file_comments: { maxInsertsPerSecond: 80, description: "Submission file comments", batchSize: 50 },
+
+  // Gradebook operations
+  gradebook_columns: { maxInsertsPerSecond: 10, description: "Gradebook columns" },
+  gradebook_column_students: { maxInsertsPerSecond: 50, description: "Gradebook column student records" },
+
+  // Class structure operations (some batched)
+  class_sections: { maxInsertsPerSecond: 20, description: "Class sections", batchSize: 10 },
+  lab_sections: { maxInsertsPerSecond: 20, description: "Lab sections", batchSize: 10 },
+  assignment_groups: { maxInsertsPerSecond: 30, description: "Assignment groups", batchSize: 20 },
+  assignment_groups_members: { maxInsertsPerSecond: 100, description: "Assignment group members", batchSize: 100 },
+
+  // Communication operations (some batched)
+  help_requests: { maxInsertsPerSecond: 15, description: "Help requests" },
+  help_request_messages: { maxInsertsPerSecond: 400, description: "Help request messages", batchSize: 20 },
+  help_request_students: { maxInsertsPerSecond: 500, description: "Help request student associations", batchSize: 20 },
+  discussion_threads: { maxInsertsPerSecond: 20, description: "Discussion threads", batchSize: 20 },
+
+  // Metadata operations (some batched)
+  tags: { maxInsertsPerSecond: 50, description: "Tag assignments" },
+  grading_conflicts: { maxInsertsPerSecond: 300, description: "Grading conflicts", batchSize: 100 },
+  workflow_events: { maxInsertsPerSecond: 200, description: "Workflow events", batchSize: 100 },
+  workflow_run_error: { maxInsertsPerSecond: 200, description: "Workflow errors", batchSize: 10 },
+
+  // Miscellaneous operations
+  due_date_exceptions: { maxInsertsPerSecond: 20, description: "Due date exceptions" },
+  regrade_requests: { maxInsertsPerSecond: 10, description: "Regrade requests" }
+};
+
+// Performance tracking
+interface PerformanceMetrics {
+  totalInserted: number;
+  startTime: number;
+  endTime?: number;
+  actualRate?: number;
+  operations: Array<{
+    timestamp: number;
+    count: number;
+  }>;
+}
+
+const performanceTracker: Record<string, PerformanceMetrics> = {};
+
+// Initialize performance tracking for all data types
+Object.keys(RATE_LIMITS).forEach(dataType => {
+  performanceTracker[dataType] = {
+    totalInserted: 0,
+    startTime: Date.now(),
+    operations: []
+  };
 });
 
-//Auth does not use pgbouncer!
-const authLimiter = new Bottleneck({
-  maxConcurrent: 30
+// Create rate-limited functions for each data type
+const rateLimiters: Record<string, Bottleneck> = {};
+Object.entries(RATE_LIMITS).forEach(([dataType, config]) => {
+  // Calculate effective rate limiting based on batch size
+  let effectiveRatePerSecond: number;
+  let effectiveConcurrency: number;
+  
+  if (config.batchSize) {
+    // For batched operations, calculate batches per second
+    const batchesPerSecond = config.maxInsertsPerSecond / config.batchSize;
+    effectiveRatePerSecond = Math.max(0.1, batchesPerSecond); // At least 1 batch per 10 seconds
+    effectiveConcurrency = Math.max(1, Math.floor(batchesPerSecond / 2)); // Conservative concurrency for batches
+    
+    console.log(`📦 ${dataType}: ${config.maxInsertsPerSecond} records/sec in batches of ${config.batchSize} = ${batchesPerSecond.toFixed(2)} batches/sec`);
+  } else {
+    // For individual operations, use the configured rate directly
+    effectiveRatePerSecond = config.maxInsertsPerSecond;
+    effectiveConcurrency = Math.max(1, Math.floor(config.maxInsertsPerSecond / 2));
+  }
+  
+  rateLimiters[dataType] = new Bottleneck({
+    maxConcurrent: effectiveConcurrency,
+    minTime: Math.ceil(1000 / effectiveRatePerSecond) // Minimum time between operations/batches
+  });
 });
 
-const smallLimiter = new Bottleneck({
-  maxConcurrent: 3 // Smaller limit for grading operations
-});
+// Legacy limiters for backward compatibility
+const limiter = rateLimiters.submissions; // Use submissions rate for general operations
+const authLimiter = rateLimiters.users; // Use users rate for auth operations
+const smallLimiter = rateLimiters.assignments; // Use assignments rate for complex operations
+
+type DatabaseTableTypes = Database["public"]["Tables"];
+
+// Helper function to track and rate-limit operations
+async function trackAndLimit<T extends keyof DatabaseTableTypes,
+  Query extends string = "*",
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  dataType: T,
+  operation: () => PostgrestTransformBuilder<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    ResultType[],
+    T,
+    Database["public"]["Tables"][T]["Relationships"]
+  >,
+  count: number = 1
+): Promise<{
+  data: ResultType[];
+  error: PostgrestError | null;
+}> {
+  const limiter = rateLimiters[dataType];
+  if (!limiter) {
+    console.warn(`⚠️ No rate limiter configured for data type: ${dataType}`);
+    return (await operation()) as unknown as {
+      data: ResultType[];
+      error: PostgrestError;
+    };
+  }
+
+  const result = await limiter.schedule(async () => {
+    return await operation();
+  });
+
+  // Track performance
+  const metrics = performanceTracker[dataType];
+  metrics.totalInserted += count;
+  metrics.operations.push({
+    timestamp: Date.now(),
+    count
+  });
+
+  return result as unknown as {
+    data: ResultType[];
+    error: PostgrestError | null;
+  };
+}
+
+
+
+// Helper function to finalize performance tracking and calculate rates
+function finalizePerformanceTracking(): void {
+  const now = Date.now();
+  Object.entries(performanceTracker).forEach(([dataType, metrics]) => {
+    metrics.endTime = now;
+    const durationSeconds = (now - metrics.startTime) / 1000;
+    metrics.actualRate = metrics.totalInserted / durationSeconds;
+  });
+}
+
+// Helper function to display performance summary
+function displayPerformanceSummary(): void {
+  console.log("\n" + "=".repeat(80));
+  console.log("📊 DATABASE INSERTION PERFORMANCE SUMMARY");
+  console.log("=".repeat(80));
+
+  // Calculate totals
+  let totalInserted = 0;
+  let totalDuration = 0;
+  let activeDataTypes = 0;
+
+  const sortedMetrics = Object.entries(performanceTracker)
+    .filter(([_, metrics]) => metrics.totalInserted > 0)
+    .sort((a, b) => b[1].totalInserted - a[1].totalInserted);
+
+  if (sortedMetrics.length === 0) {
+    console.log("No data was inserted during this run.");
+    return;
+  }
+
+  console.log(`\n🎯 RATE LIMITS CONFIGURATION:`);
+  console.log("Data Type".padEnd(25) + "Max Rate/sec".padEnd(15) + "Batch Size".padEnd(12) + "Description");
+  console.log("-".repeat(82));
+
+  sortedMetrics.forEach(([dataType]) => {
+    const config = RATE_LIMITS[dataType];
+    const batchInfo = config.batchSize ? config.batchSize.toString() : "N/A";
+    console.log(
+      dataType.padEnd(25) +
+      config.maxInsertsPerSecond.toString().padEnd(15) +
+      batchInfo.padEnd(12) +
+      config.description
+    );
+  });
+
+  console.log(`\n📈 ACTUAL PERFORMANCE RESULTS:`);
+  console.log("Data Type".padEnd(25) + "Count".padEnd(12) + "Target/sec".padEnd(12) + "Actual/sec".padEnd(12) + "Batch Info".padEnd(15) + "Efficiency");
+  console.log("-".repeat(95));
+
+  sortedMetrics.forEach(([dataType, metrics]) => {
+    const config = RATE_LIMITS[dataType];
+    const efficiency = ((metrics.actualRate || 0) / config.maxInsertsPerSecond * 100);
+    const efficiencyStr = `${efficiency.toFixed(1)}%`;
+    
+    let batchInfo = "Individual";
+    if (config.batchSize && metrics.actualRate) {
+      const actualBatchesPerSecond = metrics.actualRate / config.batchSize;
+      const targetBatchesPerSecond = config.maxInsertsPerSecond / config.batchSize;
+      batchInfo = `${actualBatchesPerSecond.toFixed(2)}/${targetBatchesPerSecond.toFixed(2)} b/s`;
+    }
+
+    console.log(
+      dataType.padEnd(25) +
+      metrics.totalInserted.toLocaleString().padEnd(12) +
+      config.maxInsertsPerSecond.toString().padEnd(12) +
+      (metrics.actualRate?.toFixed(2) || "0").padEnd(12) +
+      batchInfo.padEnd(15) +
+      efficiencyStr
+    );
+
+    totalInserted += metrics.totalInserted;
+    totalDuration = Math.max(totalDuration, (metrics.endTime || Date.now()) - metrics.startTime);
+    activeDataTypes++;
+  });
+
+  console.log("-".repeat(80));
+
+  const overallRate = totalInserted / (totalDuration / 1000);
+  const totalTargetRate = sortedMetrics.reduce((sum, [dataType]) => sum + RATE_LIMITS[dataType].maxInsertsPerSecond, 0);
+  const overallEfficiency = (overallRate / totalTargetRate * 100);
+
+  console.log(
+    "TOTALS".padEnd(25) +
+    totalInserted.toLocaleString().padEnd(12) +
+    totalTargetRate.toString().padEnd(12) +
+    overallRate.toFixed(2).padEnd(12) +
+    `${overallEfficiency.toFixed(1)}%`
+  );
+
+  console.log(`\n⏱️  TIMING SUMMARY:`);
+  console.log(`   Total Duration: ${(totalDuration / 1000).toFixed(2)} seconds`);
+  console.log(`   Total Records Inserted: ${totalInserted.toLocaleString()}`);
+  console.log(`   Overall Insertion Rate: ${overallRate.toFixed(2)} records/second`);
+  console.log(`   Active Data Types: ${activeDataTypes}`);
+
+  // Show top performers
+  const topPerformers = sortedMetrics
+    .filter(([_, metrics]) => metrics.actualRate && metrics.actualRate > 0)
+    .sort((a, b) => (b[1].actualRate || 0) - (a[1].actualRate || 0))
+    .slice(0, 5);
+
+  if (topPerformers.length > 0) {
+    console.log(`\n🏆 TOP PERFORMING DATA TYPES (by rate):`);
+    topPerformers.forEach(([dataType, metrics], index) => {
+      console.log(`   ${index + 1}. ${dataType}: ${metrics.actualRate?.toFixed(2)} records/sec`);
+    });
+  }
+
+  // Show bottlenecks (lowest efficiency)
+  const bottlenecks = sortedMetrics
+    .filter(([_, metrics]) => metrics.actualRate && metrics.actualRate > 0)
+    .map(([dataType, metrics]) => ({
+      dataType,
+      efficiency: ((metrics.actualRate || 0) / RATE_LIMITS[dataType].maxInsertsPerSecond * 100)
+    }))
+    .sort((a, b) => a.efficiency - b.efficiency)
+    .slice(0, 3);
+
+  if (bottlenecks.length > 0) {
+    console.log(`\n⚠️  POTENTIAL BOTTLENECKS (lowest efficiency):`);
+    bottlenecks.forEach(({ dataType, efficiency }, index) => {
+      console.log(`   ${index + 1}. ${dataType}: ${efficiency.toFixed(1)}% of target rate`);
+    });
+  }
+  
+  // Show batch performance summary
+  const batchedOperations = sortedMetrics.filter(([dataType]) => RATE_LIMITS[dataType].batchSize);
+  if (batchedOperations.length > 0) {
+    console.log(`\n📦 BATCH OPERATION SUMMARY:`);
+    batchedOperations.forEach(([dataType, metrics]) => {
+      const config = RATE_LIMITS[dataType];
+      if (config.batchSize && metrics.actualRate) {
+        const actualBatchesPerSecond = metrics.actualRate / config.batchSize;
+        const targetBatchesPerSecond = config.maxInsertsPerSecond / config.batchSize;
+        const batchEfficiency = (actualBatchesPerSecond / targetBatchesPerSecond * 100);
+        const avgBatchSize = metrics.totalInserted / (metrics.operations.length || 1);
+        
+        console.log(`   ${dataType}:`);
+        console.log(`     Target: ${targetBatchesPerSecond.toFixed(2)} batches/sec (${config.batchSize} records/batch)`);
+        console.log(`     Actual: ${actualBatchesPerSecond.toFixed(2)} batches/sec (${avgBatchSize.toFixed(1)} avg records/batch)`);
+        console.log(`     Batch Efficiency: ${batchEfficiency.toFixed(1)}%`);
+      }
+    });
+  }
+
+  console.log("=".repeat(80));
+}
 
 // Global counter for repository naming
 let repoCounter = 0;
@@ -104,10 +412,11 @@ async function batchCreateSubmissions(
           }));
 
           // Batch insert repositories for this chunk
-          const { data: repositoryData, error: repositoryError } = await supabase
-            .from("repositories")
-            .insert(repositoryInserts)
-            .select("id");
+          const { data: repositoryData, error: repositoryError } = await trackAndLimit(
+            "repositories",
+            () => supabase.from("repositories").insert(repositoryInserts).select("id"),
+            repositoryInserts.length
+          );
 
           if (repositoryError) {
             throw new Error(
@@ -126,10 +435,11 @@ async function batchCreateSubmissions(
           }));
 
           // Batch insert repository check runs for this chunk
-          const { data: checkRunData, error: checkRunError } = await supabase
-            .from("repository_check_runs")
-            .insert(checkRunInserts)
-            .select("id");
+          const { data: checkRunData, error: checkRunError } = await trackAndLimit(
+            "repository_check_runs",
+            () => supabase.from("repository_check_runs").insert(checkRunInserts).select("id"),
+            checkRunInserts.length
+          );
 
           if (checkRunError) {
             throw new Error(`Failed to batch create check runs (chunk ${chunkIndex + 1}): ${checkRunError.message}`);
@@ -150,10 +460,11 @@ async function batchCreateSubmissions(
           }));
 
           // Batch insert submissions for this chunk
-          const { data: submissionData, error: submissionError } = await supabase
-            .from("submissions")
-            .insert(submissionInserts)
-            .select("id");
+          const { data: submissionData, error: submissionError } = await trackAndLimit(
+            "submissions",
+            () => supabase.from("submissions").insert(submissionInserts).select("id"),
+            submissionInserts.length
+          );
 
           if (submissionError) {
             throw new Error(`Failed to batch create submissions (chunk ${chunkIndex + 1}): ${submissionError.message}`);
@@ -198,7 +509,11 @@ public class Entrypoint {
           }));
 
           // Batch insert submission files for this chunk
-          const { error: submissionFileError } = await supabase.from("submission_files").insert(submissionFileInserts);
+          const { error: submissionFileError } = await trackAndLimit(
+            "submission_files",
+            () => supabase.from("submission_files").insert(submissionFileInserts).select("id"),
+            submissionFileInserts.length
+          );
 
           if (submissionFileError) {
             throw new Error(
@@ -220,10 +535,11 @@ public class Entrypoint {
           }));
 
           // Batch insert grader results for this chunk
-          const { data: graderResultData, error: graderResultError } = await supabase
-            .from("grader_results")
-            .insert(graderResultInserts)
-            .select("id");
+          const { data: graderResultData, error: graderResultError } = await trackAndLimit(
+            "grader_results",
+            () => supabase.from("grader_results").insert(graderResultInserts).select("id"),
+            graderResultInserts.length
+          );
 
           if (graderResultError) {
             throw new Error(
@@ -262,9 +578,11 @@ public class Entrypoint {
           ]);
 
           // Batch insert grader result tests for this chunk
-          const { error: graderResultTestError } = await supabase
-            .from("grader_result_tests")
-            .insert(graderResultTestInserts);
+          const { error: graderResultTestError } = await trackAndLimit(
+            "grader_result_tests",
+            () => supabase.from("grader_result_tests").insert(graderResultTestInserts),
+            graderResultTestInserts.length
+          );
 
           if (graderResultTestError) {
             throw new Error(
@@ -531,7 +849,11 @@ async function batchGradeSubmissions(
 
     for (let index = 0; index < commentChunks.length; index++) {
       const chunk = commentChunks[index];
-      const { error: commentsError } = await supabase.from("submission_comments").insert(chunk);
+      const { error: commentsError } = await trackAndLimit(
+        "submission_comments",
+        () => supabase.from("submission_comments").insert(chunk).select("id"),
+        chunk.length
+      );
 
       if (commentsError) {
         throw new Error(`Failed to batch create submission comments (batch ${index + 1}): ${commentsError.message}`);
@@ -544,7 +866,11 @@ async function batchGradeSubmissions(
 
     for (let index = 0; index < fileCommentChunks.length; index++) {
       const chunk = fileCommentChunks[index];
-      const { error: fileCommentsError } = await supabase.from("submission_file_comments").insert(chunk);
+      const { error: fileCommentsError } = await trackAndLimit(
+        "submission_file_comments",
+        () => supabase.from("submission_file_comments").insert(chunk).select("id"),
+        chunk.length
+      );
 
       if (fileCommentsError) {
         throw new Error(
@@ -708,9 +1034,9 @@ async function createGradebookColumn({
   }
 
   // Create the gradebook column
-  const { data: column, error: columnError } = await supabase
-    .from("gradebook_columns")
-    .insert({
+  const { data: column, error: columnError } = await trackAndLimit(
+    "gradebook_columns",
+    () => supabase.from("gradebook_columns").insert({
       class_id,
       gradebook_id: gradebook.id,
       name,
@@ -721,15 +1047,14 @@ async function createGradebookColumn({
       dependencies: finalDependencies,
       released,
       sort_order
-    })
-    .select("id, name, slug, max_score, score_expression")
-    .single();
+    }).select("id, name, slug, max_score, score_expression")
+  );
 
   if (columnError) {
     throw new Error(`Failed to create gradebook column ${name}: ${columnError.message}`);
   }
 
-  return column;
+  return column[0];
 }
 
 // Helper function to find existing users with @pawtograder.net emails
@@ -803,30 +1128,28 @@ async function findExistingPawtograderUsers(): Promise<{
 // Helper function to enroll existing users in a class
 async function enrollExistingUserInClass(user: TestingUser, class_id: number): Promise<TestingUser> {
   // Create new private profile
-  const { data: privateProfile, error: privateProfileError } = await supabase
-    .from("profiles")
-    .insert({
+  const { data: privateProfile, error: privateProfileError } = await trackAndLimit(
+    "profiles",
+    () => supabase.from("profiles").insert({
       name: user.private_profile_name,
       class_id: class_id,
       is_private_profile: true
-    })
-    .select("id")
-    .single();
+    }).select("id")
+  );
 
   if (privateProfileError) {
     throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
   }
 
   // Create new public profile
-  const { data: publicProfile, error: publicProfileError } = await supabase
-    .from("profiles")
-    .insert({
+  const { data: publicProfile, error: publicProfileError } = await trackAndLimit(
+    "profiles",
+    () => supabase.from("profiles").insert({
       name: user.public_profile_name,
       class_id: class_id,
       is_private_profile: false
-    })
-    .select("id")
-    .single();
+    }).select("id")
+  );
 
   if (publicProfileError) {
     throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
@@ -840,13 +1163,16 @@ async function enrollExistingUserInClass(user: TestingUser, class_id: number): P
       : "student";
 
   // Insert user role with new profiles
-  const { error: userRoleError } = await supabase.from("user_roles").insert({
-    user_id: user.user_id,
-    role: role,
-    class_id: class_id,
-    private_profile_id: privateProfile.id,
-    public_profile_id: publicProfile.id
-  });
+  const { error: userRoleError } = await trackAndLimit(
+    "user_roles",
+    () => supabase.from("user_roles").insert({
+      user_id: user.user_id,
+      role: role,
+      class_id: class_id,
+      private_profile_id: privateProfile[0].id,
+      public_profile_id: publicProfile[0].id
+    }).select("user_id")
+  );
 
   if (userRoleError) {
     throw new Error(`Failed to create user role: ${userRoleError.message}`);
@@ -856,8 +1182,8 @@ async function enrollExistingUserInClass(user: TestingUser, class_id: number): P
   return {
     ...user,
     class_id,
-    private_profile_id: privateProfile.id,
-    public_profile_id: publicProfile.id
+    private_profile_id: privateProfile[0].id,
+    public_profile_id: publicProfile[0].id
   };
 }
 
@@ -865,8 +1191,7 @@ async function enrollExistingUserInClass(user: TestingUser, class_id: number): P
 async function createSpecificationGradingColumns(
   class_id: number,
   students: TestingUser[],
-  assignments: { id: number }[],
-  _labAssignments: { id: number }[]
+  assignments: { id: number }[]
 ): Promise<void> {
   console.log("\n📊 Creating specification grading scheme columns...");
 
@@ -1894,10 +2219,11 @@ async function createClassSections(class_id: number, numSections: number) {
     name: `Section ${String(i + 1).padStart(2, "0")}`
   }));
 
-  const { data: sections, error: sectionsError } = await supabase
-    .from("class_sections")
-    .insert(sectionsData)
-    .select("id, name");
+  const { data: sections, error: sectionsError } = await trackAndLimit(
+    "class_sections",
+    () => supabase.from("class_sections").insert(sectionsData).select("id, name"),
+    sectionsData.length
+  );
 
   if (sectionsError) {
     throw new Error(`Failed to create class sections: ${sectionsError.message}`);
@@ -1933,10 +2259,11 @@ async function createLabSections(class_id: number, numSections: number, instruct
     };
   });
 
-  const { data: sections, error: sectionsError } = await supabase
-    .from("lab_sections")
-    .insert(sectionsData)
-    .select("id, name");
+  const { data: sections, error: sectionsError } = await trackAndLimit(
+    "lab_sections",
+    () => supabase.from("lab_sections").insert(sectionsData).select("id, name"),
+    sectionsData.length
+  );
 
   if (sectionsError) {
     throw new Error(`Failed to create lab sections: ${sectionsError.message}`);
@@ -2014,10 +2341,11 @@ async function createAssignmentGroups(
     class_id: class_id
   }));
 
-  const { data: groups, error: groupsError } = await supabase
-    .from("assignment_groups")
-    .insert(groupsData)
-    .select("id, name");
+  const { data: groups, error: groupsError } = await trackAndLimit(
+    "assignment_groups",
+    () => supabase.from("assignment_groups").insert(groupsData).select("id, name"),
+    groupsData.length
+  );
 
   if (groupsError) {
     throw new Error(`Failed to create assignment groups: ${groupsError.message}`);
@@ -2050,7 +2378,11 @@ async function createAssignmentGroups(
     });
   }
 
-  const { error: membersError } = await supabase.from("assignment_groups_members").insert(membersData);
+  const { error: membersError } = await trackAndLimit(
+    "assignment_groups_members",
+    () => supabase.from("assignment_groups_members").insert(membersData).select("id"),
+    membersData.length
+  );
 
   if (membersError) {
     throw new Error(`Failed to add students to groups: ${membersError.message}`);
@@ -2117,23 +2449,22 @@ async function assignUsersToSectionsAndTags(
         if (Math.random() < 0.3 + Math.random() * 0.3) {
           // 30-60% chance
           // Create a tag record for this user
-          const { data: tagData, error: tagError } = await supabase
-            .from("tags")
-            .insert({
+          const { data: tagData, error: tagError } = await trackAndLimit(
+            "tags",
+            () => supabase.from("tags").insert({
               class_id: class_id,
               name: tagType.name,
               color: tagType.color,
               visible: true,
               profile_id: user.private_profile_id,
               creator_id: creatorId
-            })
-            .select("id, name, color")
-            .single();
+            }).select("id, name, color")
+          );
 
           if (tagError) {
             console.warn(`Failed to create tag ${tagType.name} for user: ${tagError.message}`);
-          } else {
-            userTags.push(tagData);
+          } else if (tagData && tagData.length > 0) {
+            userTags.push(tagData[0]);
           }
         }
       }
@@ -2226,7 +2557,11 @@ async function insertGraderConflicts(
 
   await Promise.all(
     conflictChunks.map(async (chunk, index) => {
-      const { error: conflictError } = await supabase.from("grading_conflicts").insert(chunk);
+      const { error: conflictError } = await trackAndLimit(
+        "grading_conflicts",
+        () => supabase.from("grading_conflicts").insert(chunk).select("id"),
+        chunk.length
+      );
 
       if (conflictError) {
         throw new Error(`Failed to insert grader conflicts (batch ${index + 1}): ${conflictError.message}`);
@@ -2427,7 +2762,11 @@ async function createWorkflowEvents(
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const { error: workflowEventsError } = await supabase.from("workflow_events").insert(chunk);
+      const { error: workflowEventsError } = await trackAndLimit(
+        "workflow_events",
+        () => supabase.from("workflow_events").insert(chunk).select("id"),
+        chunk.length
+      );
 
       if (workflowEventsError) {
         throw new Error(`Failed to create workflow events (batch ${i + 1}): ${workflowEventsError.message}`);
@@ -2529,8 +2868,18 @@ async function createWorkflowErrors(
     "Extension policy undefined: set clear rules for late submission handling"
   ];
 
-  // Create workflow errors using repository_id reference
-  const workflowErrorsToCreate = [];
+      // Create workflow errors using repository_id reference
+    const workflowErrorsToCreate: {
+      submission_id: number;
+      class_id: number;
+      repository_id: number;
+      name: string;
+      run_number: number;
+      run_attempt: number;
+      data: { type: string };
+      is_private: boolean;
+      created_at: string;
+    }[] = [];
 
   for (const submission of submissionsWithErrors) {
     // Skip submissions without repository_id
@@ -2588,7 +2937,11 @@ async function createWorkflowErrors(
 
   // Batch insert workflow errors
   if (workflowErrorsToCreate.length > 0) {
-    const { error: workflowErrorsError } = await supabase.from("workflow_run_error").insert(workflowErrorsToCreate);
+    const { error: workflowErrorsError } = await trackAndLimit(
+      "workflow_run_error",
+      () => supabase.from("workflow_run_error").insert(workflowErrorsToCreate).select("id"),
+      workflowErrorsToCreate.length
+    );
 
     if (workflowErrorsError) {
       throw new Error(`Failed to create workflow errors: ${workflowErrorsError.message}`);
@@ -2729,9 +3082,9 @@ async function createHelpRequests({
       const messageTemplate = HELP_REQUEST_TEMPLATES[Math.floor(Math.random() * HELP_REQUEST_TEMPLATES.length)];
 
       // Create the help request
-      const { data: helpRequestData, error: helpRequestError } = await supabase
-        .from("help_requests")
-        .insert({
+      const { data: helpRequestData, error: helpRequestError } = await trackAndLimit(
+        "help_requests",
+        () => supabase.from("help_requests").insert({
           class_id: class_id,
           help_queue: queueId,
           request: messageTemplate,
@@ -2740,22 +3093,24 @@ async function createHelpRequests({
           created_by: creator.private_profile_id,
           assignee: isResolved ? instructors[Math.floor(Math.random() * instructors.length)].private_profile_id : null,
           resolved_at: isResolved ? new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString() : null // Random time in last 7 days
-        })
-        .select("id")
-        .single();
+        }).select("id")
+      );
 
       if (helpRequestError) {
         throw new Error(`Failed to create help request: ${helpRequestError.message}`);
       }
 
-      const helpRequestId = helpRequestData.id;
+      const helpRequestId = helpRequestData[0].id;
 
       // Add the creator as a member
-      await supabase.from("help_request_students").insert({
-        help_request_id: helpRequestId,
-        profile_id: creator.private_profile_id,
-        class_id: class_id
-      });
+      await trackAndLimit(
+        "help_request_students",
+        () => supabase.from("help_request_students").insert({
+          help_request_id: helpRequestId,
+          profile_id: creator.private_profile_id,
+          class_id: class_id
+        }).select("id")
+      );
 
       // Add additional members (1 to maxMembersPerRequest total members)
       const numMembers = Math.floor(Math.random() * maxMembersPerRequest) + 1;
@@ -2772,7 +3127,11 @@ async function createHelpRequests({
         }));
 
         if (memberInserts.length > 0) {
-          await supabase.from("help_request_students").insert(memberInserts);
+          await trackAndLimit(
+            "help_request_students",
+            () => supabase.from("help_request_students").insert(memberInserts).select("id"),
+            memberInserts.length
+          );
         }
       }
 
@@ -2782,7 +3141,14 @@ async function createHelpRequests({
 
       if (numReplies > 0) {
         const allParticipants = [creator, ...instructors];
-        const messageInserts = [];
+        const messageInserts: Array<{
+          help_request_id: number;
+          author: string;
+          message: string;
+          class_id: number;
+          instructors_only: boolean;
+          created_at: string;
+        }> = [];
 
         for (let i = 0; i < numReplies; i++) {
           const isFromInstructor = Math.random() < 0.4; // 40% chance message is from instructor
@@ -2804,7 +3170,11 @@ async function createHelpRequests({
         }
 
         if (messageInserts.length > 0) {
-          await supabase.from("help_request_messages").insert(messageInserts);
+          await trackAndLimit(
+            "help_request_messages",
+            () => supabase.from("help_request_messages").insert(messageInserts).select("id"),
+            messageInserts.length
+          );
         }
       }
 
@@ -3055,7 +3425,7 @@ async function seedDiscussionThreads({
     draft: boolean;
   }> = [];
   const potentialAnswers: Array<{ rootThreadId: number; replyIndex: number }> = [];
-  
+
   // First, collect all replies that need to be inserted
   for (const rootThread of createdThreads) {
     const numReplies = faker.number.int({ min: 1, max: maxRepliesPerPost });
@@ -3083,8 +3453,8 @@ async function seedDiscussionThreads({
 
       // Track which replies could potentially become answers (30% chance for questions)
       if (rootThread.is_question && faker.datatype.boolean(0.3)) {
-        potentialAnswers.push({ 
-          rootThreadId: rootThread.id, 
+        potentialAnswers.push({
+          rootThreadId: rootThread.id,
           replyIndex: repliesToInsert.length - 1 // Index of the reply we just added
         });
       }
@@ -3095,18 +3465,19 @@ async function seedDiscussionThreads({
   console.log(`Inserting ${repliesToInsert.length} replies in batches of 20...`);
   const insertedReplies: Array<{ id: number }> = [];
   const batchSize = 20;
-  
+
   for (let i = 0; i < repliesToInsert.length; i += batchSize) {
     const batch = repliesToInsert.slice(i, i + batchSize);
     const batchNumber = Math.floor(i / batchSize) + 1;
     const totalBatches = Math.ceil(repliesToInsert.length / batchSize);
-    
+
     console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} replies)...`);
-    
-    const { data: batchReplies, error: batchError } = await supabase
-      .from("discussion_threads")
-      .insert(batch)
-      .select("id");
+
+    const { data: batchReplies, error: batchError } = await trackAndLimit(
+      "discussion_threads",
+      () => supabase.from("discussion_threads").insert(batch).select("id"),
+      batch.length
+    );
 
     if (batchError) {
       console.error(`Error inserting batch ${batchNumber}/${totalBatches}:`, batchError);
@@ -3118,10 +3489,6 @@ async function seedDiscussionThreads({
       console.log(`✓ Batch ${batchNumber}/${totalBatches} completed (${batchReplies.length} replies inserted)`);
     }
 
-    // Add a small delay between batches to avoid overwhelming the database
-    if (i + batchSize < repliesToInsert.length) {
-      await new Promise(resolve => setTimeout(resolve, 250)); // 250ms delay
-    }
   }
 
   // Mark some replies as answers for question threads
@@ -3201,7 +3568,28 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
   const effectiveNumManualGradedColumns = numManualGradedColumns || 0;
 
   console.log("🌱 Starting instructor dashboard data seeding...\n");
-  console.log(`📊 Configuration:`);
+
+  // Display rate limiting configuration
+  console.log("⚡ RATE LIMITING CONFIGURATION:");
+  console.log("Data Type".padEnd(25) + "Max/sec".padEnd(10) + "Batch".padEnd(8) + "Batches/sec".padEnd(12) + "Description");
+  console.log("-".repeat(90));
+  Object.entries(RATE_LIMITS).forEach(([dataType, config]) => {
+    const batchSize = config.batchSize ? config.batchSize.toString() : "N/A";
+    const batchesPerSec = config.batchSize 
+      ? (config.maxInsertsPerSecond / config.batchSize).toFixed(2)
+      : "N/A";
+    
+    console.log(
+      dataType.padEnd(25) +
+      config.maxInsertsPerSecond.toString().padEnd(10) +
+      batchSize.padEnd(8) +
+      batchesPerSec.padEnd(12) +
+      config.description
+    );
+  });
+  console.log("");
+
+  console.log(`📊 SEEDING CONFIGURATION:`);
   console.log(`   Students: ${numStudents}`);
   console.log(`   Graders: ${numGraders}`);
   console.log(`   Instructors: ${numInstructors}`);
@@ -3420,8 +3808,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const assignments: Array<{
       id: number;
       title: string;
-      rubricChecks: Array<{ id: number; name: string; points: number; [key: string]: unknown }>;
-      rubricParts: Array<{ id: number; name: string; [key: string]: unknown }>;
+      rubricChecks: Array<{ id: number; name: string; points: number;[key: string]: unknown }>;
+      rubricParts: Array<{ id: number; name: string;[key: string]: unknown }>;
       groups: Array<{ id: number; name: string; memberCount: number; members: string[] }>;
       [key: string]: unknown;
     }> = [];
@@ -3490,7 +3878,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     let assignmentIdx = 1;
     let labsCreated = 0;
     let regularAssignmentsCreated = 0;
-    
+
     for (let i = 0; i < numAssignments; i++) {
       const assignmentDate = new Date(firstAssignmentDate.getTime() + timeStep * i);
 
@@ -3522,9 +3910,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       const isLabGroupAssignment =
         isLabAssignment &&
         i <
-          effectiveLabAssignmentConfig.numLabAssignments -
-            effectiveLabAssignmentConfig.numLabAssignments +
-            effectiveGroupAssignmentConfig.numLabGroupAssignments;
+        effectiveLabAssignmentConfig.numLabAssignments -
+        effectiveLabAssignmentConfig.numLabAssignments +
+        effectiveGroupAssignmentConfig.numLabGroupAssignments;
 
       // Determine assignment type and configuration
       let groupConfig: "individual" | "groups" | "both" = "individual";
@@ -3538,7 +3926,6 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         assignmentIdx++;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 10000));
       const assignment = await smallLimiter.schedule(async () => insertEnhancedAssignment({
         due_date: assignmentDate.toISOString(),
         lab_due_date_offset: isLabAssignment ? effectiveLabAssignmentConfig.minutesDueAfterLab : undefined,
@@ -3594,7 +3981,6 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
       if (result.groups.length > 0) {
         console.log(`  ✓ Created ${result.groups.length} groups for ${result.assignment.title}`);
-        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
 
@@ -3814,7 +4200,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`\n📊 Creating gradebook columns using ${gradingScheme} scheme...`);
 
     if (gradingScheme === "specification") {
-      await createSpecificationGradingColumns(class_id, students, assignments, labAssignments);
+      await createSpecificationGradingColumns(class_id, students, assignments);
     } else {
       await createCurrentGradingColumns(class_id, students, effectiveNumManualGradedColumns);
     }
@@ -3893,8 +4279,18 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     }
 
     console.log(`\n🔗 View the instructor dashboard at: /course/${class_id}`);
+
+    // Finalize performance tracking and display summary
+    finalizePerformanceTracking();
+    displayPerformanceSummary();
+
   } catch (error) {
     console.error("❌ Error seeding database:", error);
+
+    // Still show performance summary even if there was an error
+    finalizePerformanceTracking();
+    displayPerformanceSummary();
+
     process.exit(1);
   }
 }
@@ -3949,7 +4345,7 @@ export async function runLargeScale() {
 }
 
 // Small-scale example for testing
-async function runSmallScale() {
+export async function runSmallScale() {
   const now = new Date();
 
   await seedInstructorDashboardData({
@@ -3996,7 +4392,7 @@ async function runSmallScale() {
   });
 }
 
-async function runMicro() {
+export async function runMicro() {
   const now = new Date();
 
   await seedInstructorDashboardData({
@@ -4039,9 +4435,9 @@ async function runMicro() {
 // Run the large-scale example by default
 // To run small-scale instead, change this to: runSmallScale()
 async function main() {
-  await runLargeScale();
+  // await runLargeScale();
   // Uncomment below and comment above to run small scale:
-  // await runSmallScale();
+  await runSmallScale();
   // await runMicro();
 }
 main();
