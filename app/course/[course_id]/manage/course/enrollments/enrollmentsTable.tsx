@@ -7,14 +7,13 @@ import PersonTags from "@/components/ui/person-tags";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import useAuthState from "@/hooks/useAuthState";
+import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import useTags from "@/hooks/useTags";
-import { useUserRolesWithProfiles } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
-import type { Database } from "@/utils/supabase/SupabaseTypes";
 import { Tag, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import type { Database } from "@/utils/supabase/SupabaseTypes";
 import {
-  Box,
   Checkbox,
   Dialog,
   Fieldset,
@@ -32,22 +31,20 @@ import {
 import {
   ColumnDef,
   flexRender,
-  useReactTable,
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
-  getSortedRowModel
+  getSortedRowModel,
+  useReactTable
 } from "@tanstack/react-table";
 import { Select } from "chakra-react-select";
 import { CheckIcon } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FaEdit, FaFileImport, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
+import { FaEdit, FaLink, FaTrash, FaUserCog } from "react-icons/fa";
 import { PiArrowBendLeftUpBold } from "react-icons/pi";
-import AddSingleCourseMember from "./addSingleCourseMember";
 import EditUserProfileModal from "./editUserProfileModal";
 import EditUserRoleModal from "./editUserRoleModal";
-import ImportStudentsCSVModal from "./importStudentsCSVModal";
 import RemoveStudentModal from "./removeStudentModal";
 
 type EditProfileModalData = string; // userId
@@ -107,12 +104,6 @@ export default function EnrollmentsTable() {
     openModal: openRemoveStudentModal,
     closeModal: closeRemoveStudentModal
   } = useModalManager<RemoveStudentModalData>();
-
-  const {
-    isOpen: isImportCSVModalOpen,
-    openModal: openImportCSVModal,
-    closeModal: closeImportCSVModal
-  } = useModalManager<undefined>();
 
   const [pageCount, setPageCount] = useState(0);
 
@@ -739,16 +730,6 @@ export default function EnrollmentsTable() {
         </HStack>
         <Toaster />
       </VStack>
-      <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
-        <HStack justifyContent="flex-end">
-          {" "}
-          <Button onClick={() => openImportCSVModal()}>
-            <Icon as={FaFileImport} mr="2" />
-            Import from CSV
-          </Button>
-          <AddSingleCourseMember />
-        </HStack>
-      </Box>
       {editingUserId && (
         <Dialog.Root open={isEditProfileModalOpen} onOpenChange={(details) => !details.open && closeEditProfileModal()}>
           <Portal>
@@ -803,7 +784,6 @@ export default function EnrollmentsTable() {
           isLoading={isDeletingUserRole}
         />
       )}
-      {isImportCSVModalOpen && <ImportStudentsCSVModal isOpen={isImportCSVModalOpen} onClose={closeImportCSVModal} />}
     </VStack>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { Input, VStack, Text, Dialog, Portal, Box } from "@chakra-ui/react";
+import { useCallback, useState } from "react";
+import { Input, VStack, Text, Dialog, Portal, Box, Icon } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { useForm, SubmitHandler } from "react-hook-form";
@@ -11,7 +11,7 @@ import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
 import { enrollmentAdd } from "@/lib/edgeFunctions";
 import type { Database } from "@/utils/supabase/SupabaseTypes";
-
+import { FaFileImport } from "react-icons/fa";
 type AppRole = Database["public"]["Enums"]["app_role"];
 const allowedRoles: ReadonlyArray<AppRole> = ["instructor", "grader", "student"];
 
@@ -26,12 +26,7 @@ type FormValues = {
   csvFile: FileList;
 };
 
-type ImportStudentsCSVModalProps = {
-  isOpen: boolean;
-  onClose: () => void;
-};
-
-const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps) => {
+const ImportStudentsCSVModal = () => {
   const { course_id } = useParams<{ course_id: string }>();
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirmingImport, setIsConfirmingImport] = useState(false);
@@ -43,6 +38,8 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
   const [usersToPreviewIgnore, setUsersToPreviewIgnore] = useState<
     Array<{ email: string; name: string; role: AppRole; canvas_id?: number }>
   >([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const onClose = useCallback(() => setIsOpen(false), []);
 
   const invalidate = useInvalidate();
   const supabase = createClient();
@@ -289,7 +286,17 @@ const ImportStudentsCSVModal = ({ isOpen, onClose }: ImportStudentsCSVModalProps
   };
 
   return (
-    <Dialog.Root open={isOpen} onOpenChange={(details) => !details.open && handleClose()}>
+    <Dialog.Root
+      aria-label="Import Roster from CSV"
+      open={isOpen}
+      onOpenChange={(details) => !details.open && handleClose()}
+    >
+      <Dialog.Trigger asChild>
+        <Button onClick={() => setIsOpen(true)}>
+          <Icon as={FaFileImport} />
+          Import from CSV
+        </Button>
+      </Dialog.Trigger>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>

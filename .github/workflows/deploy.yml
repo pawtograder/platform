@@ -4,12 +4,17 @@ on:
   workflow_dispatch:
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     steps:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1
         with:
           version: latest
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
       - name: Install dependencies
         run: npm ci
       - name: Deploy a branch preview environment
@@ -45,8 +50,10 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ steps.deploy.outputs.supabase_service_role_key }}
           SUPABASE_ANON_KEY: ${{ steps.deploy.outputs.supabase_anon_key }}
           BASE_URL: ${{ steps.deploy.outputs.app_url }}
-          PERCY_TOKEN: ${{ secrets.PERCY_TOKEN }}
-        run: npx percy exec -- playwright test
+
+          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

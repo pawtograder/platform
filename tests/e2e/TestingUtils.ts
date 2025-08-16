@@ -249,8 +249,6 @@ export async function createUserInClass({
     } else {
       throw new Error("Failed to extract user ID from created user data");
     }
-    // eslint-disable-next-line no-console
-    console.log(`Successfully created new user: ${resolvedEmail}`);
   }
   // Check if user already has a role in this class
   const { data: existingRole, error: roleCheckError } = await executeDb(() =>

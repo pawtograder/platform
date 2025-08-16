@@ -38,7 +38,6 @@
     "@octokit/app": "^15.1.6",
     "@octokit/auth-app": "^7.2.1",
     "@octokit/core": "^6.1.5",
-    "@percy/playwright": "^1.0.8",
     "@radix-ui/react-checkbox": "^1.1.1",
     "@radix-ui/react-dropdown-menu": "^2.1.1",
     "@radix-ui/react-label": "^2.1.0",
@@ -118,12 +117,12 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@argos-ci/playwright": "^6.0.4",
     "@eslint/eslintrc": "^3.3.1",
     "@eslint/js": "^9.26.0",
     "@faker-js/faker": "^9.9.0",
     "@openapi-codegen/cli": "^3.0.1",
     "@openapi-codegen/typescript": "^8.1.1",
-    "@percy/cli": "^1.31.1",
     "@playwright/test": "^1.53.2",
     "@snaplet/copycat": "^6.0.0",
     "@snaplet/seed": "^0.98.0",

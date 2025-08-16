@@ -58,21 +58,21 @@ test.beforeAll(async () => {
   lab1Leader = await createUserInClass({ role: "grader", class_id: course.id });
   lab2Leader = await createUserInClass({ role: "grader", class_id: course.id });
 
-  //Create a section with 5 students
-  const { section: _section1, students: _section1Students } = await createSectionWithStudents(5);
+  //Create a section with 2 students
+  const { section: _section1, students: _section1Students } = await createSectionWithStudents(2);
   section1 = _section1;
   section1Students = _section1Students;
-  //Create a section with 5 students
-  const { section: _section2, students: _section2Students } = await createSectionWithStudents(5);
+  //Create a section with 2 students
+  const { section: _section2, students: _section2Students } = await createSectionWithStudents(2);
   section2 = _section2;
   section2Students = _section2Students;
 
-  //Create a lab with 5 students
-  const { lab: _lab1, students: _lab1Students } = await createLabWithStudents(5, lab1Leader);
+  //Create a lab with 2 students
+  const { lab: _lab1, students: _lab1Students } = await createLabWithStudents(2, lab1Leader);
   lab1 = _lab1;
   lab1Students = _lab1Students;
-  //Create a lab with 5 students
-  const { lab: _lab2, students: _lab2Students } = await createLabWithStudents(5, lab2Leader);
+  //Create a lab with 2 students
+  const { lab: _lab2, students: _lab2Students } = await createLabWithStudents(2, lab2Leader);
   lab2 = _lab2;
   lab2Students = _lab2Students;
 });
