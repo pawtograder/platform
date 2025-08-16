@@ -12,7 +12,6 @@ import {
 } from "./TestingUtils";
 import { argosScreenshot } from "@argos-ci/playwright";
 
-
 let course: Course;
 let student: TestingUser | undefined;
 
