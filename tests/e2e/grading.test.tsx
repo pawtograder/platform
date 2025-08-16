@@ -246,7 +246,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByLabel("Add Comment", { exact: true })
       .click();
     await expect(page.getByText("Submitting your comment...")).toBeVisible();
-    await expect(page.getByLabel('Grading checks on line 4').getByRole('paragraph').filter({ hasText: 'I do not think it is possible' })).toBeVisible();
+    await expect(
+      page
+        .getByLabel("Grading checks on line 4")
+        .getByRole("paragraph")
+        .filter({ hasText: "I do not think it is possible" })
+    ).toBeVisible();
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
     await percySnapshot(page, "Instructors can resolve the regrade request");

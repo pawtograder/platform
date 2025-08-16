@@ -25,7 +25,7 @@ import { useUpdate } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
@@ -192,8 +192,8 @@ export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId:
 /**
  * Popover component for resolving a regrade request with warning for significant score changes
  */
-const ResolveRequestPopover = memo(function ResolveRequestPopover({ 
-  initialPoints, 
+const ResolveRequestPopover = memo(function ResolveRequestPopover({
+  initialPoints,
   regradeRequestId,
   privateProfileId
 }: {
@@ -217,13 +217,13 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
 
   const handleResolve = useCallback(async () => {
     if (resolveScore === undefined) return;
-    
+
     setIsUpdating(true);
     try {
       const supabase = createClient();
-      const { error } = await supabase.rpc('update_regrade_request_status', {
+      const { error } = await supabase.rpc("update_regrade_request_status", {
         regrade_request_id: regradeRequestId,
-        new_status: 'resolved',
+        new_status: "resolved",
         profile_id: privateProfileId,
         resolved_points: resolveScore
       });
@@ -250,8 +250,8 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
   }, [resolveScore, regradeRequestId, privateProfileId, regradeRequests]);
 
   return (
-    <PopoverRoot 
-      open={isOpen} 
+    <PopoverRoot
+      open={isOpen}
       onOpenChange={(e) => {
         setIsOpen(e.open);
       }}
@@ -266,18 +266,16 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
         <PopoverBody>
           <VStack gap={3} align="start">
             <Text fontWeight="semibold">Resolve Regrade Request</Text>
+            <Text fontSize="sm">The initial score for this regrade request is {initialPoints || 0}.</Text>
             <Text fontSize="sm">
-              The initial score for this regrade request is {initialPoints || 0}.
-            </Text>
-            <Text fontSize="sm">
-              Enter the final score for this comment after reviewing the regrade request. It will overwrite
-              the score for the comment.
+              Enter the final score for this comment after reviewing the regrade request. It will overwrite the score
+              for the comment.
             </Text>
             <VStack gap={2} align="start" w="100%">
               <Text fontSize="sm" fontWeight="medium">
                 Final Points:
               </Text>
-              <Box 
+              <Box
                 bg={isSignificantChange(resolveScore, initialPoints) ? "bg.warning" : undefined}
                 p={isSignificantChange(resolveScore, initialPoints) ? 2 : 0}
                 borderRadius={isSignificantChange(resolveScore, initialPoints) ? "md" : undefined}
@@ -335,11 +333,11 @@ const ResolveRequestPopover = memo(function ResolveRequestPopover({
 /**
  * Dialog component for escalating a regrade request to an instructor
  */
-function EscalateRequestDialog({ 
-  isOpen, 
-  onOpenChange, 
-  onEscalate, 
-  isUpdating 
+function EscalateRequestDialog({
+  isOpen,
+  onOpenChange,
+  onEscalate,
+  isUpdating
 }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
@@ -365,9 +363,7 @@ function EscalateRequestDialog({
                 ⚠️ Important Guidelines
               </Text>
               <VStack gap={1} align="start">
-                <Text fontSize="sm">
-                  • Only appeal if you believe the rubric is not being fairly applied
-                </Text>
+                <Text fontSize="sm">• Only appeal if you believe the rubric is not being fairly applied</Text>
                 <Text fontSize="sm">• Don&apos;t appeal simply because you disagree with the grade</Text>
                 <Text fontSize="sm">• The instructor&apos;s decision will be final</Text>
                 <Text fontSize="sm">• Frivolous appeals may affect future regrade requests</Text>
@@ -391,11 +387,11 @@ function EscalateRequestDialog({
 /**
  * Popover component for closing (deciding on) an escalated regrade request with warning for significant score changes
  */
-const CloseRequestPopover = memo(function CloseRequestPopover({ 
-  initialPoints, 
+const CloseRequestPopover = memo(function CloseRequestPopover({
+  initialPoints,
   resolvedPoints,
   regradeRequestId,
-  privateProfileId,
+  privateProfileId
 }: {
   initialPoints: number | null;
   resolvedPoints: number | null;
@@ -419,13 +415,13 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
 
   const handleClose = useCallback(async () => {
     if (closeScore === undefined) return;
-    
+
     setIsUpdating(true);
     try {
       const supabase = createClient();
-      const { error } = await supabase.rpc('update_regrade_request_status', {
+      const { error } = await supabase.rpc("update_regrade_request_status", {
         regrade_request_id: regradeRequestId,
-        new_status: 'closed',
+        new_status: "closed",
         profile_id: privateProfileId,
         closed_points: closeScore
       });
@@ -454,7 +450,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
   return (
     <PopoverRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
       <PopoverTrigger asChild>
-        <Button colorPalette="orange" variant="solid" size="sm"> 
+        <Button colorPalette="orange" variant="solid" size="sm">
           Decide Appeal
         </Button>
       </PopoverTrigger>
@@ -470,7 +466,7 @@ const CloseRequestPopover = memo(function CloseRequestPopover({
               <Text fontSize="sm" fontWeight="medium">
                 Final Points:
               </Text>
-              <Box 
+              <Box
                 bg={isSignificantChange(closeScore, initialPoints) ? "bg.warning" : undefined}
                 p={isSignificantChange(closeScore, initialPoints) ? 2 : 0}
                 borderRadius={isSignificantChange(closeScore, initialPoints) ? "md" : undefined}
