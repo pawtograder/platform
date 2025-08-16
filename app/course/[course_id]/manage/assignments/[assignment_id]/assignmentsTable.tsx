@@ -329,7 +329,8 @@ export default function AssignmentsTable() {
                   console.error("Error releasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
-                    description: error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
+                    description:
+                      error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
                   });
                 } finally {
                   setIsReleasingAll(false);
@@ -360,7 +361,8 @@ export default function AssignmentsTable() {
                   console.error("Error unreleasing all grading reviews:", error);
                   toaster.error({
                     title: "Error",
-                    description: error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
+                    description:
+                      error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
                   });
                 } finally {
                   setIsUnreleasingAll(false);
