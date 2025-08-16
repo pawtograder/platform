@@ -184,7 +184,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     // Release All Submission Reviews
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
     await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
-    await page.waitForTimeout(1000);
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
@@ -246,10 +245,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
+    await expect(page.getByText("Submitting your comment...")).toBeVisible();
+    await expect(page.getByLabel('Grading checks on line 4').getByRole('paragraph').filter({ hasText: 'I do not think it is possible' })).toBeVisible();
+    await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
     await percySnapshot(page, "Instructors can resolve the regrade request");
-    await page.getByRole("spinbutton").fill("10");
-    await page.getByRole("button", { name: "Resolve", exact: true }).click();
+    await page.getByRole("spinbutton").fill("40");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await expect(page.getByText("This is a significant change")).toBeVisible();
+    await page.getByRole("button", { name: "Override Score and Resolve Request", exact: true }).click();
   });
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
     await loginAsUser(page, student!, course);
@@ -290,9 +294,12 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
+    await expect(page.getByText("Submitting your comment...")).toBeVisible();
+    await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
-    await page.getByRole("spinbutton").fill("11");
-    await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal" }).click();
+    await page.getByRole("spinbutton").fill("100");
+    await expect(page.getByText("This is a significant change")).toBeVisible();
+    await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal and Close Request" }).click();
     await percySnapshot(page, "Instructors can close the regrade request");
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
   });
