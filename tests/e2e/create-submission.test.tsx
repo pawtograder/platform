@@ -10,7 +10,8 @@ import {
   supabase,
   TestingUser
 } from "./TestingUtils";
-import percySnapshot from "@percy/playwright";
+import { argosScreenshot } from "@argos-ci/playwright";
+
 
 let course: Course;
 let student: TestingUser | undefined;
@@ -143,7 +144,7 @@ test.describe("Create submission", () => {
     await expect(notGradedRow).toBeVisible();
     await expect(activeRow.getByText("Pending")).toBeVisible();
     await expect(notGradedRow.getByText("Not for grading")).toBeVisible();
-    await percySnapshot(page, "Showing active and not-graded submissions");
+    await argosScreenshot(page, "Showing active and not-graded submissions");
     await page.getByRole("link", { name: "Not for grading" }).click();
     await expect(page.getByText("Viewing a not-for-grading submission")).toBeVisible();
   });

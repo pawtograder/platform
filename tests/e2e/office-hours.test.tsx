@@ -1,6 +1,6 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
-import percySnapshot from "@percy/playwright";
 import { expect, test } from "@playwright/test";
+import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -60,7 +60,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("textbox").click();
     await page.getByRole("textbox").fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
     await page.locator("label").filter({ hasText: "Private" }).locator("svg").click();
-    await percySnapshot(page, "Office Hours - Submit a Private Request");
+    await argosScreenshot(page, "Office Hours - Submit a Private Request");
     await page.getByRole("button", { name: "Submit Request" }).click();
 
     await expect(page.getByText("Your position in the queue")).toBeVisible();
@@ -70,7 +70,7 @@ test.describe("Office Hours", () => {
       .getByRole("textbox", { name: "Type your message" })
       .fill("Thanks in advance! I might try to open a more geeral request too.");
     await page.getByRole("button", { name: "Send" }).click();
-    await percySnapshot(page, "Office Hours - Private Request with Comment");
+    await argosScreenshot(page, "Office Hours - Private Request with Comment");
 
     //Make a public request
     await page.getByRole("link", { name: "New Request" }).click();
@@ -90,7 +90,7 @@ test.describe("Office Hours", () => {
     await loginAsUser(page, student2!, course);
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.getByRole("button", { name: "View Chat" }).click();
-    await percySnapshot(page, "Office Hours - View Queue with a public request");
+    await argosScreenshot(page, "Office Hours - View Queue with a public request");
     await expect(page.getByText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1)).toBeVisible();
     await expect(page.getByText(PRIVATE_HELP_REQUEST_MESSAGE_1)).not.toBeVisible();
 
@@ -104,11 +104,11 @@ test.describe("Office Hours", () => {
     await page.getByRole("link", { name: HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await expect(page.locator("body")).toContainText(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);
-    await percySnapshot(page, "Office Hours - Instructor View Queue");
+    await argosScreenshot(page, "Office Hours - Instructor View Queue");
 
     await page.getByRole("textbox", { name: "Type your message" }).click();
     await page.getByRole("textbox", { name: "Type your message" }).fill(HELP_REQUEST_RESPONSE_1);
-    await percySnapshot(page, "Office Hours - Instructor View Request with Comments");
+    await argosScreenshot(page, "Office Hours - Instructor View Request with Comments");
     await page.getByRole("button", { name: "Send" }).click();
     await page.getByRole("link", { name: PRIVATE_HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(
@@ -139,7 +139,7 @@ test.describe("Office Hours", () => {
     await expect(popup.getByRole("button", { name: "Content" }).first()).toBeVisible();
     await expect(popup.getByRole("button", { name: "Video" }).first()).toBeVisible();
     await expect(popup.getByRole("button", { name: "Mute" }).first()).toBeVisible();
-    await percySnapshot(popup, "Office Hours - Instructor alone in a call");
+    await argosScreenshot(popup, "Office Hours - Instructor alone in a call");
 
     // Test controls
     await popup.getByRole("button", { name: "Mute" }).first().click();

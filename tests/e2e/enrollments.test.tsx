@@ -1,6 +1,6 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import percySnapshot from "@percy/playwright";
 import { expect, test } from "@playwright/test";
+import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { createClass, createUserInClass, loginAsUser, TestingUser } from "./TestingUtils";
 import { random } from "mathjs";
@@ -39,7 +39,7 @@ test.describe("Enrollments Page", () => {
   });
   test("Instructors can view enrollments", async ({ page }) => {
     // Check Enrollments Page Contents
-    await percySnapshot(page, "Enrollments Page");
+    await argosScreenshot(page, "Enrollments Page");
     await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Canvas Links" })).toBeVisible();
     await expect(

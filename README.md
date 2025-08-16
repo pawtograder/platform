@@ -40,5 +40,3 @@ This project is licensed under the GPLv3 license. See the [LICENSE](LICENSE) fil
 ## Acknowledgements
 
 This project was made possible thanks to the support of [Khoury College of Computer Sciences](https://www.khoury.northeastern.edu/), and benefits tremendously from the input of many students, instructors, and staff.
-
-This project is tested with BrowserStack

@@ -45,8 +45,10 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ steps.deploy.outputs.supabase_service_role_key }}
           SUPABASE_ANON_KEY: ${{ steps.deploy.outputs.supabase_anon_key }}
           BASE_URL: ${{ steps.deploy.outputs.app_url }}
-          PERCY_TOKEN: ${{ secrets.PERCY_TOKEN }}
-        run: npx percy exec -- playwright test
+
+          ARGOS_TOKEN: ${{ secrets.ARGOS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
