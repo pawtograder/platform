@@ -299,12 +299,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
-      await expect(
-        page
-          .getByLabel("Grading checks on line 4")
-          .getByRole("paragraph")
-          .filter({ hasText: REGRADE_FINAL_COMMENT })
-      ).toBeVisible();
+    await expect(
+      page.getByLabel("Grading checks on line 4").getByRole("paragraph").filter({ hasText: REGRADE_FINAL_COMMENT })
+    ).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
     await page.getByRole("spinbutton").fill("100");

@@ -286,7 +286,11 @@ const ImportStudentsCSVModal = () => {
   };
 
   return (
-    <Dialog.Root aria-label="Import Roster from CSV" open={isOpen} onOpenChange={(details) => !details.open && handleClose()}>
+    <Dialog.Root
+      aria-label="Import Roster from CSV"
+      open={isOpen}
+      onOpenChange={(details) => !details.open && handleClose()}
+    >
       <Dialog.Trigger asChild>
         <Button onClick={() => setIsOpen(true)}>
           <Icon as={FaFileImport} />

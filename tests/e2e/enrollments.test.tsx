@@ -82,7 +82,6 @@ test.describe("Enrollments Page", () => {
     await expect(page.getByText(student2Email)).toBeVisible();
     await expect(page.getByText(student2Name)).toBeVisible();
 
-
     // Test Add Course Member Dialog With Grader Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
     await expect(page.getByLabel("Add Course Member Dialog")).toBeVisible();
@@ -108,13 +107,13 @@ test.describe("Enrollments Page", () => {
   test("Instructors can add course members from CSV", async ({ page }) => {
     await page.getByRole("button", { name: "Import from CSV" }).click();
     await expect(page.getByLabel("Import Roster from CSV")).toBeVisible();
-    
+
     // Upload the test CSV file
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles("tests/e2e/test.csv");
     await page.getByLabel("Import Roster from CSV").getByRole("button", { name: "Import" }).click();
     await argosScreenshot(page, "Importing CSV of 2 users");
-    await page.getByRole('button', { name: 'Confirm Import (2)' }).click();
+    await page.getByRole("button", { name: "Confirm Import (2)" }).click();
     await expect(page.getByText("Users to be added")).not.toBeVisible();
     await expect(page.getByText("test-student-import-csv@pawtograder.net")).toBeVisible();
     await expect(page.getByText("test-grader-import-csv@pawtograder.net")).toBeVisible();
