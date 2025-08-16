@@ -133,12 +133,12 @@ test.describe("Office Hours", () => {
 
     // Check that the details and controls are visible
     await expect(popup.getByText("Meeting Roster")).toBeVisible();
-    await expect(popup.getByText(instructor!.private_profile_name)).toBeVisible();
     await expect(popup.getByRole("button", { name: "Leave" }).first()).toBeVisible();
     await expect(popup.getByRole("button", { name: "Speaker" }).first()).toBeVisible();
     await expect(popup.getByRole("button", { name: "Content" }).first()).toBeVisible();
     await expect(popup.getByRole("button", { name: "Video" }).first()).toBeVisible();
     await expect(popup.getByRole("button", { name: "Mute" }).first()).toBeVisible();
+    await expect(popup.getByText(instructor!.private_profile_name)).toBeVisible();
     await argosScreenshot(popup, "Office Hours - Instructor alone in a call");
 
     // Test controls

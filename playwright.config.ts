@@ -37,6 +37,14 @@ export default defineConfig({
         // Set your Argos token (required if not using GitHub Actions).
         token: process.env.ARGOS_TOKEN || ""
       }
+    ],
+    // Add built-in HTML reporter to save traces for later upload.
+    [
+      "html",
+      {
+        outputFolder: "playwright-report",
+        open: "never"
+      }
     ]
   ],
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */

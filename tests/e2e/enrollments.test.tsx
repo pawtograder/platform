@@ -82,7 +82,6 @@ test.describe("Enrollments Page", () => {
     await expect(page.getByText(student2Email)).toBeVisible();
     await expect(page.getByText(student2Name)).toBeVisible();
 
-    await page.waitForTimeout(300);
 
     // Test Add Course Member Dialog With Grader Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
@@ -93,8 +92,6 @@ test.describe("Enrollments Page", () => {
     await page.getByRole("button", { name: "Add" }).click();
     await expect(page.getByText(graderEmail)).toBeVisible();
     await expect(page.getByText(graderName)).toBeVisible();
-
-    await page.waitForTimeout(300);
 
     // Test Add Course Member Dialog With Instructor Role
     await page.getByRole("button", { name: "Add Course Member" }).click();
@@ -108,8 +105,18 @@ test.describe("Enrollments Page", () => {
     // TODO: The cells for roles don't have any unique characteristics except for the composition of the parent row and combination of sibling cells, probably needs a revisit for proper testing.
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  test.skip("Instructors can add course members from CSV", async ({ page }) => {
-    // TODO: Need a dummy test CSV file and a way to account for the different file pickers on different OS.
+  test("Instructors can add course members from CSV", async ({ page }) => {
+    await page.getByRole("button", { name: "Import from CSV" }).click();
+    await expect(page.getByLabel("Import Roster from CSV")).toBeVisible();
+    
+    // Upload the test CSV file
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles("tests/e2e/test.csv");
+    await page.getByLabel("Import Roster from CSV").getByRole("button", { name: "Import" }).click();
+    await argosScreenshot(page, "Importing CSV of 2 users");
+    await page.getByRole('button', { name: 'Confirm Import (2)' }).click();
+    await expect(page.getByText("Users to be added")).not.toBeVisible();
+    await expect(page.getByText("test-student-import-csv@pawtograder.net")).toBeVisible();
+    await expect(page.getByText("test-grader-import-csv@pawtograder.net")).toBeVisible();
   });
 });

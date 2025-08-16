@@ -223,8 +223,8 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Open Request", { exact: true })
       .click();
-    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await argosScreenshot(page, "Student can add a comment to open the regrade request");
   });
   test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
@@ -245,7 +245,6 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
-    await expect(page.getByText("Submitting your comment...")).toBeVisible();
     await expect(
       page
         .getByLabel("Grading checks on line 4")
@@ -282,6 +281,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Escalate Request" }).click();
   });
   test("Instructors can view the student's regrade appeal and resolve it", async ({ page }) => {
+    const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await loginAsUser(page, instructor!, course);
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
@@ -299,8 +299,13 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
-    await expect(page.getByText("Submitting your comment...")).toBeVisible();
-    await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
+      await expect(
+        page
+          .getByLabel("Grading checks on line 4")
+          .getByRole("paragraph")
+          .filter({ hasText: REGRADE_FINAL_COMMENT })
+      ).toBeVisible();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
     await page.getByRole("spinbutton").fill("100");
     await expect(page.getByText("This is a significant change")).toBeVisible();
