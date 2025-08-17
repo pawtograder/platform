@@ -12,7 +12,7 @@ import {
 } from "../_shared/FunctionTypes.d.ts";
 import { resolveRef, updateCheckRun, validateOIDCToken } from "../_shared/GitHubWrapper.ts";
 import { SecurityError, UserVisibleError, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import { Database } from "../_shared/SupabaseTypes.d.ts";
+import { Database, Json } from "../_shared/SupabaseTypes.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 
 async function insertComments({
