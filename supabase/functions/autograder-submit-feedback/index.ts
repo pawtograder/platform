@@ -379,10 +379,11 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<GradeRe
             grader_result_test_id: testResultIDs[idx].id,
             class_id,
             output: eachTest.hidden_output || "",
-            output_format: eachTest.hidden_output_format || "text"
+            output_format: eachTest.hidden_output_format || "text",
+            extra_data: eachTest.hidden_extra_data
           };
         })
-        .filter((eachTest) => eachTest.output.length > 0);
+        .filter((eachTest) => eachTest.output.length > 0 || eachTest.extra_data != null);
       if (hiddenTestOutputs.length > 0) {
         const { error: hiddenTestOutputsError } = await adminSupabase
           .from("grader_result_test_output")

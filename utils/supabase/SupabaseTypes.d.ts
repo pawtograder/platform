@@ -2070,6 +2070,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          extra_data: Json | null;
           grader_result_test_id: number;
           id: number;
           output: string;
@@ -2078,6 +2079,7 @@ export type Database = {
         Insert: {
           class_id: number;
           created_at?: string;
+          extra_data?: Json | null;
           grader_result_test_id: number;
           id?: number;
           output: string;
@@ -2086,6 +2088,7 @@ export type Database = {
         Update: {
           class_id?: number;
           created_at?: string;
+          extra_data?: Json | null;
           grader_result_test_id?: number;
           id?: number;
           output?: string;
