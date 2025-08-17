@@ -14,7 +14,7 @@ import {
   type SupabaseConfig,
   type ClassData,
   type StudentData
-} from "./k6-supabase.ts";
+} from "./k6-supabase.js";
 import http from "k6/http";
 
 // k6 globals
@@ -62,11 +62,7 @@ export interface InstructorData {
 /**
  * Create a test instructor (auth user + profiles + enrollment)
  */
-function createTestInstructor(
-  classId: number,
-  testRunPrefix: string,
-  config: SupabaseConfig
-): InstructorData {
+function createTestInstructor(classId: number, testRunPrefix: string, config: SupabaseConfig): InstructorData {
   const email = `instructor-${testRunPrefix}@pawtograder.net`;
   const privateName = `Instructor Test`;
   const publicName = `Professor Test`;
@@ -225,7 +221,7 @@ export function setup(): TestData {
 /**
  * Main test function - minimal test that just validates setup worked
  */
-export default function(data: TestData) {
+export default function (data: TestData) {
   console.log("🧪 Running minimal validation test...");
 
   // Verify class exists
@@ -236,7 +232,7 @@ export default function(data: TestData) {
 
   // Verify instructor enrollment
   const instructorCheck = makeSupabaseRequest(
-    "GET", 
+    "GET",
     `user_roles?class_id=eq.${data.classData.id}&role=eq.instructor`,
     null,
     data.config
@@ -258,10 +254,13 @@ export default function(data: TestData) {
 
   // Verify magic links were generated
   check(data.instructor.magic_link, {
+    //@ts-expect-error TODO: What are K6 types after all?
     "instructor magic link generated": (ml) => ml && ml.hashed_token && ml.verification_type
   });
 
   data.students.forEach((student, index) => {
+    //eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    //@ts-ignore
     check(student.magic_link, {
       [`student ${index + 1} magic link generated`]: (ml) => ml && ml.hashed_token && ml.verification_type
     });
@@ -271,7 +270,7 @@ export default function(data: TestData) {
   console.log("🔐 Testing JWT exchange for instructor...");
   const instructorAuth = exchangeMagicLinkForAccessToken(data.instructor.magic_link.hashed_token, data.config);
   const instructorHeaders = createUserAuthHeaders(instructorAuth.access_token, data.config.anonKey);
-  
+
   // Make a test request as the instructor
   const instructorProfileCheck = makeSupabaseRequest(
     "GET",
@@ -280,16 +279,17 @@ export default function(data: TestData) {
     data.config,
     instructorHeaders
   );
-  
+
   check(instructorProfileCheck, {
-    "instructor can access own profile with JWT": (r) => r.status === 200 && Array.isArray(r.data) && r.data.length === 1
+    "instructor can access own profile with JWT": (r) =>
+      r.status === 200 && Array.isArray(r.data) && r.data.length === 1
   });
 
   console.log("🔐 Testing JWT exchange for student 1...");
   const firstStudent = data.students[0];
   const studentAuth = exchangeMagicLinkForAccessToken(firstStudent.magic_link.hashed_token, data.config);
   const studentHeaders = createUserAuthHeaders(studentAuth.access_token, data.config.anonKey);
-  
+
   // Make a test request as the student
   const studentProfileCheck = makeSupabaseRequest(
     "GET",
@@ -298,50 +298,46 @@ export default function(data: TestData) {
     data.config,
     studentHeaders
   );
-  
+
   check(studentProfileCheck, {
     "student can access own profile with JWT": (r) => r.status === 200 && Array.isArray(r.data) && r.data.length === 1
   });
 
   // Test: Query all profiles as each user to see RLS policies in action
   console.log("🔍 Testing profile visibility with RLS policies...");
-  
+
   console.log("👩‍🏫 Querying all profiles as instructor...");
-  const instructorAllProfiles = makeSupabaseRequest(
-    "GET",
-    `profiles`,
-    null,
-    data.config,
-    instructorHeaders
+  const instructorAllProfiles = makeSupabaseRequest("GET", `profiles`, null, data.config, instructorHeaders);
+
+  console.log(
+    `   Instructor sees ${Array.isArray(instructorAllProfiles.data) ? instructorAllProfiles.data.length : 0} profiles`
   );
-  
-  console.log(`   Instructor sees ${Array.isArray(instructorAllProfiles.data) ? instructorAllProfiles.data.length : 0} profiles`);
   if (Array.isArray(instructorAllProfiles.data)) {
     instructorAllProfiles.data.forEach((profile: any, index: number) => {
-      console.log(`   Profile ${index + 1}: ${profile.name} (ID: ${profile.id}, Private: ${profile.is_private_profile})`);
+      console.log(
+        `   Profile ${index + 1}: ${profile.name} (ID: ${profile.id}, Private: ${profile.is_private_profile})`
+      );
     });
   }
-  
+
   check(instructorAllProfiles, {
     "instructor can query profiles": (r) => r.status === 200 && Array.isArray(r.data)
   });
 
   console.log("👤 Querying all profiles as student...");
-  const studentAllProfiles = makeSupabaseRequest(
-    "GET",
-    `profiles`,
-    null,
-    data.config,
-    studentHeaders
+  const studentAllProfiles = makeSupabaseRequest("GET", `profiles`, null, data.config, studentHeaders);
+
+  console.log(
+    `   Student sees ${Array.isArray(studentAllProfiles.data) ? studentAllProfiles.data.length : 0} profiles`
   );
-  
-  console.log(`   Student sees ${Array.isArray(studentAllProfiles.data) ? studentAllProfiles.data.length : 0} profiles`);
   if (Array.isArray(studentAllProfiles.data)) {
     studentAllProfiles.data.forEach((profile: any, index: number) => {
-      console.log(`   Profile ${index + 1}: ${profile.name} (ID: ${profile.id}, Private: ${profile.is_private_profile})`);
+      console.log(
+        `   Profile ${index + 1}: ${profile.name} (ID: ${profile.id}, Private: ${profile.is_private_profile})`
+      );
     });
   }
-  
+
   check(studentAllProfiles, {
     "student can query profiles": (r) => r.status === 200 && Array.isArray(r.data)
   });
@@ -349,11 +345,11 @@ export default function(data: TestData) {
   // Compare what each user can see
   const instructorProfileCount = Array.isArray(instructorAllProfiles.data) ? instructorAllProfiles.data.length : 0;
   const studentProfileCount = Array.isArray(studentAllProfiles.data) ? studentAllProfiles.data.length : 0;
-  
+
   console.log(`📊 Profile visibility comparison:`);
   console.log(`   Instructor can see: ${instructorProfileCount} profiles`);
   console.log(`   Student can see: ${studentProfileCount} profiles`);
-  
+
   if (instructorProfileCount !== studentProfileCount) {
     console.log(`✅ RLS policies working: Different users see different profile counts`);
   } else {
@@ -363,43 +359,39 @@ export default function(data: TestData) {
   // Test: Query user_roles as each user to see enrollment/role visibility
   console.log("");
   console.log("🔍 Testing user_roles visibility (more sensitive data)...");
-  
+
   console.log("👩‍🏫 Querying all user_roles as instructor...");
-  const instructorUserRoles = makeSupabaseRequest(
-    "GET",
-    `user_roles`,
-    null,
-    data.config,
-    instructorHeaders
+  const instructorUserRoles = makeSupabaseRequest("GET", `user_roles`, null, data.config, instructorHeaders);
+
+  console.log(
+    `   Instructor sees ${Array.isArray(instructorUserRoles.data) ? instructorUserRoles.data.length : 0} user_roles entries`
   );
-  
-  console.log(`   Instructor sees ${Array.isArray(instructorUserRoles.data) ? instructorUserRoles.data.length : 0} user_roles entries`);
   if (Array.isArray(instructorUserRoles.data)) {
     instructorUserRoles.data.forEach((role: any, index: number) => {
-      console.log(`   Role ${index + 1}: Class ${role.class_id}, Role: ${role.role}, User: ${role.user_id?.substring(0, 8)}...`);
+      console.log(
+        `   Role ${index + 1}: Class ${role.class_id}, Role: ${role.role}, User: ${role.user_id?.substring(0, 8)}...`
+      );
     });
   }
-  
+
   check(instructorUserRoles, {
     "instructor can query user_roles": (r) => r.status === 200 && Array.isArray(r.data)
   });
 
   console.log("👤 Querying all user_roles as student...");
-  const studentUserRoles = makeSupabaseRequest(
-    "GET",
-    `user_roles`,
-    null,
-    data.config,
-    studentHeaders
+  const studentUserRoles = makeSupabaseRequest("GET", `user_roles`, null, data.config, studentHeaders);
+
+  console.log(
+    `   Student sees ${Array.isArray(studentUserRoles.data) ? studentUserRoles.data.length : 0} user_roles entries`
   );
-  
-  console.log(`   Student sees ${Array.isArray(studentUserRoles.data) ? studentUserRoles.data.length : 0} user_roles entries`);
   if (Array.isArray(studentUserRoles.data)) {
     studentUserRoles.data.forEach((role: any, index: number) => {
-      console.log(`   Role ${index + 1}: Class ${role.class_id}, Role: ${role.role}, User: ${role.user_id?.substring(0, 8)}...`);
+      console.log(
+        `   Role ${index + 1}: Class ${role.class_id}, Role: ${role.role}, User: ${role.user_id?.substring(0, 8)}...`
+      );
     });
   }
-  
+
   check(studentUserRoles, {
     "student can query user_roles": (r) => r.status === 200 && Array.isArray(r.data)
   });
@@ -407,11 +399,11 @@ export default function(data: TestData) {
   // Compare user_roles visibility
   const instructorRoleCount = Array.isArray(instructorUserRoles.data) ? instructorUserRoles.data.length : 0;
   const studentRoleCount = Array.isArray(studentUserRoles.data) ? studentUserRoles.data.length : 0;
-  
+
   console.log(`📊 User roles visibility comparison:`);
   console.log(`   Instructor can see: ${instructorRoleCount} user_roles entries`);
   console.log(`   Student can see: ${studentRoleCount} user_roles entries`);
-  
+
   if (instructorRoleCount !== studentRoleCount) {
     console.log(`✅ RLS policies working: Different users see different user_roles counts`);
   } else {

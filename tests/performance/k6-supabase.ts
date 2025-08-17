@@ -98,7 +98,9 @@ export function getSupabaseConfig(): SupabaseConfig {
   const anonKey = __ENV.SUPABASE_ANON_KEY;
 
   if (!url || !serviceRoleKey || !anonKey) {
-    throw new Error("Missing required environment variables: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY");
+    throw new Error(
+      "Missing required environment variables: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY"
+    );
   }
 
   return { url, serviceRoleKey, anonKey };
@@ -243,21 +245,17 @@ export function generateMagicLink(
     type: "magiclink",
     email: email,
     options: {
-      redirect_to: `${config.url.replace('/supabase', '')}/auth/callback`
+      redirect_to: `${config.url.replace("/supabase", "")}/auth/callback`
     }
   };
 
   const authHeaders = createAuthHeaders(config.serviceRoleKey);
-  const response = http.post(
-    `${config.url}/auth/v1/admin/generate_link`,
-    JSON.stringify(magicLinkPayload),
-    {
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json"
-      }
+  const response = http.post(`${config.url}/auth/v1/admin/generate_link`, JSON.stringify(magicLinkPayload), {
+    headers: {
+      ...authHeaders,
+      "Content-Type": "application/json"
     }
-  );
+  });
 
   if (response.status !== 200) {
     throw new Error(`Failed to generate magic link for ${email}: ${response.status} - ${response.body}`);
@@ -668,16 +666,12 @@ export function exchangeMagicLinkForAccessToken(
     type: "magiclink"
   };
 
-  const response = http.post(
-    `${config.url}/auth/v1/verify`,
-    JSON.stringify(exchangePayload),
-    {
-      headers: {
-        "Content-Type": "application/json",
-        apikey: config.serviceRoleKey
-      }
+  const response = http.post(`${config.url}/auth/v1/verify`, JSON.stringify(exchangePayload), {
+    headers: {
+      "Content-Type": "application/json",
+      apikey: config.serviceRoleKey
     }
-  );
+  });
 
   if (response.status !== 200) {
     console.log(`Exchange response: ${response.status} - ${response.body}`);
@@ -697,7 +691,7 @@ export function exchangeMagicLinkForAccessToken(
 
   console.log(`✅ Successfully exchanged magic link for access token`);
   console.log(`   Access token: ${responseData.access_token.substring(0, 20)}...`);
-  
+
   return responseData;
 }
 
