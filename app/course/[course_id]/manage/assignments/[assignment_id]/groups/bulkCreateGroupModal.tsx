@@ -17,7 +17,7 @@ import {
   Table
 } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
-import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
 import { MultiValue, Select } from "chakra-react-select";

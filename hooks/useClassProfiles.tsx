@@ -1,17 +1,18 @@
 "use client";
+import { signOutAction } from "@/app/actions";
 import Logo from "@/components/ui/logo";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CourseWithFeatures, UserProfile, UserRole, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
+import TableController from "@/lib/TableController";
+import { CourseWithFeatures, UserProfile, UserRoleWithCourseAndUser } from "@/utils/supabase/DatabaseTypes";
 import { Button, Card, Container, Heading, Stack, Text, VStack } from "@chakra-ui/react";
-import { CrudFilter, useList } from "@refinedev/core";
 import { useParams } from "next/navigation";
-import { createContext, useContext, useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import useAuthState from "./useAuthState";
-import { signOutAction } from "@/app/actions";
+import { createClient } from "@/utils/supabase/client";
+
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
-  allVisibleRoles: UserRole[];
-  profiles: UserProfile[];
+  allOfMyRoles: UserRoleWithCourseAndUser[];
   private_profile_id: string;
   public_profile_id: string;
   private_profile: UserProfile;
@@ -19,26 +20,6 @@ type ClassProfileContextType = {
 };
 
 const ClassProfileContext = createContext<ClassProfileContextType | undefined>(undefined);
-
-export function useGradersAndInstructors() {
-  const profiles = useClassProfiles();
-  const staffRoster = useMemo(() => {
-    const staff = profiles.allVisibleRoles
-      .filter((r) => r.role === "grader" || r.role === "instructor")
-      .map((r) => r.private_profile_id);
-    return profiles.profiles.filter((p) => staff.includes(p.id));
-  }, [profiles.allVisibleRoles, profiles.profiles]);
-  return staffRoster;
-}
-
-export function useStudentRoster() {
-  const profiles = useClassProfiles();
-  const studentRoster = useMemo(() => {
-    const students = profiles.allVisibleRoles.filter((r) => r.role === "student").map((r) => r.private_profile_id);
-    return profiles.profiles.filter((p) => students.includes(p.id));
-  }, [profiles.allVisibleRoles, profiles.profiles]);
-  return studentRoster;
-}
 
 export function useClassProfiles() {
   const context = useContext(ClassProfileContext);
@@ -78,16 +59,6 @@ export function useIsStudent() {
   const { role } = useClassProfiles();
   return role.role === "student";
 }
-/**
- * Returns the user role object matching the specified private profile ID from all visible roles.
- *
- * @param private_profile_id - The private profile ID to search for
- * @returns The matching user role object, or undefined if not found
- */
-export function useRoleByPrivateProfileId(private_profile_id: string) {
-  const { allVisibleRoles } = useClassProfiles();
-  return allVisibleRoles.find((r) => r.private_profile_id === private_profile_id);
-}
 
 /**
  * Provides user role and profile context for the current course to its child components.
@@ -98,45 +69,40 @@ export function useRoleByPrivateProfileId(private_profile_id: string) {
  */
 export function ClassProfileProvider({ children }: { children: React.ReactNode }) {
   const { course_id } = useParams();
-  const { user, roles: myRoles } = useAuthState();
-  const filters: CrudFilter[] = course_id
-    ? [{ field: "class_id", operator: "eq", value: Number(course_id as string) }]
-    : [];
-  const { data: profiles } = useList<UserProfile>({
-    resource: "profiles",
-    queryOptions: {
-      cacheTime: Infinity,
-      staleTime: Infinity
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    filters,
-    liveMode: "auto"
-  });
-  const { data: roles } = useList<UserRole>({
-    resource: "user_roles",
-    meta: {
-      select: "*"
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    queryOptions: {
-      cacheTime: Infinity,
-      staleTime: Infinity
-    },
-    filters,
-    liveMode: "auto"
-  });
+  const { user } = useAuthState();
+  const userId = user?.id;
+  const [ready, setReady] = useState(false);
+  const myProfilesController = useMemo(() => {
+    if (!userId) {
+      return null;
+    }
+    const supabase = createClient();
+    return new TableController({
+      client: supabase,
+      table: "user_roles",
+      query: supabase
+        .from("user_roles")
+        .select(
+          "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes(*), users(*)"
+        )
+        .eq("user_id", userId)
+    });
+  }, [userId]);
+  useEffect(() => {
+    if (myProfilesController) {
+      myProfilesController.readyPromise.then(() => {
+        setReady(true);
+      });
+    }
+  }, [myProfilesController]);
 
-  if (!profiles?.data || !roles?.data) {
+  if (!ready || !myProfilesController) {
     return <Skeleton height="100px" width="100%" />;
   }
-  const myRole = myRoles.find(
+  const myRole = myProfilesController.rows.find(
     (r) => r.user_id === user?.id && (!course_id || r.class_id === Number(course_id as string))
   );
-  if (myRoles.length === 0) {
+  if (myProfilesController.rows.length === 0) {
     return (
       <Container maxW="md" py={{ base: "12", md: "24" }}>
         <Stack gap="6">
@@ -194,10 +160,9 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         role: myRole,
         private_profile_id: myRole.private_profile_id,
         public_profile_id: myRole.public_profile_id,
-        allVisibleRoles: roles.data,
-        profiles: profiles.data,
-        private_profile: profiles.data.find((p) => p.id === myRole.private_profile_id)!,
-        public_profile: profiles.data.find((p) => p.id === myRole.public_profile_id)!
+        allOfMyRoles: myProfilesController.rows,
+        private_profile: myRole.privateProfile,
+        public_profile: myRole.publicProfile
       }}
     >
       {children}

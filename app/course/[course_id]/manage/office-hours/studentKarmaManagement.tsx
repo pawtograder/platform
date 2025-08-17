@@ -4,7 +4,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
-import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import useModalManager from "@/hooks/useModalManager";
 import { useConnectionStatus, useStudentKarmaNotes } from "@/hooks/useOfficeHoursRealtime";
 import type { StudentKarmaNotes, UserProfile } from "@/utils/supabase/DatabaseTypes";

@@ -1,25 +1,26 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge, VStack, IconButton } from "@chakra-ui/react";
-import { Button } from "@/components/ui/button";
-import { useDelete } from "@refinedev/core";
-import { useParams } from "next/navigation";
-import { BsShield, BsExclamationTriangle, BsClock, BsBan, BsEye, BsPlus, BsTrash } from "react-icons/bs";
-import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import useModalManager from "@/hooks/useModalManager";
-import CreateModerationActionModal from "./modals/createModerationActionModal";
-import { useHelpRequestModeration, useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
-import { useState, useMemo } from "react";
 import { toaster } from "@/components/ui/toaster";
-import { useIsInstructor, useClassProfiles } from "@/hooks/useClassProfiles";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
+import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import useModalManager from "@/hooks/useModalManager";
+import { useHelpRequestModeration, useHelpRequests, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
 import type {
-  HelpRequestModeration,
-  UserProfile,
   HelpRequest,
-  HelpRequestMessage
+  HelpRequestMessage,
+  HelpRequestModeration,
+  UserProfile
 } from "@/utils/supabase/DatabaseTypes";
+import { Badge, Box, Flex, Heading, HStack, Icon, IconButton, Stack, Text, VStack } from "@chakra-ui/react";
+import { useDelete } from "@refinedev/core";
+import { formatDistanceToNow } from "date-fns";
+import { useParams } from "next/navigation";
+import { useMemo, useState } from "react";
+import { BsBan, BsClock, BsExclamationTriangle, BsEye, BsPlus, BsShield, BsTrash } from "react-icons/bs";
+import CreateModerationActionModal from "./modals/createModerationActionModal";
 
 type ModerationActionWithDetails = HelpRequestModeration & {
   student_profile?: UserProfile;
@@ -37,7 +38,7 @@ export default function ModerationManagement() {
   const { course_id } = useParams();
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "expired">("all");
   const isInstructor = useIsInstructor();
-  const { profiles } = useClassProfiles();
+  const profiles = useAllProfilesForClass();
 
   // Modal management
   const createModal = useModalManager();

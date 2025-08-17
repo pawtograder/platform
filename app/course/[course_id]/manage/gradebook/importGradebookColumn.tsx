@@ -2,7 +2,8 @@
 
 import { Alert } from "@/components/ui/alert";
 import { Toaster, toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { useCourseController } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";

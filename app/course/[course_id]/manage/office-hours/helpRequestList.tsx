@@ -2,7 +2,8 @@
 import { ChatGroupHeader } from "@/components/help-queue/chat-group-header";
 import { HelpRequestTeaser } from "@/components/help-queue/help-request-teaser";
 import { SearchInput } from "@/components/help-queue/search-input";
-import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { HelpRequest, HelpQueue } from "@/utils/supabase/DatabaseTypes";
 import { Box, Flex, Stack, Text } from "@chakra-ui/react";
 import NextLink from "next/link";

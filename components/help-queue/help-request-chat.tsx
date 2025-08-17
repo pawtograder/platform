@@ -1,49 +1,50 @@
 "use client";
-import { useCallback, useState, useMemo } from "react";
-import type { HelpRequest, Assignment, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
-import { Flex, HStack, Stack, Text, AvatarGroup, Box, Icon, IconButton, Card, Badge, Input } from "@chakra-ui/react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import type { Assignment, HelpRequest, Submission, SubmissionFile } from "@/utils/supabase/DatabaseTypes";
+import { AvatarGroup, Badge, Box, Card, Flex, HStack, Icon, IconButton, Input, Stack, Text } from "@chakra-ui/react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useMemo, useState } from "react";
 import {
-  BsCheck,
-  BsClipboardCheckFill,
-  BsClipboardCheck,
-  BsXCircle,
-  BsFileEarmark,
-  BsCode,
-  BsShield,
-  BsStar,
-  BsPeople,
-  BsPencil,
   BsArrowLeft,
   BsBoxArrowUpRight,
-  BsTrash
+  BsCheck,
+  BsClipboardCheck,
+  BsClipboardCheckFill,
+  BsCode,
+  BsFileEarmark,
+  BsPencil,
+  BsPeople,
+  BsShield,
+  BsStar,
+  BsTrash,
+  BsXCircle
 } from "react-icons/bs";
-import { useRouter, useParams, usePathname, useSearchParams } from "next/navigation";
 
-import { useList } from "@refinedev/core";
-import { PopConfirm } from "@/components/ui/popconfirm";
-import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
-import { toaster } from "@/components/ui/toaster";
+import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
+import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
 import { RealtimeChat } from "@/components/realtime-chat";
 import PersonAvatar from "@/components/ui/person-avatar";
-import VideoCallControls from "./video-call-controls";
+import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster } from "@/components/ui/toaster";
+import { useClassProfiles, useIsGraderOrInstructor } from "@/hooks/useClassProfiles";
 import useModalManager from "@/hooks/useModalManager";
-import CreateModerationActionModal from "@/app/course/[course_id]/manage/office-hours/modals/createModerationActionModal";
-import CreateKarmaEntryModal from "@/app/course/[course_id]/manage/office-hours/modals/createKarmaEntryModal";
-import HelpRequestFeedbackModal from "./help-request-feedback-modal";
+import { useList } from "@refinedev/core";
 import { Select } from "chakra-react-select";
+import HelpRequestFeedbackModal from "./help-request-feedback-modal";
+import VideoCallControls from "./video-call-controls";
 
-import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import StudentGroupPicker from "@/components/ui/student-group-picker";
-import Link from "next/link";
+import { useAllProfilesForClass } from "@/hooks/useCourseController";
 import {
   useHelpRequestFeedback,
-  useHelpRequestStudents,
   useHelpRequestFileReferences,
   useHelpRequestMessages,
+  useHelpRequestStudents,
   useOfficeHoursController
 } from "@/hooks/useOfficeHoursRealtime";
+import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
+import Link from "next/link";
 import { HelpRequestWatchButton } from "./help-request-watch-button";
 
 /**
@@ -838,7 +839,8 @@ const HelpRequestStudents = ({
  * @returns JSX element for the chat interface with controls
  */
 export default function HelpRequestChat({ request }: { request: HelpRequest }) {
-  const { private_profile_id, role, profiles } = useClassProfiles();
+  const { private_profile_id, role } = useClassProfiles();
+  const profiles = useAllProfilesForClass();
   const router = useRouter();
   const params = useParams();
   const pathname = usePathname();

@@ -7,7 +7,7 @@ import { useParams } from "next/navigation";
 import { BsX } from "react-icons/bs";
 import useAuthState from "@/hooks/useAuthState";
 import { useConnectionStatus, useOfficeHoursController } from "@/hooks/useOfficeHoursRealtime";
-import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { toaster } from "@/components/ui/toaster";
 import type { UserProfile } from "@/utils/supabase/DatabaseTypes";
 

@@ -1,24 +1,3 @@
-import { Box, Icon, VStack, Text, HStack, Tag, Heading, Button, Input } from "@chakra-ui/react";
-import { useRegradeRequest } from "@/hooks/useAssignment";
-import { Clock, CheckCircle, ArrowUp, XCircle } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import { useRef, useState } from "react";
-import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
-import {
-  useClassProfiles,
-  useIsGraderOrInstructor,
-  useIsInstructor,
-  useRoleByPrivateProfileId
-} from "@/hooks/useClassProfiles";
-import MessageInput from "./message-input";
-import { toaster } from "./toaster";
-import { useSubmission, useSubmissionRegradeRequestComments } from "@/hooks/useSubmission";
-import type { RegradeRequestComment as RegradeRequestCommentType, RegradeStatus } from "@/utils/supabase/DatabaseTypes";
-import { useUserProfile } from "@/hooks/useUserProfiles";
-import { format, formatRelative } from "date-fns";
-import Markdown from "./markdown";
-import PersonAvatar from "./person-avatar";
-import { Skeleton } from "./skeleton";
 import {
   DialogActionTrigger,
   DialogBody,
@@ -30,6 +9,23 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
+import { useRegradeRequest } from "@/hooks/useAssignment";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
+import { useProfileRole } from "@/hooks/useCourseController";
+import { useSubmission, useSubmissionRegradeRequestComments } from "@/hooks/useSubmission";
+import { useUserProfile } from "@/hooks/useUserProfiles";
+import type { RegradeRequestComment as RegradeRequestCommentType, RegradeStatus } from "@/utils/supabase/DatabaseTypes";
+import { Box, Button, Heading, HStack, Icon, Input, Tag, Text, VStack } from "@chakra-ui/react";
+import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
+import { format, formatRelative } from "date-fns";
+import type { LucideIcon } from "lucide-react";
+import { ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
+import { useRef, useState } from "react";
+import Markdown from "./markdown";
+import MessageInput from "./message-input";
+import PersonAvatar from "./person-avatar";
+import { Skeleton } from "./skeleton";
+import { toaster } from "./toaster";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -85,7 +81,7 @@ const statusConfig: Record<
  */
 function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType }) {
   const authorProfile = useUserProfile(comment.author);
-  const authorRole = useRoleByPrivateProfileId(comment.author);
+  const authorRole = useProfileRole(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -126,20 +122,18 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
               <Text>commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
-              {authorRole?.role === "grader" || authorRole?.role === "instructor" || authorProfile?.flair ? (
+              {authorRole === "grader" || authorRole === "instructor" || authorProfile?.flair ? (
                 <Tag.Root
                   size="md"
                   colorPalette={
-                    authorRole?.role === "grader" || authorRole?.role === "instructor"
-                      ? "blue"
-                      : authorProfile?.flair_color
+                    authorRole === "grader" || authorRole === "instructor" ? "blue" : authorProfile?.flair_color
                   }
                   variant="surface"
                 >
                   <Tag.Label>
-                    {authorRole?.role === "grader"
+                    {authorRole === "grader"
                       ? "Grader"
-                      : authorRole?.role === "instructor"
+                      : authorRole === "instructor"
                         ? "Instructor"
                         : authorProfile?.flair}
                   </Tag.Label>

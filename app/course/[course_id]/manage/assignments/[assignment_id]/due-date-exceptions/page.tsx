@@ -4,8 +4,8 @@ import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { useCourse } from "@/hooks/useAuthState";
-import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
-import { useAssignmentDueDate } from "@/hooks/useCourseController";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAssignmentDueDate, useStudentRoster } from "@/hooks/useCourseController";
 import {
   Assignment,
   AssignmentDueDateException,
