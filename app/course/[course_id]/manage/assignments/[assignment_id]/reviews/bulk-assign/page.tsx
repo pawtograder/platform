@@ -700,7 +700,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .eq("rubric_id", selectedRubric.id);
 
       if (existingAssignmentsError) {
-        toaster.error({ title: "Error", description: existingAssignmentsError.message || "Error fetching existing review assignments" });
+        toaster.error({
+          title: "Error",
+          description: existingAssignmentsError.message || "Error fetching existing review assignments"
+        });
         return false;
       }
 
@@ -752,7 +755,10 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .eq("rubric_id", selectedRubric.id);
 
       if (allReviewAssignmentsError) {
-        toaster.error({ title: "Error", description: allReviewAssignmentsError.message || "Error fetching all review assignments" });
+        toaster.error({
+          title: "Error",
+          description: allReviewAssignmentsError.message || "Error fetching all review assignments"
+        });
         return false;
       }
       //Now insert all the reivew assignment parts as needed
@@ -795,7 +801,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
       clearStateData();
       return true;
     } catch (e: unknown) {
-      const errMsg = (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
+      const errMsg =
+        (e && typeof e === "object" && "message" in e ? String((e as { message: unknown }).message) : undefined) ||
         "An unexpected error occurred while confirming assignments";
       toaster.error({
         title: "Error confirming assignments",
