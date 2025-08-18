@@ -123,7 +123,8 @@ END
 $$;
 
 -- Step 4: Replace the trigger
--- Drop any existing submission triggers
+-- Drop any existing submission triggers (note: actual trigger name is submissions_insert_hook)
+DROP TRIGGER IF EXISTS submissions_insert_hook ON "public"."submissions";
 DROP TRIGGER IF EXISTS submissions_insert_hook_trigger ON "public"."submissions";
 DROP TRIGGER IF EXISTS submission_ordinal_trigger ON "public"."submissions";
 DROP TRIGGER IF EXISTS submissions_trigger ON "public"."submissions";

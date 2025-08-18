@@ -25,7 +25,7 @@ import NotificationsBox from "@/components/notifications/notifications-box";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
-import useAuthState, { useCourse } from "@/hooks/useAuthState";
+import useAuthState from "@/hooks/useAuthState";
 import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
 import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
 import { createClient } from "@/utils/supabase/client";
@@ -38,6 +38,7 @@ import { HiOutlineSupport } from "react-icons/hi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
 import NotificationPreferences from "@/components/notifications/notification-preferences";
 import { IoNotificationsCircle } from "react-icons/io5";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 function SupportMenu() {
   return (
@@ -246,7 +247,7 @@ const ProfileChangesMenu = () => {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const invalidate = useInvalidate();
-  const { private_profile_id, public_profile_id } = useCourse();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
 
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
@@ -445,7 +446,7 @@ function UserSettingsMenu() {
   const supabase = createClient();
   const { user } = useAuthState();
   const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
-  const { private_profile_id } = useCourse();
+  const { private_profile_id } = useClassProfiles();
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
     id: private_profile_id

@@ -1,5 +1,6 @@
 import { DiscussionPostSummary } from "@/components/ui/discussion-post-summary";
 import { createClient } from "@/utils/supabase/server";
+import * as Sentry from "@sentry/nextjs";
 import {
   Box,
   CardBody,
@@ -101,11 +102,11 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .limit(10);
 
   if (assignmentsError) {
-    console.error(assignmentsError);
+    Sentry.captureException(assignmentsError);
   }
 
   // Get upcoming assignments for comparison
-  const { data: upcomingAssignments } = await supabase
+  const { data: upcomingAssignments, error: upcomingAssignmentsError } = await supabase
     .from("assignments")
     .select("*,repositories(id), submissions(profile_id, grader_results(score,max_score)), classes(time_zone)")
     .eq("class_id", course_id)
@@ -113,31 +114,54 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .order("due_date", { ascending: true })
     .limit(5);
 
-  const { data: topics } = await supabase.from("discussion_topics").select("*").eq("class_id", course_id);
+  if (upcomingAssignmentsError) {
+    Sentry.captureException(upcomingAssignmentsError);
+  }
 
-  const { data: discussions } = await supabase
+  const { data: topics, error: topicsError } = await supabase
+    .from("discussion_topics")
+    .select("*")
+    .eq("class_id", course_id);
+
+  if (topicsError) {
+    Sentry.captureException(topicsError);
+  }
+
+  const { data: discussions, error: discussionsError } = await supabase
     .from("discussion_threads")
     .select("*, profiles(*), discussion_topics(*)")
     .eq("root_class_id", course_id)
     .order("created_at", { ascending: false })
     .limit(5);
 
-  const { data: helpRequests } = await supabase
+  if (discussionsError) {
+    Sentry.captureException(discussionsError);
+  }
+
+  const { data: helpRequests, error: helpRequestsError } = await supabase
     .from("help_requests")
     .select("*, profiles(*)")
     .eq("class_id", course_id)
     .eq("status", "open")
     .order("created_at", { ascending: true });
 
+  if (helpRequestsError) {
+    Sentry.captureException(helpRequestsError);
+  }
+
   // Get review assignments for current user
-  const { data: allReviewAssignmentsSummary } = private_profile_id
+  const { data: allReviewAssignmentsSummary, error: reviewAssignmentsError } = private_profile_id
     ? await supabase
         .from("review_assignments_summary_by_assignee")
         .select("*")
         .eq("class_id", course_id)
         .eq("assignee_profile_id", private_profile_id)
         .order("soonest_due_date", { ascending: true })
-    : { data: null };
+    : { data: null, error: null };
+
+  if (reviewAssignmentsError) {
+    Sentry.captureException(reviewAssignmentsError);
+  }
 
   //Show all review assignments that are not completed, and then up to 2 most recent fully completed
   const reviewAssignmentsSummary = allReviewAssignmentsSummary
@@ -200,7 +224,15 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
       studentsWithValidExtensions
     };
   };
-  const { data: course } = await supabase.from("classes").select("time_zone").eq("id", course_id).single();
+  const { data: course, error: courseError } = await supabase
+    .from("classes")
+    .select("time_zone")
+    .eq("id", course_id)
+    .single();
+
+  if (courseError) {
+    Sentry.captureException(courseError);
+  }
   const identities = await supabase.auth.getUserIdentities();
   const githubIdentity = identities.data?.identities.find((identity) => identity.provider === "github");
 
@@ -209,32 +241,48 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
   const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-  const { data: workflowStatsHour } = await supabase
+  const { data: workflowStatsHour, error: workflowStatsHourError } = await supabase
     .from("workflow_events_summary")
     .select("queue_time_seconds, run_time_seconds")
     .eq("class_id", course_id)
     .gte("requested_at", oneHourAgo.toISOString());
 
-  const { data: workflowStatsDay } = await supabase
+  if (workflowStatsHourError) {
+    Sentry.captureException(workflowStatsHourError);
+  }
+
+  const { data: workflowStatsDay, error: workflowStatsDayError } = await supabase
     .from("workflow_events_summary")
     .select("queue_time_seconds, run_time_seconds")
     .eq("class_id", course_id)
     .gte("requested_at", oneDayAgo.toISOString());
 
-  const { data: workflowErrorsHour } = await supabase
+  if (workflowStatsDayError) {
+    Sentry.captureException(workflowStatsDayError);
+  }
+
+  const { data: workflowErrorsHour, error: workflowErrorsHourError } = await supabase
     .from("workflow_run_error")
     .select("id")
     .eq("class_id", course_id)
     .gte("created_at", oneHourAgo.toISOString());
 
-  const { data: workflowErrorsDay } = await supabase
+  if (workflowErrorsHourError) {
+    Sentry.captureException(workflowErrorsHourError);
+  }
+
+  const { data: workflowErrorsDay, error: workflowErrorsDayError } = await supabase
     .from("workflow_run_error")
     .select("id")
     .eq("class_id", course_id)
     .gte("created_at", oneDayAgo.toISOString());
 
+  if (workflowErrorsDayError) {
+    Sentry.captureException(workflowErrorsDayError);
+  }
+
   // Get the 5 most recent errors with details
-  const { data: recentErrors } = await supabase
+  const { data: recentErrors, error: recentErrorsError } = await supabase
     .from("workflow_run_error")
     .select(
       `
@@ -251,6 +299,10 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
     .eq("class_id", course_id)
     .order("created_at", { ascending: false })
     .limit(5);
+
+  if (recentErrorsError) {
+    Sentry.captureException(recentErrorsError);
+  }
 
   // Calculate workflow statistics
   const calculateWorkflowStats = (

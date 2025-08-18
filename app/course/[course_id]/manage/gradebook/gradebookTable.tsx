@@ -21,7 +21,6 @@ import {
   useGradebookColumns,
   useGradebookController,
   useGradebookRefetchStatus,
-  useStudentColumnIndexStatus,
   useStudentDetailView
 } from "@/hooks/useGradebook";
 import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
@@ -1625,7 +1624,7 @@ export default function GradebookTable() {
   const gradebookColumns = useGradebookColumns();
   const isInstructor = useIsInstructor();
   const isRefetching = useGradebookRefetchStatus();
-  const isStudentColumnIndexPopulated = useStudentColumnIndexStatus();
+  const isGradebookDataReady = gradebookController.table.ready;
 
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -1638,6 +1637,9 @@ export default function GradebookTable() {
     queryOptions: {
       staleTime: Infinity,
       cacheTime: Infinity
+    },
+    pagination: {
+      pageSize: 1000
     }
   });
 
@@ -2258,7 +2260,7 @@ export default function GradebookTable() {
     [rowModel.rows, toggleGroup, firstColumnWidth, headerHeight, isSafari]
   );
 
-  if (!students || !isStudentColumnIndexPopulated) {
+  if (!students || !isGradebookDataReady) {
     return (
       <VStack gap={2} align="center" justify="center" minH="40vh">
         <Spinner size="lg" color="blue.500" />
@@ -2268,11 +2270,13 @@ export default function GradebookTable() {
       </VStack>
     );
   }
+  console.log("isGradebookDataReady", isGradebookDataReady);
+  console.log("isRefetching", isRefetching);
 
   return (
     <VStack align="stretch" w="100%" gap={0} position="relative">
       {/* Refetch loading overlay */}
-      {(isRefetching || !isStudentColumnIndexPopulated) && (
+      {(isRefetching || !isGradebookDataReady) && (
         <Box
           position="absolute"
           top={0}

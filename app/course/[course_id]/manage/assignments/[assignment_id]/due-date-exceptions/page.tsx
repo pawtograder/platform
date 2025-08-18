@@ -3,7 +3,6 @@ import { Field } from "@/components/ui/field";
 import PersonAvatar from "@/components/ui/person-avatar";
 import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { useCourse } from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useAssignmentDueDate, useStudentRoster } from "@/hooks/useCourseController";
 import {
@@ -340,7 +339,8 @@ function StudentRow({
 }
 
 export default function DueDateExceptions() {
-  const course = useCourse();
+  const { role } = useClassProfiles();
+  const course = role.classes;
   const { assignment_id } = useParams();
   const students = useStudentRoster();
   const { data: assignment } = useOne<Assignment>({
@@ -368,7 +368,7 @@ export default function DueDateExceptions() {
   }
 
   const hasLabScheduling = assignment.data.minutes_due_after_lab !== null;
-  const originalDueDate = new TZDate(assignment.data.due_date, course.classes.time_zone || "America/New_York");
+  const originalDueDate = new TZDate(assignment.data.due_date, course.time_zone || "America/New_York");
 
   return (
     <Box>
@@ -390,8 +390,8 @@ export default function DueDateExceptions() {
         <Text fontSize="sm" color="fg.muted">
           This assignment allows students to use up to {assignment?.data.max_late_tokens} late tokens to extend the due
           date. Each late token extends the due date by 24 hours. Students in the course are given a total of{" "}
-          {course.classes.late_tokens_per_student} late tokens. You can view and edit the due date exceptions for each
-          student below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
+          {course.late_tokens_per_student} late tokens. You can view and edit the due date exceptions for each student
+          below. Extensions are applied on top of the {hasLabScheduling ? "lab-based" : "original"} due date.
         </Text>
       </Box>
 
@@ -416,7 +416,7 @@ export default function DueDateExceptions() {
               dueDateExceptions={dueDateExceptions.data}
               hasLabScheduling={hasLabScheduling}
               originalDueDate={originalDueDate}
-              course={course.classes}
+              course={course}
             />
           ))}
         </Table.Body>

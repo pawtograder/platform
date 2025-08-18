@@ -2,7 +2,6 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
 import { useCanShowGradeFor, useObfuscatedGradesMode, useSetOnlyShowGradesFor } from "@/hooks/useCourseController";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -38,6 +37,7 @@ import Papa from "papaparse";
 import { useCallback, useMemo, useState } from "react";
 import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 function StudentNameCell({
   course_id,
@@ -108,9 +108,10 @@ function ScoreLink({
 }
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
-  const course = useCourse();
+  const { role: classRole } = useClassProfiles();
+  const course = classRole.classes;
   const { classRealTimeController } = useCourseController();
-  const timeZone = course.classes.time_zone || "America/New_York";
+  const timeZone = course.time_zone || "America/New_York";
   const supabase = createClient();
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
@@ -295,7 +296,7 @@ export default function AssignmentsTable() {
       sorting: [{ id: "name", desc: false }]
     }
   });
-  const isInstructor = course.role === "instructor";
+  const isInstructor = classRole.role === "instructor";
   return (
     <VStack w="100%">
       <VStack paddingBottom="55px" w="100%">

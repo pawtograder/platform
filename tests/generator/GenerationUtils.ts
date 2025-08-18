@@ -26,27 +26,27 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   user_roles: { maxInsertsPerSecond: 50, description: "User role assignments" },
 
   // Assignment and rubric operations
-  assignments: { maxInsertsPerSecond: 2, description: "Assignment creation" },
+  assignments: { maxInsertsPerSecond: 5, description: "Assignment creation" },
   rubric_parts: { maxInsertsPerSecond: 30, description: "Rubric parts" },
   rubric_criteria: { maxInsertsPerSecond: 30, description: "Rubric criteria" },
   rubric_checks: { maxInsertsPerSecond: 30, description: "Rubric checks" },
 
   // Submission operations (high volume, batched, batch count is on submissions, but all follows that batch!)
-  repositories: { maxInsertsPerSecond: 10, description: "Repository records" },
-  repository_check_runs: { maxInsertsPerSecond: 10, description: "Repository check runs" },
-  submissions: { maxInsertsPerSecond: 10, description: "Submission records", batchSize: 20 },
-  submission_files: { maxInsertsPerSecond: 10, description: "Submission files" },
+  repositories: { maxInsertsPerSecond: 20, description: "Repository records" },
+  repository_check_runs: { maxInsertsPerSecond: 20, description: "Repository check runs" },
+  submissions: { maxInsertsPerSecond: 20, description: "Submission records", batchSize: 20 },
+  submission_files: { maxInsertsPerSecond: 20, description: "Submission files" },
 
   // Grading operations (moderate volume, batched)
   grader_results: { maxInsertsPerSecond: 60, description: "Grader results" },
   grader_result_tests: { maxInsertsPerSecond: 100, description: "Grader result tests" },
   submission_reviews: { maxInsertsPerSecond: 40, description: "Submission reviews" },
-  submission_comments: { maxInsertsPerSecond: 20, description: "Submission comments", batchSize: 100 },
-  submission_file_comments: { maxInsertsPerSecond: 20, description: "Submission file comments", batchSize: 100 },
+  submission_comments: { maxInsertsPerSecond: 10, description: "Submission comments", batchSize: 200 },
+  submission_file_comments: { maxInsertsPerSecond: 10, description: "Submission file comments", batchSize: 200 },
 
   // Gradebook operations
-  gradebook_columns: { maxInsertsPerSecond: 10, description: "Gradebook columns" },
-  gradebook_column_students: { maxInsertsPerSecond: 100, description: "Gradebook column student records" },
+  gradebook_columns: { maxInsertsPerSecond: 1, description: "Gradebook columns" },
+  gradebook_column_students: { maxInsertsPerSecond: 50, description: "Gradebook column student records" },
 
   // Class structure operations (some batched)
   class_sections: { maxInsertsPerSecond: 20, description: "Class sections" },
@@ -56,9 +56,9 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
 
   // Communication operations (some batched)
   help_requests: { maxInsertsPerSecond: 15, description: "Help requests" },
-  help_request_messages: { maxInsertsPerSecond: 400, description: "Help request messages" },
-  help_request_students: { maxInsertsPerSecond: 500, description: "Help request student associations" },
-  discussion_threads: { maxInsertsPerSecond: 2, description: "Discussion threads" },
+  help_request_messages: { maxInsertsPerSecond: 40, description: "Help request messages" },
+  help_request_students: { maxInsertsPerSecond: 100, description: "Help request student associations" },
+  discussion_threads: { maxInsertsPerSecond: 1, description: "Discussion threads", batchSize: 10 },
 
   // Metadata operations (some batched)
   tags: { maxInsertsPerSecond: 30, description: "Tag assignments" },
@@ -110,6 +110,44 @@ export class RateLimitManager {
     Object.entries(rateLimits).forEach(([dataType, config]) => {
       this.batchSizes[dataType] = config.batchSize ?? 1;
     });
+  }
+
+  private async executeWithRetry<T>(
+    operation: () => Promise<T>,
+    maxRetries: number = 5,
+    baseDelayMs: number = 5000
+  ): Promise<T> {
+    let lastError: Error;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await operation();
+        if (typeof result === "object" && result && "error" in result && result.error) {
+          throw result.error;
+        }
+        return result;
+      } catch (error) {
+        lastError = error as Error;
+
+        if (attempt === maxRetries) {
+          // Final attempt failed, throw the error
+          throw lastError;
+        }
+
+        // Calculate exponential backoff delay with jitter: baseDelay * 2^attempt
+        const exponentialDelayMs = baseDelayMs * Math.pow(2, attempt);
+        // Add equal jitter: half base delay + random half to reduce herding
+        const delayMs = exponentialDelayMs / 2 + Math.random() * (exponentialDelayMs / 2);
+        console.warn(
+          `⚠️ Operation failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delayMs / 1000}s: ${lastError.message}`
+        );
+
+        // Wait before retrying
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    throw lastError!;
   }
 
   private initializeRateLimiters(rateLimits: Record<string, RateLimitConfig>) {
@@ -179,9 +217,11 @@ export class RateLimitManager {
       };
     }
 
-    const result = await this.globalLimiter.schedule(async () => {
-      return await limiter.schedule(async () => {
-        return await operation();
+    const result = await this.executeWithRetry(async () => {
+      return await this.globalLimiter.schedule(async () => {
+        return await limiter.schedule(async () => {
+          return await operation();
+        });
       });
     });
 
@@ -220,12 +260,14 @@ export class RateLimitManager {
       });
     }
 
-    const result = await this.globalLimiter.schedule(async () => {
-      return await limiter.schedule(async () => {
-        return await supabase.auth.admin.createUser({
-          email,
-          password,
-          email_confirm
+    const result = await this.executeWithRetry(async () => {
+      return await this.globalLimiter.schedule(async () => {
+        return await limiter.schedule(async () => {
+          return await supabase.auth.admin.createUser({
+            email,
+            password,
+            email_confirm
+          });
         });
       });
     });

@@ -453,8 +453,8 @@ export async function enrollExistingUserInClass(
 // ============================
 
 export class DatabaseSeeder {
-  private rateLimitManager: RateLimitManager;
-  private rateLimits: Record<string, RateLimitConfig>;
+  protected rateLimitManager: RateLimitManager;
+  protected rateLimits: Record<string, RateLimitConfig>;
   private config: Partial<SeedingConfiguration> = {};
   private repoCounter = 0;
 
@@ -544,7 +544,7 @@ export class DatabaseSeeder {
   }
 
   // Method to validate and get complete configuration
-  private getCompleteConfiguration(): SeedingConfiguration {
+  protected getCompleteConfiguration(): SeedingConfiguration {
     // Validate required fields
     if (!this.config.numStudents) throw new Error("Number of students is required");
     if (!this.config.numGraders) throw new Error("Number of graders is required");
@@ -648,7 +648,7 @@ export class DatabaseSeeder {
         await this.createDiscussionThreads(config.discussionConfig, class_id, students, instructors, graders);
       }
 
-      // Create assignments and submissions
+      // // Create assignments and submissions
       const assignments = await this.createAssignments(config, class_id, students);
       const submissionData = await this.createSubmissions(assignments, students, class_id);
 
@@ -690,7 +690,7 @@ export class DatabaseSeeder {
     }
   }
 
-  private displayRateLimitingConfiguration(): void {
+  protected displayRateLimitingConfiguration(): void {
     console.log("⚡ RATE LIMITING CONFIGURATION:");
     console.log(
       "Data Type".padEnd(25) + "Max/sec".padEnd(10) + "Batch".padEnd(8) + "Batches/sec".padEnd(12) + "Description"
@@ -711,7 +711,7 @@ export class DatabaseSeeder {
     console.log("");
   }
 
-  private displaySeedingConfiguration(config: SeedingConfiguration): void {
+  protected displaySeedingConfiguration(config: SeedingConfiguration): void {
     console.log(`📊 SEEDING CONFIGURATION:`);
     console.log(`   Students: ${config.numStudents}`);
     console.log(`   Graders: ${config.numGraders}`);
@@ -734,7 +734,7 @@ export class DatabaseSeeder {
     console.log("");
   }
 
-  private displayFinalSummary(
+  protected displayFinalSummary(
     testClass: { id: number; name: string },
     config: SeedingConfiguration,
     assignments: Array<{ id: number; title: string }>,
@@ -1134,7 +1134,7 @@ export class DatabaseSeeder {
     console.log(`   Summary: ${conflictSummary}`);
   }
 
-  private async createDiscussionThreads(
+  protected async createDiscussionThreads(
     config: DiscussionConfig,
     class_id: number,
     students: TestingUser[],
@@ -1256,7 +1256,22 @@ export class DatabaseSeeder {
     // Track created threads for replies
     const createdThreads: Array<{ id: number; topic_id: number; is_question: boolean }> = [];
 
-    // Create root posts for each topic
+    // Collect all root threads to insert in batches
+    const threadsToInsert: Array<{
+      author: string;
+      subject: string;
+      body: string;
+      class_id: number;
+      topic_id: number;
+      is_question: boolean;
+      instructors_only: boolean;
+      draft: boolean;
+      root_class_id: number;
+    }> = [];
+
+    const threadMetadata: Array<{ topic_id: number; is_question: boolean }> = [];
+
+    // Prepare all root posts for each topic
     for (const topic of discussionTopics) {
       const subjectsForTopic = topicSubjects[topic.topic as keyof typeof topicSubjects] || ["General discussion"];
 
@@ -1271,40 +1286,81 @@ export class DatabaseSeeder {
           ? faker.helpers.arrayElement(questionBodies)
           : faker.lorem.paragraphs(faker.number.int({ min: 2, max: 10 }));
 
-        const { data: thread, error: threadError } = await this.rateLimitManager.trackAndLimit(
-          "discussion_threads",
-          () =>
-            supabase
-              .from("discussion_threads")
-              .insert({
-                author: authorId,
-                subject,
-                body,
-                class_id,
-                topic_id: topic.id,
-                is_question: isQuestion,
-                instructors_only: false,
-                draft: false,
-                root_class_id: class_id // Set for root threads
-              })
-              .select("id"),
-          1
-        );
+        threadsToInsert.push({
+          author: authorId,
+          subject,
+          body,
+          class_id,
+          topic_id: topic.id,
+          is_question: isQuestion,
+          instructors_only: false,
+          draft: false,
+          root_class_id: class_id // Set for root threads
+        });
 
-        if (threadError) {
-          console.error(`Error creating discussion thread for topic ${topic.topic}:`, threadError);
-          throw new Error(`Failed to create discussion thread for topic ${topic.topic}: ${threadError.message}`);
-        }
-
-        if (thread) {
-          createdThreads.push({
-            id: thread[0].id,
-            topic_id: topic.id,
-            is_question: isQuestion
-          });
-        }
+        threadMetadata.push({
+          topic_id: topic.id,
+          is_question: isQuestion
+        });
       }
     }
+
+    // Insert threads in batches (in parallel)
+    const threadBatchSize = this.rateLimitManager.batchSizes.discussion_threads;
+    const totalBatches = Math.ceil(threadsToInsert.length / threadBatchSize);
+    console.log(
+      `Inserting ${threadsToInsert.length} root discussion threads in ${totalBatches} parallel batches of ${threadBatchSize}...`
+    );
+
+    // Create all batch operations as promises
+    const batchPromises: Promise<{
+      threads: Array<{ id: number }> | null;
+      metadata: Array<{ topic_id: number; is_question: boolean }>;
+      batchNumber: number;
+    }>[] = [];
+
+    for (let i = 0; i < threadsToInsert.length; i += threadBatchSize) {
+      const batch = threadsToInsert.slice(i, i + threadBatchSize);
+      const metadataBatch = threadMetadata.slice(i, i + threadBatchSize);
+      const batchNumber = Math.floor(i / threadBatchSize) + 1;
+
+      console.log(`   Preparing batch ${batchNumber}/${totalBatches}: ${batch.length} threads`);
+
+      const batchPromise = this.rateLimitManager
+        .trackAndLimit(
+          "discussion_threads",
+          () => supabase.from("discussion_threads").insert(batch).select("id"),
+          batch.length
+        )
+        .then(({ data: threads, error: threadError }) => {
+          if (threadError) {
+            console.error(`Error creating discussion thread batch ${batchNumber}:`, threadError);
+            throw new Error(`Failed to create discussion thread batch ${batchNumber}: ${threadError.message}`);
+          }
+          return { threads, metadata: metadataBatch, batchNumber };
+        });
+
+      batchPromises.push(batchPromise);
+    }
+
+    // Execute all batches in parallel and collect results
+    console.log(`Executing ${batchPromises.length} batches in parallel...`);
+    const batchResults = await Promise.all(batchPromises);
+
+    // Process results in order to maintain consistent thread ordering
+    batchResults
+      .sort((a, b) => a.batchNumber - b.batchNumber)
+      .forEach(({ threads, metadata }) => {
+        if (threads) {
+          threads.forEach((thread, index) => {
+            createdThreads.push({
+              id: thread.id,
+              topic_id: metadata[index].topic_id,
+              is_question: metadata[index].is_question
+            });
+          });
+        }
+      });
 
     console.log(`✓ Created ${createdThreads.length} root discussion threads`);
 
@@ -1358,31 +1414,50 @@ export class DatabaseSeeder {
       }
     }
 
-    // Insert replies in batches of 20
+    // Insert replies in batches (in parallel)
     const insertedReplies: Array<{ id: number }> = [];
-    const batchSize = this.rateLimitManager.batchSizes.discussion_threads;
-    console.log(`Inserting ${repliesToInsert.length} replies in batches of ${batchSize}...`);
+    const replyBatchSize = this.rateLimitManager.batchSizes.discussion_threads;
+    const totalReplyBatches = Math.ceil(repliesToInsert.length / replyBatchSize);
+    console.log(
+      `Inserting ${repliesToInsert.length} replies in ${totalReplyBatches} parallel batches of ${replyBatchSize}...`
+    );
 
-    for (let i = 0; i < repliesToInsert.length; i += batchSize) {
-      const batch = repliesToInsert.slice(i, i + batchSize);
-      const batchNumber = Math.floor(i / batchSize) + 1;
-      const totalBatches = Math.ceil(repliesToInsert.length / batchSize);
+    // Create all batch operations as promises
+    const replyBatchPromises: Promise<{ replies: Array<{ id: number }> | null; batchNumber: number }>[] = [];
 
-      const { data: batchReplies, error: batchError } = await this.rateLimitManager.trackAndLimit(
-        "discussion_threads",
-        () => supabase.from("discussion_threads").insert(batch).select("id"),
-        batch.length
-      );
+    for (let i = 0; i < repliesToInsert.length; i += replyBatchSize) {
+      const batch = repliesToInsert.slice(i, i + replyBatchSize);
+      const batchNumber = Math.floor(i / replyBatchSize) + 1;
 
-      if (batchError) {
-        console.error(`Error inserting batch ${batchNumber}/${totalBatches}:`, batchError);
-        throw new Error(`Failed to insert batch ${batchNumber}: ${batchError.message}`);
-      }
+      const batchPromise = this.rateLimitManager
+        .trackAndLimit(
+          "discussion_threads",
+          () => supabase.from("discussion_threads").insert(batch).select("id"),
+          batch.length
+        )
+        .then(({ data: batchReplies, error: batchError }) => {
+          if (batchError) {
+            console.error(`Error inserting batch ${batchNumber}/${totalReplyBatches}:`, batchError);
+            throw new Error(`Failed to insert batch ${batchNumber}: ${batchError.message}`);
+          }
+          return { replies: batchReplies, batchNumber };
+        });
 
-      if (batchReplies) {
-        insertedReplies.push(...batchReplies);
-      }
+      replyBatchPromises.push(batchPromise);
     }
+
+    // Execute all batches in parallel and collect results
+    console.log(`Executing ${replyBatchPromises.length} reply batches in parallel...`);
+    const replyBatchResults = await Promise.all(replyBatchPromises);
+
+    // Process results in order to maintain consistent reply ordering
+    replyBatchResults
+      .sort((a, b) => a.batchNumber - b.batchNumber)
+      .forEach(({ replies }) => {
+        if (replies) {
+          insertedReplies.push(...replies);
+        }
+      });
 
     // Mark some replies as answers for question threads
     for (const { rootThreadId, replyIndex } of potentialAnswers) {
@@ -1578,7 +1653,7 @@ export class DatabaseSeeder {
     return assignments;
   }
 
-  private async createSubmissions(
+  protected async createSubmissions(
     assignments: Array<{
       id: number;
       title: string;
@@ -1649,7 +1724,7 @@ export class DatabaseSeeder {
     return createdSubmissions;
   }
 
-  private async createWorkflowEvents(
+  protected async createWorkflowEvents(
     submissionData: Array<{
       submission_id: number;
       assignment: { id: number; due_date: string };
@@ -1879,7 +1954,7 @@ export class DatabaseSeeder {
     }
   }
 
-  private async createWorkflowErrors(
+  protected async createWorkflowErrors(
     submissionData: Array<{
       submission_id: number;
       assignment: { id: number; due_date: string };
@@ -2126,7 +2201,7 @@ export class DatabaseSeeder {
     return results;
   }
 
-  private async gradeSubmissions(
+  protected async gradeSubmissions(
     submissionData: Array<{
       submission_id: number;
       assignment: { id: number; due_date: string };
@@ -2339,6 +2414,7 @@ export class DatabaseSeeder {
     // Batch insert comments sequentially in chunks of 50
     const COMMENT_BATCH_SIZE = this.rateLimits["submission_comments"].batchSize || 1;
 
+    console.log(`   Preparing submission comments batch ${submissionComments.length} comments`);
     if (submissionComments.length > 0) {
       const commentChunks = chunkArray(submissionComments, COMMENT_BATCH_SIZE);
 
@@ -2356,6 +2432,7 @@ export class DatabaseSeeder {
       }
     }
 
+    console.log(`   Preparing submission file comments batch ${submissionFileComments.length} comments`);
     if (submissionFileComments.length > 0) {
       const batchSize = this.rateLimits["submission_file_comments"].batchSize || 50;
       const fileCommentChunks = chunkArray(submissionFileComments, batchSize);
@@ -2410,7 +2487,7 @@ export class DatabaseSeeder {
     console.log(`   Created ${submissionFileComments.length} submission file comments`);
   }
 
-  private async createExtensionsAndRegradeRequests(
+  protected async createExtensionsAndRegradeRequests(
     submissionData: Array<{
       submission_id: number;
       assignment: { id: number; due_date: string };
@@ -2465,12 +2542,43 @@ export class DatabaseSeeder {
     const statuses: Array<"opened" | "resolved" | "closed"> = ["opened", "resolved", "closed"];
 
     const numRegradeRequests = Math.max(1, Math.floor(submissionData.length * 0.2));
-    // Shuffle the submissionData array
+    // Shuffle the submissionData array and take first N items
     const shuffledSubmissionsForRegrades = submissionData
       .map((value) => ({ value, sort: Math.random() }))
       .sort((a, b) => a.sort - b.sort)
       .map(({ value }) => value)
       .slice(0, numRegradeRequests);
+
+    // First, fetch existing comments for all submissions that we want to create regrade requests for
+    const submissionIds = shuffledSubmissionsForRegrades.map(({ submission_id }) => submission_id);
+
+    const { data: existingComments, error: commentsError } = await supabase
+      .from("submission_comments")
+      .select("id, submission_id, points")
+      .in("submission_id", submissionIds)
+      .eq("class_id", class_id);
+
+    if (commentsError) {
+      console.error(`Failed to fetch existing comments: ${commentsError.message}`);
+      return;
+    }
+
+    if (!existingComments || existingComments.length === 0) {
+      console.log("   No existing comments found for regrade requests, skipping...");
+      return;
+    }
+
+    // Group comments by submission_id for easy lookup
+    const commentsBySubmission = existingComments.reduce(
+      (acc, comment) => {
+        if (!acc[comment.submission_id]) {
+          acc[comment.submission_id] = [];
+        }
+        acc[comment.submission_id].push(comment);
+        return acc;
+      },
+      {} as Record<number, typeof existingComments>
+    );
 
     const regradePromises = shuffledSubmissionsForRegrades.map(({ submission_id, assignment, student, group }) => {
       const status = statuses[Math.floor(Math.random() * statuses.length)];
@@ -2481,6 +2589,17 @@ export class DatabaseSeeder {
         return Promise.resolve();
       }
 
+      // Get existing comments for this submission
+      const submissionComments = commentsBySubmission[submission_id];
+      if (!submissionComments || submissionComments.length === 0) {
+        console.log(`No existing comments found for submission ${submission_id}, skipping regrade request`);
+        return Promise.resolve();
+      }
+
+      // Randomly select one of the existing comments
+      const selectedComment = submissionComments[Math.floor(Math.random() * submissionComments.length)];
+
+      // Create the regrade request with reference to the existing comment
       return this.rateLimitManager.trackAndLimit("submission_regrade_requests", () =>
         supabase
           .from("submission_regrade_requests")
@@ -2492,7 +2611,11 @@ export class DatabaseSeeder {
             class_id: class_id,
             status: status,
             resolved_at: status !== "opened" ? new Date().toISOString() : null,
-            resolved_by: status !== "opened" ? grader.private_profile_id : null
+            resolved_by: status !== "opened" ? grader.private_profile_id : null,
+            submission_comment_id: selectedComment.id, // Reference existing comment
+            initial_points: selectedComment.points,
+            resolved_points: status === "resolved" || status === "closed" ? Math.floor(Math.random() * 100) : null,
+            closed_points: status === "closed" ? Math.floor(Math.random() * 100) : null
           })
           .select("id")
       );
@@ -2509,7 +2632,7 @@ export class DatabaseSeeder {
     console.log(`   Status breakdown: ~${openedCount} opened, ~${resolvedCount} resolved, ~${closedCount} closed`);
   }
 
-  private async createGradebookColumns(
+  protected async createGradebookColumns(
     config: SeedingConfiguration,
     class_id: number,
     students: TestingUser[],
@@ -2876,14 +2999,38 @@ final;`,
     }
 
     // Get existing gradebook column student records
-    const { data: existingRecords, error: fetchError } = await supabase
-      .from("gradebook_column_students")
-      .select("id, student_id")
-      .eq("gradebook_column_id", gradebook_column_id)
-      .eq("is_private", true);
+    const existingRecords: { id: number; student_id: string }[] = [];
+    let page = 0;
+    const pageSize = 500;
 
-    if (fetchError) {
-      throw new Error(`Failed to fetch existing gradebook column students: ${fetchError.message}`);
+    while (true) {
+      const { data: pageData, error: fetchError } = await this.rateLimitManager.trackAndLimit(
+        "gradebook_column_students",
+        () =>
+          supabase
+            .from("gradebook_column_students")
+            .select("id, student_id")
+            .eq("gradebook_column_id", gradebook_column_id)
+            .eq("is_private", true)
+            .range(page * pageSize, (page + 1) * pageSize - 1)
+      );
+
+      if (fetchError) {
+        throw new Error(`Failed to fetch existing gradebook column students: ${fetchError.message}`);
+      }
+
+      if (!pageData || pageData.length === 0) {
+        break;
+      }
+
+      existingRecords.push(...pageData);
+
+      // If we got less than the page size, we've reached the end
+      if (pageData.length < pageSize) {
+        break;
+      }
+
+      page++;
     }
 
     if (!existingRecords || existingRecords.length === 0) {
@@ -3012,7 +3159,7 @@ final;`,
     };
   }
 
-  private async createHelpRequests(
+  protected async createHelpRequests(
     config: HelpRequestConfig,
     class_id: number,
     students: TestingUser[],
@@ -3388,7 +3535,7 @@ final;`,
           id: group.id,
           name: group.name,
           memberCount: groupStudents.length,
-          members: groupStudents.map((s) => s.private_profile_name)
+          members: groupStudents.map((s) => s.private_profile_id)
         };
       })
     );
@@ -3624,8 +3771,6 @@ public class Entrypoint {
             `Failed to batch create grader result tests (chunk ${chunkIndex + 1}): ${graderResultTestError.message}`
           );
         }
-
-        console.log(`   Completed batch ${chunkIndex + 1}/${submissionChunks.length} (${chunk.length} submissions)`);
 
         // Return the results for this chunk
         return chunk.map((item, index) => ({
