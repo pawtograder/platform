@@ -5,18 +5,19 @@ import { toaster, Toaster } from "@/components/ui/toaster";
 import { enrollmentSyncCanvas } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { ClassSection } from "@/utils/supabase/DatabaseTypes";
-import { Box, Container, Heading, List, Text } from "@chakra-ui/react";
+import { Box, Container, Heading, HStack, List, Text } from "@chakra-ui/react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import AddSingleCourseMember from "./addSingleCourseMember";
 import EnrollmentsTable from "./enrollmentsTable";
+import ImportStudentsCSVModal from "./importStudentsCSVModal";
 
 export default function EnrollmentsPage() {
   const { course_id } = useParams();
   const [isSyncing, setIsSyncing] = useState(false);
   const [sections, setSections] = useState<ClassSection[]>([]);
   const supabase = createClient();
-
   useEffect(() => {
     const fetchSections = async () => {
       const { data } = await supabase
@@ -73,6 +74,13 @@ export default function EnrollmentsPage() {
         >
           Sync Canvas Enrollments
         </Button>
+      </Box>
+      <Box p="2" borderTop="1px solid" borderColor="border.muted" width="100%" mt={4}>
+        <HStack justifyContent="flex-end">
+          {" "}
+          <ImportStudentsCSVModal />
+          <AddSingleCourseMember />
+        </HStack>
       </Box>
       <EnrollmentsTable />
     </Container>

@@ -1,6 +1,6 @@
 import { Assignment, Course } from "@/utils/supabase/DatabaseTypes";
-import percySnapshot from "@percy/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { argosScreenshot } from "@argos-ci/playwright";
 import { addDays } from "date-fns";
 import dotenv from "dotenv";
 import {
@@ -84,7 +84,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("link", { name: assignment!.title }).click();
 
     await expect(page.getByText("Self Review Notice")).toBeVisible();
-    await percySnapshot(page, "Student can submit self-review early");
+    await argosScreenshot(page, "Student can submit self-review early");
     await page.getByRole("button", { name: "Finalize Submission Early" }).click();
     await page.getByRole("button", { name: "Confirm action" }).click();
     await page.getByRole("button", { name: "Complete Self Review" }).click();
@@ -97,7 +97,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await page.getByRole("textbox", { name: "Add a comment about this line" }).click();
     await page.getByRole("textbox", { name: "Add a comment about this line" }).fill(SELF_REVIEW_COMMENT_1);
-    await percySnapshot(page, "Adding a comment on the self-review");
+    await argosScreenshot(page, "Adding a comment on the self-review");
     await page.getByRole("button", { name: "Add Comment" }).click();
     await page.getByText("Annotate line 15 with a check:").waitFor({ state: "hidden" });
 
@@ -106,7 +106,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     });
     await page.getByRole("option", { name: "Self Review Check 1 (+5)" }).click();
     await page.getByRole("textbox", { name: "Optionally add a comment, or" }).fill("comment");
-    await percySnapshot(page, "Adding a second self-review check");
+    await argosScreenshot(page, "Adding a second self-review check");
     await page.getByRole("button", { name: "Add Check" }).click();
     // await clickAddCheckWithRetry(page);
     await page.getByText("Annotate line 5 with a check:").waitFor({ state: "hidden" });
@@ -121,7 +121,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page
       .getByRole("textbox", { name: "Optional: comment on check Self Review Check 2" })
       .fill(SELF_REVIEW_COMMENT_2);
-    await percySnapshot(page, "Adding a global self-review check with a comment");
+    await argosScreenshot(page, "Adding a global self-review check with a comment");
 
     await page.getByRole("button", { name: "Add Check" }).click();
     //Wait for the textbox to disappear
@@ -130,7 +130,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("button", { name: "Complete Review" }).click();
     await page.getByRole("button", { name: "Mark Review Assignment as Complete" }).click();
     await expect(page.getByText("Self-Review Rubric completed")).toBeVisible();
-    await percySnapshot(page, "Self-Review Rubric completed");
+    await argosScreenshot(page, "Self-Review Rubric completed");
   });
 
   test("Instructors can view the student's self-review and create their own grading review", async ({ page }) => {
@@ -148,7 +148,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(page.getByText("public int doMath(int a, int")).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_1)).toBeVisible();
     await expect(page.getByText(SELF_REVIEW_COMMENT_2)).toBeVisible();
-    await percySnapshot(page, "Instructor can view the student's self-review");
+    await argosScreenshot(page, "Instructor can view the student's self-review");
 
     await page.getByText("public static void main(").click({
       button: "right"
@@ -156,7 +156,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("option", { name: "Grading Review Check 1 (+10)" }).click();
     await page.getByRole("button", { name: "Add Check" }).waitFor({ state: "visible", timeout: 1000 });
     await page.getByRole("textbox", { name: "Optionally add a comment, or" }).fill(GRADING_REVIEW_COMMENT_1);
-    await percySnapshot(page, "Instructor adds a grading review check");
+    await argosScreenshot(page, "Instructor adds a grading review check");
     await page.getByRole("button", { name: "Add Check" }).click();
     // await clickAddCheckWithRetry(page);
     await page.getByText("Annotate line 4 with a check:").waitFor({ state: "hidden" });
@@ -177,14 +177,15 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await page.getByRole("textbox", { name: "Optional: comment on check" }).waitFor({ state: "hidden" });
 
     await page.getByRole("button", { name: "Complete Review" }).click();
-    await percySnapshot(page, "Instructor completes the grading review");
+    await argosScreenshot(page, "Instructor completes the grading review");
     await page.getByRole("button", { name: "Mark as Complete" }).click();
     await expect(page.getByText("Completed by")).toBeVisible();
 
     // Release All Submission Reviews
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
+
     await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
-    await page.waitForTimeout(1000);
+    await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
@@ -203,14 +204,14 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
     await expect(rubricSidebar).toContainText("Grading Review Criteria 20/20");
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_1);
     await expect(rubricSidebar).toContainText(GRADING_REVIEW_COMMENT_2);
-    await percySnapshot(page, "Student can view their grading results");
+    await argosScreenshot(page, "Student can view their grading results");
 
     await expect(rubricSidebar).toContainText(`${instructor!.private_profile_name} applied today`);
     // Find the region with aria-label 'Grading checks on line 4'
     const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await expect(region).toBeVisible();
     await region.getByRole("button", { name: "Request regrade for this check" }).click();
-    await percySnapshot(page, "Student can request a regrade");
+    await argosScreenshot(page, "Student can request a regrade");
     await page.getByRole("button", { name: "Draft Regrade Request" }).click();
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
@@ -224,9 +225,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Open Request", { exact: true })
       .click();
-    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await expect(region.getByText(REGRADE_COMMENT)).toBeVisible();
-    await percySnapshot(page, "Student can add a comment to open the regrade request");
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
+    await argosScreenshot(page, "Student can add a comment to open the regrade request");
   });
   test("Instructors can view the student's regrade request and resolve it", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
@@ -237,7 +238,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .click();
-    await percySnapshot(page, "Instructors can view the regrade request");
+    await argosScreenshot(page, "Instructors can view the regrade request");
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
@@ -246,10 +247,16 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
+    await expect(
+      page.getByLabel("Grading checks on line 4").filter({ hasText: "I do not think it is possible" })
+    ).toBeVisible();
+    await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
-    await percySnapshot(page, "Instructors can resolve the regrade request");
-    await page.getByRole("spinbutton").fill("10");
-    await page.getByRole("button", { name: "Resolve", exact: true }).click();
+    await argosScreenshot(page, "Instructors can resolve the regrade request");
+    await page.getByRole("spinbutton").fill("40");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await expect(page.getByText("This is a significant change")).toBeVisible();
+    await page.getByRole("button", { name: "Override Score and Resolve Request", exact: true }).click();
   });
   test("Students can view the instructor's regrade resolution and appeal it", async ({ page }) => {
     await loginAsUser(page, student!, course);
@@ -269,10 +276,11 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByLabel("Add Comment", { exact: true })
       .click();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Appeal to Instructor" }).click();
-    await percySnapshot(page, "Students can appeal their regrade request");
+    await argosScreenshot(page, "Students can appeal their regrade request");
     await page.getByRole("button", { name: "Escalate Request" }).click();
   });
   test("Instructors can view the student's regrade appeal and resolve it", async ({ page }) => {
+    const region = await page.getByRole("region", { name: "Grading checks on line 4" });
     await loginAsUser(page, instructor!, course);
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
@@ -285,15 +293,18 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByPlaceholder("Add a comment to continue the")
       .fill(REGRADE_FINAL_COMMENT);
-    await percySnapshot(page, "Instructors can view the student's regrade appeal");
+    await argosScreenshot(page, "Instructors can view the student's regrade appeal");
     await page
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
+    await expect(page.getByLabel("Grading checks on line 4").filter({ hasText: REGRADE_FINAL_COMMENT })).toBeVisible();
+    await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
-    await page.getByRole("spinbutton").fill("11");
-    await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal" }).click();
-    await percySnapshot(page, "Instructors can close the regrade request");
+    await page.getByRole("spinbutton").fill("100");
+    await expect(page.getByText("This is a significant change")).toBeVisible();
+    await page.getByRole("dialog").getByRole("button", { name: "Decide Appeal and Close Request" }).click();
+    await argosScreenshot(page, "Instructors can close the regrade request");
     await expect(page.getByLabel("Grading checks on line 4").getByRole("heading")).toContainText("Regrade Closed");
   });
 });

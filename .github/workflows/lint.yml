@@ -10,7 +10,7 @@ on:
       - "**"
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     strategy:
       matrix:
         node-version: [22.x]
