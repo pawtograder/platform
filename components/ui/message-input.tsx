@@ -80,6 +80,20 @@ export default function MessageInput(props: MessageInputProps) {
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mdEditorRef = useRef<{ codemirror?: { focus(): void } }>(null);
+  const internalTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Callback ref to handle both internal and external refs
+  const setTextAreaRef = useCallback(
+    (element: HTMLTextAreaElement | null) => {
+      internalTextAreaRef.current = element;
+      if (textAreaRef && "current" in textAreaRef) {
+        (textAreaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = element;
+      }
+    },
+    [textAreaRef]
+  );
+
   const onChange = useCallback(
     (value: string) => {
       setValue(value);
@@ -196,7 +210,7 @@ export default function MessageInput(props: MessageInputProps) {
           aria-label={ariaLabel ?? placeholder ?? "Reply..."}
           placeholder={placeholder ?? "Reply..."}
           m="0"
-          ref={textAreaRef}
+          ref={setTextAreaRef}
           onDragEnter={(e) => {
             const target = e.target as HTMLElement;
             target.style.border = "2px dashed #999";
@@ -241,6 +255,8 @@ export default function MessageInput(props: MessageInputProps) {
               sendMessage(value!, profile_id, true)
                 .then(() => {
                   setValue("");
+                  // Return focus to the textarea after sending (with small delay to ensure DOM update)
+                  setTimeout(() => internalTextAreaRef?.current?.focus(), 0);
                 })
                 .catch((error) => {
                   toaster.create({
@@ -390,6 +406,9 @@ export default function MessageInput(props: MessageInputProps) {
               try {
                 setIsSending(true);
                 await sendMessage(value!, profile_id, true);
+                setValue("");
+                // Return focus to the textarea after sending (with small delay to ensure DOM update)
+                setTimeout(() => internalTextAreaRef?.current?.focus(), 0);
               } catch (error) {
                 toaster.create({
                   title: "Error sending message",
@@ -399,7 +418,6 @@ export default function MessageInput(props: MessageInputProps) {
               } finally {
                 setIsSending(false);
               }
-              setValue("");
             }}
             variant="solid"
             colorPalette="green"
@@ -415,6 +433,7 @@ export default function MessageInput(props: MessageInputProps) {
   return (
     <VStack align="stretch" spaceY="0" p="0" gap="0" w="100%">
       <MDEditor
+        ref={mdEditorRef}
         value={value}
         textareaProps={{
           disabled: isSending
@@ -545,6 +564,8 @@ export default function MessageInput(props: MessageInputProps) {
               setIsSending(true);
               await sendMessage(value!, profile_id, true);
               setValue("");
+              // Return focus to the MDEditor after sending
+              mdEditorRef?.current?.codemirror?.focus();
             } catch (error) {
               toaster.create({
                 title: "Error sending message",

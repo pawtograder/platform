@@ -99,6 +99,10 @@ export type GradeResponse = {
 export type SubmissionResponse = {
   grader_url: string;
   grader_sha: string;
+  handout_notice?: {
+    message: string;
+    assignments: { id: number; title: string; slug?: string; class_name?: string; semester?: string }[];
+  };
 };
 export type RegressionTestRunResponse = {
   regression_test_url: string;
@@ -112,6 +116,7 @@ export type AddEnrollmentRequest = {
   courseId: number;
   canvasId?: number;
   classSectionId?: number;
+  notify?: boolean;
 };
 
 export type LiveMeetingForHelpRequestRequest = {
@@ -127,6 +132,7 @@ export type LiveMeetingEndRequest = {
 export type AssignmentCreateAllReposRequest = {
   courseId: number;
   assignmentId: number;
+  sync_permissions?: boolean;
 };
 export type ListReposRequest = {
   courseId: number;
@@ -255,6 +261,8 @@ export type AssignmentCreateSolutionRepoResponse = {
 export type AutograderCreateReposForStudentRequest = {
   user_id?: string; // Optional: if provided, use this user_id instead of JWT auth
   class_id?: number; // Optional: if provided, only create repos for this specific class
+  assignment_id?: number; // Optional: if provided, only create repos for this specific assignment
+  sync_all_permissions?: boolean; // Optional: if true, sync permissions for all existing repos
 };
 
 export type AssignmentDeleteRequest = {

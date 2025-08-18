@@ -369,7 +369,7 @@ function EmailsInnerPage() {
     let effectiveDueDate: Date;
 
     // Calculate the lab-aware effective due date if CourseController is loaded
-    if (courseController.isLoaded) {
+    if (courseController.labSectionMeetings.ready) {
       effectiveDueDate = courseController.calculateEffectiveDueDate(assignment, {
         studentPrivateProfileId: profile_id
       });

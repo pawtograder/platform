@@ -28,6 +28,7 @@ type ManagedChannel = {
   channel: RealtimeChannel;
   subscriptions: ChannelSubscription[];
   topic: string;
+  client: SupabaseClient<Database>;
   reconnectAttempts: number;
   lastReconnectTime: number;
   isReconnecting: boolean;
@@ -261,24 +262,22 @@ export class RealtimeChannelManager {
    */
   async subscribe(
     topic: string,
+    client: SupabaseClient<Database>,
     messageCallback: (message: BroadcastMessage) => void,
     statusCallback: (channel: RealtimeChannel, status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void
   ): Promise<() => void> {
-    if (!this._client) {
-      throw new Error("RealtimeChannelManager: Client not set. Call setClient() first.");
-    }
-
     let managedChannel = this._channels.get(topic);
 
     if (!managedChannel) {
       // Create new channel and subscription
-      await this._refreshSessionIfNeeded();
-      const channel = this._client.channel(topic, { config: { private: true } });
+      await this._refreshSessionIfNeeded(client);
+      const channel = client.channel(topic, { config: { private: true } });
 
       managedChannel = {
         channel,
         subscriptions: [],
         topic,
+        client,
         reconnectAttempts: 0,
         lastReconnectTime: 0,
         isReconnecting: false
@@ -308,6 +307,17 @@ export class RealtimeChannelManager {
 
     // Return unsubscribe function that removes this specific subscription
     return () => {
+      const wasLastSubscriber = managedChannel.subscriptions.length === 1;
+
+      // If this is the last subscriber, proactively notify CLOSED before teardown
+      if (wasLastSubscriber) {
+        try {
+          subscription.statusCallback(managedChannel.channel, REALTIME_SUBSCRIBE_STATES.CLOSED);
+        } catch (error) {
+          console.error("Error notifying last subscription of close:", error);
+        }
+      }
+
       const index = managedChannel.subscriptions.indexOf(subscription);
       if (index > -1) {
         managedChannel.subscriptions.splice(index, 1);
@@ -316,9 +326,7 @@ export class RealtimeChannelManager {
       // If no more subscriptions, clean up the channel
       if (managedChannel.subscriptions.length === 0) {
         managedChannel.channel.unsubscribe();
-        if (this._client) {
-          this._client.removeChannel(managedChannel.channel);
-        }
+        managedChannel.client.removeChannel(managedChannel.channel);
         this._channels.delete(topic);
       }
     };
@@ -349,18 +357,8 @@ export class RealtimeChannelManager {
 
     // Handle reconnection logic for certain error states
     if (status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR) {
-      // If the tab is hidden, we don't really care about reconnection
-      if (document.hidden) {
-        return;
-      }
-
-      // Prevent multiple simultaneous reconnection attempts
-      if (managedChannel.isReconnecting) {
-        return;
-      }
-
-      // Check if we should attempt reconnection based on retry policy
-      if (this._shouldAttemptReconnection(managedChannel)) {
+      // Only attempt reconnection if the tab is visible and we're not already reconnecting
+      if (!document.hidden && !managedChannel.isReconnecting && this._shouldAttemptReconnection(managedChannel)) {
         this._resubscribeToChannelWithBackoff(topic);
       }
     } else if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
@@ -397,20 +395,16 @@ export class RealtimeChannelManager {
   /**
    * Refresh the session token if needed and set it for Supabase Realtime
    */
-  private async _refreshSessionIfNeeded() {
-    if (!this._client) {
-      throw new Error("RealtimeChannelManager: Client not set");
-    }
-
-    const { data, error } = await this._client.auth.getSession();
+  private async _refreshSessionIfNeeded(client: SupabaseClient<Database>) {
+    const { data, error } = await client.auth.getSession();
     if (error) {
       throw error;
     }
     if (!data.session) {
       throw new Error("Session not found");
     }
-    if (this._client.realtime.accessTokenValue !== data.session.access_token) {
-      await this._client.realtime.setAuth(data.session.access_token);
+    if (client.realtime.accessTokenValue !== data.session.access_token) {
+      await client.realtime.setAuth(data.session.access_token);
     }
   }
 
@@ -508,21 +502,14 @@ export class RealtimeChannelManager {
 
     try {
       // Refresh session first
-      await this._refreshSessionIfNeeded();
+      await this._refreshSessionIfNeeded(managedChannel.client);
 
       // Remove the old channel
       managedChannel.channel.unsubscribe();
-
-      if (this._client) {
-        this._client.removeChannel(managedChannel.channel);
-      }
+      managedChannel.client.removeChannel(managedChannel.channel);
 
       // Create a new channel with the same topic
-      if (!this._client) {
-        throw new Error(`No client available for ${topic}`);
-      }
-
-      const newChannel = this._client.channel(topic, { config: { private: true } });
+      const newChannel = managedChannel.client.channel(topic, { config: { private: true } });
 
       // Set up broadcast message handler
       newChannel.on("broadcast", { event: "broadcast" }, (message) => {
@@ -593,11 +580,7 @@ export class RealtimeChannelManager {
    * Resubscribe to all channels (useful for reconnection after tab visibility changes)
    */
   async resubscribeToAllChannels() {
-    if (!this._client) return;
-
     try {
-      await this._refreshSessionIfNeeded();
-
       const topics = Array.from(this._channels.keys());
 
       for (const topic of topics) {
@@ -606,6 +589,7 @@ export class RealtimeChannelManager {
           // Reset reconnection state for fresh start
           managedChannel.reconnectAttempts = 0;
           managedChannel.isReconnecting = false;
+          await this._refreshSessionIfNeeded(managedChannel.client);
           await this._resubscribeToChannel(topic);
         }
       }
@@ -624,9 +608,7 @@ export class RealtimeChannelManager {
       managedChannel.reconnectAttempts = 0;
 
       managedChannel.channel.unsubscribe();
-      if (this._client) {
-        this._client.removeChannel(managedChannel.channel);
-      }
+      managedChannel.client.removeChannel(managedChannel.channel);
     }
 
     // Notify all subscriptions of the disconnection
@@ -647,9 +629,7 @@ export class RealtimeChannelManager {
   cleanup() {
     for (const managedChannel of this._channels.values()) {
       managedChannel.channel.unsubscribe();
-      if (this._client) {
-        this._client.removeChannel(managedChannel.channel);
-      }
+      managedChannel.client.removeChannel(managedChannel.channel);
     }
     this._channels.clear();
   }

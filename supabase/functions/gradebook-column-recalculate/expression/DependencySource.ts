@@ -2,6 +2,7 @@ import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isArray, isDenseMatrix, MathJsInstance, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import type { Database } from "../../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
 import type {
   Assignment,
   GradebookColumn,
@@ -16,6 +17,7 @@ export type ExpressionContext = {
   is_private_calculation: boolean;
   incomplete_values: IncompleteValuesAdvice | null;
   incomplete_values_policy: "assume_max" | "assume_zero" | "report_only";
+  scope: Sentry.Scope;
 };
 //TODO: Move this to a shared file
 //See also in hooks/useGradebookWhatIf.tsx
@@ -440,6 +442,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .range(from, to);
 
       if (gradebookColumnsFetchError) {
+        console.error(`Error fetching gradebook column students (range ${from}-${to}):`, gradebookColumnsFetchError);
         throw gradebookColumnsFetchError;
       }
 
@@ -469,6 +472,7 @@ class GradebookColumnsDependencySource extends DependencySourceBase {
         .range(from, to);
 
       if (gradebookColumnsError) {
+        console.error(`Error fetching gradebook columns (range ${from}-${to}):`, gradebookColumnsError);
         throw gradebookColumnsError;
       }
 
@@ -541,13 +545,22 @@ export async function addDependencySourceFunctions({
   keys: ExprDependencyInstance[];
   supabase: SupabaseClient<Database>;
 }) {
+  // Create fresh dependency source instances for this batch to ensure
+  // they pick up the latest values from the database
+  const batchDependencySourceMap = {
+    assignments: new AssignmentsDependencySource(),
+    gradebook_columns: new GradebookColumnsDependencySource()
+  };
+
   await Promise.all(
-    Object.values(DependencySourceMap).map((dependencySource) => dependencySource.retrieveValues({ keys, supabase }))
+    Object.values(batchDependencySourceMap).map((dependencySource) =>
+      dependencySource.retrieveValues({ keys, supabase })
+    )
   );
 
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const imports: Record<string, (...args: any[]) => unknown> = {};
-  for (const dependencySourceProvider of Object.values(DependencySourceMap)) {
+  for (const dependencySourceProvider of Object.values(batchDependencySourceMap)) {
     const functionNames = dependencySourceProvider.getFunctionNames();
     for (const functionName of functionNames) {
       imports[functionName] = (context: ExpressionContext, ...args: unknown[]) => {
@@ -564,19 +577,92 @@ export async function addDependencySourceFunctions({
     }
   }
 
-  imports["multiply"] = (a: number, b: number) => {
+  // Return the dependency source map so it can be used for wildcard expansion
+  // during expression compilation
+  (math as unknown as Record<string, unknown>)._batchDependencySourceMap = batchDependencySourceMap;
+
+  imports["divide"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
     if (a === undefined || b === undefined) {
       return undefined;
     }
-    return a * b;
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val / b_val;
   };
-  imports["add"] = (a: number, b: number) => {
+  imports["subtract"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
     if (a === undefined || b === undefined) {
       return undefined;
     }
-    return a + b;
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val - b_val;
   };
-  imports["sum"] = (context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
+  imports["multiply"] = (
+    a: number | GradebookColumnStudentWithMaxScore,
+    b: number | GradebookColumnStudentWithMaxScore
+  ) => {
+    if (a === undefined || b === undefined) {
+      return undefined;
+    }
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val * b_val;
+  };
+  imports["add"] = (a: number | GradebookColumnStudentWithMaxScore, b: number | GradebookColumnStudentWithMaxScore) => {
+    if (a === undefined || b === undefined) {
+      return undefined;
+    }
+    let a_val = 0;
+    let b_val = 0;
+    if (isGradebookColumnStudent(a)) {
+      a_val = a.score ?? 0;
+    } else if (typeof a === "number") {
+      a_val = a;
+    }
+    if (isGradebookColumnStudent(b)) {
+      b_val = b.score ?? 0;
+    } else if (typeof b === "number") {
+      b_val = b;
+    }
+    return a_val + b_val;
+  };
+  imports["sum"] = (_context: ExpressionContext, value: (GradebookColumnStudentWithMaxScore | number)[]) => {
     if (Array.isArray(value)) {
       const values = value
         .map((v) => {
@@ -654,7 +740,7 @@ export async function addDependencySourceFunctions({
     return value < threshold ? 1 : 0;
   };
   imports["countif"] = (
-    context: ExpressionContext,
+    _context: ExpressionContext,
     value: GradebookColumnStudentWithMaxScore[],
     condition: (value: GradebookColumnStudentWithMaxScore) => boolean
   ) => {
@@ -673,7 +759,7 @@ export async function addDependencySourceFunctions({
   };
 
   imports["mean"] = (
-    context: ExpressionContext,
+    _context: ExpressionContext,
     value: GradebookColumnStudentWithMaxScore[],
     weighted: boolean = true
   ) => {
@@ -720,7 +806,11 @@ export async function addDependencySourceFunctions({
     console.log("Mean called with non-matrix value", value);
     throw new Error("Mean called with non-matrix value");
   };
-  imports["drop_lowest"] = (context: ExpressionContext, value: GradebookColumnStudentWithMaxScore[], count: number) => {
+  imports["drop_lowest"] = (
+    _context: ExpressionContext,
+    value: GradebookColumnStudentWithMaxScore[],
+    count: number
+  ) => {
     if (Array.isArray(value)) {
       const sorted = [...value].sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
       const ret: GradebookColumnStudentWithMaxScore[] = [];

@@ -18,6 +18,7 @@ let course: Course;
 let student: TestingUser | undefined;
 let student2: TestingUser | undefined;
 let instructor: TestingUser | undefined;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let submission_id: number | undefined;
 let assignment: Assignment | undefined;
 
@@ -54,7 +55,7 @@ test.describe("Office Hours", () => {
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
 
     //Make a private request first
-    await page.getByRole("link", { name: "Submit Request" }).click();
+    await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
     await page.getByRole("textbox").click();
     await page.getByRole("textbox").fill(PRIVATE_HELP_REQUEST_MESSAGE_1);
@@ -72,7 +73,7 @@ test.describe("Office Hours", () => {
     await percySnapshot(page, "Office Hours - Private Request with Comment");
 
     //Make a public request
-    await page.getByRole("link", { name: "Submit Request" }).click();
+    await page.getByRole("link", { name: "New Request" }).click();
     await expect(page.getByRole("form", { name: "New Help Request Form" })).toBeVisible();
     await page.getByRole("textbox").click();
     await page.getByRole("textbox").fill(HELP_REQUEST_MESSAGE_1);
@@ -87,7 +88,6 @@ test.describe("Office Hours", () => {
   });
   test("Another student can view the public request and comment on it, but cant see the private", async ({ page }) => {
     await loginAsUser(page, student2!, course);
-
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
     await page.getByRole("button", { name: "View Chat" }).click();
     await percySnapshot(page, "Office Hours - View Queue with a public request");

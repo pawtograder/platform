@@ -1,9 +1,10 @@
 import { Database } from "@/supabase/functions/_shared/SupabaseTypes";
-import { SupabaseClient } from "@supabase/supabase-js";
+import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 import { UnstableGetResult as GetResult, PostgrestFilterBuilder } from "@supabase/postgrest-js";
+import { SupabaseClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ClassRealTimeController, ConnectionStatus } from "./ClassRealTimeController";
 import { OfficeHoursRealTimeController } from "./OfficeHoursRealTimeController";
-import { OfficeHoursBroadcastMessage } from "@/utils/supabase/DatabaseTypes";
 
 type DatabaseTableTypes = Database["public"]["Tables"];
 type TablesThatHaveAnIDField = {
@@ -12,6 +13,201 @@ type TablesThatHaveAnIDField = {
 
 type ExtractIdType<T extends TablesThatHaveAnIDField> = DatabaseTableTypes[T]["Row"]["id"];
 
+/**
+ * Hook that returns all values from a TableController that match a predicate.
+ * Automatically subscribes to real-time updates for each matching item.
+ * Uses memoization to prevent unnecessary re-renders.
+ *
+ * @example
+ * ```tsx
+ * // Get all unread discussion threads for a user
+ * const unreadThreads = useListTableControllerValues(
+ *   controller.discussionThreadReadStatus,
+ *   useCallback((data) => data.read_at === null && data.user_id === currentUserId, [currentUserId])
+ * );
+ *
+ * // Get all assignments due in the next week
+ * const upcomingAssignments = useListTableControllerValues(
+ *   controller.assignments,
+ *   useCallback((assignment) => {
+ *     const dueDate = new Date(assignment.due_at);
+ *     const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+ *     return dueDate <= nextWeek;
+ *   }, [])
+ * );
+ * ```
+ */
+export function useListTableControllerValues<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType>,
+  predicate: (row: PossiblyTentativeResult<ResultType>) => boolean
+) {
+  const [matchingIds, setMatchingIds] = useState<Set<ExtractIdType<T>>>(new Set());
+  const [values, setValues] = useState<Map<ExtractIdType<T>, PossiblyTentativeResult<ResultType>>>(new Map());
+
+  // Keep track of individual ID subscriptions
+  const subscriptionsRef = useRef<Map<ExtractIdType<T>, () => void>>(new Map());
+
+  // Effect to subscribe to the list and detect matching items
+  useEffect(() => {
+    const { unsubscribe } = controller.list((data) => {
+      // Find all rows that match the predicate
+      const matchingRows = data.filter((row) => predicate(row as PossiblyTentativeResult<ResultType>));
+      const newMatchingIds = new Set(matchingRows.map((row) => (row as { id: ExtractIdType<T> }).id));
+
+      // Update matching IDs
+      setMatchingIds(newMatchingIds);
+
+      // Update values map with current matching rows
+      setValues((prevValues) => {
+        const newValues = new Map(prevValues);
+
+        // Add/update all matching rows
+        matchingRows.forEach((row) => {
+          const id = (row as { id: ExtractIdType<T> }).id;
+          newValues.set(id, row as PossiblyTentativeResult<ResultType>);
+        });
+
+        // Remove rows that no longer match
+        for (const [id] of prevValues) {
+          if (!newMatchingIds.has(id)) {
+            newValues.delete(id);
+          }
+        }
+
+        return newValues;
+      });
+    });
+
+    return unsubscribe;
+  }, [controller, predicate]);
+
+  // Effect to manage individual ID subscriptions
+  useEffect(() => {
+    const subscriptions = subscriptionsRef.current;
+
+    // Subscribe to new IDs
+    for (const id of matchingIds) {
+      if (!subscriptions.has(id)) {
+        const { unsubscribe } = controller.getById(id as IDType, (data) => {
+          if (data) {
+            // Only update if the row still matches the predicate
+            if (predicate(data)) {
+              setValues((prevValues) => {
+                const newValues = new Map(prevValues);
+                newValues.set(id, data);
+                return newValues;
+              });
+            } else {
+              // Row no longer matches, remove it
+              setValues((prevValues) => {
+                const newValues = new Map(prevValues);
+                newValues.delete(id);
+                return newValues;
+              });
+              setMatchingIds((prevIds) => {
+                const newIds = new Set(prevIds);
+                newIds.delete(id);
+                return newIds;
+              });
+            }
+          } else {
+            // Row was deleted, remove it
+            setValues((prevValues) => {
+              const newValues = new Map(prevValues);
+              newValues.delete(id);
+              return newValues;
+            });
+            setMatchingIds((prevIds) => {
+              const newIds = new Set(prevIds);
+              newIds.delete(id);
+              return newIds;
+            });
+          }
+        });
+
+        subscriptions.set(id, unsubscribe);
+      }
+    }
+
+    // Unsubscribe from IDs that are no longer matching
+    for (const [id, unsubscribe] of subscriptions) {
+      if (!matchingIds.has(id)) {
+        unsubscribe();
+        subscriptions.delete(id);
+      }
+    }
+
+    // Cleanup on unmount
+    return () => {
+      for (const [, unsubscribe] of subscriptions) {
+        unsubscribe();
+      }
+      subscriptions.clear();
+    };
+  }, [controller, matchingIds, predicate]);
+
+  // Memoize the final result to avoid unnecessary re-renders
+  const result = useMemo(() => {
+    return Array.from(values.values());
+  }, [values]);
+
+  return result;
+}
+
+export function useFindTableControllerValue<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(
+  controller: TableController<T, Query, IDType, ResultType>,
+  predicate: (row: PossiblyTentativeResult<ResultType>) => boolean
+) {
+  const [id, setID] = useState<ExtractIdType<T> | undefined>(undefined);
+  const [value, setValue] = useState<PossiblyTentativeResult<ResultType> | undefined>(undefined);
+
+  useEffect(() => {
+    if (id) {
+      return;
+    }
+    const { unsubscribe } = controller.list((data) => {
+      const row = data.find((row) => predicate(row as PossiblyTentativeResult<ResultType>));
+      if (row && typeof row === "object" && row !== null && "id" in row) {
+        setID((row as { id: ExtractIdType<T> }).id);
+        setValue(row as PossiblyTentativeResult<ResultType>);
+      }
+    });
+    return unsubscribe;
+  }, [controller, predicate, id]);
+
+  useEffect(() => {
+    if (id) {
+      const { unsubscribe } = controller.getById(id as IDType, (data) => {
+        setValue(data);
+      });
+      return unsubscribe;
+    }
+  }, [controller, id]);
+
+  return value;
+}
 export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };
@@ -64,6 +260,14 @@ export default class TableController<
   private _statusUnsubscribe: (() => void) | null = null;
   private _submissionId: number | null = null;
   private _lastConnectionStatus: ConnectionStatus["overall"] = "connecting";
+  private _closed: boolean = false;
+  /**
+   * Optional select clause to use when fetching a single row (e.g., after realtime events).
+   * This enables preserving joined columns for controllers initialized with joined selects.
+   */
+  private _selectForSingleRow: Query | undefined;
+  private _isRefetching: boolean = false;
+  private _refetchListeners: ((isRefetching: boolean) => void)[] = [];
 
   private _listDataListeners: ((
     data: ResultOne[],
@@ -78,13 +282,31 @@ export default class TableController<
   get readyPromise() {
     return this._readyPromise;
   }
+  get isRefetching() {
+    return this._isRefetching;
+  }
+
+  /**
+   * Subscribe to refetch status changes
+   * @param listener Callback that receives the current refetch status
+   * @returns Unsubscribe function
+   */
+  subscribeToRefetchStatus(listener: (isRefetching: boolean) => void) {
+    this._refetchListeners.push(listener);
+    // Immediately call with current status
+    listener(this._isRefetching);
+    return () => {
+      this._refetchListeners = this._refetchListeners.filter((l) => l !== listener);
+    };
+  }
 
   async _fetchRow(id: IDType): Promise<ResultOne | undefined> {
-    const { data, error } = await this._client.from(this._table).select("*").eq("id", id).single();
+    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
+    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
     if (error) {
       throw error;
     }
-    return data;
+    return data as unknown as ResultOne | undefined;
   }
 
   /**
@@ -97,15 +319,25 @@ export default class TableController<
     let nRows: number | undefined;
 
     // Load initial data, do all of the pages.
-    while (page * pageSize < (nRows ?? 1000)) {
-      const { data, error } = await this._query.range(page * pageSize, (page + 1) * pageSize);
+    // If nRows is specified, only fetch up to nRows, otherwise fetch all pages until no more data
+    while (!this._closed) {
+      const rangeStart = page * pageSize;
+      let rangeEnd = (page + 1) * pageSize - 1;
+      if (typeof nRows === "number") {
+        if (rangeStart >= nRows) break;
+        rangeEnd = Math.min(rangeEnd, nRows - 1);
+      }
+      const { data, error } = await this._query.range(rangeStart, rangeEnd);
+      if (this._closed) {
+        return [];
+      }
       if (error) {
         throw error;
       }
-      if (!data) {
+      if (!data || data.length === 0) {
         break;
       }
-      rows.push(...data);
+      rows.push(...(data as unknown as ResultOne[]));
       if (data.length < pageSize) {
         break;
       }
@@ -119,6 +351,10 @@ export default class TableController<
    * Refetch all data and notify subscribers of changes
    */
   private async _refetchAllData(): Promise<void> {
+    // Set refetch state to true and notify listeners
+    this._isRefetching = true;
+    this._refetchListeners.forEach((listener) => listener(true));
+
     try {
       const oldRows = [...this._rows];
       const newData = await this._fetchInitialData();
@@ -161,7 +397,23 @@ export default class TableController<
       }
     } catch (error) {
       console.error(`Failed to refetch data for table ${this._table}:`, error);
+    } finally {
+      // Set refetch state to false and notify listeners
+      this._isRefetching = false;
+      this._refetchListeners.forEach((listener) => listener(false));
     }
+  }
+
+  /**
+   * Public method to refetch all data for this controller's query and notify subscribers.
+   * Useful when entries may have been created after the initial fetch but before
+   * realtime subscriptions were established by the consumer.
+   */
+  async refetchAll(): Promise<void> {
+    if (this._isRefetching) {
+      return;
+    }
+    await this._refetchAllData();
   }
 
   /**
@@ -187,6 +439,7 @@ export default class TableController<
     client,
     table,
     classRealTimeController,
+    selectForSingleRow,
     submissionId,
     officeHoursRealTimeController
   }: {
@@ -201,6 +454,8 @@ export default class TableController<
     table: RelationName;
     classRealTimeController?: ClassRealTimeController;
     officeHoursRealTimeController?: OfficeHoursRealTimeController;
+    /** Select clause to use for single-row refetches (preserves joins) */
+    selectForSingleRow?: Query;
     submissionId?: number;
   }) {
     this._rows = [];
@@ -210,10 +465,12 @@ export default class TableController<
     this._classRealTimeController = classRealTimeController || null;
     this._officeHoursRealTimeController = officeHoursRealTimeController || null;
     this._submissionId = submissionId || null;
+    this._selectForSingleRow = selectForSingleRow;
 
     this._readyPromise = new Promise(async (resolve, reject) => {
       try {
         const messageHandler = (message: BroadcastMessage) => {
+          if (this._closed) return;
           // Filter by table name
           if (message.table !== table) {
             return;
@@ -231,9 +488,24 @@ export default class TableController<
               break;
           }
         };
+
+        // Fetch initial data first, respecting cancellation
+        if (this._closed) {
+          resolve();
+          return;
+        }
+        const initialData = await this._fetchInitialData();
+        if (this._closed) {
+          resolve();
+          return;
+        }
+        this._rows = initialData.map((row) => ({
+          ...row,
+          __db_pending: false
+        }));
+
         // Set up realtime subscription if controller is provided
-        if (this._classRealTimeController) {
-          // Subscribe to messages for this table, optionally filtered by submission
+        if (!this._closed && this._classRealTimeController) {
           if (this._submissionId) {
             this._realtimeUnsubscribe = this._classRealTimeController.subscribeToTableForSubmission(
               table,
@@ -246,22 +518,24 @@ export default class TableController<
 
           // Subscribe to connection status changes for reconnection handling
           this._statusUnsubscribe = this._classRealTimeController.subscribeToStatus((status) => {
+            if (this._closed) return;
             this._handleConnectionStatusChange(status);
           });
 
           // Get initial connection status
           this._lastConnectionStatus = this._classRealTimeController.getConnectionStatus().overall;
         }
-        if (this._officeHoursRealTimeController) {
+        if (!this._closed && this._officeHoursRealTimeController) {
           this._realtimeUnsubscribe = this._officeHoursRealTimeController.subscribeToTable(table, messageHandler);
         }
-        const initialData = await this._fetchInitialData();
-        this._rows = initialData.map((row) => ({
-          ...row,
-          __db_pending: false
-        }));
+
+        if (this._closed) {
+          resolve();
+          return;
+        }
+
         this._ready = true;
-        //Emit a change event
+        // Emit a change event
         this._listDataListeners.forEach((listener) => listener(this._rows, { entered: this._rows, left: [] }));
         this._itemDataListeners.forEach((listeners, id) => {
           const row = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
@@ -273,21 +547,31 @@ export default class TableController<
         });
         resolve();
       } catch (error) {
-        reject(error);
+        if (!this._closed) {
+          reject(error);
+        } else {
+          resolve();
+        }
       }
     });
   }
 
   close() {
+    this._closed = true;
     if (this._realtimeUnsubscribe) {
       this._realtimeUnsubscribe();
     }
     if (this._statusUnsubscribe) {
       this._statusUnsubscribe();
     }
+    // Clear all listeners
+    this._refetchListeners = [];
+    this._listDataListeners = [];
+    this._itemDataListeners.clear();
   }
 
   private _handleInsert(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
@@ -295,6 +579,14 @@ export default class TableController<
       // Check for exact ID match first
       const existingRowById = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
       if (existingRowById) {
+        // If we have a custom select for single row (joins), refresh the full row to keep joins in sync
+        if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+          this._fetchRow(data.id as IDType).then((fullRow) => {
+            if (fullRow) {
+              this._updateRow(data.id as IDType, fullRow as ResultOne & { id: IDType }, false);
+            }
+          });
+        }
         return;
       }
 
@@ -308,32 +600,65 @@ export default class TableController<
       if (pendingRow) {
         // Update the pending row with the real data instead of adding a duplicate
         const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
-        const oldId = pendingRowWithId.id;
         pendingRowWithId.id = data.id as IDType;
-
-        // Debug logging for development
-        if (process.env.NODE_ENV === "development") {
-          console.log(`[TableController] Matched pending row for ${this._table}:`, {
-            oldId,
-            newId: data.id,
-            pendingData: pendingRow,
-            incomingData: data
+        // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
+        if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+          this._fetchRow(data.id as IDType).then((fullRow) => {
+            if (fullRow) {
+              this._updateRow(data.id as IDType, fullRow as ResultOne & { id: IDType }, false);
+            } else {
+              this._updateRow(
+                data.id as IDType,
+                {
+                  ...(data as ResultOne),
+                  id: data.id
+                } as ResultOne & { id: IDType },
+                false
+              );
+            }
           });
+        } else {
+          this._updateRow(
+            data.id as IDType,
+            {
+              ...data,
+              id: data.id
+            } as ResultOne & { id: IDType },
+            false
+          );
         }
-
-        this._updateRow(
-          data.id as IDType,
-          {
-            ...data,
-            id: data.id
-          } as ResultOne & { id: IDType },
-          false
-        );
       } else {
-        this._addRow({
-          ...data,
-          __db_pending: false
-        } as PossiblyTentativeResult<ResultOne>);
+        // Re-check to avoid duplicates if another concurrent event already added this row
+        const isDuplicate = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === (data.id as IDType));
+        // If we have a custom select (joins), refetch to get full joined row; otherwise use the payload
+        if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+          this._fetchRow(data.id as IDType).then((fullRow) => {
+            // Re-check to avoid duplicates if another concurrent event already added this row
+            if (isDuplicate) {
+              return;
+            }
+            if (fullRow) {
+              this._addRow({
+                ...(fullRow as ResultOne),
+                __db_pending: false
+              } as PossiblyTentativeResult<ResultOne>);
+            } else {
+              this._addRow({
+                ...(data as ResultOne),
+                __db_pending: false
+              } as PossiblyTentativeResult<ResultOne>);
+            }
+          });
+        } else {
+          // Re-check to avoid duplicates if another concurrent event already added this row
+          if (isDuplicate) {
+            return;
+          }
+          this._addRow({
+            ...data,
+            __db_pending: false
+          } as PossiblyTentativeResult<ResultOne>);
+        }
       }
     } else if (message.row_id) {
       // Handle ID-only broadcasts - fetch the data
@@ -356,25 +681,17 @@ export default class TableController<
           if (pendingRow) {
             // Update the pending row with the real data instead of adding a duplicate
             const pendingRowWithId = pendingRow as ResultOne & { id: IDType };
-            const oldId = pendingRowWithId.id;
             pendingRowWithId.id = message.row_id as IDType;
-
-            // Debug logging for development
-            if (process.env.NODE_ENV === "development") {
-              console.log(`[TableController] Matched pending row (ID-only) for ${this._table}:`, {
-                oldId,
-                newId: message.row_id,
-                pendingData: pendingRow,
-                fetchedData: row
-              });
-            }
 
             this._updateRow(message.row_id as IDType, row as ResultOne & { id: IDType }, false);
           } else {
-            this._addRow({
-              ...row,
-              __db_pending: false
-            });
+            // Re-check before add in case another event already inserted it
+            if (!this._rows.find((r) => (r as ResultOne & { id: IDType }).id === (message.row_id as IDType))) {
+              this._addRow({
+                ...row,
+                __db_pending: false
+              });
+            }
           }
         });
       }
@@ -463,17 +780,36 @@ export default class TableController<
   }
 
   private _handleUpdate(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       // Handle full data broadcasts
       const data = message.data as Record<string, unknown>;
       const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === data.id);
-      if (existingRow) {
-        this._updateRow(data.id as IDType, { ...data, id: data.id } as ResultOne & { id: IDType }, false);
+      const applyUpdate = (rowLike: Record<string, unknown>) => {
+        if (existingRow) {
+          this._updateRow(
+            data.id as IDType,
+            { ...(rowLike as ResultOne), id: data.id } as ResultOne & { id: IDType },
+            false
+          );
+        } else {
+          this._addRow({
+            ...(rowLike as ResultOne),
+            __db_pending: false
+          } as PossiblyTentativeResult<ResultOne>);
+        }
+      };
+
+      if (this._selectForSingleRow && (this._selectForSingleRow as string) !== "*") {
+        this._fetchRow(data.id as IDType).then((fullRow) => {
+          if (fullRow) {
+            applyUpdate(fullRow as unknown as Record<string, unknown>);
+          } else {
+            applyUpdate(data);
+          }
+        });
       } else {
-        this._addRow({
-          ...data,
-          __db_pending: false
-        } as PossiblyTentativeResult<ResultOne>);
+        applyUpdate(data);
       }
     } else if (message.row_id) {
       // Handle ID-only broadcasts - fetch the data
@@ -495,6 +831,7 @@ export default class TableController<
   }
 
   private _handleDelete(message: BroadcastMessage) {
+    if (this._closed) return;
     if (message.data) {
       const data = message.data as Record<string, unknown>;
       this._removeRow(data.id as IDType);
@@ -574,25 +911,41 @@ export default class TableController<
   }
 
   async invalidate(id: IDType) {
-    const { data, error } = await this._client.from(this._table).select("*").eq("id", id).single();
+    const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
+    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
     if (error) {
       throw error;
     }
     if (!data) {
       return;
     }
+    const typedData = data as unknown as ResultOne;
     const existingRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
     if (existingRow) {
-      this._updateRow(id as IDType, data as ResultOne & { id: IDType }, false);
+      this._updateRow(id as IDType, typedData as ResultOne & { id: IDType }, false);
     } else {
       this._addRow({
-        ...data,
+        ...(typedData as ResultOne),
         __db_pending: false
-      });
+      } as PossiblyTentativeResult<ResultOne>);
     }
   }
 
   private _addRow(row: PossiblyTentativeResult<ResultOne>) {
+    // Enforce uniqueness by ID. If a row with the same ID already exists, treat this as an update.
+    if ("id" in row) {
+      const id = (row as { id: IDType }).id;
+      const existingIndex = this._rows.findIndex((r) => (r as ResultOne & { id: IDType }).id === id);
+      if (existingIndex !== -1) {
+        this._updateRow(
+          id,
+          row as unknown as ResultOne & { id: IDType },
+          !!(row as { __db_pending?: boolean }).__db_pending
+        );
+        return;
+      }
+    }
+
     this._rows = [...this._rows, row];
 
     this._listDataListeners.forEach((listener) => listener(this._rows, { entered: [row], left: [] }));
@@ -711,9 +1064,6 @@ export default class TableController<
     const oldRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
     if (!oldRow) {
       throw new Error("Row not found");
-    }
-    if (this._table === "gradebook_column_students") {
-      console.log("update", id, row, oldRow);
     }
     this._updateRow(id, { ...oldRow, ...row, id, __db_pending: true }, true);
     const { data, error } = await this._client.from(this._table).update(row).eq("id", id).select("*").single();

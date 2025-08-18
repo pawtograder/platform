@@ -62,7 +62,7 @@ export default function QueueLayout({ children }: LayoutProps) {
     ...userRequestItems,
     {
       href: `${basePath}/new`,
-      label: "Submit Request",
+      label: "New Request",
       isActive: pathname === `${basePath}/new`
     },
     {
@@ -79,30 +79,49 @@ export default function QueueLayout({ children }: LayoutProps) {
 
   return (
     <ModerationBanNotice classId={Number(course_id)}>
-      <Box m={4}>
-        <Heading mb={4}>Help Queue: {helpQueue.name}</Heading>
-        <Box display="flex" gap={6}>
+      <Box m={{ base: 2, md: 4 }} maxW={{ base: "md", md: "6xl" }} mx="auto">
+        <Heading mb={{ base: 2, md: 4 }} size={{ base: "md", md: "lg" }}>
+          Help Queue: {helpQueue.name}
+        </Heading>
+        <Box display="flex" gap={{ base: 4, md: 6 }} flexDirection={{ base: "column", md: "row" }}>
           {/* Navigation Sidebar */}
-          <VStack align="stretch" width="300px" gap={2}>
-            {navigationItems.map((item) => (
-              <Link key={item.href} href={item.href}>
-                <Box
-                  p={3}
-                  borderRadius="md"
-                  bg={item.isActive ? "bg.info" : "bg.muted"}
-                  color={item.isActive ? "fg.info" : "fg.muted"}
-                  _hover={{ bg: item.isActive ? "blue.emphasized" : "bg.emphasized" }}
-                  cursor="pointer"
-                  fontWeight={item.isActive ? "semibold" : "normal"}
-                >
-                  {item.label}
-                </Box>
-              </Link>
-            ))}
+          <VStack align="stretch" width={{ base: "100%", md: "300px" }} gap={2}>
+            {navigationItems.map((item) => {
+              const isNewRequest = item.label === "New Request";
+              return (
+                <Link key={item.href} href={item.href}>
+                  <Box
+                    p={{ base: 3, md: 3 }}
+                    borderRadius="md"
+                    bg={
+                      isNewRequest
+                        ? item.isActive
+                          ? "green.emphasized"
+                          : "green.muted"
+                        : item.isActive
+                          ? "bg.info"
+                          : "bg.muted"
+                    }
+                    color={
+                      isNewRequest ? (item.isActive ? "white" : "green.fg") : item.isActive ? "fg.info" : "fg.muted"
+                    }
+                    _hover={{
+                      bg: isNewRequest ? "green.emphasized" : item.isActive ? "blue.emphasized" : "bg.emphasized"
+                    }}
+                    cursor="pointer"
+                    fontWeight={item.isActive ? "semibold" : "normal"}
+                  >
+                    {item.label}
+                  </Box>
+                </Link>
+              );
+            })}
           </VStack>
 
           {/* Main Content */}
-          <Box flex="1">{children}</Box>
+          <Box flex="1" maxW={{ base: "md", md: "full" }} mx={{ base: "auto", md: "0" }}>
+            {children}
+          </Box>
         </Box>
       </Box>
     </ModerationBanNotice>

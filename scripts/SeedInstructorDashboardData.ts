@@ -19,10 +19,16 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 dotenv.config({ path: ".env.local" });
 
 export const RANDOM_SEED = 100;
+const RECYCLE_USERS_KEY = process.env.RECYCLE_USERS_KEY || "demo";
 faker.seed(RANDOM_SEED);
 
 const limiter = new Bottleneck({
   maxConcurrent: 200
+});
+
+//Auth does not use pgbouncer!
+const authLimiter = new Bottleneck({
+  maxConcurrent: 30
 });
 
 const smallLimiter = new Bottleneck({
@@ -414,11 +420,9 @@ async function batchGradeSubmissions(
     number,
     {
       grader: string;
-      total_score: number;
       released: boolean;
       completed_by: string | null;
       completed_at: string | null;
-      total_autograde_score: number;
     }
   >();
 
@@ -429,59 +433,93 @@ async function batchGradeSubmissions(
     const files = submissionFilesMap.get(review.submission_id) || [];
 
     if (isCompleted) {
-      // Create comments for each rubric check
-      for (const check of rubricChecks) {
+      // Calculate maximum possible points for this rubric
+      const maxPossiblePoints = 90; // TODO: When we finalize the design of max points for hand vs auto grade, update here...
+      console.log(`Max possible points: ${maxPossiblePoints} from ${rubricChecks.length} checks`);
+
+      const targetPercentage = Math.max(0.75, Math.min(1, 0.9 + (Math.random() * 0.1 - 0.05)));
+      const targetTotalPoints = 90; //Math.floor(maxPossiblePoints * targetPercentage);
+      console.log(`Target total points: ${targetTotalPoints} (${Math.round(targetPercentage * 100)}% of max)`);
+
+      // Filter checks that will be applied
+      const applicableChecks = rubricChecks.filter((check) => {
         const applyChance = 0.8;
-        const shouldApply = check.is_required || Math.random() < applyChance;
+        return check.is_required || Math.random() < applyChance;
+      });
 
-        if (shouldApply) {
-          const pointsAwarded = Math.floor(Math.random() * (check.points + 1));
+      // Distribute target points among applicable checks (ignore individual check.points limits)
+      const checkPointAllocations = new Map<number, number>();
 
-          if (check.is_annotation && files.length > 0) {
-            // Create submission file comment (annotation)
-            const file = files[Math.floor(Math.random() * files.length)];
-            const lineNumber = Math.floor(Math.random() * 5) + 1;
+      // Distribute points roughly equally among checks with some randomness
+      let remainingPoints = targetTotalPoints;
 
-            submissionFileComments.push({
-              submission_id: review.submission_id,
-              submission_file_id: file.id,
-              author: grader.private_profile_id,
-              comment: `${check.name}: Grading comment for this check`,
-              points: pointsAwarded,
-              line: lineNumber,
-              class_id: review.class_id,
-              released: true,
-              rubric_check_id: check.id,
-              submission_review_id: review.id
-            });
-          } else {
-            // Create submission comment (general comment)
-            submissionComments.push({
-              submission_id: review.submission_id,
-              author: grader.private_profile_id,
-              comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
-              points: pointsAwarded,
-              class_id: review.class_id,
-              released: true,
-              rubric_check_id: check.id,
-              submission_review_id: review.id
-            });
-          }
+      for (let i = 0; i < applicableChecks.length; i++) {
+        const check = applicableChecks[i];
+
+        if (i === applicableChecks.length - 1) {
+          // Last check gets all remaining points
+          checkPointAllocations.set(check.id, remainingPoints);
+          remainingPoints = 0;
+        } else {
+          // Allocate roughly equal portion with some randomness
+          const baseAllocation = Math.floor(targetTotalPoints / applicableChecks.length);
+          const randomBonus = Math.floor(Math.random() * 10) - 5; // ±5 points variance
+          const allocation = Math.max(1, baseAllocation + randomBonus); // At least 1 point
+
+          // Don't allocate more than what's remaining
+          const finalAllocation = Math.min(allocation, remainingPoints - (applicableChecks.length - i - 1));
+
+          checkPointAllocations.set(check.id, finalAllocation);
+          remainingPoints -= finalAllocation;
+        }
+      }
+
+      const totalPointsAwarded = Array.from(checkPointAllocations.values()).reduce((sum, points) => sum + points, 0);
+      if (totalPointsAwarded !== targetTotalPoints) {
+        console.log(`Total points awarded: ${totalPointsAwarded} !== target total points: ${targetTotalPoints}`);
+      }
+      // Create comments for applicable checks with allocated points
+      for (const check of applicableChecks) {
+        const pointsAwarded = checkPointAllocations.get(check.id) || 0;
+
+        if (check.is_annotation && files.length > 0) {
+          // Create submission file comment (annotation)
+          const file = files[Math.floor(Math.random() * files.length)];
+          const lineNumber = Math.floor(Math.random() * 5) + 1;
+
+          submissionFileComments.push({
+            submission_id: review.submission_id,
+            submission_file_id: file.id,
+            author: grader.private_profile_id,
+            comment: `${check.name}: Grading comment for this check`,
+            points: pointsAwarded,
+            line: lineNumber,
+            class_id: review.class_id,
+            released: true,
+            rubric_check_id: check.id,
+            submission_review_id: review.id
+          });
+        } else {
+          // Create submission comment (general comment)
+          submissionComments.push({
+            submission_id: review.submission_id,
+            author: grader.private_profile_id,
+            comment: `${check.name}: ${pointsAwarded}/${check.points} points - ${check.name.includes("quality") ? "Good work on this aspect!" : "Applied this grading criteria"}`,
+            points: pointsAwarded,
+            class_id: review.class_id,
+            released: true,
+            rubric_check_id: check.id,
+            submission_review_id: review.id
+          });
         }
       }
     }
 
-    // Prepare review update
-    const totalScore = isCompleted ? Math.floor(Math.random() * 100) : 0;
-    const totalAutogradeScore = Math.floor(Math.random() * 100);
-
     reviewUpdates.set(review.id, {
       grader: grader.private_profile_id,
-      total_score: totalScore,
       released: isCompleted,
       completed_by: isCompleted ? grader.private_profile_id : null,
-      completed_at: isCompleted ? new Date().toISOString() : null,
-      total_autograde_score: totalAutogradeScore
+      completed_at: isCompleted ? new Date().toISOString() : null
     });
   }
 
@@ -533,7 +571,14 @@ async function batchGradeSubmissions(
       const updateErrors = updateResults.filter((result) => result.error);
 
       if (updateErrors.length > 0) {
-        throw new Error(`Failed to update ${updateErrors.length} submission reviews in batch ${chunkIndex + 1}`);
+        console.error(
+          "Update errors:",
+          updateErrors.map((e) => ({ error: e.error, data: e.data }))
+        );
+        console.error("Sample update data:", chunk[0][1]);
+        throw new Error(
+          `Failed to update ${updateErrors.length} submission reviews in batch ${chunkIndex + 1}: ${updateErrors[0].error?.message}`
+        );
       }
     })
   );
@@ -597,7 +642,6 @@ function extractDependenciesFromExpression(
     if (Object.keys(flattenedDependencies).length === 0) {
       return null;
     }
-    console.log(flattenedDependencies);
     return flattenedDependencies;
   } catch (error) {
     console.warn(`Failed to parse expression "${expr}": ${error}`);
@@ -676,7 +720,7 @@ async function createGradebookColumn({
       slug,
       max_score,
       score_expression,
-      dependencies: finalDependencies ? JSON.stringify(finalDependencies) : null,
+      dependencies: finalDependencies,
       released,
       sort_order
     })
@@ -690,6 +734,558 @@ async function createGradebookColumn({
   return column;
 }
 
+// Helper function to find existing users with @pawtograder.net emails
+async function findExistingPawtograderUsers(): Promise<{
+  instructors: TestingUser[];
+  graders: TestingUser[];
+  students: TestingUser[];
+}> {
+  // Query public.users for existing @pawtograder.net users
+  const { data: existingUsers, error: usersError } = await supabase
+    .from("users")
+    .select(
+      "*, user_roles(role, private_profile_id, public_profile_id, profiles_private:profiles!private_profile_id(name), profiles_public:profiles!public_profile_id(name))"
+    )
+    .like("email", `%${RECYCLE_USERS_KEY}-demo@pawtograder.net`);
+
+  if (usersError) {
+    console.error(`Failed to fetch existing users: ${usersError.message}`);
+    throw new Error(`Failed to fetch existing users: ${usersError.message}`);
+  }
+
+  const pawtograderUsers = existingUsers;
+
+  if (pawtograderUsers.length === 0) {
+    console.log("No existing *demo@pawtograder.net users found");
+    return { instructors: [], graders: [], students: [] };
+  }
+
+  console.log(`Found ${pawtograderUsers.length} existing *demo@pawtograder.net users`);
+
+  // Convert to TestingUser format
+  const convertToTestingUser = (
+    user: { user_id: string; email?: string | null },
+    userRole: {
+      profiles_private?: { name: string | null };
+      profiles_public?: { name: string | null };
+      private_profile_id: string;
+      public_profile_id: string;
+    }
+  ): TestingUser => ({
+    private_profile_name: userRole.profiles_private?.name || "Unknown",
+    public_profile_name: userRole.profiles_public?.name || "Unknown",
+    email: user.email || "",
+    password: process.env.TEST_PASSWORD || "change-it",
+    user_id: user.user_id,
+    private_profile_id: userRole.private_profile_id,
+    public_profile_id: userRole.public_profile_id,
+    class_id: -1 // Will be updated when enrolled in class
+  });
+
+  const result = { instructors: [] as TestingUser[], graders: [] as TestingUser[], students: [] as TestingUser[] };
+
+  for (const user of pawtograderUsers) {
+    if (!user.user_roles || user.user_roles.length === 0) continue;
+
+    const testingUser = convertToTestingUser(user, user.user_roles[0]);
+
+    // Categorize by email pattern (instructor-, grader-, student-)
+    if (user.email && user.email.startsWith("instructor-")) {
+      result.instructors.push(testingUser);
+    } else if (user.email && user.email.startsWith("grader-")) {
+      result.graders.push(testingUser);
+    } else if (user.email && user.email.startsWith("student-")) {
+      result.students.push(testingUser);
+    }
+  }
+
+  return result;
+}
+
+// Helper function to enroll existing users in a class
+async function enrollExistingUserInClass(user: TestingUser, class_id: number): Promise<TestingUser> {
+  // Create new private profile
+  const { data: privateProfile, error: privateProfileError } = await supabase
+    .from("profiles")
+    .insert({
+      name: user.private_profile_name,
+      class_id: class_id,
+      is_private_profile: true
+    })
+    .select("id")
+    .single();
+
+  if (privateProfileError) {
+    throw new Error(`Failed to create private profile: ${privateProfileError.message}`);
+  }
+
+  // Create new public profile
+  const { data: publicProfile, error: publicProfileError } = await supabase
+    .from("profiles")
+    .insert({
+      name: user.public_profile_name,
+      class_id: class_id,
+      is_private_profile: false
+    })
+    .select("id")
+    .single();
+
+  if (publicProfileError) {
+    throw new Error(`Failed to create public profile: ${publicProfileError.message}`);
+  }
+
+  // Determine role based on email pattern
+  const role = user.email.startsWith("instructor-")
+    ? "instructor"
+    : user.email.startsWith("grader-")
+      ? "grader"
+      : "student";
+
+  // Insert user role with new profiles
+  const { error: userRoleError } = await supabase.from("user_roles").insert({
+    user_id: user.user_id,
+    role: role,
+    class_id: class_id,
+    private_profile_id: privateProfile.id,
+    public_profile_id: publicProfile.id
+  });
+
+  if (userRoleError) {
+    throw new Error(`Failed to create user role: ${userRoleError.message}`);
+  }
+
+  // Return updated user with new profile IDs and class_id
+  return {
+    ...user,
+    class_id,
+    private_profile_id: privateProfile.id,
+    public_profile_id: publicProfile.id
+  };
+}
+
+// Helper function to create specification grading scheme columns
+async function createSpecificationGradingColumns(
+  class_id: number,
+  students: TestingUser[],
+  assignments: { id: number }[],
+  _labAssignments: { id: number }[]
+): Promise<void> {
+  console.log("\n📊 Creating specification grading scheme columns...");
+
+  // Create skill columns (12 skills)
+  const skillColumns = [];
+  for (let i = 1; i <= 12; i++) {
+    const skillColumn = await createGradebookColumn({
+      class_id,
+      name: `Skill #${i}`,
+      description: `Score for skill #${i}`,
+      slug: `skill-${i}`,
+      max_score: 2,
+      sort_order: 1 + i
+    });
+
+    // Update render expression separately
+    await supabase
+      .from("gradebook_columns")
+      .update({ render_expression: 'customLabel(score,[2,"Meets";1,"Approach";0,"Not"])' })
+      .eq("id", skillColumn.id);
+    skillColumns.push(skillColumn);
+  }
+
+  // Create expectation level columns
+  const skillColumnIds = skillColumns.map((col) => col.id);
+  await createGradebookColumn({
+    class_id,
+    name: "Skills Meeting Expectations",
+    description: "Total number of skills at meets expectations level",
+    slug: "meets-expectations",
+    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = x.score == 2)',
+    max_score: 12,
+    dependencies: { gradebook_columns: skillColumnIds },
+    sort_order: 14
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Skills Approaching Expectations",
+    description: "Total number of skills at approaching expectations level",
+    slug: "approaching-expectations",
+    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = x.score == 1)',
+    max_score: 12,
+    dependencies: { gradebook_columns: skillColumnIds },
+    sort_order: 15
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Skills Not Meeting Expectations",
+    description: "Total number of skills at does not meet expectations level",
+    slug: "does-not-meet-expectations",
+    score_expression: 'countif(gradebook_columns("skill-*"), f(x) = not x.is_missing and x.score == 0)',
+    max_score: 12,
+    dependencies: { gradebook_columns: skillColumnIds },
+    sort_order: 16
+  });
+
+  // Find and rename assignment columns to HW #X or Lab #X
+  // Note: assignment_id column may not exist in current schema, so we'll handle it differently
+  const { data: existingColumns, error: columnsError } = await supabase
+    .from("gradebook_columns")
+    .select("id, name, slug")
+    .eq("class_id", class_id)
+    .like("slug", "assignment-%");
+
+  if (columnsError) {
+    console.warn(`Warning: Could not fetch existing assignment columns: ${columnsError.message}`);
+  } else if (existingColumns) {
+    const hwColumnIds = [];
+    const labColumnIds = [];
+
+    for (let i = 0; i < existingColumns.length; i++) {
+      const column = existingColumns[i];
+      // Since we don't have assignment_id, determine type by index and total counts
+      const isLab = column.slug.includes("lab-") || i >= assignments.length;
+      const assignmentIndex = isLab ? i - assignments.length + 1 : i + 1;
+
+      const newName = isLab ? `Lab #${assignmentIndex}` : `HW #${assignmentIndex}`;
+      const newSlug = isLab ? `lab-${assignmentIndex}` : `hw-${assignmentIndex}`;
+
+      await supabase
+        .from("gradebook_columns")
+        .update({
+          name: newName,
+          slug: newSlug,
+          description: isLab ? `Participation in ${newName}` : `Score for ${newName}`,
+          max_score: isLab ? 1 : 100
+        })
+        .eq("id", column.id);
+
+      // Update render expression separately for labs
+      if (isLab) {
+        labColumnIds.push(column.id);
+      } else {
+        hwColumnIds.push(column.id);
+      }
+    }
+
+    // Create aggregate columns
+    if (hwColumnIds.length > 0) {
+      await createGradebookColumn({
+        class_id,
+        name: "Avg HW",
+        description: "Average of all homework assignments",
+        slug: "average.hw",
+        score_expression: 'mean(gradebook_columns("assignment-assignment-*"))',
+        max_score: 100,
+        dependencies: { gradebook_columns: hwColumnIds },
+        sort_order: 22
+      });
+    }
+
+    if (labColumnIds.length > 0) {
+      await createGradebookColumn({
+        class_id,
+        name: "Total Labs",
+        description: "Total number of labs participated in",
+        slug: "total-labs",
+        score_expression: 'countif(gradebook_columns("assignment-lab-*"), f(x) = not x.is_missing and x.score>0)',
+        max_score: labColumnIds.length,
+        dependencies: { gradebook_columns: labColumnIds },
+        sort_order: 33
+      });
+    }
+  }
+
+  // Create final grade column
+  const finalColumn = await createGradebookColumn({
+    class_id,
+    name: "Final Score",
+    description: `Grades will be primarily assigned by achievement levels of the course Skills, with required grade thresholds on HW for each letter grade, and + (other than A) given for participation in 8 or more out of 10 labs, - given for participating in fewer than 6 out of ten labs.
+Grade | Skills Needed | HW Needed 
+-- | -- | --
+A | Meets expectations on 10+/12, Approaching expectations on remainder | 85% or better
+B | Meets expectations on 8+/12, Approaching expectations on remainder | 75% or better
+C | Meets expectations on 5+/12, Approaching expectations on remainder | 65% or better
+D | Approaching expectations or better on 9+/12 | 55% or better`,
+    slug: "final",
+    score_expression: `CriteriaA = gradebook_columns("meets-expectations") >= 10 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 85
+CriteriaB = gradebook_columns("meets-expectations") >= 8 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 75
+CriteriaC = gradebook_columns("meets-expectations") >= 5 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 65
+CriteriaD = gradebook_columns("approaching-expectations") >= 9 and gradebook_columns("does-not-meet-expectations") == 0 and gradebook_columns("average.hw") >= 55
+CriteriaPlus = gradebook_columns("total-labs") >= 8
+CriteriaMinus = gradebook_columns("total-labs") < 6
+letter = case_when([CriteriaA, 95;
+CriteriaB, 85;
+CriteriaC, 75;
+CriteriaD, 65;
+true, 0])
+mod = case_when([CriteriaPlus, 3;
+CriteriaMinus, -3;
+true, 0])
+final = max(letter + mod, 0)
+final;`,
+    max_score: 100,
+    sort_order: 34
+  });
+
+  // Update render expression separately
+  await supabase.from("gradebook_columns").update({ render_expression: "letter(score)" }).eq("id", finalColumn.id);
+
+  // Set scores for skill columns using specified distribution
+  // 90% of students: 10+ skills at 2, none at 0
+  // 5% of students: 8-9 skills at 2, none at 0
+  // 5% of students: random distribution
+
+  // Categorize students
+  const shuffledStudents = [...students].sort(() => Math.random() - 0.5);
+  const excellent = shuffledStudents.slice(0, Math.floor(students.length * 0.9)); // 90%
+  const good = shuffledStudents.slice(Math.floor(students.length * 0.9), Math.floor(students.length * 0.95)); // 5%
+  const random = shuffledStudents.slice(Math.floor(students.length * 0.95)); // 5%
+
+  console.log(
+    `Skills distribution: ${excellent.length} excellent, ${good.length} good, ${random.length} random students`
+  );
+
+  for (let i = 0; i < skillColumns.length; i++) {
+    const skillColumn = skillColumns[i];
+
+    // Create custom score distribution for this skill
+    const customScores = students.map((student, index) => {
+      const studentCategory =
+        index < excellent.length ? "excellent" : index < excellent.length + good.length ? "good" : "random";
+
+      if (studentCategory === "excellent") {
+        // 90% of students: 10+ skills at 2, none at 0
+        if (i < 10) {
+          return Math.random() < 0.9 ? 2 : 1; // First 10 skills: mostly 2s, some 1s
+        } else {
+          return Math.random() < 0.7 ? 2 : 1; // Remaining 2 skills: mix of 1s and 2s
+        }
+      } else if (studentCategory === "good") {
+        // 5% of students: 8-9 skills at 2, none at 0
+        if (i < 8) {
+          return Math.random() < 0.85 ? 2 : 1; // First 8 skills: mostly 2s, some 1s
+        } else if (i < 10) {
+          return Math.random() < 0.5 ? 2 : 1; // Skills 9-10: mix of 1s and 2s
+        } else {
+          return Math.random() < 0.3 ? 2 : 1; // Remaining skills: mostly 1s
+        }
+      } else {
+        // 5% of students: completely random distribution
+        return [0, 1, 2][Math.floor(Math.random() * 3)];
+      }
+    });
+
+    // Use the existing setGradebookColumnScores function with custom scores
+    await setCustomGradebookColumnScores({
+      class_id,
+      gradebook_column_id: skillColumn.id,
+      students,
+      customScores
+    });
+
+    const avgScore = customScores.reduce((sum, s) => sum + s, 0) / customScores.length;
+    console.log(`✓ Set ${skillColumn.name} scores: avg=${avgScore.toFixed(2)}`);
+  }
+
+  // Call auto layout RPC to organize columns properly
+  const { data: gradebook } = await supabase.from("gradebooks").select("id").eq("class_id", class_id).single();
+
+  if (gradebook) {
+    const { error: layoutError } = await supabase.rpc("gradebook_auto_layout", {
+      p_gradebook_id: gradebook.id
+    });
+
+    if (layoutError) {
+      console.error("Failed to auto-layout gradebook:", layoutError);
+    } else {
+      console.log("✓ Applied auto-layout to gradebook columns");
+    }
+  }
+
+  console.log(`✓ Created specification grading scheme with ${skillColumns.length} skills and aggregate columns`);
+}
+
+// Helper function to create current grading scheme columns
+async function createCurrentGradingColumns(
+  class_id: number,
+  students: TestingUser[],
+  effectiveNumManualGradedColumns: number
+): Promise<{ id: number; name: string; slug: string; max_score: number | null; score_expression: string | null }[]> {
+  console.log("\n📊 Creating current grading scheme columns...");
+
+  // Create manual graded columns if specified
+  const manualGradedColumns: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    max_score: number | null;
+    score_expression: string | null;
+  }> = [];
+
+  if (effectiveNumManualGradedColumns > 0) {
+    console.log(`\n📊 Creating ${effectiveNumManualGradedColumns} manual graded columns...`);
+
+    for (let i = 1; i <= effectiveNumManualGradedColumns; i++) {
+      const columnName = `Manual Grade ${i}`;
+      const columnSlug = `manual-grade-${i}`;
+
+      const manualColumn = await createGradebookColumn({
+        class_id,
+        name: columnName,
+        description: `Manual grading column ${i}`,
+        slug: columnSlug,
+        max_score: 100,
+        sort_order: 1000 + i
+      });
+
+      manualGradedColumns.push(manualColumn);
+    }
+
+    console.log(`✓ Created ${manualGradedColumns.length} manual graded columns`);
+  }
+
+  const participationColumn = await createGradebookColumn({
+    class_id,
+    name: "Participation",
+    description: "Overall class participation score",
+    slug: "participation",
+    max_score: 100,
+    sort_order: 1000
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Average Assignments",
+    description: "Average of all assignments",
+    slug: "average-assignments",
+    score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
+    max_score: 100,
+    sort_order: 2
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Average Lab Assignments",
+    description: "Average of all lab assignments",
+    slug: "average-lab-assignments",
+    score_expression: "mean(gradebook_columns('assignment-lab-*'))",
+    max_score: 100,
+    sort_order: 3
+  });
+
+  await createGradebookColumn({
+    class_id,
+    name: "Final Grade",
+    description: "Calculated final grade",
+    slug: "final-grade",
+    score_expression:
+      "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
+    max_score: 100,
+    sort_order: 999
+  });
+
+  console.log(
+    `✓ Created ${4 + manualGradedColumns.length} gradebook columns (${4} standard + ${manualGradedColumns.length} manual)`
+  );
+
+  // Set scores for the participation column using normal distribution
+  console.log("\n📊 Setting scores for gradebook columns...");
+  const participationStats = await setGradebookColumnScores({
+    class_id,
+    gradebook_column_id: participationColumn.id,
+    students,
+    averageScore: 85,
+    standardDeviation: 12,
+    maxScore: 100
+  });
+  console.log(
+    `✓ Set participation scores: avg=${participationStats.averageActual}, min=${participationStats.minScore}, max=${participationStats.maxScore}`
+  );
+
+  // Set scores for manual graded columns using normal distribution
+  if (manualGradedColumns.length > 0) {
+    console.log("\n📊 Setting scores for manual graded columns...");
+    for (const manualColumn of manualGradedColumns) {
+      const manualStats = await setGradebookColumnScores({
+        class_id,
+        gradebook_column_id: manualColumn.id,
+        students,
+        averageScore: 80 + Math.random() * 20, // Random average between 80-100
+        standardDeviation: 10 + Math.random() * 10, // Random deviation between 10-20
+        maxScore: 100
+      });
+      console.log(
+        `✓ Set ${manualColumn.name} scores: avg=${manualStats.averageActual}, min=${manualStats.minScore}, max=${manualStats.maxScore}`
+      );
+    }
+  }
+
+  return manualGradedColumns;
+}
+
+// Helper function to set custom scores for students in a gradebook column
+async function setCustomGradebookColumnScores({
+  class_id,
+  gradebook_column_id,
+  students,
+  customScores
+}: {
+  class_id: number;
+  gradebook_column_id: number;
+  students: TestingUser[];
+  customScores: number[];
+}): Promise<void> {
+  const limiter = new Bottleneck({
+    maxConcurrent: 5,
+    minTime: 100
+  });
+
+  // Get the gradebook_id for this class
+  const { data: gradebook, error: gradebookError } = await supabase
+    .from("gradebooks")
+    .select("id")
+    .eq("class_id", class_id)
+    .single();
+
+  if (gradebookError || !gradebook) {
+    throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
+  }
+
+  // Get existing gradebook column student records
+  const { data: existingRecords, error: fetchError } = await supabase
+    .from("gradebook_column_students")
+    .select("id, student_id")
+    .eq("gradebook_column_id", gradebook_column_id)
+    .eq("is_private", true);
+
+  if (fetchError) {
+    throw new Error(`Failed to fetch existing gradebook column students: ${fetchError.message}`);
+  }
+
+  if (!existingRecords || existingRecords.length === 0) {
+    throw new Error(`No existing gradebook column student records found for column ${gradebook_column_id}`);
+  }
+
+  const updatePromises = students.map(async (student, index) => {
+    const existingRecord = existingRecords.find((record) => record.student_id === student.private_profile_id);
+    if (!existingRecord) {
+      console.warn(`No gradebook column student record found for student ${student.email}`);
+      return;
+    }
+
+    const { error: updateError } = await limiter.schedule(() =>
+      supabase.from("gradebook_column_students").update({ score: customScores[index] }).eq("id", existingRecord.id)
+    );
+
+    if (updateError) {
+      throw new Error(`Failed to update score for student ${student.email}: ${updateError.message}`);
+    }
+  });
+
+  await Promise.all(updatePromises);
+}
+
 // Helper function to set scores for students in a gradebook column using normal distribution
 async function setGradebookColumnScores({
   class_id,
@@ -697,7 +1293,8 @@ async function setGradebookColumnScores({
   students,
   averageScore,
   standardDeviation = 15,
-  maxScore = 100
+  maxScore = 100,
+  useDiscreteValues
 }: {
   class_id: number;
   gradebook_column_id: number;
@@ -705,6 +1302,7 @@ async function setGradebookColumnScores({
   averageScore: number;
   standardDeviation?: number;
   maxScore?: number;
+  useDiscreteValues?: number[];
 }): Promise<{
   updatedCount: number;
   averageActual: number;
@@ -713,18 +1311,39 @@ async function setGradebookColumnScores({
 }> {
   // Generate scores using normal distribution
   const scores = students.map(() => {
-    // Generate normal distribution using Box-Muller transform
-    const u1 = Math.random();
-    const u2 = Math.random();
-    const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    if (useDiscreteValues) {
+      // For discrete values, use weighted random selection based on desired average
+      const weights = useDiscreteValues.map((value) => {
+        // Weight based on distance from average, with some randomness
+        const distance = Math.abs(value - averageScore);
+        return Math.exp(-distance * 2) + Math.random() * 0.3;
+      });
 
-    // Apply to our distribution
-    let score = averageScore + z0 * standardDeviation;
+      const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+      const normalizedWeights = weights.map((w) => w / totalWeight);
 
-    // Clamp to valid range (0 to maxScore)
-    score = Math.max(0, Math.min(maxScore, score));
+      let random = Math.random();
+      for (let i = 0; i < useDiscreteValues.length; i++) {
+        random -= normalizedWeights[i];
+        if (random <= 0) {
+          return useDiscreteValues[i];
+        }
+      }
+      return useDiscreteValues[useDiscreteValues.length - 1];
+    } else {
+      // Generate normal distribution using Box-Muller transform
+      const u1 = Math.random();
+      const u2 = Math.random();
+      const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
 
-    return Math.round(score * 100) / 100; // Round to 2 decimal places
+      // Apply to our distribution
+      let score = averageScore + z0 * standardDeviation;
+
+      // Clamp to valid range (0 to maxScore)
+      score = Math.max(0, Math.min(maxScore, score));
+
+      return Math.round(score * 100) / 100; // Round to 2 decimal places
+    }
   });
 
   // Get the gradebook_id for this class
@@ -761,10 +1380,9 @@ async function setGradebookColumnScores({
       return;
     }
 
-    const { error: updateError } = await supabase
-      .from("gradebook_column_students")
-      .update({ score: scores[index] })
-      .eq("id", existingRecord.id);
+    const { error: updateError } = await limiter.schedule(() =>
+      supabase.from("gradebook_column_students").update({ score: scores[index] }).eq("id", existingRecord.id)
+    );
 
     if (updateError) {
       throw new Error(`Failed to update score for student ${student.email}: ${updateError.message}`);
@@ -971,8 +1589,8 @@ function generateRubricStructure(config: NonNullable<SeedingOptions["rubricConfi
           config.minChecksPerCriteria;
         const selectedChecks = criteriaTemplate.checks.slice(0, Math.min(numChecks, criteriaTemplate.checks.length));
 
-        // Randomly select points from the available options
-        const criteriaPoints = criteriaTemplate.points[Math.floor(Math.random() * criteriaTemplate.points.length)];
+        // Will be set later to ensure total sums to 90
+        const criteriaPoints = 10; // Temporary value
 
         return {
           ...criteriaTemplate,
@@ -994,7 +1612,8 @@ function generateRubricStructure(config: NonNullable<SeedingOptions["rubricConfi
     };
   });
 }
-
+let assignmentIdx = 1;
+let labAssignmentIdx = 1;
 // Enhanced assignment creation function that generates diverse rubrics
 async function insertEnhancedAssignment({
   due_date,
@@ -1002,7 +1621,8 @@ async function insertEnhancedAssignment({
   allow_not_graded_submissions,
   class_id,
   rubricConfig,
-  groupConfig
+  groupConfig,
+  name
 }: {
   due_date: string;
   lab_due_date_offset?: number;
@@ -1010,6 +1630,7 @@ async function insertEnhancedAssignment({
   class_id: number;
   rubricConfig: NonNullable<SeedingOptions["rubricConfig"]>;
   groupConfig?: "individual" | "groups" | "both";
+  name?: string;
 }): Promise<{
   id: number;
   title: string;
@@ -1026,10 +1647,17 @@ async function insertEnhancedAssignment({
   }>;
   [key: string]: unknown;
 }> {
-  const assignmentIdx = Math.floor(Math.random() * 100000) + 1;
   const title =
-    (lab_due_date_offset ? `Assignment ${assignmentIdx}` : `Lab ${assignmentIdx}`) +
+    (name || (lab_due_date_offset ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`)) +
     (groupConfig && groupConfig !== "individual" ? ` (Group)` : "");
+  let ourAssignmentIdx;
+  if (lab_due_date_offset) {
+    ourAssignmentIdx = labAssignmentIdx;
+    labAssignmentIdx++;
+  } else {
+    ourAssignmentIdx = assignmentIdx;
+    assignmentIdx++;
+  }
 
   // Create self review setting
   const { data: selfReviewSettingData, error: selfReviewSettingError } = await supabase
@@ -1049,6 +1677,7 @@ async function insertEnhancedAssignment({
 
   const self_review_setting_id = selfReviewSettingData.id;
 
+  console.log(`Creating assignment ${title}`);
   // Create assignment
   const { data: insertedAssignmentData, error: assignmentError } = await supabase
     .from("assignments")
@@ -1058,12 +1687,12 @@ async function insertEnhancedAssignment({
       due_date: due_date,
       minutes_due_after_lab: lab_due_date_offset,
       template_repo: TEST_HANDOUT_REPO,
-      autograder_points: 100,
+      autograder_points: 20,
       total_points: 100,
       max_late_tokens: 10,
       release_date: addDays(new Date(), -1).toUTCString(),
       class_id: class_id,
-      slug: lab_due_date_offset ? `lab-${assignmentIdx}` : `assignment-${assignmentIdx}`,
+      slug: lab_due_date_offset ? `lab-${ourAssignmentIdx}` : `assignment-${ourAssignmentIdx}`,
       group_config: groupConfig || "individual",
       allow_not_graded_submissions: allow_not_graded_submissions || false,
       self_review_setting_id: self_review_setting_id,
@@ -1136,6 +1765,46 @@ async function insertEnhancedAssignment({
 
   // Combine self-review with generated structure for grading rubric
   const allParts = [selfReviewPart, ...rubricStructure.map((part) => ({ ...part, ordinal: part.ordinal + 1 }))];
+
+  // CRITICAL FIX: Ensure all criteria total_points sum to exactly 90
+  const targetTotal = 90;
+  const selfReviewPoints = 10; // Fixed self-review points
+  const remainingPoints = targetTotal - selfReviewPoints; // 80 points to distribute
+
+  // Collect all non-self-review criteria
+  const allCriteria = allParts.slice(1).flatMap((part) => part.criteria);
+  console.log(
+    `🎯 Distributing ${remainingPoints} points among ${allCriteria.length} criteria (${selfReviewPoints} for self-review)`
+  );
+
+  // Distribute remaining points among criteria to ensure exact total
+  let pointsLeft = remainingPoints;
+  for (let i = 0; i < allCriteria.length; i++) {
+    const criteria = allCriteria[i];
+    if (i === allCriteria.length - 1) {
+      // Last criteria gets all remaining points
+      criteria.total_points = pointsLeft;
+      console.log(`  Final criteria "${criteria.name}": ${pointsLeft} points`);
+    } else {
+      // Distribute roughly equally with some variance
+      const basePoints = Math.floor(remainingPoints / allCriteria.length);
+      const variance = Math.floor(Math.random() * 6) - 3; // ±3 points
+      const allocatedPoints = Math.max(
+        5,
+        Math.min(pointsLeft - (allCriteria.length - i - 1) * 5, basePoints + variance)
+      );
+      criteria.total_points = allocatedPoints;
+      pointsLeft -= allocatedPoints;
+      console.log(`  Criteria "${criteria.name}": ${allocatedPoints} points`);
+    }
+  }
+
+  const actualTotal = allParts.flatMap((part) => part.criteria).reduce((sum, c) => sum + c.total_points, 0);
+  console.log(`✅ Criteria total_points sum: ${actualTotal} (target: ${targetTotal})`);
+
+  if (actualTotal !== targetTotal) {
+    throw new Error(`Criteria total_points sum (${actualTotal}) doesn't match target (${targetTotal})`);
+  }
 
   // Create rubric parts
   const createdParts = [];
@@ -1696,14 +2365,14 @@ async function createWorkflowEvents(
         updated_at: requestedAt.toISOString(),
         run_started_at: requestedAt.toISOString(),
         run_updated_at: requestedAt.toISOString(),
-        payload: JSON.stringify({
+        payload: {
           action: "requested",
           workflow_run: {
             id: workflowRunId,
             status: "queued",
             conclusion: null
           }
-        })
+        }
       });
 
       // 2. IN_PROGRESS event
@@ -1717,14 +2386,14 @@ async function createWorkflowEvents(
         updated_at: inProgressAt.toISOString(),
         run_started_at: inProgressAt.toISOString(),
         run_updated_at: inProgressAt.toISOString(),
-        payload: JSON.stringify({
+        payload: {
           action: "in_progress",
           workflow_run: {
             id: workflowRunId,
             status: "in_progress",
             conclusion: null
           }
-        })
+        }
       });
 
       // 3. COMPLETED event (if the workflow completed)
@@ -1740,14 +2409,14 @@ async function createWorkflowEvents(
           updated_at: completedAt.toISOString(),
           run_started_at: inProgressAt.toISOString(),
           run_updated_at: completedAt.toISOString(),
-          payload: JSON.stringify({
+          payload: {
             action: "completed",
             workflow_run: {
               id: workflowRunId,
               status: "completed",
               conclusion: finalConclusion
             }
-          })
+          }
         });
       }
     }
@@ -1912,7 +2581,7 @@ async function createWorkflowErrors(
         run_number: runNumber,
         run_attempt: runAttempt,
         name: errorMessage,
-        data: JSON.stringify({ type: errorType }),
+        data: { type: errorType },
         is_private: isPrivate,
         created_at: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString()
       });
@@ -1930,9 +2599,9 @@ async function createWorkflowErrors(
     console.log(`   ✓ Created ${workflowErrorsToCreate.length} workflow errors`);
 
     // Log breakdown by type
-    const userVisibleCount = workflowErrorsToCreate.filter((e) => e.data.includes("user_visible_error")).length;
-    const securityCount = workflowErrorsToCreate.filter((e) => e.data.includes("security_error")).length;
-    const configCount = workflowErrorsToCreate.filter((e) => e.data.includes("config_error")).length;
+    const userVisibleCount = workflowErrorsToCreate.filter((e) => e.data.type === "user_visible_error").length;
+    const securityCount = workflowErrorsToCreate.filter((e) => e.data.type === "security_error").length;
+    const configCount = workflowErrorsToCreate.filter((e) => e.data.type === "config_error").length;
     const privateCount = workflowErrorsToCreate.filter((e) => e.is_private).length;
 
     console.log(
@@ -2190,6 +2859,237 @@ interface SeedingOptions {
     maxRepliesPerRequest: number;
     maxMembersPerRequest: number;
   };
+  discussionConfig?: {
+    postsPerTopic: number;
+    maxRepliesPerPost: number;
+  };
+  gradingScheme?: "current" | "specification";
+}
+
+// Helper function to seed discussion threads
+async function seedDiscussionThreads({
+  class_id,
+  students,
+  instructors,
+  graders,
+  postsPerTopic,
+  maxRepliesPerPost
+}: {
+  class_id: number;
+  students: TestingUser[];
+  instructors: TestingUser[];
+  graders: TestingUser[];
+  postsPerTopic: number;
+  maxRepliesPerPost: number;
+}) {
+  console.log(`\n💬 Creating discussion threads...`);
+  console.log(`   Posts per topic: ${postsPerTopic}`);
+  console.log(`   Max replies per post: ${maxRepliesPerPost}`);
+
+  // Get the discussion topics for this class (auto-created by triggers)
+  const { data: discussionTopics, error: topicsError } = await supabase
+    .from("discussion_topics")
+    .select("*")
+    .eq("class_id", class_id)
+    .order("ordinal");
+
+  if (topicsError) {
+    console.error("Error fetching discussion topics:", topicsError);
+    throw topicsError;
+  }
+
+  if (!discussionTopics || discussionTopics.length === 0) {
+    console.log("No discussion topics found - they should be auto-created by triggers");
+    return;
+  }
+
+  console.log(`Found ${discussionTopics.length} discussion topics: ${discussionTopics.map((t) => t.topic).join(", ")}`);
+
+  // All users who can post (students, instructors, graders)
+  const allUsers = [...students, ...instructors, ...graders];
+
+  // Question subjects for different topics
+  const topicSubjects = {
+    Assignments: [
+      "Homework 1 clarification needed",
+      "Project submission format?",
+      "Due date extension request",
+      "Grading rubric question",
+      "Partner work allowed?",
+      "Late submission policy",
+      "Assignment requirements unclear",
+      "Help with problem 3",
+      "Resubmission allowed?",
+      "Group work guidelines"
+    ],
+    Logistics: [
+      "Office hours schedule",
+      "Exam dates confirmed?",
+      "Class cancelled today?",
+      "Final exam format",
+      "Missing lecture notes",
+      "Room change notification",
+      "Midterm review session",
+      "Course syllabus update",
+      "Grade distribution",
+      "Contact TA question"
+    ],
+    Readings: [
+      "Chapter 5 discussion",
+      "Required vs optional readings",
+      "Paper analysis help",
+      "Research methodology question",
+      "Citation format clarification",
+      "Additional resources?",
+      "Textbook alternatives",
+      "Reading comprehension check",
+      "Key concepts summary",
+      "Follow-up questions"
+    ],
+    Memes: [
+      "When you finally understand recursion",
+      "Debugging at 3am be like...",
+      "That feeling when code compiles",
+      "Coffee addiction level: programmer",
+      "Stack overflow saves the day again",
+      "When the semester starts vs ends",
+      "Professor vs student expectations",
+      "Group project dynamics",
+      "Finals week survival guide",
+      "Coding bootcamp vs reality"
+    ]
+  };
+
+  // Bodies for different types of posts
+  const questionBodies = [
+    "Can someone help me understand this concept? I've been struggling with it for hours.",
+    "I'm not sure I understand the requirements correctly. Could someone clarify?",
+    "Has anyone else encountered this issue? Looking for advice.",
+    "What's the best approach for solving this type of problem?",
+    "Can someone point me to relevant resources on this topic?",
+    "I'm getting confused by the instructions. Any help would be appreciated.",
+    "Quick question about the implementation details...",
+    "Not sure if my understanding is correct. Can someone verify?",
+    "Looking for study group partners for this topic.",
+    "What are the common pitfalls to avoid here?"
+  ];
+
+  const replyBodies = [
+    "Thanks for asking this! I had the same question.",
+    "Great point! I hadn't considered that perspective.",
+    "Here's what worked for me in a similar situation...",
+    "I think the key is to focus on the fundamentals first.",
+    "Actually, I believe there might be another way to approach this.",
+    "This helped clarify things for me too!",
+    "Good catch - that's an important detail to remember.",
+    "I found this resource helpful: [example link]",
+    "Building on what others have said...",
+    "That makes perfect sense now, thank you!",
+    "I had a similar issue and solved it by...",
+    "Totally agree with the previous responses.",
+    "Just to add to this discussion...",
+    "This is exactly what I needed to know!",
+    "Another thing to consider is..."
+  ];
+
+  // Track created threads for replies
+  const createdThreads: Array<{ id: number; topic_id: number; is_question: boolean }> = [];
+
+  // Create root posts for each topic
+  for (const topic of discussionTopics) {
+    const subjectsForTopic = topicSubjects[topic.topic as keyof typeof topicSubjects] || ["General discussion"];
+
+    for (let i = 0; i < postsPerTopic; i++) {
+      const user = faker.helpers.arrayElement(allUsers);
+      const isAnonymous = faker.datatype.boolean(0.3); // 30% chance of anonymous posting
+      const isQuestion = faker.datatype.boolean(0.6); // 60% chance of being a question
+      const authorId = isAnonymous ? user.public_profile_id : user.private_profile_id;
+
+      const subject = faker.helpers.arrayElement(subjectsForTopic);
+      const body = isQuestion
+        ? faker.helpers.arrayElement(questionBodies)
+        : faker.lorem.paragraphs(faker.number.int({ min: 2, max: 10 }));
+
+      const { data: thread, error: threadError } = await supabase
+        .from("discussion_threads")
+        .insert({
+          author: authorId,
+          subject,
+          body,
+          class_id,
+          topic_id: topic.id,
+          is_question: isQuestion,
+          instructors_only: false,
+          draft: false,
+          root_class_id: class_id // Set for root threads
+        })
+        .select("id")
+        .single();
+
+      if (threadError) {
+        console.error(`Error creating discussion thread for topic ${topic.topic}:`, threadError);
+        throw new Error(`Failed to create discussion thread for topic ${topic.topic}: ${threadError.message}`);
+      }
+
+      if (thread) {
+        createdThreads.push({
+          id: thread.id,
+          topic_id: topic.id,
+          is_question: isQuestion
+        });
+      }
+    }
+  }
+
+  console.log(`✓ Created ${createdThreads.length} root discussion threads`);
+
+  // Create replies to the root posts
+  let totalReplies = 0;
+  for (const rootThread of createdThreads) {
+    const numReplies = faker.number.int({ min: 1, max: maxRepliesPerPost });
+
+    for (let i = 0; i < numReplies; i++) {
+      const user = faker.helpers.arrayElement(allUsers);
+      const isAnonymous = faker.datatype.boolean(0.25); // 25% chance of anonymous replies
+      const authorId = isAnonymous ? user.public_profile_id : user.private_profile_id;
+
+      const body = faker.helpers.arrayElement(replyBodies);
+
+      const { data: reply, error: replyError } = await supabase
+        .from("discussion_threads")
+        .insert({
+          author: authorId,
+          subject: "Re: Discussion Reply",
+          body,
+          class_id,
+          topic_id: rootThread.topic_id,
+          parent: rootThread.id,
+          root: rootThread.id,
+          is_question: false, // Replies are typically not questions
+          instructors_only: false,
+          draft: false
+          // root_class_id stays null for non-root threads
+        })
+        .select("id")
+        .single();
+
+      if (replyError) {
+        console.error(`Error creating reply to thread ${rootThread.id}:`, replyError);
+        throw new Error(`Failed to create reply to thread ${rootThread.id}: ${replyError.message}`);
+      }
+
+      totalReplies++;
+
+      // Sometimes mark a reply as an answer if the root post was a question
+      if (reply && rootThread.is_question && faker.datatype.boolean(0.3)) {
+        // 30% chance
+        await supabase.from("discussion_threads").update({ answer: reply.id }).eq("id", rootThread.id);
+      }
+    }
+  }
+
+  console.log(`✓ Created ${totalReplies} replies to discussion threads`);
+  console.log(`✓ Discussion threads seeding completed`);
 }
 
 async function seedInstructorDashboardData(options: SeedingOptions) {
@@ -2205,7 +3105,9 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     sectionsAndTagsConfig,
     labAssignmentConfig,
     groupAssignmentConfig,
-    helpRequestConfig
+    helpRequestConfig,
+    discussionConfig,
+    gradingScheme = "current"
   } = options;
 
   // Default rubric configuration if not provided
@@ -2282,52 +3184,113 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     );
     console.log(`   Max Members per Request: ${helpRequestConfig.maxMembersPerRequest}`);
   }
+  if (discussionConfig) {
+    console.log(`   Discussion Posts per Topic: ${discussionConfig.postsPerTopic}`);
+    console.log(`   Max Replies per Post: ${discussionConfig.maxRepliesPerPost}`);
+  }
   console.log("");
 
   try {
     // Create test class using TestingUtils
-    const testClass = await createClass();
+    const testClass = await createClass({ name: process.env.CLASS_NAME || "Test Class" });
     const class_id = testClass.id;
     console.log(`✓ Created test class: ${testClass.name} (ID: ${class_id})`);
 
-    // Create users using TestingUtils
-    console.log("\n👥 Creating test users...");
+    // Find existing users first, then create new ones as needed
+    console.log("\n👥 Finding existing @pawtograder.net users and creating test users...");
 
-    console.log(`  Creating ${numInstructors} instructors`);
-    const instructorItems = Array.from({ length: numInstructors }, (_, i) => ({ index: i }));
-    const instructors = await Promise.all(
-      instructorItems.map(async () =>
-        limiter.schedule(async () => {
+    const existingUsers = await findExistingPawtograderUsers();
+    console.log(
+      `Found ${existingUsers.instructors.length} existing instructors, ${existingUsers.graders.length} existing graders, ${existingUsers.students.length} existing students`
+    );
+
+    // Enroll existing users in the class and create additional users as needed
+    console.log(
+      `  Processing ${numInstructors} instructors (${existingUsers.instructors.length} existing + ${Math.max(0, numInstructors - existingUsers.instructors.length)} new)`
+    );
+    const existingInstructors = await Promise.all(
+      existingUsers.instructors
+        .slice(0, numInstructors)
+        .map((user) => limiter.schedule(() => enrollExistingUserInClass(user, class_id)))
+    );
+
+    const newInstructorsNeeded = Math.max(0, numInstructors - existingInstructors.length);
+    const newInstructors = await Promise.all(
+      Array.from({ length: newInstructorsNeeded }).map(() =>
+        authLimiter.schedule(async () => {
           const name = faker.person.fullName();
-          return createUserInClass({ role: "instructor", class_id, name });
+          const uuid = crypto.randomUUID();
+          return createUserInClass({
+            role: "instructor",
+            class_id,
+            name,
+            email: `instructor-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          });
         })
       )
     );
-    console.log(`✓ Created ${instructors.length} instructors`);
+    const instructors = [...existingInstructors, ...newInstructors];
+    console.log(
+      `✓ Using ${existingInstructors.length} existing + created ${newInstructors.length} new instructors = ${instructors.length} total`
+    );
 
-    console.log(`  Creating ${numGraders} graders`);
-    const graderItems = Array.from({ length: numGraders }, (_, i) => ({ index: i }));
-    const graders = await Promise.all(
-      graderItems.map(async () =>
-        limiter.schedule(async () => {
+    console.log(
+      `  Processing ${numGraders} graders (${existingUsers.graders.length} existing + ${Math.max(0, numGraders - existingUsers.graders.length)} new)`
+    );
+    const existingGraders = await Promise.all(
+      existingUsers.graders
+        .slice(0, numGraders)
+        .map((user) => limiter.schedule(() => enrollExistingUserInClass(user, class_id)))
+    );
+
+    const newGradersNeeded = Math.max(0, numGraders - existingGraders.length);
+    const newGraders = await Promise.all(
+      Array.from({ length: newGradersNeeded }).map(() =>
+        authLimiter.schedule(async () => {
           const name = faker.person.fullName();
-          return createUserInClass({ role: "grader", class_id, name });
+          const uuid = crypto.randomUUID();
+          return createUserInClass({
+            role: "grader",
+            class_id,
+            name,
+            email: `grader-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          });
         })
       )
     );
-    console.log(`✓ Created ${graders.length} graders`);
+    const graders = [...existingGraders, ...newGraders];
+    console.log(
+      `✓ Using ${existingGraders.length} existing + created ${newGraders.length} new graders = ${graders.length} total`
+    );
 
-    console.log(`  Creating ${numStudents} students`);
-    const studentItems = Array.from({ length: numStudents }, (_, i) => ({ index: i }));
-    const students = await Promise.all(
-      studentItems.map(async () =>
-        limiter.schedule(async () => {
+    console.log(
+      `  Processing ${numStudents} students (${existingUsers.students.length} existing + ${Math.max(0, numStudents - existingUsers.students.length)} new)`
+    );
+    const existingStudents = await Promise.all(
+      existingUsers.students
+        .slice(0, numStudents)
+        .map((user) => limiter.schedule(() => enrollExistingUserInClass(user, class_id)))
+    );
+
+    const newStudentsNeeded = Math.max(0, numStudents - existingStudents.length);
+    const newStudents = await Promise.all(
+      Array.from({ length: newStudentsNeeded }).map(() =>
+        authLimiter.schedule(async () => {
           const name = faker.person.fullName();
-          return createUserInClass({ role: "student", class_id, name });
+          const uuid = crypto.randomUUID();
+          return createUserInClass({
+            role: "student",
+            class_id,
+            name,
+            email: `student-${uuid}-${RECYCLE_USERS_KEY}-demo@pawtograder.net`
+          });
         })
       )
     );
-    console.log(`✓ Created ${students.length} students, ${instructors.length} instructors, ${graders.length} graders`);
+    const students = [...existingStudents, ...newStudents];
+    console.log(
+      `✓ Using ${existingStudents.length} existing + created ${newStudents.length} new students = ${students.length} total`
+    );
 
     // Create sections and tags
     console.log("\n🏫 Creating class and lab sections...");
@@ -2385,6 +3348,18 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log("\n⚔️ Creating grader conflicts based on specified patterns...");
     await insertGraderConflicts(graders, students, class_id, instructors[0].private_profile_id);
 
+    // Create discussion threads first (before assignments)
+    if (discussionConfig) {
+      await seedDiscussionThreads({
+        class_id,
+        students,
+        instructors,
+        graders,
+        postsPerTopic: discussionConfig.postsPerTopic,
+        maxRepliesPerPost: discussionConfig.maxRepliesPerPost
+      });
+    }
+
     // Create assignments with enhanced rubric generation
     console.log("\n📚 Creating test assignments with diverse rubrics...");
     const now = new Date();
@@ -2429,10 +3404,70 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     const groupSize = calculateGroupSize(students.length);
     console.log(`   Group size: ${groupSize} students per group`);
 
-    // Create all assignments in parallel
+    // Test the alternating pattern logic
+    console.log(
+      `\n🧪 Testing alternating pattern with ${numAssignments} total assignments, ${effectiveLabAssignmentConfig.numLabAssignments} labs:`
+    );
+    const testPattern: string[] = [];
+    let testLabsCreated = 0;
+    let testRegularAssignmentsCreated = 0;
+    for (let i = 0; i < numAssignments; i++) {
+      const shouldCreateLab = i % 2 === 0;
+      const canCreateLab = testLabsCreated < effectiveLabAssignmentConfig.numLabAssignments;
+      const canCreateRegularAssignment =
+        testRegularAssignmentsCreated < numAssignments - effectiveLabAssignmentConfig.numLabAssignments;
+
+      let isLabAssignment: boolean;
+      if (shouldCreateLab && canCreateLab) {
+        isLabAssignment = true;
+        testLabsCreated++;
+      } else if (!shouldCreateLab && canCreateRegularAssignment) {
+        isLabAssignment = false;
+        testRegularAssignmentsCreated++;
+      } else if (canCreateLab) {
+        isLabAssignment = true;
+        testLabsCreated++;
+      } else {
+        isLabAssignment = false;
+        testRegularAssignmentsCreated++;
+      }
+      testPattern.push(isLabAssignment ? "L" : "A");
+    }
+    console.log(`   Pattern: ${testPattern.join("-")} (L=Lab, A=Assignment)`);
+    console.log(`   Labs created: ${testLabsCreated}, Regular assignments: ${testRegularAssignmentsCreated}`);
+
+    // Create all assignments in parallel with alternating lab/assignment pattern
+    let labAssignmentIdx = 1;
+    let assignmentIdx = 1;
+    let labsCreated = 0;
+    let regularAssignmentsCreated = 0;
     const assignmentPromises = Array.from({ length: numAssignments }, async (_, i) => {
       const assignmentDate = new Date(firstAssignmentDate.getTime() + timeStep * i);
-      const isLabAssignment = i < effectiveLabAssignmentConfig.numLabAssignments;
+
+      // Alternate between lab and regular assignments
+      // Pattern: Lab, Assignment, Lab, Assignment, etc.
+      // But stop creating labs once we've reached the limit, and stop creating regular assignments once we've reached the limit
+      const shouldCreateLab = i % 2 === 0; // Even indices (0, 2, 4, ...) for labs
+      const canCreateLab = labsCreated < effectiveLabAssignmentConfig.numLabAssignments;
+      const canCreateRegularAssignment =
+        regularAssignmentsCreated < numAssignments - effectiveLabAssignmentConfig.numLabAssignments;
+
+      let isLabAssignment: boolean;
+      if (shouldCreateLab && canCreateLab) {
+        isLabAssignment = true;
+        labsCreated++;
+      } else if (!shouldCreateLab && canCreateRegularAssignment) {
+        isLabAssignment = false;
+        regularAssignmentsCreated++;
+      } else if (canCreateLab) {
+        // If we can't create the preferred type, create a lab if possible
+        isLabAssignment = true;
+        labsCreated++;
+      } else {
+        // Otherwise create a regular assignment
+        isLabAssignment = false;
+        regularAssignmentsCreated++;
+      }
       const isGroupAssignment = i < effectiveGroupAssignmentConfig.numGroupAssignments;
       const isLabGroupAssignment =
         isLabAssignment &&
@@ -2446,6 +3481,12 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
       if (isGroupAssignment || isLabGroupAssignment) {
         groupConfig = "groups";
       }
+      const name = isLabAssignment ? `Lab ${labAssignmentIdx}` : `Assignment ${assignmentIdx}`;
+      if (isLabAssignment) {
+        labAssignmentIdx++;
+      } else {
+        assignmentIdx++;
+      }
 
       const assignment = await insertEnhancedAssignment({
         due_date: assignmentDate.toISOString(),
@@ -2453,7 +3494,8 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
         class_id,
         allow_not_graded_submissions: false,
         rubricConfig: effectiveRubricConfig,
-        groupConfig
+        groupConfig,
+        name
       });
 
       // Create assignment groups for group assignments
@@ -2720,117 +3762,13 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     // // Create gradebook columns after all other operations are complete
 
-    // Create simple columns first (without expressions)
-    console.log("\n📊 Creating gradebook columns...");
+    // Create gradebook columns based on selected scheme
+    console.log(`\n📊 Creating gradebook columns using ${gradingScheme} scheme...`);
 
-    // Create manual graded columns if specified
-    const manualGradedColumns: Array<{
-      id: number;
-      name: string;
-      slug: string;
-      max_score: number | null;
-      score_expression: string | null;
-    }> = [];
-
-    if (effectiveNumManualGradedColumns > 0) {
-      console.log(`\n📊 Creating ${effectiveNumManualGradedColumns} manual graded columns...`);
-
-      for (let i = 1; i <= effectiveNumManualGradedColumns; i++) {
-        const columnName = `Manual Grade ${i}`;
-        const columnSlug = `manual-grade-${i}`;
-
-        const manualColumn = await createGradebookColumn({
-          class_id,
-          name: columnName,
-          description: `Manual grading column ${i}`,
-          slug: columnSlug,
-          max_score: 100,
-          sort_order: 1000 + i
-        });
-
-        manualGradedColumns.push(manualColumn);
-      }
-
-      console.log(`✓ Created ${manualGradedColumns.length} manual graded columns`);
-    }
-
-    const participationColumn = await createGradebookColumn({
-      class_id,
-      name: "Participation",
-      description: "Overall class participation score",
-      slug: "participation",
-      max_score: 100,
-      sort_order: 1000
-    });
-
-    await createGradebookColumn({
-      class_id,
-      name: "Average Assignments",
-      description: "Average of all assignments",
-      slug: "average-assignments",
-      score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
-      max_score: 100,
-      sort_order: 2
-    });
-
-    await createGradebookColumn({
-      class_id,
-      name: "Average Lab Assignments",
-      description: "Average of all lab assignments",
-      slug: "average-lab-assignments",
-      score_expression: "mean(gradebook_columns('assignment-lab-*'))",
-      max_score: 100,
-      sort_order: 3
-    });
-
-    await createGradebookColumn({
-      class_id,
-      name: "Final Grade",
-      description: "Calculated final grade",
-      slug: "final-grade",
-      score_expression:
-        "gradebook_columns('average-lab-assignments') * 0.4 + gradebook_columns('average-assignments') * 0.5 + gradebook_columns('participation') * 0.1",
-      max_score: 100,
-      sort_order: 999
-    });
-
-    console.log(
-      `✓ Created ${4 + manualGradedColumns.length} gradebook columns (${4} standard + ${manualGradedColumns.length} manual)`
-    );
-
-    // Now update the columns with score expressions one by one
-    console.log("📊 Adding score expressions to gradebook columns...");
-
-    // Set scores for the participation column using normal distribution
-    console.log("\n📊 Setting scores for gradebook columns...");
-    const participationStats = await setGradebookColumnScores({
-      class_id,
-      gradebook_column_id: participationColumn.id,
-      students,
-      averageScore: 85,
-      standardDeviation: 12,
-      maxScore: 100
-    });
-    console.log(
-      `✓ Set participation scores: avg=${participationStats.averageActual}, min=${participationStats.minScore}, max=${participationStats.maxScore}`
-    );
-
-    // Set scores for manual graded columns using normal distribution
-    if (manualGradedColumns.length > 0) {
-      console.log("\n📊 Setting scores for manual graded columns...");
-      for (const manualColumn of manualGradedColumns) {
-        const manualStats = await setGradebookColumnScores({
-          class_id,
-          gradebook_column_id: manualColumn.id,
-          students,
-          averageScore: 80 + Math.random() * 20, // Random average between 80-100
-          standardDeviation: 10 + Math.random() * 10, // Random deviation between 10-20
-          maxScore: 100
-        });
-        console.log(
-          `✓ Set ${manualColumn.name} scores: avg=${manualStats.averageActual}, min=${manualStats.minScore}, max=${manualStats.maxScore}`
-        );
-      }
+    if (gradingScheme === "specification") {
+      await createSpecificationGradingColumns(class_id, students, assignments, labAssignments);
+    } else {
+      await createCurrentGradingColumns(class_id, students, effectiveNumManualGradedColumns);
     }
 
     // Create help requests if configured
@@ -2856,7 +3794,7 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     console.log(`   Lab Assignments: ${labAssignments.length}`);
     console.log(`   Group Assignments: ${groupAssignments.length}`);
     console.log(`   Lab Group Assignments: ${labGroupAssignments.length}`);
-    console.log(`   Manual Graded Columns: ${manualGradedColumns.length}`);
+    console.log(`   Grading Scheme: ${gradingScheme}`);
     console.log(`   Students: ${students.length}`);
     console.log(`   Graders: ${graders.length}`);
     console.log(`   Instructors: ${instructors.length}`);
@@ -2875,6 +3813,11 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
     if (helpRequestConfig) {
       console.log(`   Help Requests: ${helpRequestConfig.numHelpRequests} (80% resolved/closed)`);
     }
+    if (discussionConfig) {
+      console.log(
+        `   Discussion Threads: ${discussionConfig.postsPerTopic} posts per topic, up to ${discussionConfig.maxRepliesPerPost} replies each`
+      );
+    }
 
     console.log(`\n🏫 Section Details:`);
     classSections.forEach((section) => console.log(`   Class: ${section.name}`));
@@ -2886,21 +3829,19 @@ async function seedInstructorDashboardData(options: SeedingOptions) {
 
     console.log(`\n🔐 Login Credentials:`);
     console.log(`\n   Instructor:`);
-    console.log(`     Email: ${instructors[0].email}`);
+    console.log(`     Sample email: ${instructors[0].email}`);
     console.log(`     Password: ${instructors[0].password}`);
 
     console.log(`\n   Graders (${graders.length} total):`);
     if (graders.length > 0) {
-      console.log(`     Email Template: ${graders[0].email.replace(/#\d+/, "#N")}`);
+      console.log(`     Sample email: ${graders[0].email}`);
       console.log(`     Password: ${graders[0].password}`);
-      console.log(`     Available Numbers: 1-${graders.length} `);
     }
 
     console.log(`\n   Students (${students.length} total):`);
     if (students.length > 0) {
-      console.log(`     Email Template: ${students[0].email.replace(/#\d+/, "#N")}`);
+      console.log(`     Sample email: ${students[0].email}`);
       console.log(`     Password: ${students[0].password}`);
-      console.log(`     Available Numbers: 1-${students.length}`);
     }
 
     console.log(`\n🔗 View the instructor dashboard at: /course/${class_id}`);
@@ -2951,6 +3892,10 @@ export async function runLargeScale() {
       minRepliesPerRequest: 0,
       maxRepliesPerRequest: 300,
       maxMembersPerRequest: 5
+    },
+    discussionConfig: {
+      postsPerTopic: faker.number.int({ min: 50, max: 100 }), // 50-100 posts per topic
+      maxRepliesPerPost: 100 // up to 100 replies per root post
     }
   });
 }
@@ -2967,6 +3912,7 @@ async function runSmallScale() {
     firstAssignmentDate: subDays(now, 30), // 30 days in the past
     lastAssignmentDate: addDays(now, 30), // 30 days in the future
     numManualGradedColumns: 5, // 5 manual graded columns for small scale
+    gradingScheme: "specification", // Use specification grading scheme
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
@@ -2982,11 +3928,11 @@ async function runSmallScale() {
       numGraderTags: 4
     },
     labAssignmentConfig: {
-      numLabAssignments: 25,
+      numLabAssignments: 10,
       minutesDueAfterLab: 60 // 1 hour
     },
     groupAssignmentConfig: {
-      numGroupAssignments: 10,
+      numGroupAssignments: 5,
       numLabGroupAssignments: 10
     },
     helpRequestConfig: {
@@ -2994,6 +3940,10 @@ async function runSmallScale() {
       minRepliesPerRequest: 0,
       maxRepliesPerRequest: 70,
       maxMembersPerRequest: 6
+    },
+    discussionConfig: {
+      postsPerTopic: faker.number.int({ min: 5, max: 16 }), // 5-16 posts per topic
+      maxRepliesPerPost: 16 // up to 16 replies per root post
     }
   });
 }
@@ -3005,9 +3955,10 @@ async function runMicro() {
     numStudents: 2,
     numGraders: 1,
     numInstructors: 1,
-    numAssignments: 5,
-    firstAssignmentDate: addDays(now, 5),
-    lastAssignmentDate: addDays(now, 10),
+    numAssignments: 10,
+    firstAssignmentDate: addDays(now, -65),
+    lastAssignmentDate: addDays(now, -2),
+    gradingScheme: "specification",
     rubricConfig: {
       minPartsPerAssignment: 2,
       maxPartsPerAssignment: 4,
@@ -3023,12 +3974,16 @@ async function runMicro() {
       numGraderTags: 1
     },
     labAssignmentConfig: {
-      numLabAssignments: 1, // 40% of 5 assignments
+      numLabAssignments: 10,
       minutesDueAfterLab: 10 // 1 hour
     },
     groupAssignmentConfig: {
-      numGroupAssignments: 1, // 40% of regular assignments (3 * 0.4 ≈ 1)
-      numLabGroupAssignments: 1 // 50% of lab assignments (2 * 0.5 = 1)
+      numGroupAssignments: 1,
+      numLabGroupAssignments: 1
+    },
+    discussionConfig: {
+      postsPerTopic: 2, // 2 posts per topic
+      maxRepliesPerPost: 4 // up to 4 replies per root post
     }
   });
 }
@@ -3041,5 +3996,4 @@ async function main() {
   await runSmallScale();
   // await runMicro();
 }
-
 main();
