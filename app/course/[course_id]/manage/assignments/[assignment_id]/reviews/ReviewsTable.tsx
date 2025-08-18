@@ -18,7 +18,7 @@ import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { FaEdit, FaTrash, FaDownload } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
 
@@ -531,23 +531,21 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
   );
   const tableController = useMemo(() => {
+    const joinedSelect =
+      "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))";
+
     const query = supabase
       .from("review_assignments")
-      .select(
-        "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))"
-      )
+      .select(joinedSelect)
       .eq("assignment_id", Number(assignmentId))
       .not("rubric_id", "eq", selfReviewRubric?.id || 0);
 
-    return new TableController<
-      "review_assignments",
-      "*, profiles!assignee_profile_id(*), rubrics(*), submissions(*, profiles!profile_id(*), assignment_groups(*, assignment_groups_members(*,profiles!profile_id(*))), assignments(*), submission_reviews!submission_reviews_submission_id_fkey(completed_at, grader, rubric_id, submission_id)), review_assignment_rubric_parts(*, rubric_parts!review_assignment_rubric_parts_rubric_part_id_fkey(id, name))",
-      number
-    >({
+    return new TableController<"review_assignments", typeof joinedSelect, number>({
       query,
       client: supabase,
       table: "review_assignments",
-      classRealTimeController
+      classRealTimeController,
+      selectForSingleRow: joinedSelect
     });
   }, [classRealTimeController, supabase, assignmentId, selfReviewRubric]);
 
@@ -582,6 +580,73 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   } = table;
 
   const isError = !!error;
+
+  // Keep table in sync when related tables change in realtime
+  useEffect(() => {
+    if (!classRealTimeController) return;
+    // When a submission_review changes, invalidate the matching review_assignment row (or refetch all as fallback)
+    const unsubscribeSubmissionReviews = classRealTimeController.subscribeToTable("submission_reviews", (message) => {
+      try {
+        // Attempt targeted invalidation when we have enough data
+        const data = message.data as { submission_id?: number; grader?: string; rubric_id?: number } | undefined;
+        if (data && data.submission_id && data.grader && data.rubric_id) {
+          const current = tableController.list().data as unknown as PopulatedReviewAssignment[];
+          const match = current.find(
+            (ra) =>
+              ra.submission_id === data.submission_id &&
+              ra.assignee_profile_id === data.grader &&
+              ra.rubric_id === data.rubric_id
+          );
+          if (match?.id) {
+            void tableController.invalidate(match.id);
+            return;
+          }
+        }
+        // Fallback to a lightweight full refresh
+        void tableController.refetchAll();
+      } catch {
+        void tableController.refetchAll();
+      }
+    });
+
+    // If rubric parts for a review assignment change, invalidate that review assignment row
+    const unsubscribeReviewAssignmentRubricParts = classRealTimeController.subscribeToTable(
+      "review_assignment_rubric_parts",
+      (message) => {
+        const data = message.data as { review_assignment_id?: number } | undefined;
+        if (data?.review_assignment_id) {
+          void tableController.invalidate(data.review_assignment_id as number);
+        } else {
+          void tableController.refetchAll();
+        }
+      }
+    );
+
+    // Keep in sync with direct changes to review_assignments
+    const unsubscribeReviewAssignments = classRealTimeController.subscribeToTable("review_assignments", (message) => {
+      try {
+        if (message.operation === "INSERT" || message.operation === "UPDATE" || message.operation === "DELETE") {
+          const assignmentIdNum = Number(assignmentId);
+          const mData = message.data as { id?: number; assignment_id?: number } | undefined;
+          if (mData?.assignment_id === assignmentIdNum && typeof mData.id === "number") {
+            void tableController.invalidate(mData.id as number);
+          } else if (typeof message.row_id === "number") {
+            void tableController.invalidate(message.row_id as number);
+          } else {
+            void tableController.refetchAll();
+          }
+        }
+      } catch {
+        void tableController.refetchAll();
+      }
+    });
+
+    return () => {
+      unsubscribeSubmissionReviews();
+      unsubscribeReviewAssignmentRubricParts();
+      unsubscribeReviewAssignments();
+    };
+  }, [classRealTimeController, tableController, assignmentId]);
 
   // Generate filter options from data
   const filterOptions = useMemo(() => {

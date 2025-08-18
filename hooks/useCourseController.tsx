@@ -27,7 +27,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
+import { LiveEvent, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";

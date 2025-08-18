@@ -8,7 +8,6 @@ import { format } from "date-fns";
 import { useEffect, useMemo } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { FaPlus } from "react-icons/fa";
-
 import { Button } from "@/components/ui/button";
 import {
   DialogBody,
@@ -249,16 +248,53 @@ export default function AssignReviewModal({
     [rubricPartsData]
   );
 
-  const onSubmitHanlder = async (data: ReviewAssignmentFormData) => {
+  const onSubmitHandler = async (data: ReviewAssignmentFormData) => {
     const { rubric_part_ids, ...restOfData } = data;
     let reviewAssignmentId: number | undefined = undefined;
     let mainOperationSuccessful = false;
     let rubricPartsOperationSuccessful = true; // Assume success unless proven otherwise
 
+    // Validate required fields
+    if (!restOfData.submission_id || !restOfData.rubric_id) {
+      toaster.error({
+        title: "Error",
+        description: "Submission and rubric must be selected."
+      });
+      return;
+    }
+
+    // Resolve submission_review_id for this submission + rubric (required by DB)
+    let submissionReviewId: number | undefined;
+    try {
+      const { data: sr, error } = await supabaseClient
+        .from("submission_reviews")
+        .select("id")
+        .eq("submission_id", restOfData.submission_id)
+        .eq("rubric_id", restOfData.rubric_id)
+        .single();
+
+      if (error || !sr?.id) {
+        toaster.error({
+          title: "Error creating review assignment",
+          description:
+            "Failed to find submission review for this submission and rubric. Please ensure the rubric exists for this assignment."
+        });
+        return;
+      }
+      submissionReviewId = Number(sr.id);
+    } catch (e) {
+      toaster.error({
+        title: "Error creating review assignment",
+        description: e instanceof Error ? e.message : "Unable to look up submission review."
+      });
+      return;
+    }
+
     const valuesToSubmit = {
       ...restOfData,
       class_id: courseId,
       assignment_id: assignmentId,
+      submission_review_id: submissionReviewId,
       due_date: restOfData.due_date,
       release_date: restOfData.release_date || undefined,
       max_allowable_late_tokens:
@@ -299,16 +335,14 @@ export default function AssignReviewModal({
         });
         if (!createdReviewAssignment.data?.id) {
           toaster.error({ title: "Error", description: "Failed to get ID of the created review assignment." });
-          // No further operations can proceed without reviewAssignmentId
           rubricPartsOperationSuccessful = false;
-          // mainOperationSuccessful remains false
         } else {
           reviewAssignmentId = createdReviewAssignment.data.id;
-          mainOperationSuccessful = true; // If it doesn't throw and ID is present
+          mainOperationSuccessful = true;
         }
       }
 
-      // Proceed with rubric parts only if main operation was potentially successful and ID is available
+      // Proceed with rubric parts only if main operation was successful and ID is available
       if (mainOperationSuccessful && reviewAssignmentId !== undefined) {
         const newSelectedRubricPartIds = rubric_part_ids || [];
 
@@ -359,7 +393,6 @@ export default function AssignReviewModal({
               }
               if (creationErrorsInLoop) {
                 rubricPartsOperationSuccessful = false;
-                // A general toast for loop errors, specific ones are handled by errorNotification or catch
                 toaster.error({
                   id: "batch-rubric-part-error",
                   title: "Error saving some rubric parts",
@@ -376,17 +409,12 @@ export default function AssignReviewModal({
               "Could not manage specific rubric parts due to a setup issue. Skipping delete/create of parts.",
             type: "warning"
           });
-          rubricPartsOperationSuccessful = false; // Cannot manage parts without client
+          rubricPartsOperationSuccessful = false;
         }
       } else if (reviewAssignmentId === undefined && mainOperationSuccessful) {
-        // This case should ideally be caught by the !createdReviewAssignment.data?.id check earlier
-        // but as a fallback, if mainOp was flagged successful but ID is missing.
         rubricPartsOperationSuccessful = false;
       }
     } catch (error) {
-      // This primarily catches errors from createReviewAssignment/updateReviewAssignment
-      // if they throw an error not handled by their own errorNotification.
-      // mainOperationSuccessful will remain false or be set to false.
       mainOperationSuccessful = false;
       toaster.error({
         title: "Error in review assignment submission process",
@@ -441,7 +469,7 @@ export default function AssignReviewModal({
           </DialogCloseTrigger>
         </DialogHeader>
         <DialogBody>
-          <form onSubmit={handleSubmit(onSubmitHanlder)} id="review-assignment-form">
+          <form onSubmit={handleSubmit(onSubmitHandler)} id="review-assignment-form">
             <VStack gap={4} p={4} align="stretch">
               <Field label="Submission" invalid={!!errors.submission_id}>
                 <Controller
