@@ -21,18 +21,44 @@ export default function OfficeHoursAdminPage() {
   return (
     <Box>
       <Tabs.Root defaultValue="dashboard" variant="enclosed">
-        <Tabs.List>
-          <Tabs.Trigger value="dashboard">TA Dashboard</Tabs.Trigger>
-          <Tabs.Trigger value="queues">Queue Management</Tabs.Trigger>
-          <Tabs.Trigger value="assignments">Assignment Management</Tabs.Trigger>
-          <Tabs.Trigger value="templates">Templates</Tabs.Trigger>
-          <Tabs.Trigger value="moderation">Moderation</Tabs.Trigger>
-          <Tabs.Trigger value="karma">Student Karma</Tabs.Trigger>
-          <Tabs.Trigger value="activity">Student Activity</Tabs.Trigger>
-          {isInstructor && <Tabs.Trigger value="feedback">Feedback</Tabs.Trigger>}
-        </Tabs.List>
+        <Box overflowX={{ base: "auto", md: "visible" }} overflowY="hidden" pb={{ base: 1, md: 0 }}>
+          <Tabs.List
+            display="inline-flex"
+            flexWrap="nowrap"
+            columnGap={{ base: 2, md: 3 }}
+            px={{ base: 2, md: 0 }}
+            minW="max-content"
+          >
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="dashboard">
+              TA Dashboard
+            </Tabs.Trigger>
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="queues">
+              Queue Management
+            </Tabs.Trigger>
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="assignments">
+              Assignment Management
+            </Tabs.Trigger>
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="templates">
+              Templates
+            </Tabs.Trigger>
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="moderation">
+              Moderation
+            </Tabs.Trigger>
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="karma">
+              Student Karma
+            </Tabs.Trigger>
+            <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="activity">
+              Student Activity
+            </Tabs.Trigger>
+            {isInstructor && (
+              <Tabs.Trigger flexShrink={0} whiteSpace="nowrap" value="feedback">
+                Feedback
+              </Tabs.Trigger>
+            )}
+          </Tabs.List>
+        </Box>
 
-        <Box mt={6}>
+        <Box mt={{ base: 3, md: 6 }}>
           <Tabs.Content value="dashboard">
             <HelpQueuesDashboard />
           </Tabs.Content>

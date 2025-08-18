@@ -42,7 +42,7 @@ export default function CurrentRequest({ request, position }: { request: HelpReq
   }, [assignee]);
 
   return (
-    <Box width="100%">
+    <Box width="100%" maxW={{ base: "md", md: "full" }} mx="auto">
       <DataList.Root>
         <DataList.Item>
           <DataList.ItemLabel>Your position in the queue</DataList.ItemLabel>
@@ -61,7 +61,13 @@ export default function CurrentRequest({ request, position }: { request: HelpReq
         </DataList.Item>
       </DataList.Root>
 
-      <Flex height="100vh" overflow="hidden" width="100%">
+      <Flex
+        height={{ base: "auto", md: "100vh" }}
+        overflow={{ base: "visible", md: "hidden" }}
+        width="100%"
+        maxW={{ base: "md", md: "full" }}
+        mx="auto"
+      >
         <HelpRequestChat request={request} />
       </Flex>
     </Box>

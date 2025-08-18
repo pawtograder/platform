@@ -1,6 +1,19 @@
 "use client";
 
+import NotificationsBox from "@/components/notifications/notifications-box";
+import { ColorModeButton } from "@/components/ui/color-mode";
+import Link from "@/components/ui/link";
+import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
+import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
+import { createClient } from "@/utils/supabase/client";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
+  Avatar,
   Box,
   Button,
   CloseButton,
@@ -15,30 +28,15 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { FaCircleUser } from "react-icons/fa6";
-import { PiSignOut } from "react-icons/pi";
-import { signOutAction } from "../actions";
 import { useInvalidate, useList, useOne } from "@refinedev/core";
-import { ColorModeButton } from "@/components/ui/color-mode";
-import Link from "@/components/ui/link";
-import NotificationsBox from "@/components/notifications/notifications-box";
-import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
-import { Tooltip } from "@/components/ui/tooltip";
-import useAuthState from "@/hooks/useAuthState";
-import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
-import { createClient } from "@/utils/supabase/client";
-import { UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { Avatar } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
+import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
+import { PiSignOut } from "react-icons/pi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
-import NotificationPreferences from "@/components/notifications/notification-preferences";
-import { IoNotificationsCircle } from "react-icons/io5";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { signOutAction } from "../actions";
 
 function SupportMenu() {
   return (
@@ -407,40 +405,6 @@ const ProfileChangesMenu = () => {
   );
 };
 
-/**
- * Dialog component to allow users to manage their notification preferences.
- */
-const NotificationPreferencesMenu = () => {
-  return (
-    <Dialog.Root size={"md"} placement={"center"}>
-      <Dialog.Trigger asChild>
-        <Button variant="ghost" colorPalette="gray" w="100%" justifyContent="flex-start" size="sm" py={0}>
-          <IoNotificationsCircle />
-          Notification Settings
-        </Button>
-      </Dialog.Trigger>
-      <Portal>
-        <Dialog.Backdrop />
-        <Dialog.Positioner>
-          <Dialog.Content maxHeight="80vh" overflowY="auto">
-            <Dialog.Header>
-              <Dialog.Title>Notification Settings</Dialog.Title>
-            </Dialog.Header>
-            <Dialog.Body>
-              <NotificationPreferences />
-            </Dialog.Body>
-            <Dialog.Footer>
-              <Dialog.ActionTrigger asChild>
-                <Button variant="outline">Close</Button>
-              </Dialog.ActionTrigger>
-            </Dialog.Footer>
-          </Dialog.Content>
-        </Dialog.Positioner>
-      </Portal>
-    </Dialog.Root>
-  );
-};
-
 function UserSettingsMenu() {
   const [open, setOpen] = useState(false);
   const supabase = createClient();
@@ -579,7 +543,6 @@ function UserSettingsMenu() {
                   </>
                 )}
                 <ProfileChangesMenu />
-                <NotificationPreferencesMenu />
                 <Button
                   variant="ghost"
                   pl={0}

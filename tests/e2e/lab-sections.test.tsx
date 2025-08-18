@@ -1,6 +1,6 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import percySnapshot from "@percy/playwright";
 import { expect, test } from "@playwright/test";
+import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { createClass, createUserInClass, loginAsUser, TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
@@ -33,7 +33,7 @@ test.describe("Lab Sections Page", () => {
   });
   test("Instructors can view lab section contents", async ({ page }) => {
     // Check Lab Sections Page Contents
-    await percySnapshot(page, "Lab Sections Page");
+    await argosScreenshot(page, "Lab Sections Page");
     await expect(page.getByRole("heading", { name: "Lab Sections" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create Lab Section" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create your first lab section" })).toBeVisible();

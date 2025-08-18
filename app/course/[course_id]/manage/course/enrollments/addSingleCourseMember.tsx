@@ -1,6 +1,6 @@
 "use client";
 
-import { Icon, Button, Input, Dialog, Field, NativeSelect, Text } from "@chakra-ui/react";
+import { Icon, Button, Input, Dialog, Field, NativeSelect, Text, Spinner } from "@chakra-ui/react";
 import { FaPlus } from "react-icons/fa";
 import { useForm } from "react-hook-form";
 import { useParams } from "next/navigation";
@@ -8,6 +8,7 @@ import { useCallback, useState } from "react";
 import { enrollmentAdd } from "@/lib/edgeFunctions";
 import { createClient } from "@/utils/supabase/client";
 import { toaster } from "@/components/ui/toaster";
+import * as Sentry from "@sentry/nextjs";
 
 type FormData = {
   email: string;
@@ -18,6 +19,7 @@ type FormData = {
 
 export default function AddSingleCourseMember() {
   const [open, setOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { course_id } = useParams();
   const {
     register,
@@ -26,11 +28,7 @@ export default function AddSingleCourseMember() {
   } = useForm<FormData>();
   const onSubmit = useCallback(
     async (data: FormData) => {
-      toaster.create({
-        title: "Adding course member",
-        description: "Please wait while we add the member to the course",
-        type: "info"
-      });
+      setIsSubmitting(true);
       const supabase = createClient();
       try {
         await enrollmentAdd(
@@ -44,10 +42,13 @@ export default function AddSingleCourseMember() {
           type: "success"
         });
       } catch (error) {
+        Sentry.captureException(error);
         toaster.error({
           title: "Error adding course member",
           description: error instanceof Error ? error.message : "An unexpected error occurred."
         });
+      } finally {
+        setIsSubmitting(false);
       }
     },
     [course_id]
@@ -101,8 +102,15 @@ export default function AddSingleCourseMember() {
                   Notify user they were added to this course
                 </label>
               </Field.Root>
-              <Button type="submit" mt={2}>
-                Add
+              <Button type="submit" mt={2} loading={isSubmitting}>
+                {isSubmitting ? (
+                  <>
+                    <Spinner size="sm" />
+                    Adding...
+                  </>
+                ) : (
+                  "Add"
+                )}
               </Button>
             </form>
           </Dialog.Body>

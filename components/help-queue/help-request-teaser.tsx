@@ -1,4 +1,5 @@
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { Avatar, Box, HStack, Stack, Text, Badge, Icon, AvatarGroup } from "@chakra-ui/react";
 import { BsChatText, BsCameraVideo, BsGeoAlt, BsPeople, BsPersonVideo2 } from "react-icons/bs";
 import Markdown from "react-markdown";
@@ -45,6 +46,17 @@ export const HelpRequestTeaser = (props: Props) => {
   const student2Profile = useUserProfile(students[1] || "");
   const student3Profile = useUserProfile(students[2] || "");
 
+  // Fallback to class roster when individual profile hook hasn't populated yet
+  const { profiles: rosterProfiles } = useClassProfiles();
+  const rosterProfile1 = rosterProfiles.find((p) => p.id === (students[0] || ""));
+  const rosterProfile2 = rosterProfiles.find((p) => p.id === (students[1] || ""));
+  const rosterProfile3 = rosterProfiles.find((p) => p.id === (students[2] || ""));
+
+  const getBestName = (p: unknown): string => {
+    const u = p as { name?: string; short_name?: string; sortable_name?: string } | undefined;
+    return u?.name || u?.short_name || u?.sortable_name || "";
+  };
+
   // Helper functions that use the profiles we've already loaded
   const renderStudentsDisplay = () => {
     if (students.length === 0) {
@@ -52,13 +64,16 @@ export const HelpRequestTeaser = (props: Props) => {
     }
 
     if (students.length === 1) {
-      return <Text fontWeight="medium">{student1Profile?.name || "Unknown Student"}</Text>;
+      return (
+        <Text fontWeight="medium">{student1Profile?.name || getBestName(rosterProfile1) || "Unknown Student"}</Text>
+      );
     }
 
     if (students.length === 2) {
       return (
         <Text fontWeight="medium">
-          {student1Profile?.name || "Unknown"} & {student2Profile?.name || "Unknown"}
+          {student1Profile?.name || getBestName(rosterProfile1) || "Unknown"} &{" "}
+          {student2Profile?.name || getBestName(rosterProfile2) || "Unknown"}
         </Text>
       );
     }
@@ -66,7 +81,7 @@ export const HelpRequestTeaser = (props: Props) => {
     return (
       <HStack spaceX={1}>
         <Text fontWeight="medium">
-          {student1Profile?.name || "Unknown"} + {students.length - 1} others
+          {student1Profile?.name || getBestName(rosterProfile1) || "Unknown"} + {students.length - 1} others
         </Text>
         <Icon as={BsPeople} fontSize="sm" color="fg.muted" />
       </HStack>
@@ -85,21 +100,39 @@ export const HelpRequestTeaser = (props: Props) => {
     if (students.length === 1) {
       return (
         <Avatar.Root size="sm">
-          <Avatar.Image src={student1Profile?.avatar_url} />
-          <Avatar.Fallback>{student1Profile?.name?.charAt(0) || "?"}</Avatar.Fallback>
+          <Avatar.Image
+            src={(student1Profile?.avatar_url || rosterProfile1?.avatar_url || undefined) as string | undefined}
+          />
+          <Avatar.Fallback>{(student1Profile?.name || getBestName(rosterProfile1) || "?").charAt(0)}</Avatar.Fallback>
         </Avatar.Root>
       );
     }
 
-    const profiles = [student1Profile, student2Profile, student3Profile].filter(Boolean);
     const maxAvatars = Math.min(3, students.length);
+    const avatars = [
+      {
+        id: students[0],
+        name: student1Profile?.name || getBestName(rosterProfile1),
+        avatar_url: (student1Profile?.avatar_url || rosterProfile1?.avatar_url) as string | undefined
+      },
+      {
+        id: students[1],
+        name: student2Profile?.name || getBestName(rosterProfile2),
+        avatar_url: (student2Profile?.avatar_url || rosterProfile2?.avatar_url) as string | undefined
+      },
+      {
+        id: students[2],
+        name: student3Profile?.name || getBestName(rosterProfile3),
+        avatar_url: (student3Profile?.avatar_url || rosterProfile3?.avatar_url) as string | undefined
+      }
+    ].slice(0, maxAvatars);
 
     return (
       <AvatarGroup size="sm">
-        {profiles.slice(0, maxAvatars).map((profile, index) => (
-          <Avatar.Root key={students[index]} size="sm">
-            <Avatar.Image src={profile?.avatar_url} />
-            <Avatar.Fallback>{profile?.name?.charAt(0) || "?"}</Avatar.Fallback>
+        {avatars.map((p) => (
+          <Avatar.Root key={p.id} size="sm">
+            <Avatar.Image src={p.avatar_url} />
+            <Avatar.Fallback>{(p.name || "?").charAt(0)}</Avatar.Fallback>
           </Avatar.Root>
         ))}
       </AvatarGroup>

@@ -9,18 +9,19 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
-import { useRegradeRequest } from "@/hooks/useAssignment";
+import { useAssignmentController, useRegradeRequest } from "@/hooks/useAssignment";
 import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useProfileRole } from "@/hooks/useCourseController";
-import { useSubmission, useSubmissionRegradeRequestComments } from "@/hooks/useSubmission";
+import { useSubmission, useSubmissionController, useSubmissionRegradeRequestComments } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
+import { createClient } from "@/utils/supabase/client";
 import type { RegradeRequestComment as RegradeRequestCommentType, RegradeStatus } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Heading, HStack, Icon, Input, Tag, Text, VStack } from "@chakra-ui/react";
-import { useCreate, useInvalidate, useUpdate } from "@refinedev/core";
+import { useUpdate } from "@refinedev/core";
 import { format, formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
-import { useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import Markdown from "./markdown";
 import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
@@ -183,6 +184,339 @@ export function RegradeRequestComments({ regradeRequestId }: { regradeRequestId:
 }
 
 /**
+ * Popover component for resolving a regrade request with warning for significant score changes
+ */
+const ResolveRequestPopover = memo(function ResolveRequestPopover({
+  initialPoints,
+  regradeRequestId,
+  privateProfileId
+}: {
+  initialPoints: number | null;
+  regradeRequestId: number;
+  privateProfileId: string;
+}) {
+  const [resolveScore, setResolveScore] = useState<number>();
+  const [isOpen, setIsOpen] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const { regradeRequests } = useAssignmentController();
+
+  // Helper function to check if the score change is significant (>50%)
+  const isSignificantChange = useCallback((newScore: number | undefined, originalScore: number | null): boolean => {
+    if (newScore === undefined || originalScore === null || originalScore === 0) {
+      return false;
+    }
+    const changePercent = Math.abs((newScore - originalScore) / originalScore);
+    return changePercent > 0.5;
+  }, []);
+
+  const handleResolve = useCallback(async () => {
+    if (resolveScore === undefined) return;
+
+    setIsUpdating(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.rpc("update_regrade_request_status", {
+        regrade_request_id: regradeRequestId,
+        new_status: "resolved",
+        profile_id: privateProfileId,
+        resolved_points: resolveScore
+      });
+
+      if (error) throw error;
+
+      setIsOpen(false);
+      await regradeRequests.invalidate(regradeRequestId);
+      toaster.create({
+        title: "Request Resolved",
+        description: "The regrade request has been resolved.",
+        type: "success"
+      });
+    } catch (error) {
+      console.error("Error resolving request:", error);
+      toaster.create({
+        title: "Error",
+        description: "Failed to resolve request. Please try again.",
+        type: "error"
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [resolveScore, regradeRequestId, privateProfileId, regradeRequests]);
+
+  return (
+    <PopoverRoot
+      open={isOpen}
+      onOpenChange={(e) => {
+        setIsOpen(e.open);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button colorPalette="blue" size="sm" loading={isUpdating}>
+          Resolve Request
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent>
+        <PopoverArrow />
+        <PopoverBody>
+          <VStack gap={3} align="start">
+            <Text fontWeight="semibold">Resolve Regrade Request</Text>
+            <Text fontSize="sm">The initial score for this regrade request is {initialPoints || 0}.</Text>
+            <Text fontSize="sm">
+              Enter the final score for this comment after reviewing the regrade request. It will overwrite the score
+              for the comment.
+            </Text>
+            <VStack gap={2} align="start" w="100%">
+              <Text fontSize="sm" fontWeight="medium">
+                Final Points:
+              </Text>
+              <Box
+                bg={isSignificantChange(resolveScore, initialPoints) ? "bg.warning" : undefined}
+                p={isSignificantChange(resolveScore, initialPoints) ? 2 : 0}
+                borderRadius={isSignificantChange(resolveScore, initialPoints) ? "md" : undefined}
+                w="100%"
+              >
+                <Input
+                  type="number"
+                  value={resolveScore?.toString() ?? ""}
+                  onChange={(e) => {
+                    e.stopPropagation(); // Prevent event bubbling
+                    const inputValue = e.target.value;
+
+                    // Allow clearing the field
+                    if (inputValue === "" || inputValue === "-") {
+                      setResolveScore(undefined);
+                      return;
+                    }
+
+                    // Parse as float to handle decimal input, then convert to int
+                    const value = parseFloat(inputValue);
+                    if (!isNaN(value)) {
+                      setResolveScore(Math.round(value));
+                    }
+                  }}
+                  onFocus={(e) => e.stopPropagation()} // Prevent focus events from bubbling
+                  onBlur={(e) => e.stopPropagation()} // Prevent blur events from bubbling
+                  placeholder="Enter points..."
+                  size="sm"
+                  w="100px"
+                />
+                {isSignificantChange(resolveScore, initialPoints) && (
+                  <Text fontSize="xs" color="orange.900" mt={1} fontWeight="medium">
+                    ⚠️ This is a significant change ({">"}50%) from the original score
+                  </Text>
+                )}
+              </Box>
+            </VStack>
+            <Button
+              colorPalette="blue"
+              size="sm"
+              onClick={handleResolve}
+              loading={isUpdating}
+              w="100%"
+              disabled={resolveScore === undefined}
+            >
+              Override Score and Resolve Request
+            </Button>
+          </VStack>
+        </PopoverBody>
+      </PopoverContent>
+    </PopoverRoot>
+  );
+});
+
+/**
+ * Dialog component for escalating a regrade request to an instructor
+ */
+function EscalateRequestDialog({
+  isOpen,
+  onOpenChange,
+  onEscalate,
+  isUpdating
+}: {
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  onEscalate: () => Promise<void>;
+  isUpdating: boolean;
+}) {
+  return (
+    <DialogRoot open={isOpen} onOpenChange={(e) => onOpenChange(e.open)}>
+      <DialogTrigger asChild>
+        <Button colorPalette="orange" size="sm" loading={isUpdating}>
+          Appeal to Instructor
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Escalate Regrade Request</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <VStack gap={4} align="start">
+            <Text>You can appeal this regrade request to an instructor for final review.</Text>
+            <Box bg="bg.info" p={3} borderRadius="md" w="100%">
+              <Text fontWeight="semibold" mb={2}>
+                ⚠️ Important Guidelines
+              </Text>
+              <VStack gap={1} align="start">
+                <Text fontSize="sm">• Only appeal if you believe the rubric is not being fairly applied</Text>
+                <Text fontSize="sm">• Don&apos;t appeal simply because you disagree with the grade</Text>
+                <Text fontSize="sm">• The instructor&apos;s decision will be final</Text>
+                <Text fontSize="sm">• Frivolous appeals may affect future regrade requests</Text>
+              </VStack>
+            </Box>
+          </VStack>
+        </DialogBody>
+        <DialogFooter>
+          <DialogActionTrigger asChild>
+            <Button variant="outline">Cancel</Button>
+          </DialogActionTrigger>
+          <Button colorPalette="orange" onClick={onEscalate} loading={isUpdating}>
+            Escalate Request
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </DialogRoot>
+  );
+}
+
+/**
+ * Popover component for closing (deciding on) an escalated regrade request with warning for significant score changes
+ */
+const CloseRequestPopover = memo(function CloseRequestPopover({
+  initialPoints,
+  resolvedPoints,
+  regradeRequestId,
+  privateProfileId
+}: {
+  initialPoints: number | null;
+  resolvedPoints: number | null;
+  regradeRequestId: number;
+  privateProfileId: string;
+}) {
+  const [closeScore, setCloseScore] = useState<number>();
+  const [isOpen, setIsOpen] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  const { regradeRequests } = useAssignmentController();
+
+  // Helper function to check if the score change is significant (>50%)
+  const isSignificantChange = useCallback((newScore: number | undefined, originalScore: number | null): boolean => {
+    if (newScore === undefined || originalScore === null || originalScore === 0) {
+      return false;
+    }
+    const changePercent = Math.abs((newScore - originalScore) / originalScore);
+    return changePercent > 0.5;
+  }, []);
+
+  const handleClose = useCallback(async () => {
+    if (closeScore === undefined) return;
+
+    setIsUpdating(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.rpc("update_regrade_request_status", {
+        regrade_request_id: regradeRequestId,
+        new_status: "closed",
+        profile_id: privateProfileId,
+        closed_points: closeScore
+      });
+
+      if (error) throw error;
+
+      setIsOpen(false);
+      await regradeRequests.invalidate(regradeRequestId);
+      toaster.create({
+        title: "Request Closed",
+        description: "The regrade request has been closed.",
+        type: "success"
+      });
+    } catch (error) {
+      console.error("Error closing request:", error);
+      toaster.create({
+        title: "Error",
+        description: "Failed to close request. Please try again.",
+        type: "error"
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  }, [closeScore, regradeRequestId, privateProfileId, regradeRequests]);
+
+  return (
+    <PopoverRoot open={isOpen} onOpenChange={(e) => setIsOpen(e.open)}>
+      <PopoverTrigger asChild>
+        <Button colorPalette="orange" variant="solid" size="sm">
+          Decide Appeal
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent>
+        <PopoverArrow />
+        <PopoverBody>
+          <VStack gap={3} align="start">
+            <Text fontWeight="semibold">Decide Appeal</Text>
+            <Text fontSize="sm">Enter the final decision for this appealed regrade request.</Text>
+            <Text fontSize="sm">Initial score: {initialPoints}.</Text>
+            <Text fontSize="sm">Revised score: {resolvedPoints}.</Text>
+            <VStack gap={2} align="start" w="100%">
+              <Text fontSize="sm" fontWeight="medium">
+                Final Points:
+              </Text>
+              <Box
+                bg={isSignificantChange(closeScore, initialPoints) ? "bg.warning" : undefined}
+                p={isSignificantChange(closeScore, initialPoints) ? 2 : 0}
+                borderRadius={isSignificantChange(closeScore, initialPoints) ? "md" : undefined}
+                w="100%"
+              >
+                <Input
+                  type="number"
+                  value={closeScore?.toString() ?? ""}
+                  onChange={(e) => {
+                    e.stopPropagation(); // Prevent event bubbling
+                    const inputValue = e.target.value;
+
+                    // Allow clearing the field
+                    if (inputValue === "" || inputValue === "-") {
+                      setCloseScore(undefined);
+                      return;
+                    }
+
+                    // Parse as float to handle decimal input, then convert to int
+                    const value = parseFloat(inputValue);
+                    if (!isNaN(value)) {
+                      setCloseScore(Math.round(value));
+                    }
+                  }}
+                  onFocus={(e) => e.stopPropagation()} // Prevent focus events from bubbling
+                  onBlur={(e) => e.stopPropagation()} // Prevent blur events from bubbling
+                  placeholder="Enter points..."
+                  size="sm"
+                  w="100px"
+                />
+                {isSignificantChange(closeScore, initialPoints) && (
+                  <Text fontSize="xs" color="orange.900" mt={1} fontWeight="medium">
+                    ⚠️ This is a significant change ({">"}50%) from the original score
+                  </Text>
+                )}
+              </Box>
+            </VStack>
+            <Button
+              colorPalette="green"
+              variant="surface"
+              size="sm"
+              onClick={handleClose}
+              loading={isUpdating}
+              w="100%"
+              disabled={closeScore === undefined}
+            >
+              Decide Appeal and Close Request
+            </Button>
+          </VStack>
+        </PopoverBody>
+      </PopoverContent>
+    </PopoverRoot>
+  );
+});
+
+/**
  * Displays and manages a regrade request, including its status, metadata, available actions, and associated comments.
  *
  * Renders the regrade request's current status, assignment and user details, and provides context-sensitive actions such as resolving, escalating, or closing the request based on user role and request state. Includes a comment section for discussion and supports adding new comments unless the request is closed. Children content is rendered within the request panel.
@@ -204,22 +538,17 @@ export default function RegradeRequestWrapper({
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
-  const [resolveScore, setResolveScore] = useState<number>();
-  const [closeScore, setCloseScore] = useState<number>();
   const [isEscalateDialogOpen, setIsEscalateDialogOpen] = useState(false);
   const isGroupAssignment = useSubmission().assignment_group_id !== null;
-  const { mutateAsync: updateRegradeStatus } = useCreate({
-    resource: "rpc/update_regrade_request_status"
-  });
-  const { mutateAsync: createComment } = useCreate<RegradeRequestCommentType>({
-    resource: "submission_regrade_request_comments"
-  });
-  const invalidate = useInvalidate();
+  const { submission_regrade_request_comments } = useSubmissionController();
+  const { regradeRequests } = useAssignmentController();
+
   const assignee = useUserProfile(regradeRequest?.assignee);
   const resolver = useUserProfile(regradeRequest?.resolved_by);
   const escalator = useUserProfile(regradeRequest?.escalated_by);
   const closer = useUserProfile(regradeRequest?.closed_by);
 
+  // Early return if no regrade request
   if (!regradeRequest) {
     return <>{children}</>;
   }
@@ -231,6 +560,7 @@ export default function RegradeRequestWrapper({
   const showCommentForm = regradeRequest.status !== "closed";
 
   const handleSubmitComment = async (commentText: string) => {
+    if (!regradeRequest?.id) return;
     if (!commentText.trim()) {
       toaster.create({
         title: "Empty comment",
@@ -241,20 +571,20 @@ export default function RegradeRequestWrapper({
     }
 
     setIsSubmittingComment(true);
+    const supabase = createClient();
     try {
       if (regradeRequest.status === "draft") {
-        await updateRegradeStatus({
-          values: {
-            new_status: "opened",
-            profile_id: private_profile_id,
-            regrade_request_id: regradeRequest.id
-          }
+        const { error } = await supabase.rpc("update_regrade_request_status", {
+          regrade_request_id: regradeRequest.id,
+          new_status: "opened",
+          profile_id: private_profile_id
         });
-        await invalidate({
-          resource: "submission_regrade_requests",
-          id: regradeRequest.id,
-          invalidates: ["all"]
-        });
+
+        if (error) {
+          throw new Error(`Failed to open regrade request: ${error.message}`);
+        }
+
+        await regradeRequests.invalidate(regradeRequest.id);
       }
       const values = {
         comment: commentText.trim(),
@@ -264,20 +594,12 @@ export default function RegradeRequestWrapper({
         class_id: regradeRequest.class_id,
         author: private_profile_id
       };
-      await createComment({
-        values: values
-      });
-
-      toaster.create({
-        title: "Comment added",
-        description: "Your comment has been added to the regrade request",
-        type: "success"
-      });
+      await submission_regrade_request_comments.create(values);
     } catch (error) {
-      console.error("Error creating comment:", error);
+      console.error("Error creating comment or updating regrade request:", error);
       toaster.create({
         title: "Error",
-        description: "Failed to add comment. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to add comment. Please try again.",
         type: "error"
       });
     } finally {
@@ -285,54 +607,22 @@ export default function RegradeRequestWrapper({
     }
   };
 
-  const handleResolveRequest = async () => {
-    setIsUpdatingStatus(true);
-    try {
-      await updateRegradeStatus({
-        values: {
-          regrade_request_id: regradeRequest.id,
-          new_status: "resolved",
-          profile_id: private_profile_id,
-          resolved_points: resolveScore
-        }
-      });
-      await invalidate({
-        resource: "submission_regrade_requests",
-        id: regradeRequest.id,
-        invalidates: ["all"]
-      });
-      toaster.create({
-        title: "Request Resolved",
-        description: "The regrade request has been resolved.",
-        type: "success"
-      });
-    } catch (error) {
-      console.error("Error resolving request:", error);
-      toaster.create({
-        title: "Error",
-        description: "Failed to resolve request. Please try again.",
-        type: "error"
-      });
-    } finally {
-      setIsUpdatingStatus(false);
-    }
-  };
-
   const handleEscalateRequest = async () => {
+    if (!regradeRequest?.id) return;
     setIsUpdatingStatus(true);
+    const supabase = createClient();
     try {
-      await updateRegradeStatus({
-        values: {
-          regrade_request_id: regradeRequest.id,
-          new_status: "escalated",
-          profile_id: private_profile_id
-        }
+      const { error } = await supabase.rpc("update_regrade_request_status", {
+        regrade_request_id: regradeRequest.id,
+        new_status: "escalated",
+        profile_id: private_profile_id
       });
-      await invalidate({
-        resource: "submission_regrade_requests",
-        id: regradeRequest.id,
-        invalidates: ["all"]
-      });
+
+      if (error) {
+        throw new Error(`Failed to escalate regrade request: ${error.message}`);
+      }
+
+      await regradeRequests.invalidate(regradeRequest.id);
       setIsEscalateDialogOpen(false);
       toaster.create({
         title: "Request Escalated",
@@ -343,40 +633,7 @@ export default function RegradeRequestWrapper({
       console.error("Error escalating request:", error);
       toaster.create({
         title: "Error",
-        description: "Failed to escalate request. Please try again.",
-        type: "error"
-      });
-    } finally {
-      setIsUpdatingStatus(false);
-    }
-  };
-
-  const handleCloseRequest = async () => {
-    setIsUpdatingStatus(true);
-    try {
-      await updateRegradeStatus({
-        values: {
-          regrade_request_id: regradeRequest.id,
-          new_status: "closed",
-          profile_id: private_profile_id,
-          closed_points: closeScore
-        }
-      });
-      await invalidate({
-        resource: "submission_regrade_requests",
-        id: regradeRequest.id,
-        invalidates: ["all"]
-      });
-      toaster.create({
-        title: "Request Closed",
-        description: "The regrade request has been closed.",
-        type: "success"
-      });
-    } catch (error) {
-      console.error("Error closing request:", error);
-      toaster.create({
-        title: "Error",
-        description: "Failed to close request. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to escalate request. Please try again.",
         type: "error"
       });
     } finally {
@@ -448,165 +705,31 @@ export default function RegradeRequestWrapper({
               </VStack>
               {/* Resolve Button for opened status + grader/instructor */}
               {regradeRequest.status === "opened" && isGraderOrInstructor && (
-                <PopoverRoot>
-                  <PopoverTrigger asChild>
-                    <Button colorPalette="blue" size="sm" loading={isUpdatingStatus}>
-                      Resolve Request
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent>
-                    <PopoverArrow />
-                    <PopoverBody>
-                      <VStack gap={3} align="start">
-                        <Text fontWeight="semibold">Resolve Regrade Request</Text>
-                        <Text fontSize="sm">
-                          The initial score for this regrade request is {regradeRequest.initial_points || 0}.
-                        </Text>
-                        <Text fontSize="sm">
-                          Enter the final score for this comment after reviewing the regrade request. It will overwrite
-                          the score for the comment.
-                        </Text>
-                        <VStack gap={2} align="start" w="100%">
-                          <Text fontSize="sm" fontWeight="medium">
-                            Final Points:
-                          </Text>
-                          <Input
-                            type="number"
-                            value={resolveScore?.toString() ?? ""}
-                            onChange={(e) => {
-                              const inputValue = e.target.value;
-
-                              // Allow clearing the field
-                              if (inputValue === "" || inputValue === "-") {
-                                setResolveScore(undefined);
-                                return;
-                              }
-
-                              // Parse as float to handle decimal input, then convert to int
-                              const value = parseFloat(inputValue);
-                              if (!isNaN(value)) {
-                                setResolveScore(Math.round(value));
-                              }
-                            }}
-                            placeholder="Enter points..."
-                            size="sm"
-                            w="100px"
-                          />
-                        </VStack>
-                        <Button
-                          colorPalette="blue"
-                          size="sm"
-                          onClick={handleResolveRequest}
-                          loading={isUpdatingStatus}
-                          w="100%"
-                        >
-                          Resolve
-                        </Button>
-                      </VStack>
-                    </PopoverBody>
-                  </PopoverContent>
-                </PopoverRoot>
+                <ResolveRequestPopover
+                  initialPoints={regradeRequest.initial_points}
+                  regradeRequestId={regradeRequest.id}
+                  privateProfileId={private_profile_id}
+                />
               )}
 
               {/* Escalate Button for resolved status + student */}
               {regradeRequest.status === "resolved" && !isGraderOrInstructor && (
-                <DialogRoot open={isEscalateDialogOpen} onOpenChange={(e) => setIsEscalateDialogOpen(e.open)}>
-                  <DialogTrigger asChild>
-                    <Button colorPalette="orange" size="sm" loading={isUpdatingStatus}>
-                      Appeal to Instructor
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Escalate Regrade Request</DialogTitle>
-                    </DialogHeader>
-                    <DialogBody>
-                      <VStack gap={4} align="start">
-                        <Text>You can appeal this regrade request to an instructor for final review.</Text>
-                        <Box bg="bg.info" p={3} borderRadius="md" w="100%">
-                          <Text fontWeight="semibold" mb={2}>
-                            ⚠️ Important Guidelines
-                          </Text>
-                          <VStack gap={1} align="start">
-                            <Text fontSize="sm">
-                              • Only appeal if you believe the rubric is not being fairly applied
-                            </Text>
-                            <Text fontSize="sm">• Don&apos;t appeal simply because you disagree with the grade</Text>
-                            <Text fontSize="sm">• The instructor&apos;s decision will be final</Text>
-                            <Text fontSize="sm">• Frivolous appeals may affect future regrade requests</Text>
-                          </VStack>
-                        </Box>
-                      </VStack>
-                    </DialogBody>
-                    <DialogFooter>
-                      <DialogActionTrigger asChild>
-                        <Button variant="outline">Cancel</Button>
-                      </DialogActionTrigger>
-                      <Button colorPalette="orange" onClick={handleEscalateRequest} loading={isUpdatingStatus}>
-                        Escalate Request
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </DialogRoot>
+                <EscalateRequestDialog
+                  isOpen={isEscalateDialogOpen}
+                  onOpenChange={setIsEscalateDialogOpen}
+                  onEscalate={handleEscalateRequest}
+                  isUpdating={isUpdatingStatus}
+                />
               )}
 
               {/* Close Button for escalated status + instructor */}
               {regradeRequest.status === "escalated" && isInstructor && (
-                <PopoverRoot>
-                  <PopoverTrigger asChild>
-                    <Button colorPalette="orange" variant="solid" size="sm" loading={isUpdatingStatus}>
-                      Decide Appeal
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent>
-                    <PopoverArrow />
-                    <PopoverBody>
-                      <VStack gap={3} align="start">
-                        <Text fontWeight="semibold">Decide Appeal</Text>
-                        <Text fontSize="sm">Enter the final decision for this appealed regrade request.</Text>
-                        <Text fontSize="sm">Initial score: {regradeRequest.initial_points}.</Text>
-                        <Text fontSize="sm">Revised score: {regradeRequest.resolved_points}.</Text>
-                        <VStack gap={2} align="start" w="100%">
-                          <Text fontSize="sm" fontWeight="medium">
-                            Final Points:
-                          </Text>
-                          <Input
-                            type="number"
-                            value={closeScore?.toString() ?? ""}
-                            onChange={(e) => {
-                              const inputValue = e.target.value;
-
-                              // Allow clearing the field
-                              if (inputValue === "" || inputValue === "-") {
-                                setCloseScore(undefined);
-                                return;
-                              }
-
-                              // Parse as float to handle decimal input, then convert to int
-                              const value = parseFloat(inputValue);
-                              if (!isNaN(value)) {
-                                setCloseScore(Math.round(value));
-                              }
-                            }}
-                            placeholder="Enter points..."
-                            size="sm"
-                            w="100px"
-                          />
-                        </VStack>
-                        <Button
-                          colorPalette="green"
-                          variant="surface"
-                          size="sm"
-                          onClick={handleCloseRequest}
-                          loading={isUpdatingStatus}
-                          w="100%"
-                        >
-                          Decide Appeal
-                        </Button>
-                      </VStack>
-                    </PopoverBody>
-                  </PopoverContent>
-                </PopoverRoot>
+                <CloseRequestPopover
+                  initialPoints={regradeRequest.initial_points}
+                  resolvedPoints={regradeRequest.resolved_points}
+                  regradeRequestId={regradeRequest.id}
+                  privateProfileId={private_profile_id}
+                />
               )}
             </HStack>
           </Box>

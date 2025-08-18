@@ -2,7 +2,16 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
-import { useCanShowGradeFor, useObfuscatedGradesMode, useSetOnlyShowGradesFor } from "@/hooks/useCourseController";
+import {
+  useCanShowGradeFor,
+  useCourseController,
+  useObfuscatedGradesMode,
+  useSetOnlyShowGradesFor
+} from "@/hooks/useCourseController";
+import { useTableControllerTable } from "@/hooks/useTableControllerTable";
+import TableController from "@/lib/TableController";
+
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { createClient } from "@/utils/supabase/client";
 import {
   ActiveSubmissionsWithGradesForAssignment,
@@ -27,9 +36,6 @@ import {
   VStack
 } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useTableControllerTable } from "@/hooks/useTableControllerTable";
-import TableController from "@/lib/TableController";
-import { useCourseController } from "@/hooks/useCourseController";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
 import { useParams } from "next/navigation";
@@ -37,7 +43,6 @@ import Papa from "papaparse";
 import { useCallback, useMemo, useState } from "react";
 import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 import { TbEye, TbEyeOff } from "react-icons/tb";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 function StudentNameCell({
   course_id,
@@ -113,6 +118,8 @@ export default function AssignmentsTable() {
   const { classRealTimeController } = useCourseController();
   const timeZone = course.time_zone || "America/New_York";
   const supabase = createClient();
+  const [isReleasingAll, setIsReleasingAll] = useState(false);
+  const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
   const columns = useMemo<ColumnDef<ActiveSubmissionsWithGradesForAssignment>[]>(
     () => [
       {
@@ -280,8 +287,7 @@ export default function AssignmentsTable() {
     nextPage,
     previousPage,
     setPageSize,
-    isLoading,
-    refetch
+    isLoading
   } = useTableControllerTable({
     columns,
     //TODO: Longer term, we should fix to make this work with views!
@@ -305,23 +311,31 @@ export default function AssignmentsTable() {
             <Button
               colorPalette="green"
               variant="subtle"
+              loading={isReleasingAll}
+              disabled={isReleasingAll || isUnreleasingAll}
               onClick={async () => {
-                const submissionIds = getRowModel()
-                  .rows.map((s) => s.original.activesubmissionid)
-                  .filter((id) => id !== null);
-                const supabase = createClient();
+                setIsReleasingAll(true);
+                try {
+                  const { error } = await supabase.rpc("release_all_grading_reviews_for_assignment", {
+                    assignment_id: Number(assignment_id)
+                  });
 
-                const { error } = await supabase
-                  .from("submission_reviews")
-                  .update({ released: true })
-                  .in("submission_id", submissionIds)
-                  .select("*");
-                refetch();
+                  if (error) {
+                    throw new Error(`Failed to release reviews: ${error.message}`);
+                  }
 
-                if (error) {
-                  toaster.error({ title: "Error", description: error.message });
-                } else {
+                  await tableController.refetchAll();
+
                   toaster.success({ title: "Success", description: "All submission reviews released" });
+                } catch (error) {
+                  console.error("Error releasing all grading reviews:", error);
+                  toaster.error({
+                    title: "Error",
+                    description:
+                      error instanceof Error ? error.message : "Unknown error occurred while releasing reviews"
+                  });
+                } finally {
+                  setIsReleasingAll(false);
                 }
               }}
             >
@@ -330,23 +344,30 @@ export default function AssignmentsTable() {
             <Button
               variant="ghost"
               colorPalette="red"
+              loading={isUnreleasingAll}
+              disabled={isReleasingAll || isUnreleasingAll}
               onClick={async () => {
-                const submissionIds = getRowModel()
-                  .rows.map((s) => s.original.activesubmissionid)
-                  .filter((id) => id !== null);
-                const supabase = createClient();
+                setIsUnreleasingAll(true);
+                try {
+                  const { error } = await supabase.rpc("unrelease_all_grading_reviews_for_assignment", {
+                    assignment_id: Number(assignment_id)
+                  });
 
-                const { error } = await supabase
-                  .from("submission_reviews")
-                  .update({ released: false })
-                  .in("submission_id", submissionIds)
-                  .select("*");
-                refetch();
+                  if (error) {
+                    throw new Error(`Failed to unrelease reviews: ${error.message}`);
+                  }
 
-                if (error) {
-                  toaster.error({ title: "Error", description: error.message });
-                } else {
+                  await tableController.refetchAll();
                   toaster.success({ title: "Success", description: "All submission reviews unreleased" });
+                } catch (error) {
+                  console.error("Error unreleasing all grading reviews:", error);
+                  toaster.error({
+                    title: "Error",
+                    description:
+                      error instanceof Error ? error.message : "Unknown error occurred while unreleasing reviews"
+                  });
+                } finally {
+                  setIsUnreleasingAll(false);
                 }
               }}
             >
