@@ -119,7 +119,7 @@ export default function AssignReviewModal({
   const selectedRubricId = watch("rubric_id");
   const selectedSubmissionId = watch("submission_id");
 
-  const { data: assignmentData, isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
+  const { isLoading: isLoadingAssignment } = useOne<AssignmentRow>({
     resource: "assignments",
     id: assignmentId,
     queryOptions: { enabled: isOpen && !!assignmentId },
@@ -209,19 +209,14 @@ export default function AssignReviewModal({
     );
   }, [submissionsData]);
 
-  const gradingRubricIdFromAssignment = assignmentData?.data?.grading_rubric_id;
-
   const rubricsFilters = useMemo(() => {
-    if (isLoadingAssignment) {
-      return undefined; // Query will be disabled
-    }
-    if (gradingRubricIdFromAssignment) {
-      return [{ field: "id", operator: "eq" as const, value: gradingRubricIdFromAssignment }];
-    }
-    // No specific rubric for assignment, or assignment has no grading_rubric_id.
-    // Show no rubrics by using a filter that won't match.
-    return [{ field: "id", operator: "eq" as const, value: -1 }]; // Assuming rubric IDs are positive
-  }, [isLoadingAssignment, gradingRubricIdFromAssignment]);
+    if (isLoadingAssignment) return undefined;
+    return [
+      { field: "class_id", operator: "eq" as const, value: courseId },
+      { field: "assignment_id", operator: "eq" as const, value: assignmentId },
+      { field: "review_round", operator: "ne" as const, value: "self-review" }
+    ];
+  }, [isLoadingAssignment, courseId, assignmentId]);
 
   const { data: rubricsData, isLoading: isLoadingRubrics } = useList<RubricRow>({
     resource: "rubrics",
