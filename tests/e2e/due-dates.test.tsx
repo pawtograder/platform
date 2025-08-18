@@ -68,6 +68,8 @@ test.describe("Assignment due dates", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
+    //Wait for the page to load to avoid race condition
+    await expect(page).toHaveURL(/\/assignments\b/);
     await expect(page.getByText(testAssignment!.title)).toBeVisible();
     const cell = page.getByRole("cell", { name: testAssignment!.title });
     await expect(cell).toBeVisible();
@@ -88,6 +90,8 @@ test.describe("Assignment due dates", () => {
     await expect(page.getByRole("link").filter({ hasText: "Assignments" })).toBeVisible();
     const link = page.getByRole("link").filter({ hasText: "Assignments" });
     await link.click();
+    //Wait for the page to load to avoid race condition
+    await expect(page).toHaveURL(/\/assignments\b/);
     await page.getByRole("link", { name: testLabAssignment!.title }).click();
 
     await expect(page.getByText("This is a test assignment for E2E testing")).toBeVisible();

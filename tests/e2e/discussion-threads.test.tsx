@@ -1,6 +1,6 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import percySnapshot from "@percy/playwright";
 import { expect, test } from "@playwright/test";
+import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { createClass, createUserInClass, loginAsUser, TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
@@ -31,7 +31,7 @@ test.describe("Discussion Thread Page", () => {
   test("A student can view the discussion feed", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
-    await percySnapshot(page, "Discussion Thread Page");
+    await argosScreenshot(page, "Discussion Thread Page");
     await expect(page.getByRole("heading", { name: "Discussion Feed" })).toBeVisible();
     await expect(page.getByRole("link").filter({ hasText: "New Thread" })).toBeVisible();
     await expect(page.getByPlaceholder("Search threads...")).toBeVisible();
@@ -45,7 +45,7 @@ test.describe("Discussion Thread Page", () => {
     await loginAsUser(page, student1!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
     await page.getByRole("link").filter({ hasText: "New Thread" }).click();
-    await percySnapshot(page, "Create New Thread Form");
+    await argosScreenshot(page, "Create New Thread Form");
     await expect(page.getByRole("heading", { name: "New Discussion Thread" })).toBeVisible();
     await expect(page.getByText("Topic")).toBeVisible();
     // await expect(page.getByText("Assignments", { exact: true })).toBeVisible(); // Too annoying to test

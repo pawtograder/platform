@@ -1,5 +1,7 @@
 # Pawtograder Course Operations Platform
 
+[![Covered by Argos Visual Testing](https://argos-ci.com/badge.svg)](https://app.argos-ci.com/jon-bell/platform/reference)
+
 Pawtograder is a course operations platform for instructors and students. It provides "autograder" functionality (automated grading of programming assignments, combining instructor support and handgrading inspired by Autolab and Autograder.io with GitHub integration inspired by GitHub Classroom) and other interactive features like Q&A, office hours queue, and more.
 
 It is under active development.
@@ -40,5 +42,3 @@ This project is licensed under the GPLv3 license. See the [LICENSE](LICENSE) fil
 ## Acknowledgements
 
 This project was made possible thanks to the support of [Khoury College of Computer Sciences](https://www.khoury.northeastern.edu/), and benefits tremendously from the input of many students, instructors, and staff.
-
-This project is tested with BrowserStack
