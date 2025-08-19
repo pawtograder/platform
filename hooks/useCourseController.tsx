@@ -885,8 +885,6 @@ export function CourseControllerProvider({
   course_id: number;
   children: React.ReactNode;
 }) {
-  // const controller = useRef<CourseController | null>(null);
-  const client = createClient();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
   const [courseController, setCourseController] = useState<CourseController | null>(null);
@@ -894,6 +892,7 @@ export function CourseControllerProvider({
   // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
     let cancelled = false;
+    const client = createClient();
     const realTimeController = new ClassRealTimeController({
       client,
       classId: course_id,
@@ -938,7 +937,7 @@ export function CourseControllerProvider({
       _courseController?.close();
       realTimeController.close();
     };
-  }, [client, course_id, profile_id, role]);
+  }, [course_id, profile_id, role]);
 
   if (!courseController) {
     return (

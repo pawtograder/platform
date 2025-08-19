@@ -1,7 +1,5 @@
 import { useFindTableControllerValue, useTableControllerValueById } from "@/lib/TableController";
 import { UserProfile, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
-import { useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { useCourseController } from "./useCourseController";
 
