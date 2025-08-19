@@ -33,7 +33,7 @@ export function useUserProfile(
     [id]
   );
   const userRole = useFindTableControllerValue(controller.userRolesWithProfiles, findFunction);
-  const profile = useTableControllerValueById(controller.profiles, id as string);
+  const profile = useTableControllerValueById(controller.profiles, id);
 
   const ret = useMemo(() => {
     if (!profile) {

@@ -89,7 +89,6 @@ export function useDiscussionThreadReadStatus(threadId: number) {
       if (!controller.discussionThreadReadStatus.ready || readStatus === undefined) {
         return;
       }
-      console.log(`readStatus: ${readStatus}`);
       if (readStatus) {
         if (isUnread && readStatus.read_at) {
           controller.discussionThreadReadStatus.update(readStatus.id, {
@@ -101,11 +100,9 @@ export function useDiscussionThreadReadStatus(threadId: number) {
           });
         }
       } else {
-        console.log(`createdThreadReadStatuses: ${createdThreadReadStatuses.current}`);
         if (createdThreadReadStatuses.current.has(threadId)) {
           return;
         }
-        console.log(`adding threadId: ${threadId}`);
         createdThreadReadStatuses.current.add(threadId);
         controller.discussionThreadReadStatus
           .create({
@@ -739,7 +736,6 @@ export class CourseController {
 
   // Close method to clean up TableController instances
   close(): void {
-    console.log("Closing CourseController");
     this._profiles?.close();
     this._userRolesWithProfiles?.close();
     this._discussionThreadTeasers?.close();

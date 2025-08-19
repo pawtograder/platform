@@ -972,6 +972,9 @@ export default class TableController<
     if (id === 0) {
       throw new Error("0 is not a valid ID, ever.");
     }
+    if (id === undefined) {
+      throw new Error("Undefined ID is not a valid ID, ever.");
+    }
     const data = this._rows.find(
       (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
     ) as PossiblyTentativeResult<ResultOne>;
