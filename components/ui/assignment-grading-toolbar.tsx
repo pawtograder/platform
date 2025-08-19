@@ -8,7 +8,7 @@ import {
   useReviewAssignment
 } from "@/hooks/useAssignment";
 import { HStack, Text, Box } from "@chakra-ui/react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { FaArrowLeft, FaArrowRight, FaCheckCircle, FaClock, FaChartBar } from "react-icons/fa";
 import { Select } from "chakra-react-select";
@@ -50,8 +50,11 @@ function SubmissionOptionRenderer({ submissionId, assignmentReviewId }: Submissi
 }
 
 interface SubmissionSelectOption {
+  // value is the review assignment id to ensure uniqueness across multiple reviews of the same submission
   value: number;
   label: string;
+  submissionId: number;
+  reviewAssignmentId: number;
 }
 
 // Data types for grouped submission selector
@@ -217,6 +220,7 @@ export { SubmissionSelector };
 export default function AssignmentGradingToolbar() {
   const { course_id, assignment_id, submissions_id } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const myReviewAssignments = useMyReviewAssignments();
 
   const { numCompleted, nextUncompleted, lastCompleted, completionPercent, selectOptions, currentlySelected } =
@@ -229,13 +233,19 @@ export default function AssignmentGradingToolbar() {
 
       // Create select options for all review assignments
       const options: SubmissionSelectOption[] = myReviewAssignments.map((review) => ({
-        value: review.submission_id,
-        label: `Submission ${review.submission_id}`
+        value: review.id, // unique per review assignment
+        label: `Submission ${review.submission_id}`,
+        submissionId: review.submission_id,
+        reviewAssignmentId: review.id
       }));
 
       // Find the currently selected option based on the submissions_id from URL
       const currentSubmissionId = submissions_id ? parseInt(submissions_id as string) : null;
-      const selected = currentSubmissionId ? options.find((option) => option.value === currentSubmissionId) : null;
+      // Prefer explicit review assignment selection via query param when present
+      // We read this later with useSearchParams (not available inside useMemo at top-level), so we only use submission fallback here.
+      const selected = currentSubmissionId
+        ? (options.find((option) => option.submissionId === currentSubmissionId) ?? null)
+        : null;
 
       // Find next uncompleted relative to current position in the select order
       let nextUncompleted = null;
@@ -247,7 +257,7 @@ export default function AssignmentGradingToolbar() {
 
         // Search from current position forward
         for (let i = startIndex; i < options.length; i++) {
-          const review = myReviewAssignments.find((r) => r.submission_id === options[i].value);
+          const review = myReviewAssignments.find((r) => r.id === options[i].reviewAssignmentId);
           if (review && !review.completed_at) {
             nextUncompleted = review;
             break;
@@ -257,7 +267,7 @@ export default function AssignmentGradingToolbar() {
         // If nothing found, wrap around and search from beginning to current position
         if (!nextUncompleted && currentIndex > 0) {
           for (let i = 0; i < currentIndex; i++) {
-            const review = myReviewAssignments.find((r) => r.submission_id === options[i].value);
+            const review = myReviewAssignments.find((r) => r.id === options[i].reviewAssignmentId);
             if (review && !review.completed_at) {
               nextUncompleted = review;
               break;
@@ -284,14 +294,21 @@ export default function AssignmentGradingToolbar() {
   const handleSubmissionSelect = useCallback(
     (option: SubmissionSelectOption | null) => {
       if (option) {
-        const review = myReviewAssignments.find((r) => r.submission_id === option.value);
-        const reviewId = review?.id;
-        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files${reviewId ? `?review_assignment_id=${reviewId}` : ""}`;
+        const reviewId = option.reviewAssignmentId;
+        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.submissionId}/files${reviewId ? `?review_assignment_id=${reviewId}` : ""}`;
         router.push(url);
       }
     },
-    [course_id, assignment_id, router, myReviewAssignments]
+    [course_id, assignment_id, router]
   );
+
+  // Resolve selected option preference: exact review assignment via query param first, fallback to submission id
+  const selectedOptionFromQuery = useMemo(() => {
+    const reviewAssignmentIdParam = searchParams?.get("review_assignment_id");
+    if (!reviewAssignmentIdParam) return null;
+    const rid = Number(reviewAssignmentIdParam);
+    return selectOptions.find((o) => o.reviewAssignmentId === rid) || null;
+  }, [searchParams, selectOptions]);
 
   if (myReviewAssignments.length === 0) {
     return (
@@ -337,13 +354,17 @@ export default function AssignmentGradingToolbar() {
           <Select<SubmissionSelectOption>
             placeholder="Select a submission to review..."
             options={selectOptions}
-            value={currentlySelected}
+            value={selectedOptionFromQuery || currentlySelected}
             onChange={handleSubmissionSelect}
             size="sm"
             isSearchable={false}
             formatOptionLabel={(option: SubmissionSelectOption) => {
-              const review = myReviewAssignments.find((r) => r.submission_id === option.value);
-              return <SubmissionOptionRenderer submissionId={option.value} assignmentReviewId={review?.id} />;
+              return (
+                <SubmissionOptionRenderer
+                  submissionId={option.submissionId}
+                  assignmentReviewId={option.reviewAssignmentId}
+                />
+              );
             }}
           />
         </Box>

@@ -63,7 +63,8 @@ function ActiveReviewPicker() {
       <SegmentGroup.Root
         value={activeSubmissionReviewId?.toString() ?? ""}
         onValueChange={(value) => {
-          setActiveSubmissionReviewId(Number(value.value));
+          const selectedId = Number(value.value);
+          setActiveSubmissionReviewId(selectedId);
         }}
       >
         <SegmentGroup.Indicator />

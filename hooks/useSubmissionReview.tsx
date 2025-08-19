@@ -1,10 +1,9 @@
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useAssignmentController, useMyReviewAssignments, useReviewAssignment, useRubricById } from "./useAssignment";
 import {
   useAllCommentsForReview,
   useSubmission,
-  useSubmissionReview,
   useSubmissionReviewOrGradingReview,
   useWritableSubmissionReviews
 } from "./useSubmission";
@@ -36,8 +35,10 @@ export function useActiveRubricId() {
 }
 
 export function SubmissionReviewProvider({ children }: { children: React.ReactNode }) {
-  const [ignoreAssignedReview, setIgnoreAssignedReview] = useState<number | undefined>(undefined);
-  const [activeReviewAssignmentId, setActiveReviewAssignmentId] = useState<number | undefined>(undefined);
+  const router = useRouter();
+  const pathname = usePathname();
+  const [ignoreAssignedReview, setIgnoreAssignedReviewState] = useState<number | undefined>(undefined);
+  const [activeReviewAssignmentId, setActiveReviewAssignmentIdState] = useState<number | undefined>(undefined);
   const [activeRubricId, setActiveRubricId] = useState<number | undefined>(undefined);
   const [scrollToRubricId, setScrollToRubricId] = useState<number | undefined>(undefined);
   const searchParams = useSearchParams();
@@ -47,67 +48,125 @@ export function SubmissionReviewProvider({ children }: { children: React.ReactNo
   const submission = useSubmission();
   const assignmentController = useAssignmentController();
   const initialSubmissionReviewId = submission.grading_review_id ?? undefined;
-  const [activeSubmissionReviewId, setActiveSubmissionReviewId] = useState<number | undefined>(
+  const [activeSubmissionReviewId, setActiveSubmissionReviewIdState] = useState<number | undefined>(
     initialSubmissionReviewId
   );
 
+  // Helper: push updated review_assignment_id to URL (preserve other params)
+  const navigateToReviewAssignmentId = (id: number | undefined) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (id === undefined || id === null) {
+      params.delete("review_assignment_id");
+    } else {
+      params.set("review_assignment_id", String(id));
+    }
+    const qs = params.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname);
+  };
+
   useEffect(() => {
-    const reviewAssignment = reviewAssignmentIdParam
+    // 1) If user chose to ignore the assigned review, do not bind to any review assignment.
+    if (ignoreAssignedReview) {
+      setActiveReviewAssignmentIdState(undefined);
+      // Keep the currently selected submission review if any; if none, fall back once.
+      if (!activeSubmissionReviewId) {
+        const gradingWritable = writableReviews?.find((wr) => wr.id === submission.grading_review_id);
+        const chosen = gradingWritable ?? writableReviews?.[0];
+        if (chosen) {
+          setActiveSubmissionReviewIdState(chosen.id);
+          setActiveRubricId(chosen.rubric_id);
+        } else {
+          // last resort: non-writable grading review context
+          setActiveSubmissionReviewIdState(submission.grading_review_id ?? undefined);
+          setActiveRubricId(assignmentController.assignment.grading_rubric_id ?? undefined);
+        }
+      }
+      return;
+    }
+
+    // 2) If a review_assignment_id is explicitly in the URL, it is the source of truth.
+    const reviewAssignmentFromUrl = reviewAssignmentIdParam
       ? myAssignedReviews.find((ra) => ra.id === parseInt(reviewAssignmentIdParam, 10))
       : undefined;
-    const assignedSubmissionReview = writableReviews?.find((wr) => wr.id === reviewAssignment?.submission_review_id);
-    //If the review assignment has been completed, don't set it as active
+    const writableForUrl = writableReviews?.find((wr) => wr.id === reviewAssignmentFromUrl?.submission_review_id);
+
     if (
-      !ignoreAssignedReview &&
-      reviewAssignment &&
-      assignedSubmissionReview &&
-      !assignedSubmissionReview?.completed_at &&
-      !reviewAssignment.completed_at
+      reviewAssignmentFromUrl &&
+      writableForUrl &&
+      !writableForUrl.completed_at &&
+      !reviewAssignmentFromUrl.completed_at
     ) {
-      setActiveReviewAssignmentId(reviewAssignment.id);
-      setActiveSubmissionReviewId(reviewAssignment.submission_review_id);
-      setActiveRubricId(reviewAssignment.rubric_id);
-    } else if (writableReviews && writableReviews.length > 0) {
-      //Default to a grading review if it is writable
-      const gradingReview = writableReviews.find((wr) => wr.id === submission.grading_review_id);
-      if (gradingReview) {
-        if (ignoreAssignedReview) {
-          setActiveReviewAssignmentId(undefined);
-        } else {
-          setActiveReviewAssignmentId(
-            myAssignedReviews.find((ra) => ra.submission_review_id === gradingReview.id && !ra.completed_at)?.id
-          );
-        }
-        //Only set submission review id if it is writable!
-        setActiveSubmissionReviewId(writableReviews.find((wr) => wr.id === gradingReview.id)?.id ?? undefined);
-        setActiveRubricId(gradingReview.rubric_id);
-      } else {
-        if (ignoreAssignedReview) {
-          setActiveReviewAssignmentId(undefined);
-        } else {
-          setActiveReviewAssignmentId(
-            myAssignedReviews.find((ra) => ra.submission_review_id === writableReviews[0].id && !ra.completed_at)?.id
-          );
-        }
-        setActiveSubmissionReviewId(writableReviews[0].id);
-        setActiveRubricId(writableReviews[0].rubric_id);
+      setActiveReviewAssignmentIdState(reviewAssignmentFromUrl.id);
+      setActiveSubmissionReviewIdState(reviewAssignmentFromUrl.submission_review_id);
+      setActiveRubricId(reviewAssignmentFromUrl.rubric_id);
+      return;
+    }
+
+    // 3) Otherwise, respect the user's explicit review selection (segment control) if present.
+    if (activeSubmissionReviewId) {
+      const selectedWritable = writableReviews?.find((wr) => wr.id === activeSubmissionReviewId);
+      if (selectedWritable) {
+        setActiveRubricId(selectedWritable.rubric_id);
+      } else if (submission.grading_review_id === activeSubmissionReviewId) {
+        setActiveRubricId(assignmentController.assignment.grading_rubric_id ?? undefined);
       }
+      const raForSelected = myAssignedReviews.find(
+        (ra) => ra.submission_review_id === activeSubmissionReviewId && !ra.completed_at
+      );
+      setActiveReviewAssignmentIdState(raForSelected?.id);
+      return;
+    }
+
+    // 4) Initial/default selection when nothing is chosen and no URL param.
+    if (writableReviews && writableReviews.length > 0) {
+      const grading = writableReviews.find((wr) => wr.id === submission.grading_review_id);
+      const chosen = grading ?? writableReviews[0];
+      setActiveSubmissionReviewIdState(chosen.id);
+      setActiveRubricId(chosen.rubric_id);
+      const raDefault = myAssignedReviews.find((ra) => ra.submission_review_id === chosen.id && !ra.completed_at);
+      setActiveReviewAssignmentIdState(raDefault?.id);
     } else {
-      //Default to grading review
-      setActiveReviewAssignmentId(undefined);
-      setActiveSubmissionReviewId(submission.grading_review_id ?? undefined);
+      // default to non-writable grading review context
+      setActiveReviewAssignmentIdState(undefined);
+      setActiveSubmissionReviewIdState(submission.grading_review_id ?? undefined);
       setActiveRubricId(assignmentController.assignment.grading_rubric_id ?? undefined);
     }
   }, [
     reviewAssignmentIdParam,
-    setActiveReviewAssignmentId,
+    activeSubmissionReviewId,
     myAssignedReviews,
     writableReviews,
     submission,
     assignmentController,
-    setActiveSubmissionReviewId,
     ignoreAssignedReview
   ]);
+
+  // Wrapped setters that also sync the URL for consistency
+  const setActiveReviewAssignmentId = (id: number | undefined) => {
+    setActiveReviewAssignmentIdState(id);
+    navigateToReviewAssignmentId(id);
+  };
+
+  const setActiveSubmissionReviewId = (id: number | undefined) => {
+    setActiveSubmissionReviewIdState(id);
+    // Map submission review -> review assignment (if any)
+    const ra = id ? myAssignedReviews.find((r) => r.submission_review_id === id) : undefined;
+    // Clear ignore state when explicitly selecting a review
+    setIgnoreAssignedReviewState(undefined);
+    navigateToReviewAssignmentId(ra?.id);
+  };
+
+  const setIgnoreAssignedReview = (ignore: number | undefined) => {
+    // When ignoring, drop the param; when returning, restore the last ignored RA id
+    if (ignore !== undefined) {
+      navigateToReviewAssignmentId(undefined);
+      setIgnoreAssignedReviewState(ignore);
+    } else {
+      // restore the previously ignored id (if any)
+      navigateToReviewAssignmentId(ignoreAssignedReview);
+      setIgnoreAssignedReviewState(undefined);
+    }
+  };
 
   const value = {
     activeReviewAssignmentId,
