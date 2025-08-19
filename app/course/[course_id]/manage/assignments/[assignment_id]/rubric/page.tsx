@@ -344,6 +344,29 @@ function InnerRubricPage() {
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [updatePaused, setUpdatePaused] = useState<boolean>(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  // Points summary state
+  const gradingRubricFromDb = useRubric("grading-review");
+  const gradingRubricForSummary =
+    activeReviewRound === "grading-review" && rubricForSidebar ? rubricForSidebar : gradingRubricFromDb;
+  const assignmentMaxPoints = assignmentDetails?.total_points ?? 0;
+  const autograderPoints = assignmentDetails?.autograder_points ?? 0;
+  const gradingRubricPoints = (() => {
+    if (!gradingRubricForSummary) return 0;
+    let total = 0;
+    for (const part of gradingRubricForSummary.rubric_parts ?? []) {
+      for (const criteria of part.rubric_criteria ?? []) {
+        const criteriaTotal = criteria.total_points ?? 0;
+        const sumCheckPoints = (criteria.rubric_checks ?? []).reduce((acc, check) => acc + (check.points ?? 0), 0);
+        if (criteria.is_additive) {
+          total += Math.min(sumCheckPoints, criteriaTotal);
+        } else {
+          total += criteriaTotal;
+        }
+      }
+    }
+    return total;
+  })();
+  const addsUp = assignmentMaxPoints === autograderPoints + gradingRubricPoints;
 
   const [unsavedStatusPerTab, setUnsavedStatusPerTab] = useState<Record<string, boolean>>(
     REVIEW_ROUNDS_AVAILABLE.reduce(
@@ -1325,6 +1348,27 @@ function InnerRubricPage() {
           </Box>
           <Box w="lg" position="relative" h="calc(100vh - 100px)" overflowY="auto">
             {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
+
+            {/* Points summary for autograder vs grading rubric vs assignment total */}
+            <Box
+              role="region"
+              aria-label="Rubric points summary"
+              mt={2}
+              mb={4}
+              p={3}
+              borderRadius="md"
+              bg={addsUp ? "bg.success" : "bg.warning"}
+            >
+              <Heading size="sm" mb={1}>
+                Points Summary
+              </Heading>
+              <Text fontSize="sm">Assignment max points: {assignmentMaxPoints}</Text>
+              <Text fontSize="sm">Autograder points: {autograderPoints}</Text>
+              <Text fontSize="sm">Grading rubric points: {gradingRubricPoints}</Text>
+              <Text fontSize="sm" mt={1}>
+                {addsUp ? "These add up." : "These do not add up."}
+              </Text>
+            </Box>
 
             {isLoadingCurrentRubric && !rubricForSidebar && (
               <Center h="100%">
