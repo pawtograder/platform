@@ -27,7 +27,7 @@ import { Database } from "@/utils/supabase/SupabaseTypes";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { LiveEvent, useCreate, useList, useUpdate } from "@refinedev/core";
+import { LiveEvent, useList, useUpdate } from "@refinedev/core";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
@@ -86,9 +86,10 @@ export function useDiscussionThreadReadStatus(threadId: number) {
 
   const setUnread = useCallback(
     (root_threadId: number, threadId: number, isUnread: boolean) => {
-      if (!controller.discussionThreadReadStatus.ready) {
+      if (!controller.discussionThreadReadStatus.ready || readStatus === undefined) {
         return;
       }
+      console.log(`readStatus: ${readStatus}`);
       if (readStatus) {
         if (isUnread && readStatus.read_at) {
           controller.discussionThreadReadStatus.update(readStatus.id, {
@@ -100,9 +101,11 @@ export function useDiscussionThreadReadStatus(threadId: number) {
           });
         }
       } else {
+        console.log(`createdThreadReadStatuses: ${createdThreadReadStatuses.current}`);
         if (createdThreadReadStatuses.current.has(threadId)) {
           return;
         }
+        console.log(`adding threadId: ${threadId}`);
         createdThreadReadStatuses.current.add(threadId);
         controller.discussionThreadReadStatus
           .create({
@@ -217,21 +220,33 @@ export class CourseController {
   private _client: SupabaseClient<Database>;
 
   // Lazily created TableController instances to avoid realtime subscription bursts
-  private _profiles?: TableController<"profiles">;
   private _discussionThreadTeasers?: TableController<"discussion_threads">;
   private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
 
   constructor(
+    public role: Database["public"]["Enums"]["app_role"],
     public courseId: number,
     client: SupabaseClient<Database>,
     classRealTimeController: ClassRealTimeController
   ) {
     this._classRealTimeController = classRealTimeController;
     this._client = client as SupabaseClient<Database>;
+  }
+
+  /**
+   * Initialize critical TableControllers immediately after construction
+   * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
+   */
+  initializeEagerControllers() {
+    // Create profiles and userRolesWithProfiles immediately
+    // These are accessed frequently and should be ready
+    void this.profiles; // Triggers lazy creation
+    void this.userRolesWithProfiles; // Triggers lazy creation
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -523,13 +538,8 @@ export class CourseController {
     };
   }
 
-  getUserProfile(id: string, callback?: UpdateCallback<UserProfileWithPrivateProfile>) {
-    if (callback) {
-      return this.profiles.getById(id, (data) => {
-        if (data) callback(data as UserProfileWithPrivateProfile);
-      });
-    }
-    return this.profiles.getById(id);
+  get isStaff() {
+    return this.role === "instructor" || this.role === "grader";
   }
 
   getUserRole(user_id: string) {
@@ -718,24 +728,25 @@ export class CourseController {
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
+    if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
     if (this._discussionThreadTeasers) createdControllers.push(this._discussionThreadTeasers);
     if (this._discussionThreadReadStatus) createdControllers.push(this._discussionThreadReadStatus);
     if (this._tags) createdControllers.push(this._tags);
     if (this._labSections) createdControllers.push(this._labSections);
     if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
-    if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
     return createdControllers.every((c) => c.ready);
   }
 
   // Close method to clean up TableController instances
   close(): void {
+    console.log("Closing CourseController");
     this._profiles?.close();
+    this._userRolesWithProfiles?.close();
     this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
-    this._userRolesWithProfiles?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -894,17 +905,29 @@ export function CourseControllerProvider({
     const start = async () => {
       try {
         await realTimeController.start();
-        _courseController = new CourseController(course_id, client, realTimeController);
 
         if (cancelled) {
           await realTimeController.close();
           return;
         }
+
+        _courseController = new CourseController(role, course_id, client, realTimeController);
+
+        if (cancelled) {
+          _courseController?.close();
+          await realTimeController.close();
+          return;
+        }
+
+        // Initialize the critical controllers now that everything is stable
+        _courseController.initializeEagerControllers();
+
         setCourseController(_courseController);
         setClassRealTimeController(realTimeController);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.error("Failed to start ClassRealTimeController:", e);
+        _courseController?.close();
         await realTimeController.close();
       }
     };
@@ -912,8 +935,8 @@ export function CourseControllerProvider({
 
     return () => {
       cancelled = true;
-      realTimeController.close();
       _courseController?.close();
+      realTimeController.close();
     };
   }, [client, course_id, profile_id, role]);
 

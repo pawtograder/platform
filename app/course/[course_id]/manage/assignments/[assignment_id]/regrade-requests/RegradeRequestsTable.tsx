@@ -1,21 +1,22 @@
 "use client";
 
 import PersonName from "@/components/ui/person-name";
-import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, HStack, Icon, Input, Table, Tag, Text, VStack } from "@chakra-ui/react";
-import { Select } from "chakra-react-select";
+import { useAssignmentController, useRubricCheck } from "@/hooks/useAssignment";
+import { useCourseController } from "@/hooks/useCourseController";
 import { useCustomTable } from "@/hooks/useCustomTable";
+import { useTableControllerTableValues } from "@/lib/TableController";
+import type { RegradeStatus } from "@/utils/supabase/DatabaseTypes";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { Box, Button, HStack, Icon, Input, Table, Tag, Text, VStack } from "@chakra-ui/react";
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
 import { ColumnDef, flexRender } from "@tanstack/react-table";
+import { Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import type { LucideIcon } from "lucide-react";
 import { AlertCircle, ArrowUp, CheckCircle, Clock, XCircle } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useMemo } from "react";
-import { FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaCheck, FaTimes } from "react-icons/fa";
-import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { Database } from "@/utils/supabase/SupabaseTypes";
-import { useAssignmentController, useRubricCheck } from "@/hooks/useAssignment";
-import useUserProfiles, { getUserProfile } from "@/hooks/useUserProfiles";
+import { FaCheck, FaExternalLinkAlt, FaSort, FaSortDown, FaSortUp, FaTimes } from "react-icons/fa";
 
 // Status configuration
 const statusConfig: Record<
@@ -168,7 +169,8 @@ function RubricCheckCell({ row }: { row: RegradeRequestRow }) {
 export default function RegradeRequestsTable() {
   const { assignment_id } = useParams();
   const assignmentController = useAssignmentController();
-  const { users } = useUserProfiles();
+  const courseController = useCourseController();
+  const profiles = useTableControllerTableValues(courseController.profiles);
 
   // Get all rubric checks for the assignment
   const allRubricChecks = useMemo(() => {
@@ -419,13 +421,13 @@ export default function RegradeRequestsTable() {
     return Array.from(assignees)
       .sort()
       .map((assigneeUid) => {
-        const profile = getUserProfile(users, assigneeUid);
+        const profile = profiles.find((profile) => profile.id === assigneeUid);
         return {
           label: profile?.name || assigneeUid,
           value: assigneeUid
         };
       });
-  }, [data, users]);
+  }, [data, profiles]);
 
   // Create options for student filter
   const studentOptions = useMemo(() => {
