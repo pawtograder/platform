@@ -2270,8 +2270,6 @@ export default function GradebookTable() {
       </VStack>
     );
   }
-  console.log("isGradebookDataReady", isGradebookDataReady);
-  console.log("isRefetching", isRefetching);
 
   return (
     <VStack align="stretch" w="100%" gap={0} position="relative">

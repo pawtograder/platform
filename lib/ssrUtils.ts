@@ -12,6 +12,16 @@ type DecodedToken = {
   // Add other expected JWT claims here if needed
 };
 
+export async function getUserRolesForCourse(course_id: number): Promise<UserRoleJwt | undefined> {
+  const client = await createClient();
+  const token = (await client.auth.getSession()).data.session?.access_token;
+  if (!token) {
+    return undefined;
+  }
+  const decoded = jwtDecode<DecodedToken>(token);
+  return decoded.user_roles.find((role) => role.class_id === course_id);
+}
+
 async function getRolesForCourse(course_id: number): Promise<UserRoleJwt["role"][]> {
   const client = await createClient();
   const token = (await client.auth.getSession()).data.session?.access_token;

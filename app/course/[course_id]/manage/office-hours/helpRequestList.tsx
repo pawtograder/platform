@@ -62,7 +62,7 @@ export default function HelpRequestList() {
 
   // Create a mapping of profile ID to student name for search functionality
   const studentNameMap = useMemo(() => {
-    return studentRoster.reduce(
+    return studentRoster?.reduce(
       (acc, student) => {
         acc[student.id] = student.name || student.short_name || student.sortable_name || "Unknown Student";
         return acc;
@@ -80,7 +80,7 @@ export default function HelpRequestList() {
         const requestStudents = requestStudentsMap[request.id] || [];
         const requestTextMatch = request.request.toLowerCase().includes(searchLower);
         const studentNameMatch = requestStudents.some((profileId) => {
-          const studentName = studentNameMap[profileId];
+          const studentName = studentNameMap?.[profileId];
           return studentName && studentName.toLowerCase().includes(searchLower);
         });
         return requestTextMatch || studentNameMatch;

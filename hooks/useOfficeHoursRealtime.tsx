@@ -49,9 +49,16 @@ export class OfficeHoursController {
   private _isLoaded = false;
   private _officeHoursRealTimeController: OfficeHoursRealTimeController | null = null;
   private _broadcastUnsubscribe: (() => void) | null = null;
+  private _client: SupabaseClient<Database>;
 
   // Track read receipts that have been marked to prevent duplicates across component mounts
   private _markedAsReadSet: Set<number> = new Set();
+
+  // Track which help request IDs have had their messages loaded
+  private _loadedHelpRequestIds: Set<number> = new Set();
+
+  // Map of help request ID to their dedicated message TableController
+  private _helpRequestMessageControllers: Map<number, TableController<"help_request_messages">> = new Map();
 
   // TableControllers for all tables
   readonly helpRequestMessages: TableController<"help_request_messages">;
@@ -73,13 +80,15 @@ export class OfficeHoursController {
     client: SupabaseClient<Database>,
     officeHoursRealTimeController: OfficeHoursRealTimeController
   ) {
+    this._client = client;
     this._officeHoursRealTimeController = officeHoursRealTimeController;
 
-    //TODO: Should be in a separate hook dependent on the help request id, just use-memo it there.
+    // Initialize helpRequestMessages with a query that returns no results initially
+    // Individual help request messages will be loaded lazily via dedicated controllers
     this.helpRequestMessages = new TableController({
       client,
       table: "help_request_messages",
-      query: client.from("help_request_messages").select("*").eq("class_id", classId),
+      query: client.from("help_request_messages").select("*").eq("class_id", classId).eq("id", -1), // No message will have id = -1
       officeHoursRealTimeController
     });
 
@@ -244,6 +253,47 @@ export class OfficeHoursController {
   }
 
   /**
+   * Load messages for a specific help request if not already loaded
+   */
+  loadMessagesForHelpRequest(helpRequestId: number): TableController<"help_request_messages"> {
+    // Return existing controller if already loaded
+    if (this._helpRequestMessageControllers.has(helpRequestId)) {
+      return this._helpRequestMessageControllers.get(helpRequestId)!;
+    }
+
+    // Create new TableController for this specific help request
+    const controller = new TableController({
+      client: this._client,
+      table: "help_request_messages",
+      query: this._client
+        .from("help_request_messages")
+        .select("*")
+        .eq("class_id", this.classId)
+        .eq("help_request_id", helpRequestId),
+      officeHoursRealTimeController: this._officeHoursRealTimeController || undefined
+    });
+
+    this._helpRequestMessageControllers.set(helpRequestId, controller);
+    this._loadedHelpRequestIds.add(helpRequestId);
+
+    return controller;
+  }
+
+  /**
+   * Get the TableController for a specific help request's messages
+   */
+  getHelpRequestMessagesController(helpRequestId: number): TableController<"help_request_messages"> | undefined {
+    return this._helpRequestMessageControllers.get(helpRequestId);
+  }
+
+  /**
+   * Check if messages for a help request have been loaded
+   */
+  isHelpRequestLoaded(helpRequestId: number): boolean {
+    return this._loadedHelpRequestIds.has(helpRequestId);
+  }
+
+  /**
    * Close the controller and clean up resources
    */
   close(): void {
@@ -272,7 +322,14 @@ export class OfficeHoursController {
     this.helpRequestFileReferences.close();
     this.videoMeetingSessions.close();
 
+    // Close per-help-request message controllers
+    for (const controller of this._helpRequestMessageControllers.values()) {
+      controller.close();
+    }
+    this._helpRequestMessageControllers.clear();
+
     this._markedAsReadSet.clear();
+    this._loadedHelpRequestIds.clear();
   }
 
   get isLoaded() {
@@ -355,19 +412,27 @@ export function useOfficeHoursController() {
 export function useHelpRequestMessages(help_request_id: number | undefined) {
   const controller = useOfficeHoursController();
   const [messages, setMessages] = useState<HelpRequestMessage[]>([]);
+
   useEffect(() => {
     if (!help_request_id) {
       setMessages([]);
       return;
     }
-    const { data, unsubscribe } = controller.helpRequestMessages.list((data) => {
-      const filteredData = data.filter((msg) => msg.help_request_id === help_request_id);
-      setMessages(filteredData);
+
+    // Load messages for this help request if not already loaded
+    const helpRequestController = controller.loadMessagesForHelpRequest(help_request_id);
+
+    // Subscribe to updates for this specific help request
+    const { data, unsubscribe } = helpRequestController.list((data) => {
+      setMessages(data);
     });
-    const filteredData = data.filter((msg) => msg.help_request_id === help_request_id);
-    setMessages(filteredData);
+
+    // Set initial data
+    setMessages(data);
+
     return unsubscribe;
   }, [controller, help_request_id]);
+
   return messages;
 }
 

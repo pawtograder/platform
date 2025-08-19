@@ -165,10 +165,10 @@ const TEMPLATES: Record<string, SeederConfig> = {
       maxMembersPerRequest: 5
     },
     discussions: {
-      postsPerTopic: 0, // Disabled for large scale to reduce load
-      maxRepliesPerPost: 0
+      postsPerTopic: 40,
+      maxRepliesPerPost: 10
     },
-    gradingScheme: "current",
+    gradingScheme: "specification",
     rateLimitOverrides: {
       assignments: {
         maxInsertsPerSecond: 1,

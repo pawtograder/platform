@@ -349,6 +349,9 @@ DECLARE
     remote_ip text;
     current_user_id uuid;
 BEGIN
+    -- Set fixed search_path to prevent search_path attacks
+    PERFORM set_config('search_path', 'pg_catalog, public', true);
+    
     -- Get common values (matches original audit_insert_and_update logic)
     current_user_id := auth.uid();
     SELECT split_part(
@@ -358,13 +361,13 @@ BEGIN
     CASE TG_OP
     WHEN 'INSERT' THEN
         -- Batch insert audit records for all new rows (matches original format)
-        INSERT INTO audit (class_id, user_id, "table", old, new, ip_addr)
+        INSERT INTO public.audit (class_id, user_id, "table", old, new, ip_addr)
         SELECT n.class_id, current_user_id, TG_TABLE_NAME, NULL, row_to_json(n), remote_ip
         FROM NEW_TABLE n;
         
     WHEN 'UPDATE' THEN
         -- Batch insert audit records for all updated rows (matches original format)
-        INSERT INTO audit (class_id, user_id, "table", old, new, ip_addr)
+        INSERT INTO public.audit (class_id, user_id, "table", old, new, ip_addr)
         SELECT COALESCE(n.class_id, o.class_id), current_user_id, TG_TABLE_NAME, 
                row_to_json(o), row_to_json(n), remote_ip
         FROM NEW_TABLE n

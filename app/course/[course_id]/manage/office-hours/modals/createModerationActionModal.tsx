@@ -169,7 +169,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                       placeholder="Select a student"
                     >
                       <option value="">Select a student</option>
-                      {students.map((profile: UserProfile) => (
+                      {students?.map((profile: UserProfile) => (
                         <option key={profile.id} value={profile.id}>
                           {profile.name || "Unknown Student"}
                         </option>
@@ -177,7 +177,7 @@ export default function CreateModerationActionModal({ isOpen, onClose, onSuccess
                     </NativeSelect.Field>
                   </NativeSelect.Root>
                   <Field.ErrorText>{errors.student_profile_id?.message}</Field.ErrorText>
-                  <Field.HelperText>{students.length} students available</Field.HelperText>
+                  <Field.HelperText>{students?.length} students available</Field.HelperText>
                 </Field.Root>
 
                 <Field.Root invalid={!!errors.action_type}>

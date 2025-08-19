@@ -442,6 +442,7 @@ export function useSubmissionFileComment(comment_id: number) {
   const [comment, setComment] = useState<SubmissionFileComment | undefined>(
     submissionController.submission_file_comments.getById(comment_id).data
   );
+  console.log(comment_id, comment);
   useEffect(() => {
     const { unsubscribe, data } = submissionController.submission_file_comments.getById(comment_id, (data) => {
       setComment(data);

@@ -111,24 +111,11 @@ export function useAllStudentRoles() {
 }
 export function useStudentRoster() {
   const { userRolesWithProfiles: controller } = useCourseController();
-  const [roster, setRoster] = useState<UserProfile[]>([]);
+  const studentRoles = useListTableControllerValues(controller, (r) => r.role === "student");
+  const [roster, setRoster] = useState<UserProfile[] | undefined>(undefined);
   useEffect(() => {
-    const { data, unsubscribe } = controller.list((data) => {
-      const students = data.filter((r) => r.role === "student");
-      setRoster((old) => {
-        if (old && old.length == students.length) {
-          {
-            if (old.every((r) => students.some((s) => s.private_profile_id === r.id))) {
-              return old;
-            }
-          }
-        }
-        return students.map((r) => r.profiles);
-      });
-    });
-    setRoster(data.filter((r) => r.role === "student").map((r) => r.profiles));
-    return unsubscribe;
-  }, [controller]);
+    setRoster(studentRoles.map((r) => r.profiles));
+  }, [studentRoles]);
   return roster;
 }
 export function useProfiles() {

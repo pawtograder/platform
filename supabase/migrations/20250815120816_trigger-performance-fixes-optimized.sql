@@ -84,8 +84,7 @@ BEGIN
                 NEW.is_active = true;
                 UPDATE submissions SET is_active = false 
                 WHERE assignment_id = NEW.assignment_id 
-                AND assignment_group_id = NEW.assignment_group_id
-                AND id != NEW.id;
+                AND assignment_group_id = NEW.assignment_group_id;
             END IF;
         ELSE
             -- Handle individual submissions: use 0 for group ID + actual profile ID
@@ -110,8 +109,7 @@ BEGIN
                 NEW.is_active = true;
                 UPDATE submissions SET is_active = false 
                 WHERE assignment_id = NEW.assignment_id 
-                AND profile_id = NEW.profile_id
-                AND id != NEW.id;
+                AND profile_id = NEW.profile_id;
             END IF;
         END IF;
         

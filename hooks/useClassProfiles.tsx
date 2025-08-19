@@ -9,7 +9,9 @@ import { useParams } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import useAuthState from "./useAuthState";
 import { createClient } from "@/utils/supabase/client";
-
+import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { useList } from "@refinedev/core";
 type ClassProfileContextType = {
   role: UserRoleWithCourseAndUser;
   allOfMyRoles: UserRoleWithCourseAndUser[];
@@ -60,6 +62,13 @@ export function useIsStudent() {
   return role.role === "student";
 }
 
+type UserRoleWithClassAndUser = GetResult<
+  Database["public"],
+  Database["public"]["Tables"]["user_roles"]["Row"],
+  "user_roles",
+  Database["public"]["Tables"]["user_roles"]["Relationships"],
+  "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes(*), users(*)"
+>;
 /**
  * Provides user role and profile context for the current course to its child components.
  *
@@ -71,38 +80,29 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
   const { course_id } = useParams();
   const { user } = useAuthState();
   const userId = user?.id;
-  const [ready, setReady] = useState(false);
-  const myProfilesController = useMemo(() => {
-    if (!userId) {
-      return null;
-    }
-    const supabase = createClient();
-    return new TableController({
-      client: supabase,
-      table: "user_roles",
-      query: supabase
-        .from("user_roles")
-        .select(
-          "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes(*), users(*)"
-        )
-        .eq("user_id", userId)
-    });
-  }, [userId]);
-  useEffect(() => {
-    if (myProfilesController) {
-      myProfilesController.readyPromise.then(() => {
-        setReady(true);
-      });
-    }
-  }, [myProfilesController]);
+  const { data: roles, isLoading } = useList<UserRoleWithClassAndUser>({
+    resource: "user_roles",
+    meta: {
+      select:
+        "*, privateProfile:profiles!private_profile_id(*), publicProfile:profiles!public_profile_id(*), classes(*), users(*)"
+    },
+    pagination: {
+      pageSize: 1000
+    },
+    queryOptions: {
+      cacheTime: Infinity,
+      staleTime: Infinity
+    },
+    filters: [{ field: "user_id", operator: "eq", value: userId }]
+  });
 
-  if (!ready || !myProfilesController) {
+  if (isLoading) {
     return <Skeleton height="100px" width="100%" />;
   }
-  const myRole = myProfilesController.rows.find(
+  const myRole = roles?.data.find(
     (r) => r.user_id === user?.id && (!course_id || r.class_id === Number(course_id as string))
   );
-  if (myProfilesController.rows.length === 0) {
+  if (!roles?.data || roles?.data.length === 0) {
     return (
       <Container maxW="md" py={{ base: "12", md: "24" }}>
         <Stack gap="6">
@@ -160,7 +160,7 @@ export function ClassProfileProvider({ children }: { children: React.ReactNode }
         role: myRole,
         private_profile_id: myRole.private_profile_id,
         public_profile_id: myRole.public_profile_id,
-        allOfMyRoles: myProfilesController.rows,
+        allOfMyRoles: roles?.data,
         private_profile: myRole.privateProfile,
         public_profile: myRole.publicProfile
       }}

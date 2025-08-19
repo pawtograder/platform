@@ -16,6 +16,7 @@ import {
 
 // k6 globals
 declare const __ENV: Record<string, string>;
+declare const __VU: number;
 
 // Custom metrics
 export const submissionRate = new Rate("submission_success_rate");
@@ -53,7 +54,7 @@ type TestData = {
   repositories: RepositoryData[];
 };
 
-export async function setup() {
+export function setup() {
   console.log("🚀 Starting HTTP-based performance test setup...");
 
   try {
@@ -88,7 +89,7 @@ export async function setup() {
     // 3. Create students
     console.log("👥 Creating students...");
     const students = [];
-    const workerIndex = process.env.TEST_WORKER_INDEX || "k6-worker";
+    const workerIndex = __ENV.TEST_WORKER_INDEX ? `${__ENV.TEST_WORKER_INDEX}-vu${__VU}` : `k6-worker-vu${__VU}`;
 
     for (let i = 0; i < 5; i++) {
       // Create fewer students to reduce load

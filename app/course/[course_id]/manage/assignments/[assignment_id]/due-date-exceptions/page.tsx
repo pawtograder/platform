@@ -354,7 +354,7 @@ export default function DueDateExceptions() {
     pagination: { pageSize: 1000 },
     filters: [{ field: "assignment_id", operator: "eq", value: Number.parseInt(assignment_id as string) }]
   });
-  const { data: dueDateExceptions } = useList<AssignmentDueDateException>({
+  const { data: dueDateExceptions, isLoading } = useList<AssignmentDueDateException>({
     resource: "assignment_due_date_exceptions",
     queryOptions: { enabled: !!course },
     liveMode: "auto",
@@ -407,18 +407,22 @@ export default function DueDateExceptions() {
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {students.map((student) => (
-            <StudentRow
-              key={student.id}
-              student={student}
-              assignment={assignment.data}
-              groups={groups.data}
-              dueDateExceptions={dueDateExceptions.data}
-              hasLabScheduling={hasLabScheduling}
-              originalDueDate={originalDueDate}
-              course={course}
-            />
-          ))}
+          {isLoading || !students ? (
+            <Skeleton height="400px" width="100%" />
+          ) : (
+            students.map((student) => (
+              <StudentRow
+                key={student.id}
+                student={student}
+                assignment={assignment.data}
+                groups={groups.data}
+                dueDateExceptions={dueDateExceptions.data}
+                hasLabScheduling={hasLabScheduling}
+                originalDueDate={originalDueDate}
+                course={course}
+              />
+            ))
+          )}
         </Table.Body>
       </Table.Root>
     </Box>

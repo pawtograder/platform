@@ -31,7 +31,7 @@ export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersIn
     if (!groups) {
       return [];
     }
-    return students.filter(
+    return students?.filter(
       (p: { is_private_profile: boolean; id: string }) =>
         p.is_private_profile && !groups.some((g) => g.assignment_groups_members.some((m) => m.profile_id === p.id))
     );
@@ -48,7 +48,7 @@ export default function BulkCreateGroup({
 }) {
   const [groupTextField, setGroupTextField] = useState<string>("");
   const [groupSize, setGroupSize] = useState<number>(0);
-  const ungroupedProfiles = useUngroupedStudentProfiles(groups);
+  const ungroupedProfiles = useUngroupedStudentProfiles(groups) || [];
   const [generatedGroups, setGeneratedGroups] = useState<GroupCreateData[]>([]);
   const { addGroupsToCreate } = useGroupManagement();
   const supabase = createClient();

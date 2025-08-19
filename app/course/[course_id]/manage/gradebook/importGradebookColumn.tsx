@@ -326,7 +326,7 @@ export default function ImportGradebookColumns() {
                       let importIdentifiers = previewData.previewCols[0]?.students.map((s) => s.identifier) || [];
                       importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
                       const rosterIdentifiers = studentRoster
-                        .map((s) => {
+                        ?.map((s) => {
                           if (previewData.idType === "email") {
                             const rosterEntry = courseController
                               .getRosterWithUserInfo()
@@ -338,8 +338,8 @@ export default function ImportGradebookColumns() {
                           return null;
                         })
                         .filter((id): id is string => !!id);
-                      const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers.includes(id));
-                      const notInImport = rosterIdentifiers.filter((id) => !importIdentifiers.includes(id));
+                      const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers?.includes(id));
+                      const notInImport = rosterIdentifiers?.filter((id) => !importIdentifiers.includes(id));
                       return (
                         <VStack mb={2} align="stretch">
                           {notInRoster.length > 0 && (
@@ -348,11 +348,11 @@ export default function ImportGradebookColumns() {
                               students will not be imported. {notInRoster.join(", ")}
                             </Alert>
                           )}
-                          {notInImport.length > 0 && (
+                          {notInImport && notInImport.length > 0 && (
                             <Alert status="info" variant="subtle">
-                              Note: {notInImport.length} student(s) in the roster are not in the import. These students
+                              Note: {notInImport?.length} student(s) in the roster are not in the import. These students
                               will receive a &quot;missing&quot; grade for the imported columns.
-                              {notInImport.join(", ")}
+                              {notInImport?.join(", ")}
                             </Alert>
                           )}
                         </VStack>
@@ -398,7 +398,7 @@ export default function ImportGradebookColumns() {
                             </Table.Row>
                           </Table.Header>
                           <Table.Body>
-                            {studentRoster.map((student, idx) => {
+                            {studentRoster?.map((student, idx) => {
                               let identifier: string | null = null;
                               if (previewData.idType === "email") {
                                 const rosterEntry = courseController
@@ -455,19 +455,20 @@ export default function ImportGradebookColumns() {
                             {(() => {
                               let importIdentifiers = filteredPreviewCols[0]?.students.map((s) => s.identifier) || [];
                               importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
-                              const rosterIdentifiers = studentRoster
-                                .map((s) => {
-                                  if (previewData.idType === "email") {
-                                    const rosterEntry = courseController
-                                      .getRosterWithUserInfo()
-                                      .data.find((r) => r.private_profile_id === s.id);
-                                    return rosterEntry?.users.email ?? null;
-                                  } else if (previewData.idType === "sid") {
-                                    return s.sis_user_id;
-                                  }
-                                  return null;
-                                })
-                                .filter((id): id is string => !!id);
+                              const rosterIdentifiers =
+                                studentRoster
+                                  ?.map((s) => {
+                                    if (previewData.idType === "email") {
+                                      const rosterEntry = courseController
+                                        .getRosterWithUserInfo()
+                                        .data.find((r) => r.private_profile_id === s.id);
+                                      return rosterEntry?.users.email ?? null;
+                                    } else if (previewData.idType === "sid") {
+                                      return s.sis_user_id;
+                                    }
+                                    return null;
+                                  })
+                                  .filter((id): id is string => !!id) || [];
                               return importIdentifiers
                                 .filter((id) => !rosterIdentifiers.includes(id))
                                 .map((identifier, idx) => (

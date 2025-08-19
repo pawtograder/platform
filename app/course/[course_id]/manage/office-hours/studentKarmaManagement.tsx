@@ -48,7 +48,7 @@ export default function StudentKarmaManagement() {
   // Create a map of profile ID to profile for easy lookup
   const profilesMap = useMemo(() => {
     const map = new Map<string, UserProfile>();
-    studentProfiles.forEach((profile) => {
+    studentProfiles?.forEach((profile) => {
       map.set(profile.id, profile);
     });
     return map;

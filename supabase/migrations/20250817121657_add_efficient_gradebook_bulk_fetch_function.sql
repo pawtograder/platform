@@ -6,7 +6,7 @@
 -- This is crucial for performance with large gradebook datasets
 CREATE INDEX IF NOT EXISTS "idx_gradebook_column_students_class_student_covering" 
 ON "public"."gradebook_column_students" USING "btree" ("class_id", "student_id") 
-INCLUDE ("id", "gradebook_column_id", "is_private", "score", "score_override", "is_missing", "is_excused", "is_droppable", "released", "score_override_note");
+INCLUDE ("id", "gradebook_column_id", "is_private", "score", "score_override", "is_missing", "is_excused", "is_droppable", "released", "score_override_note", "is_recalculating", "incomplete_values");
 
 -- Covering index for gradebook_columns to avoid table lookups for sort_order
 CREATE INDEX IF NOT EXISTS "idx_gradebook_columns_id_covering" 
@@ -33,18 +33,20 @@ AS $$
             jsonb_build_object(
                 'private_profile_id', gcs.student_id::text,
                 'entries', jsonb_agg(
-                    jsonb_build_object(
-                        'gcs_id', gcs.id,
-                        'gc_id', gcs.gradebook_column_id,
-                        'is_private', gcs.is_private,
-                        'score', gcs.score,
-                        'score_override', gcs.score_override,
-                        'is_missing', gcs.is_missing,
-                        'is_excused', gcs.is_excused,
-                        'is_droppable', gcs.is_droppable,
-                        'released', gcs.released,
-                        'score_override_note', gcs.score_override_note
-                    ) ORDER BY gc.sort_order ASC NULLS LAST, gc.id ASC
+                                         jsonb_build_object(
+                         'gcs_id', gcs.id,
+                         'gc_id', gcs.gradebook_column_id,
+                         'is_private', gcs.is_private,
+                         'score', gcs.score,
+                         'score_override', gcs.score_override,
+                         'is_missing', gcs.is_missing,
+                         'is_excused', gcs.is_excused,
+                         'is_droppable', gcs.is_droppable,
+                         'released', gcs.released,
+                         'score_override_note', gcs.score_override_note,
+                         'is_recalculating', gcs.is_recalculating,
+                         'incomplete_values', gcs.incomplete_values
+                     ) ORDER BY gc.sort_order ASC NULLS LAST, gc.id ASC
                 )
             ) as student_data
         FROM public.gradebook_column_students gcs
@@ -80,20 +82,22 @@ AS $$
     FROM (
         SELECT 
             gcs.student_id,
-            jsonb_agg(
-                ARRAY[
-                    gcs.id::text,
-                    gcs.gradebook_column_id::text, 
-                    gcs.is_private::text,
-                    COALESCE(gcs.score::text, ''),
-                    COALESCE(gcs.score_override::text, ''),
-                    gcs.is_missing::text,
-                    gcs.is_excused::text,
-                    gcs.is_droppable::text,
-                    gcs.released::text,
-                    COALESCE(gcs.score_override_note, '')
-                ] ORDER BY gc.sort_order ASC NULLS LAST, gc.id ASC
-            ) as entries_array
+                         jsonb_agg(
+                 ARRAY[
+                     gcs.id::text,
+                     gcs.gradebook_column_id::text, 
+                     gcs.is_private::text,
+                     COALESCE(gcs.score::text, ''),
+                     COALESCE(gcs.score_override::text, ''),
+                     gcs.is_missing::text,
+                     gcs.is_excused::text,
+                     gcs.is_droppable::text,
+                     gcs.released::text,
+                     COALESCE(gcs.score_override_note, ''),
+                     gcs.is_recalculating::text,
+                     COALESCE(gcs.incomplete_values::text, '')
+                 ] ORDER BY gc.sort_order ASC NULLS LAST, gc.id ASC
+             ) as entries_array
         FROM public.gradebook_column_students gcs
         INNER JOIN public.gradebook_columns gc ON gc.id = gcs.gradebook_column_id
         WHERE gcs.class_id = get_gradebook_records_for_all_students_array.class_id

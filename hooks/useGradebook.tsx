@@ -15,6 +15,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { CourseController, useCourseController } from "./useCourseController";
 
 import { Database } from "@/utils/supabase/SupabaseTypes";
+import type { Json } from "@/utils/supabase/SupabaseTypes";
 import { all, ConstantNode, create, FunctionNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import { useClassProfiles } from "./useClassProfiles";
@@ -38,6 +39,8 @@ export type GradebookRecordsForStudent = {
     is_droppable: boolean;
     released: boolean;
     score_override_note: string | null;
+    is_recalculating: boolean;
+    incomplete_values: Json; // JSONB type
   }[];
 };
 
@@ -330,9 +333,9 @@ class StudentGradebookController {
         score_override: entry.score_override,
         score_override_note: entry.score_override_note,
         student_id: this._profile_id,
-        is_recalculating: false, // Not available in new format
+        is_recalculating: entry.is_recalculating,
         is_private: entry.is_private,
-        incomplete_values: null // Not available in new format
+        incomplete_values: entry.incomplete_values
       }));
 
     if (
@@ -505,6 +508,7 @@ export class GradebookCellController {
   }
 
   private _handleGradebookColumnStudentChange(message: BroadcastMessage): void {
+    console.log("handleGradebookColumnStudentChange", message);
     if (message.table !== "gradebook_column_students") return;
 
     const data = message.data as GradebookColumnStudent | undefined;
@@ -561,7 +565,9 @@ export class GradebookCellController {
       is_excused: columnStudent.is_excused,
       is_droppable: columnStudent.is_droppable,
       released: columnStudent.released,
-      score_override_note: columnStudent.score_override_note
+      score_override_note: columnStudent.score_override_note,
+      is_recalculating: columnStudent.is_recalculating,
+      incomplete_values: columnStudent.incomplete_values
     };
 
     if (entryIndex >= 0) {
@@ -711,6 +717,8 @@ export class GradebookCellController {
       is_excused: boolean;
       is_droppable: boolean;
       score_override_note: string | null;
+      is_recalculating: boolean;
+      incomplete_values: Json;
     }>
   ): Promise<void> {
     const { error } = await this._client.from("gradebook_column_students").update(updates).eq("id", gcs_id);
@@ -1105,9 +1113,9 @@ export class GradebookController {
         score_override: entry.score_override,
         score_override_note: entry.score_override_note,
         student_id: student_id,
-        is_recalculating: false, // Not available in new format
+        is_recalculating: entry.is_recalculating,
         is_private: entry.is_private,
-        incomplete_values: null // Not available in new format
+        incomplete_values: entry.incomplete_values
       };
     }
 
@@ -1341,6 +1349,8 @@ export class GradebookController {
       is_excused: boolean;
       is_droppable: boolean;
       score_override_note: string | null;
+      is_recalculating: boolean;
+      incomplete_values: Json;
     }>
   ): Promise<void> {
     return this.table.updateGradebookEntry(gcs_id, updates);

@@ -659,6 +659,122 @@ export class DatabaseSeeder {
       // Grade submissions
       await this.gradeSubmissions(submissionData, graders, students);
 
+      // const class_id = 208;
+      // const { data: testClassData } = await supabase.from("classes").select("*").eq("id", class_id);
+      // const testClass = testClassData?.[0];
+      // if (!testClass) {
+      //   console.error("Test class not found");
+      //   return;
+      // }
+
+      // const { data: gradersData } = await supabase
+      //   .from("user_roles")
+      //   .select(
+      //     "*, private_profile:profiles!private_profile_id(*),public_profile:profiles!public_profile_id(*),users(email)"
+      //   )
+      //   .eq("class_id", class_id)
+      //   .eq("role", "grader");
+      // const graders =
+      //   gradersData?.map((grader) => ({
+      //     private_profile_id: grader.private_profile.id || "",
+      //     public_profile_id: grader.public_profile.id || "",
+      //     email: grader.users.email || "",
+      //     password: "",
+      //     class_id: class_id,
+      //     user_id: grader.user_id || "",
+      //     private_profile_name: grader.private_profile.name || "",
+      //     public_profile_name: grader.public_profile.name || ""
+      //   })) || [];
+      // const { data: studentsData } = await supabase
+      //   .from("user_roles")
+      //   .select(
+      //     "*, private_profile:profiles!private_profile_id(*),public_profile:profiles!public_profile_id(*),users(email)"
+      //   )
+      //   .eq("class_id", class_id)
+      //   .eq("role", "student");
+      // const students =
+      //   studentsData?.map((student) => ({
+      //     private_profile_id: student.private_profile.id || "",
+      //     public_profile_id: student.public_profile.id || "",
+      //     private_profile_name: student.private_profile.name || "",
+      //     public_profile_name: student.public_profile.name || "",
+      //     email: student.users.email || "",
+      //     password: "",
+      //     class_id: class_id,
+      //     user_id: student.user_id || ""
+      //   })) || [];
+      // const { data: instructorsData } = await supabase
+      //   .from("user_roles")
+      //   .select(
+      //     "*, private_profile:profiles!private_profile_id(*),public_profile:profiles!public_profile_id(*),users(email)"
+      //   )
+      //   .eq("class_id", class_id)
+      //   .eq("role", "instructor");
+      // const instructors =
+      //   instructorsData?.map((instructor) => ({
+      //     private_profile_id: instructor.private_profile.id || "",
+      //     public_profile_id: instructor.public_profile.id || "",
+      //     email: instructor.users.email || "",
+      //     private_profile_name: instructor.private_profile.name || "",
+      //     public_profile_name: instructor.public_profile.name || "",
+      //     password: "",
+      //     class_id: class_id,
+      //     user_id: instructor.user_id || ""
+      //   })) || [];
+      // if (!instructors) {
+      //   console.error("Instructors not found");
+      //   return;
+      // }
+
+      // const { data: submissionData } = await supabase.from("submissions").select("*").eq("class_id", class_id);
+      // if (!submissionData) {
+      //   console.error("Submissions not found");
+      //   return;
+      // }
+      // const { data: assignments } = await supabase.from("assignments").select("*").eq("class_id", class_id);
+      // if (!assignments) {
+      //   console.error("Assignments not found");
+      //   return;
+      // }
+      // const submissionWithProfileData: Array<{
+      //   submission_id: number;
+      //   assignment: { id: number; due_date: string };
+      //   student?: TestingUser;
+      //   group?: { id: number; name: string; memberCount: number; members: string[] };
+      // }> = [];
+      // for (const assignment of assignments) {
+      //   const thisAssignmentSubmissions = submissionData.filter(
+      //     (submission) => submission.assignment_id === assignment.id
+      //   );
+      //   const { data: groupsWithMembers } = await supabase
+      //     .from("assignment_groups")
+      //     .select("*, assignment_groups_members(profiles!profile_id(*))")
+      //     .eq("assignment_id", assignment.id);
+      //   for (const submission of thisAssignmentSubmissions) {
+      //     const submissionWithProfile = {
+      //       submission_id: submission.id,
+      //       assignment: { id: assignment.id, due_date: assignment.due_date },
+      //       student: students.find((student) => student.private_profile_id === submission.profile_id),
+      //       group:
+      //         submission.assignment_group_id &&
+      //         groupsWithMembers?.find((group) => group.id === submission.assignment_group_id)
+      //           ? {
+      //               id: submission.assignment_group_id,
+      //               members:
+      //                 groupsWithMembers
+      //                   .find((group) => group.id === submission.assignment_group_id)
+      //                   ?.assignment_groups_members.map((member) => member.profiles.name || "") || [],
+      //               memberCount:
+      //                 groupsWithMembers.find((group) => group.id === submission.assignment_group_id)
+      //                   ?.assignment_groups_members.length || 0,
+      //               name: groupsWithMembers.find((group) => group.id === submission.assignment_group_id)?.name || ""
+      //             }
+      //           : undefined
+      //     };
+      //     submissionWithProfileData.push(submissionWithProfile);
+      //   }
+      // }
+
       // Create extensions and regrade requests
       await this.createExtensionsAndRegradeRequests(submissionData, assignments, graders, class_id);
 
@@ -1053,39 +1169,35 @@ export class DatabaseSeeder {
       created_by_profile_id: string;
     }> = [];
 
-    // Helper function to extract the number from a user's name
-    function extractUserNumber(user: TestingUser): number | null {
-      // Extract from private_profile_name which follows pattern: "Student #1Test", "Grader #2Test", etc.
-      const match = user.private_profile_name.match(/#(\d+)/);
-      return match ? parseInt(match[1], 10) : null;
+    // Helper function to get the user number based on their position in the list
+    function getUserNumber(user: TestingUser, userList: TestingUser[]): number {
+      const index = userList.findIndex((u) => u.private_profile_id === user.private_profile_id);
+      return index + 1; // Use 1-based indexing
     }
 
     // For each conflict pattern (grader numbers 2, 3)
     for (const graderNumber of conflictPatterns) {
-      // Find the grader with this number
-      const targetGrader = graders.find((grader) => {
-        const graderNum = extractUserNumber(grader);
-        return graderNum === graderNumber;
-      });
+      // Find the grader at this position (graderNumber - 1 because we use 1-based indexing)
+      const targetGrader = graders[graderNumber - 1];
 
       if (!targetGrader) {
         console.warn(`⚠️ Could not find grader #${graderNumber}, skipping conflicts for this grader`);
         continue;
       }
 
-      // Find all students whose numbers are divisible by the grader number
-      const conflictedStudents = students.filter((student) => {
-        const studentNum = extractUserNumber(student);
-        return studentNum !== null && studentNum % graderNumber === 0;
+      // Find all students whose position numbers are divisible by the grader number
+      const conflictedStudents = students.filter((student, studentIndex) => {
+        const studentNum = studentIndex + 1; // Use 1-based indexing
+        return studentNum % graderNumber === 0;
       });
 
       console.log(
-        `   Grader #${graderNumber} conflicts with ${conflictedStudents.length} students (divisible by ${graderNumber})`
+        `   Grader #${graderNumber} conflicts with ${conflictedStudents.length} students (position divisible by ${graderNumber})`
       );
 
       // Create conflict records for each conflicted student
       conflictedStudents.forEach((student) => {
-        const studentNum = extractUserNumber(student);
+        const studentNum = getUserNumber(student, students);
         conflictsToInsert.push({
           grader_profile_id: targetGrader.private_profile_id,
           student_profile_id: student.private_profile_id,
@@ -2454,7 +2566,7 @@ export class DatabaseSeeder {
     }
 
     // Batch update reviews in parallel chunks (Supabase doesn't support bulk updates)
-    const UPDATE_BATCH_SIZE = 100; // Smaller batch size for concurrent operations
+    const UPDATE_BATCH_SIZE = 5; // Smaller batch size for concurrent operations
     const reviewUpdateEntries = Array.from(reviewUpdates.entries());
     const updateChunks = chunkArray(reviewUpdateEntries, UPDATE_BATCH_SIZE);
 
@@ -2485,6 +2597,7 @@ export class DatabaseSeeder {
     console.log(`✓ Processed grading for ${reviewsToProcess.length} submissions`);
     console.log(`   Created ${submissionComments.length} submission comments`);
     console.log(`   Created ${submissionFileComments.length} submission file comments`);
+    return submissionComments;
   }
 
   protected async createExtensionsAndRegradeRequests(
@@ -2513,35 +2626,36 @@ export class DatabaseSeeder {
 
     // Create due date exceptions (extensions) for selected submissions
     console.log("   Creating due date extensions...");
-    const extensionPromises = submissionData
+
+    // First, create array of all extension data to insert
+    const extensionsToInsert = submissionData
       .filter(({ submission_id, student }) => student && submissionsForExtensions.has(submission_id))
-      .map(({ assignment, student }) => {
-        if (!student) return Promise.resolve();
+      .map(({ assignment, student }) => ({
+        assignment_id: assignment.id,
+        student_id: student!.private_profile_id,
+        class_id: class_id,
+        hours: Math.floor(5000 / 60), // Convert minutes to hours
+        creator_id: student!.private_profile_id,
+        note: "Automatically granted extension for testing purposes"
+      }));
 
-        return this.rateLimitManager.trackAndLimit("assignment_due_date_exceptions", () =>
-          supabase
-            .from("assignment_due_date_exceptions")
-            .insert({
-              assignment_id: assignment.id,
-              student_id: student.private_profile_id,
-              class_id: class_id,
-              hours: Math.floor(5000 / 60), // Convert minutes to hours
-              creator_id: student.private_profile_id,
-              note: "Automatically granted extension for testing purposes"
-            })
-            .select("id")
-        );
-      });
+    // Insert extensions in batches of 100
+    const batchSize = this.rateLimits["assignment_due_date_exceptions"].batchSize || 100;
+    for (let i = 0; i < extensionsToInsert.length; i += batchSize) {
+      const batch = extensionsToInsert.slice(i, i + batchSize);
 
-    const validExtensionPromises = extensionPromises.filter((p) => p !== undefined);
-    await Promise.all(validExtensionPromises);
-    console.log(`   ✓ Created ${validExtensionPromises.length} due date extensions`);
+      await this.rateLimitManager.trackAndLimit("assignment_due_date_exceptions", () =>
+        supabase.from("assignment_due_date_exceptions").insert(batch).select("id")
+      );
+    }
+
+    console.log(`   ✓ Created ${extensionsToInsert.length} due date extensions`);
 
     // Create regrade requests for 20% of submissions at random
     console.log("   Creating regrade requests...");
     const statuses: Array<"opened" | "resolved" | "closed"> = ["opened", "resolved", "closed"];
 
-    const numRegradeRequests = Math.max(1, Math.floor(submissionData.length * 0.2));
+    const numRegradeRequests = Math.max(Math.max(1, Math.floor(submissionData.length * 0.2)), 1000);
     // Shuffle the submissionData array and take first N items
     const shuffledSubmissionsForRegrades = submissionData
       .map((value) => ({ value, sort: Math.random() }))
@@ -2552,24 +2666,10 @@ export class DatabaseSeeder {
     // First, fetch existing comments for all submissions that we want to create regrade requests for
     const submissionIds = shuffledSubmissionsForRegrades.map(({ submission_id }) => submission_id);
 
-    const { data: existingComments, error: commentsError } = await supabase
-      .from("submission_comments")
-      .select("id, submission_id, points")
-      .in("submission_id", submissionIds)
-      .eq("class_id", class_id);
-
-    if (commentsError) {
-      console.error(`Failed to fetch existing comments: ${commentsError.message}`);
-      return;
-    }
-
-    if (!existingComments || existingComments.length === 0) {
-      console.log("   No existing comments found for regrade requests, skipping...");
-      return;
-    }
-
+    const comments = await supabase.from("submission_comments").select("*").in("submission_id", submissionIds);
+    const submissionComments = comments.data || [];
     // Group comments by submission_id for easy lookup
-    const commentsBySubmission = existingComments.reduce(
+    const commentsBySubmission = submissionComments.reduce(
       (acc, comment) => {
         if (!acc[comment.submission_id]) {
           acc[comment.submission_id] = [];
@@ -2577,58 +2677,90 @@ export class DatabaseSeeder {
         acc[comment.submission_id].push(comment);
         return acc;
       },
-      {} as Record<number, typeof existingComments>
+      {} as Record<number, Array<(typeof submissionComments)[number]>>
     );
 
-    const regradePromises = shuffledSubmissionsForRegrades.map(({ submission_id, assignment, student, group }) => {
+    // Collect all regrade request data for batch insert
+    const regradeRequestsData: Array<{
+      submission_id: number;
+      assignment_id: number;
+      assignee: string;
+      created_by: string;
+      class_id: number;
+      status: "opened" | "resolved" | "closed";
+      resolved_at: string | null;
+      resolved_by: string | null;
+      submission_comment_id: number;
+      initial_points: number | null;
+      resolved_points: number | null;
+      closed_points: number | null;
+    }> = [];
+    for (const { submission_id, assignment, student, group } of shuffledSubmissionsForRegrades) {
       const status = statuses[Math.floor(Math.random() * statuses.length)];
       const grader = graders[Math.floor(Math.random() * graders.length)];
 
       if (!student && !group) {
         console.log("No student or group found for submission", submission_id);
-        return Promise.resolve();
+        continue;
       }
 
       // Get existing comments for this submission
       const submissionComments = commentsBySubmission[submission_id];
       if (!submissionComments || submissionComments.length === 0) {
         console.log(`No existing comments found for submission ${submission_id}, skipping regrade request`);
-        return Promise.resolve();
+        continue;
       }
 
       // Randomly select one of the existing comments
       const selectedComment = submissionComments[Math.floor(Math.random() * submissionComments.length)];
 
-      // Create the regrade request with reference to the existing comment
-      return this.rateLimitManager.trackAndLimit("submission_regrade_requests", () =>
-        supabase
-          .from("submission_regrade_requests")
-          .insert({
-            submission_id: submission_id,
-            assignment_id: assignment.id,
-            assignee: grader.private_profile_id,
-            created_by: student ? student.private_profile_id : group ? group.members[0] : "",
-            class_id: class_id,
-            status: status,
-            resolved_at: status !== "opened" ? new Date().toISOString() : null,
-            resolved_by: status !== "opened" ? grader.private_profile_id : null,
-            submission_comment_id: selectedComment.id, // Reference existing comment
-            initial_points: selectedComment.points,
-            resolved_points: status === "resolved" || status === "closed" ? Math.floor(Math.random() * 100) : null,
-            closed_points: status === "closed" ? Math.floor(Math.random() * 100) : null
-          })
-          .select("id")
-      );
-    });
+      // Add regrade request data to batch
+      regradeRequestsData.push({
+        submission_id: submission_id,
+        assignment_id: assignment.id,
+        assignee: grader.private_profile_id,
+        created_by: student ? student.private_profile_id : group ? group.members[0] : "",
+        class_id: class_id,
+        status: status,
+        resolved_at: status !== "opened" ? new Date().toISOString() : null,
+        resolved_by: status !== "opened" ? grader.private_profile_id : null,
+        submission_comment_id: selectedComment.id, // Reference existing comment
+        initial_points: selectedComment.points,
+        resolved_points: status === "resolved" || status === "closed" ? Math.floor(Math.random() * 100) : null,
+        closed_points: status === "closed" ? Math.floor(Math.random() * 100) : null
+      });
+    }
 
-    const validRegradePromises = regradePromises.filter((p) => p !== undefined);
-    await Promise.all(validRegradePromises);
-    console.log(`   ✓ Created ${validRegradePromises.length} regrade requests`);
+    // Perform batch insert if we have data
+    if (regradeRequestsData.length > 0) {
+      const BATCH_SIZE = this.rateLimits["submission_regrade_requests"].batchSize || 1;
+      const regradeChunks = chunkArray(regradeRequestsData, BATCH_SIZE);
+
+      console.log(`   Processing ${regradeRequestsData.length} regrade requests in ${regradeChunks.length} batches...`);
+
+      for (let i = 0; i < regradeChunks.length; i++) {
+        const chunk = regradeChunks[i];
+        const { error: regradeError } = await this.rateLimitManager.trackAndLimit(
+          "submission_regrade_requests",
+          () => supabase.from("submission_regrade_requests").insert(chunk).select("id"),
+          chunk.length
+        );
+
+        if (regradeError) {
+          console.error(
+            `Failed to insert regrade requests batch ${i + 1}/${regradeChunks.length}: ${regradeError.message}`
+          );
+          return;
+        }
+      }
+    }
+
+    console.log(`   ✓ Created ${regradeRequestsData.length} regrade requests`);
 
     // Log summary
-    const openedCount = Math.round(validRegradePromises.length * 0.33); // Approximate since we use random status
-    const resolvedCount = Math.round(validRegradePromises.length * 0.33);
-    const closedCount = validRegradePromises.length - openedCount - resolvedCount;
+    const openedCount = Math.round(regradeRequestsData.length * 0.33); // Approximate since we use random status
+    const resolvedCount = Math.round(regradeRequestsData.length * 0.33);
+    const closedCount = regradeRequestsData.length - openedCount - resolvedCount;
     console.log(`   Status breakdown: ~${openedCount} opened, ~${resolvedCount} resolved, ~${closedCount} closed`);
   }
 
@@ -2708,6 +2840,25 @@ export class DatabaseSeeder {
       max_score: 12,
       dependencies: { gradebook_columns: skillColumnIds },
       sort_order: 16
+    });
+
+    await this.createGradebookColumn({
+      class_id,
+      name: "Total Labs",
+      description: "Total number of labs",
+      slug: "total-labs",
+      score_expression: "countif(gradebook_columns('assignment-lab-*'), f(x) = not x.is_missing and x.score>0)",
+      max_score: 10
+    });
+
+    await this.createGradebookColumn({
+      class_id,
+      name: "Average HW",
+      description: "Average of all homework assignments",
+      slug: "average.hw",
+      score_expression: "mean(gradebook_columns('assignment-hw-*'))",
+      max_score: 100,
+      sort_order: 17
     });
 
     // Create final grade column
@@ -2842,9 +2993,9 @@ final;`,
 
     await this.createGradebookColumn({
       class_id,
-      name: "Average Assignments",
-      description: "Average of all assignments",
-      slug: "average-assignments",
+      name: "Average HW",
+      description: "Average of all homework assignments",
+      slug: "average.hw",
       score_expression: "mean(gradebook_columns('assignment-assignment-*'))",
       max_score: 100,
       sort_order: 2
@@ -2938,17 +3089,20 @@ final;`,
     max_score: number | null;
     score_expression: string | null;
   }> {
+    console.log("Creating gradebook column", name);
     // Get the gradebook for this class
     const { data: gradebook, error: gradebookError } = await supabase
       .from("gradebooks")
       .select("id")
       .eq("class_id", class_id)
       .single();
+    console.log("Gradebook retrieved");
 
     if (gradebookError || !gradebook) {
       throw new Error(`Failed to find gradebook for class ${class_id}: ${gradebookError?.message}`);
     }
 
+    console.log("Doing column insert");
     // Create the gradebook column
     const { data: column, error: columnError } = await this.rateLimitManager.trackAndLimit("gradebook_columns", () =>
       supabase
@@ -2967,7 +3121,7 @@ final;`,
         })
         .select("id, name, slug, max_score, score_expression")
     );
-
+    console.log("Column inserted");
     if (columnError) {
       throw new Error(`Failed to create gradebook column ${name}: ${columnError.message}`);
     }

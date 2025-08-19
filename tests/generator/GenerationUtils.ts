@@ -40,9 +40,9 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   // Grading operations (moderate volume, batched)
   grader_results: { maxInsertsPerSecond: 60, description: "Grader results" },
   grader_result_tests: { maxInsertsPerSecond: 100, description: "Grader result tests" },
-  submission_reviews: { maxInsertsPerSecond: 40, description: "Submission reviews" },
-  submission_comments: { maxInsertsPerSecond: 10, description: "Submission comments", batchSize: 200 },
-  submission_file_comments: { maxInsertsPerSecond: 10, description: "Submission file comments", batchSize: 200 },
+  submission_reviews: { maxInsertsPerSecond: 100, description: "Submission reviews" },
+  submission_comments: { maxInsertsPerSecond: 100, description: "Submission comments", batchSize: 200 },
+  submission_file_comments: { maxInsertsPerSecond: 100, description: "Submission file comments", batchSize: 200 },
 
   // Gradebook operations
   gradebook_columns: { maxInsertsPerSecond: 1, description: "Gradebook columns" },
@@ -58,7 +58,7 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   help_requests: { maxInsertsPerSecond: 15, description: "Help requests" },
   help_request_messages: { maxInsertsPerSecond: 40, description: "Help request messages" },
   help_request_students: { maxInsertsPerSecond: 100, description: "Help request student associations" },
-  discussion_threads: { maxInsertsPerSecond: 1, description: "Discussion threads", batchSize: 10 },
+  discussion_threads: { maxInsertsPerSecond: 4, description: "Discussion threads", batchSize: 10 },
 
   // Metadata operations (some batched)
   tags: { maxInsertsPerSecond: 30, description: "Tag assignments" },
@@ -67,8 +67,8 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   workflow_run_error: { maxInsertsPerSecond: 100, description: "Workflow errors", batchSize: 100 },
 
   // Miscellaneous operations
-  assignment_due_date_exceptions: { maxInsertsPerSecond: 200, description: "Due date exceptions" },
-  submission_regrade_requests: { maxInsertsPerSecond: 50, description: "Regrade requests" }
+  assignment_due_date_exceptions: { maxInsertsPerSecond: 10, description: "Due date exceptions", batchSize: 100 },
+  submission_regrade_requests: { maxInsertsPerSecond: 4, description: "Regrade requests", batchSize: 100 }
 };
 // Performance tracking
 export interface PerformanceMetrics {

@@ -61,15 +61,20 @@ export function useRealtimeChat({
 
   useEffect(() => {
     const unsubscribe = controller.officeHoursRealTimeController.subscribeToHelpRequest(helpRequestId, () => {});
+
+    // Load messages for this help request if not already loaded
+    const helpRequestController = controller.loadMessagesForHelpRequest(helpRequestId);
+
     // Proactively refetch messages once on mount/id change to backfill any rows
     // created after controller initialization but before this subscription existed
-    controller.helpRequestMessages.refetchAll();
+    helpRequestController.refetchAll();
+
     return () => {
       unsubscribe();
     };
   }, [helpRequestId, classId, controller]);
 
-  const { helpRequestMessages, helpRequestReadReceipts } = controller;
+  const { helpRequestReadReceipts } = controller;
 
   // Get connection status from controller
   const connectionStatus = controller.getConnectionStatus();
@@ -92,8 +97,11 @@ export function useRealtimeChat({
         throw new Error("Message content cannot be empty");
       }
 
+      // Get the help request specific controller for message creation
+      const helpRequestController = controller.loadMessagesForHelpRequest(helpRequestId);
+
       try {
-        await helpRequestMessages.create({
+        await helpRequestController.create({
           message: content,
           help_request_id: helpRequestId,
           author: private_profile_id,
@@ -110,7 +118,7 @@ export function useRealtimeChat({
         throw error;
       }
     },
-    [enableChat, user, private_profile_id, helpRequestId, classId, helpRequestMessages]
+    [enableChat, user, private_profile_id, helpRequestId, classId, controller]
   );
 
   const markMessageAsRead = useCallback(

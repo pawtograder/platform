@@ -162,7 +162,7 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
       selectedOption,
       placeholder: "Select any submission to view..."
     };
-  }, [submissions, classProfiles, assignmentGroups, submissions_id]);
+  }, [submissions, classProfiles, assignmentGroups, submissions_id, staffProfiles]);
 }
 
 function SubmissionSelector() {

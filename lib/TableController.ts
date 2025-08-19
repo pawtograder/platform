@@ -302,7 +302,7 @@ export default class TableController<
 
   async _fetchRow(id: IDType): Promise<ResultOne | undefined> {
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
-    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
+    const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).maybeSingle();
     if (error) {
       throw error;
     }

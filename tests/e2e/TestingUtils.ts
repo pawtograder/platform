@@ -297,14 +297,17 @@ export async function createUserInClass({
       lab_section_id: lab_section_id
     });
   } else if (section_id || lab_section_id) {
-    await supabase
-      .from("user_roles")
-      .update({
-        class_section_id: section_id,
-        lab_section_id: lab_section_id
-      })
-      .eq("user_id", userId)
-      .eq("class_id", class_id);
+    await (rateLimitManager ?? DEFAULT_RATE_LIMIT_MANAGER).trackAndLimit("user_roles", () =>
+      supabase
+        .from("user_roles")
+        .update({
+          class_section_id: section_id,
+          lab_section_id: lab_section_id
+        })
+        .eq("user_id", userId)
+        .eq("class_id", class_id)
+        .select("id")
+    );
   }
   const { data: profileData, error: profileError } = await supabase
     .from("user_roles")
