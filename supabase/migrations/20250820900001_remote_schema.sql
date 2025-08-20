@@ -1,3 +1,10 @@
+
+CREATE INDEX idx_rubric_checks_criteria_ordinal ON public.rubric_checks USING btree (rubric_criteria_id, ordinal);
+
+CREATE INDEX idx_rubric_criteria_part_ordinal ON public.rubric_criteria USING btree (rubric_part_id, ordinal);
+
+CREATE INDEX idx_rubric_parts_rubric_ordinal ON public.rubric_parts USING btree (rubric_id, ordinal);
+
 CREATE OR REPLACE FUNCTION public.create_all_repos_for_assignment(course_id integer, assignment_id integer)
  RETURNS void
  LANGUAGE plpgsql
