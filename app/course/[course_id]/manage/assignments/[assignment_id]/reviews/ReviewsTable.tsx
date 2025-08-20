@@ -383,7 +383,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           .select("id")
           .eq("submission_id", row.submission_id)
           .eq("rubric_id", codeWalkRubric.id)
-          .single();
+          .eq("grader", row.assignee_profile_id)
+          .maybeSingle();
 
         if (existingReview?.id) {
           submissionReviewId = existingReview.id;
@@ -395,6 +396,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
               class_id: course.classes.id,
               submission_id: row.submission_id,
               rubric_id: codeWalkRubric.id,
+              grader: row.assignee_profile_id,
               name: codeWalkRubric.name || "Code Walk Review",
               total_score: 0,
               total_autograde_score: 0,
