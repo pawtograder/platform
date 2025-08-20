@@ -27,6 +27,7 @@ import {
   FiAlertCircle,
   FiBookOpen,
   FiClipboard,
+  FiClock,
   FiCompass,
   FiMenu,
   FiMessageSquare,
@@ -74,6 +75,7 @@ const LinkItems = (courseID: number) => [
       { name: "Lab Sections", icon: MdOutlineScience, target: `/course/${courseID}/manage/course/lab-sections` },
       { name: "Flashcard Decks", icon: TbCards, target: `/course/${courseID}/manage/course/flashcard-decks` },
       { name: "Grading Conflicts", icon: FiAlertCircle, target: `/course/${courseID}/manage/course/grading-conflicts` },
+      { name: "Due Date Extensions", icon: FiClock, target: `/course/${courseID}/manage/course/due-date-extensions` },
       { name: "Audit Log", icon: FaScroll, target: `/course/${courseID}/manage/course/audit` },
       { name: "Emailer", icon: MdOutlineMail, target: `/course/${courseID}/manage/course/emails` },
       { name: "Workflow Runs", icon: FaRobot, target: `/course/${courseID}/manage/workflow-runs` }

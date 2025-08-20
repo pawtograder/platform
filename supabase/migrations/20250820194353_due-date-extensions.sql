@@ -200,4 +200,13 @@ CREATE TRIGGER on_assignment_created_apply_extensions AFTER INSERT ON public.ass
 
 CREATE TRIGGER on_student_deadline_extension_created AFTER INSERT ON public.student_deadline_extensions FOR EACH ROW EXECUTE FUNCTION create_assignment_exceptions_from_extension();
 
+-- Add after all the table creation and policy definitions
+CREATE TRIGGER broadcast_student_deadline_extensions_realtime
+  AFTER INSERT OR DELETE OR UPDATE
+  ON public.student_deadline_extensions
+  FOR EACH ROW
+  EXECUTE FUNCTION broadcast_course_table_change_unified();
+
+
+
 

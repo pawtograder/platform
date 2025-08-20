@@ -14,7 +14,8 @@ import {
   Tag,
   UserProfile,
   UserRoleWithUser,
-  UserRoleWithPrivateProfileAndUser
+  UserRoleWithPrivateProfileAndUser,
+  StudentDeadlineExtension
 } from "@/utils/supabase/DatabaseTypes";
 import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
 import TableController, {
@@ -224,6 +225,7 @@ export class CourseController {
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
   private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
+  private _studentDeadlineExtensions?: TableController<"student_deadline_extensions">;
 
   constructor(
     public role: Database["public"]["Enums"]["app_role"],
@@ -340,6 +342,18 @@ export class CourseController {
       });
     }
     return this._userRolesWithProfiles;
+  }
+
+  get studentDeadlineExtensions(): TableController<"student_deadline_extensions"> {
+    if (!this._studentDeadlineExtensions) {
+      this._studentDeadlineExtensions = new TableController({
+        client: this._client,
+        table: "student_deadline_extensions",
+        query: this._client.from("student_deadline_extensions").select("*").eq("class_id", this.courseId),
+        classRealTimeController: this.classRealTimeController
+      });
+    }
+    return this._studentDeadlineExtensions;
   }
 
   private genericDataSubscribers: { [key in string]: Map<number, UpdateCallback<unknown>[]> } = {};
@@ -723,6 +737,7 @@ export class CourseController {
       | TableController<"lab_sections">
       | TableController<"lab_section_meetings">
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
+      | TableController<"student_deadline_extensions">
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
     if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
@@ -731,6 +746,8 @@ export class CourseController {
     if (this._tags) createdControllers.push(this._tags);
     if (this._labSections) createdControllers.push(this._labSections);
     if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
+    if (this._studentDeadlineExtensions) createdControllers.push(this._studentDeadlineExtensions);
+
     return createdControllers.every((c) => c.ready);
   }
 
@@ -743,6 +760,7 @@ export class CourseController {
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
+    this._studentDeadlineExtensions?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -1187,4 +1205,23 @@ export function useUserRolesWithProfiles() {
   }, [controller]);
 
   return userRoles;
+}
+
+/**
+ * Hook to get student deadline extensions
+ * This provides access to class-wide extensions that apply to all assignments
+ */
+export function useStudentDeadlineExtensions() {
+  const controller = useCourseController();
+  const [extensions, setExtensions] = useState<StudentDeadlineExtension[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.studentDeadlineExtensions.list((updatedExtensions) => {
+      setExtensions(updatedExtensions as StudentDeadlineExtension[]);
+    });
+    setExtensions(data as StudentDeadlineExtension[]);
+    return unsubscribe;
+  }, [controller]);
+
+  return extensions;
 }
