@@ -1,6 +1,6 @@
 # Pawtograder Course Operations Platform
 
-[![Covered by Argos Visual Testing](https://argos-ci.com/badge.svg)](https://app.argos-ci.com/jon-bell/platform/reference)
+[![Covered by Argos Visual Testing](https://argos-ci.com/badge.svg)](https://app.argos-ci.com/pawtograder/platform/reference?utm_source=pawtograder&utm_campaign=oss)
 
 Pawtograder is a course operations platform for instructors and students. It provides "autograder" functionality (automated grading of programming assignments, combining instructor support and handgrading inspired by Autolab and Autograder.io with GitHub integration inspired by GitHub Classroom) and other interactive features like Q&A, office hours queue, and more.
 

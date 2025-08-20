@@ -1004,10 +1004,10 @@ export class GradebookController {
     result.push(["Name", "Email", "Canvas ID", "SID", ...columns.map((col) => col.name)]);
     roster.forEach((student) => {
       const studentGradebookController = this.getStudentGradebookController(student.private_profile_id);
-      const userProfile = courseController.getUserProfile(student.private_profile_id);
+      const userProfile = courseController.profiles.getById(student.private_profile_id);
       const gradesForStudent = columns.map((col) => getScore(studentGradebookController.getGradesForStudent(col.id)));
       const row = [
-        student.users.name ?? "Unknown",
+        userProfile.data.name ?? "Unknown",
         student.users.email ?? "Unknown",
         student.canvas_id,
         userProfile?.data?.sis_user_id,
