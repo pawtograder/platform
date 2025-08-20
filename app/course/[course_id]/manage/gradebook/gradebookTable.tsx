@@ -1,27 +1,29 @@
 "use client";
 
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { MenuContent, MenuItem, MenuRoot, MenuTrigger, MenuSeparator } from "@/components/ui/menu";
+import { MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import PersonName from "@/components/ui/person-name";
 import { Toaster, toaster } from "@/components/ui/toaster";
 import { Tooltip as WrappedTooltip } from "@/components/ui/tooltip";
-import { useClassProfiles, useIsInstructor, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useIsInstructor } from "@/hooks/useClassProfiles";
 import {
+  useAllStudentRoles,
   useCanShowGradeFor,
   useCourseController,
   useObfuscatedGradesMode,
   useSetOnlyShowGradesFor
 } from "@/hooks/useCourseController";
 import {
+  useAreAllDependenciesReleased,
   useGradebookColumn,
   useGradebookColumnGrades,
   useGradebookColumns,
   useGradebookController,
-  useStudentDetailView,
-  useAreAllDependenciesReleased,
   useGradebookRefetchStatus,
-  useStudentColumnIndexStatus
+  useStudentDetailView
 } from "@/hooks/useGradebook";
+import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
 import { createClient } from "@/utils/supabase/client";
 import {
   ClassSection,
@@ -43,11 +45,11 @@ import {
   Input,
   Link,
   List,
-  Portal,
+  PopoverBody,
+  PopoverContent,
   PopoverRoot,
   PopoverTrigger,
-  PopoverContent,
-  PopoverBody,
+  Portal,
   Spinner,
   Table,
   Text,
@@ -55,8 +57,7 @@ import {
   Tooltip,
   VStack
 } from "@chakra-ui/react";
-import { Checkbox } from "@/components/ui/checkbox";
-import { useCreate, useInvalidate, useUpdate, useList } from "@refinedev/core";
+import { useCreate, useInvalidate, useList, useUpdate } from "@refinedev/core";
 import { useForm } from "@refinedev/react-hook-form";
 import {
   Column,
@@ -71,34 +72,33 @@ import {
   useReactTable
 } from "@tanstack/react-table";
 import { useVirtualizer, VirtualItem } from "@tanstack/react-virtual";
-import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { Select } from "chakra-react-select";
+import { useParams } from "next/navigation";
+import pluralize from "pluralize";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FieldValues } from "react-hook-form";
-import { FiDownload, FiPlus, FiFilter, FiChevronDown } from "react-icons/fi";
+import { FaLock } from "react-icons/fa";
+import { FaLockOpen } from "react-icons/fa6";
+import { FiChevronDown, FiDownload, FiFilter, FiPlus } from "react-icons/fi";
 import {
   LuArrowDown,
   LuArrowLeft,
   LuArrowRight,
   LuArrowUp,
+  LuCalculator,
   LuCheck,
-  LuPencil,
-  LuTrash,
-  LuX,
   LuChevronDown,
   LuChevronRight,
-  LuCalculator,
   LuFile,
-  LuLayoutGrid
+  LuLayoutGrid,
+  LuPencil,
+  LuTrash,
+  LuX
 } from "react-icons/lu";
 import { TbEye, TbEyeOff, TbFilter } from "react-icons/tb";
-import pluralize from "pluralize";
 import { WhatIf } from "../../gradebook/whatIf";
 import GradebookCell from "./gradebookCell";
 import ImportGradebookColumn from "./importGradebookColumn";
-import { FaLock } from "react-icons/fa";
-import { FaLockOpen } from "react-icons/fa6";
-import { Select } from "chakra-react-select";
-import { useParams } from "next/navigation";
-import { GradebookWhatIfProvider } from "@/hooks/useGradebookWhatIf";
 const MemoizedGradebookCell = React.memo(GradebookCell);
 
 function RenderExprDocs() {
@@ -1618,14 +1618,13 @@ function StudentDetailDialog() {
 }
 export default function GradebookTable() {
   const { course_id } = useParams();
-  const students = useStudentRoster();
+  const students = useAllStudentRoles();
   const courseController = useCourseController();
   const gradebookController = useGradebookController();
-  const { allVisibleRoles } = useClassProfiles();
   const gradebookColumns = useGradebookColumns();
   const isInstructor = useIsInstructor();
   const isRefetching = useGradebookRefetchStatus();
-  const isStudentColumnIndexPopulated = useStudentColumnIndexStatus();
+  const isGradebookDataReady = gradebookController.table.ready;
 
   // State for collapsible groups - use base group name as key for stability
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -1638,6 +1637,9 @@ export default function GradebookTable() {
     queryOptions: {
       staleTime: Infinity,
       cacheTime: Infinity
+    },
+    pagination: {
+      pageSize: 1000
     }
   });
 
@@ -1654,7 +1656,7 @@ export default function GradebookTable() {
       }
     > = {};
 
-    allVisibleRoles.forEach((role) => {
+    students.forEach((role) => {
       if (role.role === "student") {
         const classSection = classSections?.data?.find((s) => s.id === role.class_section_id);
         const labSection = labSections?.find((s) => s.id === role.lab_section_id);
@@ -1672,7 +1674,7 @@ export default function GradebookTable() {
       }
     });
     return map;
-  }, [allVisibleRoles, classSections?.data, labSections]);
+  }, [students, classSections?.data, labSections]);
 
   const columnsForGrouping = gradebookColumns.map((col) => ({
     id: col.id,
@@ -1789,7 +1791,7 @@ export default function GradebookTable() {
 
         let maxWidth = 180;
         students.forEach((student) => {
-          tempElement.textContent = student.name || student.short_name || "Unknown Student";
+          tempElement.textContent = student.profiles.name || student.profiles.short_name || "Unknown Student";
           const textWidth = tempElement.offsetWidth;
           maxWidth = Math.max(maxWidth, textWidth + 60);
         });
@@ -1871,7 +1873,7 @@ export default function GradebookTable() {
 
         // Check if this column has any non-missing values
         for (const student of students) {
-          const controller = gradebookController.getStudentGradebookController(student.id);
+          const controller = gradebookController.getStudentGradebookController(student.private_profile_id);
           const { item } = controller.getColumnForStudent(col.id);
           const score = item?.score_override ?? item?.score;
 
@@ -2035,9 +2037,12 @@ export default function GradebookTable() {
     labSections
   ]);
 
+  const studentProfiles = useMemo(() => {
+    return students.map((student) => student.profiles);
+  }, [students]);
   // Table instance
   const table = useReactTable({
-    data: students,
+    data: studentProfiles,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -2082,7 +2087,7 @@ export default function GradebookTable() {
 
     // Measure each student name
     students.forEach((student) => {
-      tempElement.textContent = student.name || student.short_name || "Unknown Student";
+      tempElement.textContent = student.profiles.name || student.profiles.short_name || "Unknown Student";
       const textWidth = tempElement.offsetWidth;
       maxWidth = Math.max(maxWidth, textWidth + 60); // Add padding for icons and spacing
     });
@@ -2255,7 +2260,7 @@ export default function GradebookTable() {
     [rowModel.rows, toggleGroup, firstColumnWidth, headerHeight, isSafari]
   );
 
-  if (!students || !isStudentColumnIndexPopulated) {
+  if (!students || !isGradebookDataReady) {
     return (
       <VStack gap={2} align="center" justify="center" minH="40vh">
         <Spinner size="lg" color="blue.500" />
@@ -2269,7 +2274,7 @@ export default function GradebookTable() {
   return (
     <VStack align="stretch" w="100%" gap={0} position="relative">
       {/* Refetch loading overlay */}
-      {(isRefetching || !isStudentColumnIndexPopulated) && (
+      {(isRefetching || !isGradebookDataReady) && (
         <Box
           position="absolute"
           top={0}

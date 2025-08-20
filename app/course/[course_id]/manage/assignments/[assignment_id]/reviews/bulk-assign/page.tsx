@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
 import useTags from "@/hooks/useTags";
 import { Assignment, ClassSection, LabSection, RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import { createClient } from "@/utils/supabase/client";
@@ -34,6 +33,7 @@ import { useAssignmentController, useRubrics } from "@/hooks/useAssignment";
 import { useLabSections } from "@/hooks/useCourseController";
 import { Alert } from "@/components/ui/alert";
 import { addDays } from "date-fns";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 // Main Page Component
 export default function BulkAssignGradingPage() {
@@ -127,7 +127,8 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
 
   // const { mutateAsync } = useCreate();
   const [isGeneratingReviews, setIsGeneratingReviews] = useState(false);
-  const course = useCourse();
+  const { role: classRole } = useClassProfiles();
+  const course = classRole.classes;
   const { tags } = useTags();
   const supabase = createClient();
 
@@ -716,6 +717,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           );
         })
         .map((assignment) => assignment.id);
+
       if (assignmentsToUpdate.length > 0) {
         await supabase
           .from("review_assignments")
@@ -740,8 +742,9 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           rubric_id: selectedRubric.id,
           class_id: Number(course_id),
           submission_review_id: submissionReviewId,
-          due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+          due_date: new TZDate(dueDate, course.time_zone ?? "America/New_York").toISOString()
         }));
+
       if (assignmentsToCreate.length > 0) {
         const { error: insertAssignmentsError } = await supabase.from("review_assignments").insert(assignmentsToCreate);
         if (insertAssignmentsError) {
@@ -765,6 +768,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         });
         return false;
       }
+
       //Now insert all the review assignment parts as needed (skip any that already exist)
       const reviewAssignmentPartsToCreate = validReviews
         .map(({ review, submissionReviewId }) => {
@@ -1350,14 +1354,14 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             </Field.Root>
 
             <Field.Root>
-              <Field.Label>Review due date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
+              <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
               <Input
                 type="datetime-local"
                 value={
                   dueDate
                     ? new Date(dueDate)
                         .toLocaleString("sv-SE", {
-                          timeZone: course.classes.time_zone ?? "America/New_York"
+                          timeZone: course.time_zone ?? "America/New_York"
                         })
                         .replace(" ", "T")
                     : ""
@@ -1379,7 +1383,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
                       parseInt(minute),
                       0,
                       0,
-                      course.classes.time_zone ?? "America/New_York"
+                      course.time_zone ?? "America/New_York"
                     );
                     setDueDate(tzDate.toString());
                   } else {

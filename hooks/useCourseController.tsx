@@ -1,5 +1,13 @@
 "use client";
 
+import { toaster } from "@/components/ui/toaster";
+import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
+import TableController, {
+  PossiblyTentativeResult,
+  useFindTableControllerValue,
+  useListTableControllerValues
+} from "@/lib/TableController";
+import { createClient } from "@/utils/supabase/client";
 import {
   Assignment,
   AssignmentDueDateException,
@@ -13,28 +21,117 @@ import {
   Notification,
   Tag,
   UserProfile,
-  UserRoleWithUser,
-  UserRoleWithPrivateProfileAndUser
+  UserRoleWithPrivateProfileAndUser,
+  UserRoleWithUser
 } from "@/utils/supabase/DatabaseTypes";
-import { ClassRealTimeController } from "@/lib/ClassRealTimeController";
-import TableController, {
-  PossiblyTentativeResult,
-  useFindTableControllerValue,
-  useListTableControllerValues
-} from "@/lib/TableController";
-import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
-import { SupabaseClient } from "@supabase/supabase-js";
 import { Box, Spinner } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
 import { LiveEvent, useList, useUpdate } from "@refinedev/core";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { addHours, addMinutes } from "date-fns";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useAuthState from "./useAuthState";
 import { useClassProfiles } from "./useClassProfiles";
 import { DiscussionThreadReadWithAllDescendants } from "./useDiscussionThreadRootController";
-import { toaster } from "@/components/ui/toaster";
 
+export function useAllProfilesForClass() {
+  const { profiles: controller } = useCourseController();
+  const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      setProfiles(data);
+    });
+    setProfiles(data);
+    return unsubscribe;
+  }, [controller]);
+  return profiles;
+}
+
+/**
+ * Hook to get all student profiles filtered by having the 'student' tag
+ */
+export function useAllStudentProfiles() {
+  const allProfiles = useAllProfilesForClass();
+  const allTags = useTags();
+
+  return useMemo(() => {
+    if (!allProfiles || !allTags) {
+      return [];
+    }
+
+    // Get all staff tags (case-insensitive)
+    const staffTags = allTags.filter(
+      (tag) => tag.name.toLowerCase() === "instructor" || tag.name.toLowerCase() === "grader"
+    );
+    const staffProfileIds = new Set(staffTags.map((tag) => tag.profile_id));
+
+    // Filter profiles to only include those without staff tags
+    return allProfiles.filter((profile) => !staffProfileIds.has(profile.id) && profile.is_private_profile);
+  }, [allProfiles, allTags]);
+}
+export function useGradersAndInstructors() {
+  const { userRolesWithProfiles: controller } = useCourseController();
+  const [gradersAndInstructors, setGradersAndInstructors] = useState<UserProfile[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      const gradersAndInstructors = data.filter((r) => r.role === "grader" || r.role === "instructor");
+      setGradersAndInstructors((old) => {
+        if (old && old.length == gradersAndInstructors.length) {
+          if (old.every((r) => gradersAndInstructors.some((s) => s.private_profile_id === r.id))) {
+            return old;
+          }
+        }
+        return gradersAndInstructors.map((r) => r.profiles);
+      });
+    });
+    setGradersAndInstructors(data.filter((r) => r.role === "grader" || r.role === "instructor").map((r) => r.profiles));
+    return unsubscribe;
+  }, [controller]);
+  return gradersAndInstructors;
+}
+
+export function useAllStudentRoles() {
+  const { userRolesWithProfiles: controller } = useCourseController();
+  const [roles, setRoles] = useState<UserRoleWithPrivateProfileAndUser[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      const students = data.filter((r) => r.role === "student");
+      setRoles((old) => {
+        if (old && old.length == students.length) {
+          if (old.every((r) => students.some((s) => s.id === r.id))) {
+            return old;
+          }
+        }
+        return students;
+      });
+    });
+    setRoles(data.filter((r) => r.role === "student"));
+    return unsubscribe;
+  }, [controller]);
+  return roles;
+}
+export function useStudentRoster() {
+  const { userRolesWithProfiles: controller } = useCourseController();
+  const studentRoles = useListTableControllerValues(controller, (r) => r.role === "student");
+  const [roster, setRoster] = useState<UserProfile[] | undefined>(undefined);
+  useEffect(() => {
+    setRoster(studentRoles.map((r) => r.profiles));
+  }, [studentRoles]);
+  return roster;
+}
+export function useProfiles() {
+  const { profiles: controller } = useCourseController();
+  const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  useEffect(() => {
+    const { data, unsubscribe } = controller.list((data) => {
+      setProfiles(data);
+    });
+    setProfiles(data);
+    return unsubscribe;
+  }, [controller]);
+  return profiles;
+}
 export function useUpdateThreadTeaser() {
   const { mutateAsync: updateThread } = useUpdate<DiscussionThread>({
     resource: "discussion_threads",
@@ -215,6 +312,7 @@ export class CourseController {
   private onlyShowGradesForListeners: ((val: string) => void)[] = [];
   private _classRealTimeController: ClassRealTimeController | null = null;
   private _client: SupabaseClient<Database>;
+  private _userId: string;
 
   // Lazily created TableController instances to avoid realtime subscription bursts
   private _discussionThreadTeasers?: TableController<"discussion_threads">;
@@ -229,10 +327,12 @@ export class CourseController {
     public role: Database["public"]["Enums"]["app_role"],
     public courseId: number,
     client: SupabaseClient<Database>,
-    classRealTimeController: ClassRealTimeController
+    classRealTimeController: ClassRealTimeController,
+    userId: string
   ) {
     this._classRealTimeController = classRealTimeController;
     this._client = client as SupabaseClient<Database>;
+    this._userId = userId;
   }
 
   /**
@@ -283,7 +383,7 @@ export class CourseController {
       this._discussionThreadReadStatus = new TableController({
         client: this._client,
         table: "discussion_thread_read_status",
-        query: this._client.from("discussion_thread_read_status").select("*"),
+        query: this._client.from("discussion_thread_read_status").select("*").eq("user_id", this._userId),
         classRealTimeController: this.classRealTimeController
       });
     }
@@ -884,56 +984,54 @@ export function CourseControllerProvider({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
   const [courseController, setCourseController] = useState<CourseController | null>(null);
-
+  const { user } = useAuthState();
+  const userId = user?.id;
   // Initialize ClassRealTimeController and ensure it is started before use
   useEffect(() => {
-    let cancelled = false;
-    const client = createClient();
-    const realTimeController = new ClassRealTimeController({
-      client,
-      classId: course_id,
-      profileId: profile_id,
-      isStaff: role === "instructor" || role === "grader"
-    });
-    let _courseController: CourseController | null = null;
+    if (userId) {
+      let cancelled = false;
+      const client = createClient();
+      const realTimeController = new ClassRealTimeController({
+        client,
+        classId: course_id,
+        profileId: profile_id,
+        isStaff: role === "instructor" || role === "grader"
+      });
+      let _courseController: CourseController | null = null;
 
-    const start = async () => {
-      try {
-        await realTimeController.start();
+      const start = async () => {
+        try {
+          await realTimeController.start();
 
-        if (cancelled) {
-          await realTimeController.close();
-          return;
-        }
+          _courseController = new CourseController(role, course_id, client, realTimeController, userId);
 
-        _courseController = new CourseController(role, course_id, client, realTimeController);
+          if (cancelled) {
+            _courseController?.close();
+            await realTimeController.close();
+            return;
+          }
 
-        if (cancelled) {
+          // Initialize the critical controllers now that everything is stable
+          _courseController.initializeEagerControllers();
+
+          setCourseController(_courseController);
+          setClassRealTimeController(realTimeController);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("Failed to start ClassRealTimeController:", e);
           _courseController?.close();
           await realTimeController.close();
-          return;
         }
+      };
+      start();
 
-        // Initialize the critical controllers now that everything is stable
-        _courseController.initializeEagerControllers();
-
-        setCourseController(_courseController);
-        setClassRealTimeController(realTimeController);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error("Failed to start ClassRealTimeController:", e);
+      return () => {
+        cancelled = true;
         _courseController?.close();
-        await realTimeController.close();
-      }
-    };
-    start();
-
-    return () => {
-      cancelled = true;
-      _courseController?.close();
-      realTimeController.close();
-    };
-  }, [course_id, profile_id, role]);
+        realTimeController.close();
+      };
+    }
+  }, [course_id, profile_id, role, userId]);
 
   if (!courseController) {
     return (
@@ -1187,4 +1285,74 @@ export function useUserRolesWithProfiles() {
   }, [controller]);
 
   return userRoles;
+}
+
+/**
+ * Hook to get all tags for the course
+ */
+export function useTags() {
+  const controller = useCourseController();
+  const [tags, setTags] = useState<Tag[]>([]);
+
+  useEffect(() => {
+    const { data, unsubscribe } = controller.listTags((updatedTags) => {
+      setTags(updatedTags);
+    });
+    setTags(data);
+    return unsubscribe;
+  }, [controller]);
+
+  return tags;
+}
+
+/**
+ * Hook to get tags for a specific profile
+ */
+export function useProfileTags(profileId: string | undefined) {
+  const controller = useCourseController();
+  const [tags, setTags] = useState<Tag[]>([]);
+
+  useEffect(() => {
+    if (!profileId) {
+      setTags([]);
+      return;
+    }
+
+    const { data, unsubscribe } = controller.getTagsForProfile(profileId, (updatedTags) => {
+      setTags(updatedTags);
+    });
+    setTags(data || []);
+    return unsubscribe;
+  }, [controller, profileId]);
+
+  return tags;
+}
+
+/**
+ * Hook to determine role based on tags for a given profile id
+ * Returns 'student', 'grader', or 'instructor' based on the presence of that tag on the profile
+ */
+export function useProfileRole(profileId: string | undefined): "student" | "grader" | "instructor" | undefined {
+  const tags = useProfileTags(profileId);
+
+  return useMemo(() => {
+    if (!tags || tags.length === 0) {
+      return undefined;
+    }
+
+    // Look for role tags (case-insensitive)
+    const roleTag = tags.find((tag) => {
+      const tagName = tag.name.toLowerCase();
+      return tagName === "instructor" || tagName === "grader" || tagName === "student";
+    });
+
+    if (roleTag) {
+      const roleName = roleTag.name.toLowerCase();
+      if (roleName === "instructor") return "instructor";
+      if (roleName === "grader") return "grader";
+      if (roleName === "student") return "student";
+    }
+
+    return undefined;
+  }, [tags]);
 }

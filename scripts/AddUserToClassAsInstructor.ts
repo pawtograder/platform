@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
-dotenv.config({ path: ".env.local.prod" });
+dotenv.config({ path: ".env.local" });
 
 function printUsage() {
   console.log("Usage:");

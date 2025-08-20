@@ -5,12 +5,12 @@ import { PopoverRoot, PopoverTrigger, PopoverContent, PopoverBody } from "@/comp
 import { HiOutlineInbox } from "react-icons/hi2";
 import NotificationTeaser from "./notification-teaser";
 import { useState } from "react";
-import { useCourse } from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 export default function NotificationsBox() {
   const { notifications, set_read, dismiss } = useNotifications();
   const [isOpen, setIsOpen] = useState(false);
-  const course = useCourse();
+  const { role: classRole } = useClassProfiles();
 
   // Filter out notifications where the author is the current user
   const filteredNotifications =
@@ -21,7 +21,8 @@ export default function NotificationsBox() {
       // Filter out notifications where the author is the current user
       const body = n.body as { author_profile_id?: string };
       return (
-        body.author_profile_id !== course?.private_profile_id && body.author_profile_id !== course?.public_profile_id
+        body.author_profile_id !== classRole.private_profile_id &&
+        body.author_profile_id !== classRole.public_profile_id
       );
     }) || [];
   const unreadCount = filteredNotifications?.filter((n) => !n.viewed_at).length || 0;
