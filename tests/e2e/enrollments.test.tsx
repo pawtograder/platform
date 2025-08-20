@@ -114,7 +114,6 @@ test.describe("Enrollments Page", () => {
     await page.getByLabel("Import Roster from CSV").getByRole("button", { name: "Import" }).click();
     await argosScreenshot(page, "Importing CSV of 2 users");
     await page.getByRole("button", { name: "Confirm Import (2)" }).click();
-
     await expect(page.getByText("test-student-import-csv@pawtograder.net")).toBeVisible();
     await expect(page.getByText("test-grader-import-csv@pawtograder.net")).toBeVisible();
   });

@@ -16,7 +16,6 @@ import { Controller, FieldValues } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { toaster, Toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
 import { appendTimezoneOffset } from "@/lib/utils";
 import { Assignment } from "@/utils/supabase/DatabaseTypes";
 import { TZDate } from "@date-fns/tz";
@@ -26,6 +25,7 @@ import { UseFormReturnType } from "@refinedev/react-hook-form";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LuCheck } from "react-icons/lu";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 function GroupConfigurationSubform({ form, timezone }: { form: UseFormReturnType<Assignment>; timezone: string }) {
   const { course_id } = useParams();
@@ -317,9 +317,10 @@ export default function AssignmentForm({
     formState: { errors }
   } = form;
 
-  const course = useCourse();
+  const { role: classRole } = useClassProfiles();
+  const course = classRole.classes;
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const timezone = course.classes.time_zone || "America/New_York";
+  const timezone = course.time_zone || "America/New_York";
   const isEditing = !!form.getValues("id");
   // Enforce that release date must be strictly in the future
   const nowPlusOneMinute = addMinutes(TZDate.tz(timezone), 1);
@@ -394,7 +395,7 @@ export default function AssignmentForm({
           </Fieldset.Content>
           <Fieldset.Content>
             <Field
-              label={`Release Date (${course.classes.time_zone})`}
+              label={`Release Date (${course.time_zone})`}
               helperText="Date that students can see the assignment. Student repositories will be created at the release date. Ensure all handout materials are in place before this time."
               errorText={errors.release_date?.message?.toString()}
               invalid={errors.release_date ? true : false}
@@ -446,7 +447,7 @@ export default function AssignmentForm({
           </Fieldset.Content>
           <Fieldset.Content>
             <Field
-              label={`Due Date (${course.classes.time_zone})`}
+              label={`Due Date (${course.time_zone})`}
               helperText="No submissions accepted after this time unless late submissions are allowed"
               errorText={errors.due_date?.message?.toString()}
               invalid={errors.due_date ? true : false}

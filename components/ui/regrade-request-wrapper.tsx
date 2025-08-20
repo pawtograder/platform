@@ -10,12 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { PopoverArrow, PopoverBody, PopoverContent, PopoverRoot, PopoverTrigger } from "@/components/ui/popover";
 import { useAssignmentController, useRegradeRequest } from "@/hooks/useAssignment";
-import {
-  useClassProfiles,
-  useIsGraderOrInstructor,
-  useIsInstructor,
-  useRoleByPrivateProfileId
-} from "@/hooks/useClassProfiles";
+import { useClassProfiles, useIsGraderOrInstructor, useIsInstructor } from "@/hooks/useClassProfiles";
 import { useSubmission, useSubmissionController, useSubmissionRegradeRequestComments } from "@/hooks/useSubmission";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import { createClient } from "@/utils/supabase/client";
@@ -31,6 +26,7 @@ import MessageInput from "./message-input";
 import PersonAvatar from "./person-avatar";
 import { Skeleton } from "./skeleton";
 import { toaster } from "./toaster";
+import { useProfileRole } from "@/hooks/useCourseController";
 
 const statusConfig: Record<
   RegradeStatus,
@@ -86,7 +82,7 @@ const statusConfig: Record<
  */
 function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType }) {
   const authorProfile = useUserProfile(comment.author);
-  const authorRole = useRoleByPrivateProfileId(comment.author);
+  const authorRole = useProfileRole(comment.author);
   const [isEditing, setIsEditing] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const { mutateAsync: updateComment } = useUpdate({
@@ -127,20 +123,18 @@ function RegradeRequestComment({ comment }: { comment: RegradeRequestCommentType
               <Text>commented on {format(comment.created_at, "MMM d, yyyy")}</Text>
             </HStack>
             <HStack>
-              {authorRole?.role === "grader" || authorRole?.role === "instructor" || authorProfile?.flair ? (
+              {authorRole === "grader" || authorRole === "instructor" || authorProfile?.flair ? (
                 <Tag.Root
                   size="md"
                   colorPalette={
-                    authorRole?.role === "grader" || authorRole?.role === "instructor"
-                      ? "blue"
-                      : authorProfile?.flair_color
+                    authorRole === "grader" || authorRole === "instructor" ? "blue" : authorProfile?.flair_color
                   }
                   variant="surface"
                 >
                   <Tag.Label>
-                    {authorRole?.role === "grader"
+                    {authorRole === "grader"
                       ? "Grader"
-                      : authorRole?.role === "instructor"
+                      : authorRole === "instructor"
                         ? "Instructor"
                         : authorProfile?.flair}
                   </Tag.Label>

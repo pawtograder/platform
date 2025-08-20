@@ -1,6 +1,19 @@
 "use client";
 
+import NotificationsBox from "@/components/notifications/notifications-box";
+import { ColorModeButton } from "@/components/ui/color-mode";
+import Link from "@/components/ui/link";
+import { PopConfirm } from "@/components/ui/popconfirm";
+import { toaster, Toaster } from "@/components/ui/toaster";
+import { Tooltip } from "@/components/ui/tooltip";
+import useAuthState from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
+import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
+import { createClient } from "@/utils/supabase/client";
+import { UserProfile } from "@/utils/supabase/DatabaseTypes";
 import {
+  Avatar,
   Box,
   Button,
   CloseButton,
@@ -15,27 +28,15 @@ import {
   Text,
   VStack
 } from "@chakra-ui/react";
-import { FaCircleUser } from "react-icons/fa6";
-import { PiSignOut } from "react-icons/pi";
-import { signOutAction } from "../actions";
 import { useInvalidate, useList, useOne } from "@refinedev/core";
-import { ColorModeButton } from "@/components/ui/color-mode";
-import Link from "@/components/ui/link";
-import NotificationsBox from "@/components/notifications/notifications-box";
-import { PopConfirm } from "@/components/ui/popconfirm";
-import { toaster, Toaster } from "@/components/ui/toaster";
-import { Tooltip } from "@/components/ui/tooltip";
-import useAuthState, { useCourse } from "@/hooks/useAuthState";
-import { useObfuscatedGradesMode, useSetObfuscatedGradesMode } from "@/hooks/useCourseController";
-import { useAutomaticRealtimeConnectionStatus } from "@/hooks/useRealtimeConnectionStatus";
-import { createClient } from "@/utils/supabase/client";
-import { UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { Avatar } from "@chakra-ui/react";
 import { useParams } from "next/navigation";
 import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { FaGithub, FaUnlink } from "react-icons/fa";
+import { FaCircleUser } from "react-icons/fa6";
 import { HiOutlineSupport } from "react-icons/hi";
+import { PiSignOut } from "react-icons/pi";
 import { TbSpy, TbSpyOff } from "react-icons/tb";
+import { signOutAction } from "../actions";
 
 function SupportMenu() {
   return (
@@ -244,7 +245,7 @@ const ProfileChangesMenu = () => {
   const { course_id } = useParams();
   const { user } = useAuthState();
   const invalidate = useInvalidate();
-  const { private_profile_id, public_profile_id } = useCourse();
+  const { private_profile_id, public_profile_id } = useClassProfiles();
 
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
@@ -409,7 +410,7 @@ function UserSettingsMenu() {
   const supabase = createClient();
   const { user } = useAuthState();
   const [gitHubUsername, setGitHubUsername] = useState<string | null>(null);
-  const { private_profile_id } = useCourse();
+  const { private_profile_id } = useClassProfiles();
   const { data: privateProfile } = useOne<UserProfile>({
     resource: "profiles",
     id: private_profile_id

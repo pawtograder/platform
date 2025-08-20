@@ -14,9 +14,8 @@ import {
 } from "@/components/ui/drawer";
 import Link from "@/components/ui/link";
 import SemesterText from "@/components/ui/semesterText";
-import useAuthState from "@/hooks/useAuthState";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { Course, CourseWithFeatures, UserRoleWithCourse } from "@/utils/supabase/DatabaseTypes";
+import { Course, CourseWithFeatures } from "@/utils/supabase/DatabaseTypes";
 import { Box, Button, Flex, HStack, Menu, Portal, Skeleton, Text, VStack } from "@chakra-ui/react";
 import Image from "next/image";
 import NextLink from "next/link";
@@ -34,9 +33,9 @@ import {
   FiStar,
   FiUsers
 } from "react-icons/fi";
+import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 import { TbCards } from "react-icons/tb";
 import UserMenu from "../UserMenu";
-import { MdOutlineMail, MdOutlineScience } from "react-icons/md";
 
 const LinkItems = (courseID: number) => [
   { name: "Assignments", icon: FiCompass, student_only: true, target: `/course/${courseID}/assignments` },
@@ -81,14 +80,15 @@ const LinkItems = (courseID: number) => [
   }
 ];
 
-function CoursePicker({ courses, currentCourse }: { courses: UserRoleWithCourse[]; currentCourse: Course }) {
-  if (courses.length === 1) {
+function CoursePicker({ currentCourse }: { currentCourse: Course }) {
+  const { allOfMyRoles } = useClassProfiles();
+  if (allOfMyRoles.length === 1) {
     return <></>;
   }
   const uniqueCourses: Course[] = [];
-  courses.forEach((c) => {
-    if (c.classes && !uniqueCourses.some((uc) => uc.id === c.classes!.id)) {
-      uniqueCourses.push(c.classes);
+  allOfMyRoles.forEach((r) => {
+    if (r.classes && !uniqueCourses.some((uc) => uc.id === r.classes!.id)) {
+      uniqueCourses.push(r.classes);
     }
   });
   const courseSorter = (a: Course, b: Course) => {
@@ -155,7 +155,6 @@ export default function DynamicCourseNav() {
   const pathname = usePathname();
   const courseNavRef = useRef<HTMLDivElement>(null);
   const { role: enrollment } = useClassProfiles();
-  const { roles: courses } = useAuthState();
   const { colorMode } = useColorMode();
   const isInstructor = enrollment.role === "instructor" || enrollment.role === "grader";
 
@@ -166,7 +165,7 @@ export default function DynamicCourseNav() {
     }
   });
 
-  if (!enrollment || !courses) {
+  if (!enrollment) {
     return <Skeleton height="40" width="100%" />;
   }
 
@@ -191,7 +190,7 @@ export default function DynamicCourseNav() {
           {/* Top row: Course picker, logo, course name, user menu */}
           <HStack justifyContent="space-between" alignItems="center">
             <HStack>
-              <CoursePicker courses={courses} currentCourse={enrollment.classes} />
+              <CoursePicker currentCourse={enrollment.classes} />
               {colorMode === "dark" ? (
                 <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
               ) : (
@@ -294,7 +293,7 @@ export default function DynamicCourseNav() {
         <Flex width="100%" pt="2" alignItems="center" justifyContent="space-between">
           <VStack gap="0" align="start">
             <HStack>
-              <CoursePicker courses={courses} currentCourse={enrollment.classes} />
+              <CoursePicker currentCourse={enrollment.classes} />
               {colorMode === "dark" ? (
                 <Image src="/Logo-Dark.png" width={30} height={30} alt="Logo" />
               ) : (

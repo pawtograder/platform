@@ -85,7 +85,7 @@ export function OverrideScoreForm({
       !studentGradebookColumn.score &&
       !studentGradebookColumn.score_override &&
       studentGradebookColumn.is_missing;
-    await gradebookController.gradebook_column_students.update(studentGradebookColumn.id, {
+    await gradebookController.updateGradebookColumnStudent(studentGradebookColumn.id, {
       ...values,
       score: values.is_missing && !forceMissingOff ? null : values.score,
       is_missing: forceMissingOff ? false : values.is_missing
@@ -191,7 +191,7 @@ export function OverrideScoreForm({
               colorPalette="orange"
               variant="surface"
               onClick={async () => {
-                await gradebookController.gradebook_column_students.update(studentGradebookColumn.id, {
+                await gradebookController.updateGradebookColumnStudent(studentGradebookColumn.id, {
                   score_override: null
                 });
                 if (onSuccess) onSuccess();

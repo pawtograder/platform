@@ -2,7 +2,8 @@
 
 import { Alert } from "@/components/ui/alert";
 import { Toaster, toaster } from "@/components/ui/toaster";
-import { useClassProfiles, useStudentRoster } from "@/hooks/useClassProfiles";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { useCourseController } from "@/hooks/useCourseController";
 import { getScore, useGradebookColumns, useGradebookController } from "@/hooks/useGradebook";
 import { createClient } from "@/utils/supabase/client";
@@ -289,9 +290,9 @@ export default function ImportGradebookColumns() {
                               }
                               let oldValue = null;
                               if (existingCol && studentPrivateProfileId) {
-                                const found = gradebookController.gradebook_column_students.rows.find(
-                                  (s) =>
-                                    s.gradebook_column_id === existingCol.id && s.student_id === studentPrivateProfileId
+                                const found = gradebookController.getGradebookColumnStudent(
+                                  existingCol.id,
+                                  studentPrivateProfileId
                                 );
                                 oldValue = getScore(found) ?? null;
                               }
@@ -325,7 +326,7 @@ export default function ImportGradebookColumns() {
                       let importIdentifiers = previewData.previewCols[0]?.students.map((s) => s.identifier) || [];
                       importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
                       const rosterIdentifiers = studentRoster
-                        .map((s) => {
+                        ?.map((s) => {
                           if (previewData.idType === "email") {
                             const rosterEntry = courseController
                               .getRosterWithUserInfo()
@@ -337,8 +338,8 @@ export default function ImportGradebookColumns() {
                           return null;
                         })
                         .filter((id): id is string => !!id);
-                      const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers.includes(id));
-                      const notInImport = rosterIdentifiers.filter((id) => !importIdentifiers.includes(id));
+                      const notInRoster = importIdentifiers.filter((id) => !rosterIdentifiers?.includes(id));
+                      const notInImport = rosterIdentifiers?.filter((id) => !importIdentifiers.includes(id));
                       return (
                         <VStack mb={2} align="stretch">
                           {notInRoster.length > 0 && (
@@ -347,11 +348,11 @@ export default function ImportGradebookColumns() {
                               students will not be imported. {notInRoster.join(", ")}
                             </Alert>
                           )}
-                          {notInImport.length > 0 && (
+                          {notInImport && notInImport.length > 0 && (
                             <Alert status="info" variant="subtle">
-                              Note: {notInImport.length} student(s) in the roster are not in the import. These students
+                              Note: {notInImport?.length} student(s) in the roster are not in the import. These students
                               will receive a &quot;missing&quot; grade for the imported columns.
-                              {notInImport.join(", ")}
+                              {notInImport?.join(", ")}
                             </Alert>
                           )}
                         </VStack>
@@ -397,7 +398,7 @@ export default function ImportGradebookColumns() {
                             </Table.Row>
                           </Table.Header>
                           <Table.Body>
-                            {studentRoster.map((student, idx) => {
+                            {studentRoster?.map((student, idx) => {
                               let identifier: string | null = null;
                               if (previewData.idType === "email") {
                                 const rosterEntry = courseController
@@ -454,19 +455,20 @@ export default function ImportGradebookColumns() {
                             {(() => {
                               let importIdentifiers = filteredPreviewCols[0]?.students.map((s) => s.identifier) || [];
                               importIdentifiers = importIdentifiers.filter((id): id is string => !!id);
-                              const rosterIdentifiers = studentRoster
-                                .map((s) => {
-                                  if (previewData.idType === "email") {
-                                    const rosterEntry = courseController
-                                      .getRosterWithUserInfo()
-                                      .data.find((r) => r.private_profile_id === s.id);
-                                    return rosterEntry?.users.email ?? null;
-                                  } else if (previewData.idType === "sid") {
-                                    return s.sis_user_id;
-                                  }
-                                  return null;
-                                })
-                                .filter((id): id is string => !!id);
+                              const rosterIdentifiers =
+                                studentRoster
+                                  ?.map((s) => {
+                                    if (previewData.idType === "email") {
+                                      const rosterEntry = courseController
+                                        .getRosterWithUserInfo()
+                                        .data.find((r) => r.private_profile_id === s.id);
+                                      return rosterEntry?.users.email ?? null;
+                                    } else if (previewData.idType === "sid") {
+                                      return s.sis_user_id;
+                                    }
+                                    return null;
+                                  })
+                                  .filter((id): id is string => !!id) || [];
                               return importIdentifiers
                                 .filter((id) => !rosterIdentifiers.includes(id))
                                 .map((identifier, idx) => (
@@ -640,8 +642,9 @@ export default function ImportGradebookColumns() {
                                       ? col.newGradebookColumnStudents?.find(
                                           (g) => g.student_id === studentPrivateProfileId && g.is_private
                                         )
-                                      : gradebookController.gradebook_column_students.rows.find(
-                                          (g) => g.student_id === studentPrivateProfileId && g.is_private
+                                      : gradebookController.getGradebookColumnStudent(
+                                          col.existingCol?.id ?? 0,
+                                          studentPrivateProfileId
                                         );
                                     if (!gcs) return null;
                                     let score: number | undefined = undefined;

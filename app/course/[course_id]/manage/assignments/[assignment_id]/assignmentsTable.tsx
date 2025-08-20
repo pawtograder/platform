@@ -2,7 +2,7 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import PersonName from "@/components/ui/person-name";
 import { toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import {
   useCanShowGradeFor,
   useCourseController,
@@ -112,9 +112,10 @@ function ScoreLink({
 }
 export default function AssignmentsTable() {
   const { assignment_id, course_id } = useParams();
-  const course = useCourse();
+  const { role: classRole } = useClassProfiles();
+  const course = classRole.classes;
   const { classRealTimeController } = useCourseController();
-  const timeZone = course.classes.time_zone || "America/New_York";
+  const timeZone = course.time_zone || "America/New_York";
   const supabase = createClient();
   const [isReleasingAll, setIsReleasingAll] = useState(false);
   const [isUnreleasingAll, setIsUnreleasingAll] = useState(false);
@@ -300,7 +301,7 @@ export default function AssignmentsTable() {
       sorting: [{ id: "name", desc: false }]
     }
   });
-  const isInstructor = course.role === "instructor";
+  const isInstructor = classRole.role === "instructor";
   return (
     <VStack w="100%">
       <VStack paddingBottom="55px" w="100%">

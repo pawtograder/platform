@@ -89,12 +89,13 @@ class GradebookWhatIfController {
   }
 
   private setupGradebookListener() {
-    // Subscribe to gradebook column student changes
-    this._gradebookUnsubscribe = this.gradebookController.subscribeColumnStudentList((students) => {
-      let hasChanges = false;
+    // Subscribe to gradebook column student changes for this specific student
+    this._gradebookUnsubscribe = this.gradebookController.subscribeColumnsForStudent(
+      this.private_profile_id,
+      (students) => {
+        let hasChanges = false;
 
-      for (const student of students) {
-        if (student.student_id === this.private_profile_id) {
+        for (const student of students) {
           const gradebookScore =
             student.score_override !== null ? student.score_override : (student.score ?? undefined);
           const existingGrade = this._grades[student.gradebook_column_id];
@@ -114,13 +115,13 @@ class GradebookWhatIfController {
             hasChanges = true;
           }
         }
-      }
 
-      // If there were changes, recalculate any what-if grades that depend on these columns
-      if (hasChanges) {
-        this.recalculateDependentColumns();
+        // If there were changes, recalculate any what-if grades that depend on these columns
+        if (hasChanges) {
+          this.recalculateDependentColumns();
+        }
       }
-    });
+    );
   }
 
   private recalculateDependentColumns() {
@@ -372,7 +373,7 @@ class GradebookWhatIfController {
           const submission = this.gradebookController.studentSubmissions
             .get(this.private_profile_id)
             ?.find((s) => s.assignment_id === matchingAssignments[0].id);
-          if (!submission) return null;
+          if (!submission || submission.total_score === null) return null;
           return submission.total_score;
         };
         if (Array.isArray(assignmentSlug)) {
