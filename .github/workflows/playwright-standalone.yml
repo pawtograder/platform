@@ -4,7 +4,7 @@ on:
 jobs:
   test:
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: pawtograder-ci
     outputs:
       service_uuid: ${{ steps.deploy.outputs.service_uuid }}
       app_uuid: ${{ steps.deploy.outputs.app_uuid }}

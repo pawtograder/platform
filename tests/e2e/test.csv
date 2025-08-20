@@ -1,0 +1,3 @@
+email,name,role,canvas_id
+test-student-import-csv@pawtograder.net,Test Student,student,12345
+test-grader-import-csv@pawtograder.net,Test Grader,grader,12346

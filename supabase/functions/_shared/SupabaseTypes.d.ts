@@ -2073,6 +2073,7 @@ export type Database = {
         Row: {
           class_id: number;
           created_at: string;
+          extra_data: Json | null;
           grader_result_test_id: number;
           id: number;
           output: string;
@@ -2081,6 +2082,7 @@ export type Database = {
         Insert: {
           class_id: number;
           created_at?: string;
+          extra_data?: Json | null;
           grader_result_test_id: number;
           id?: number;
           output: string;
@@ -2089,6 +2091,7 @@ export type Database = {
         Update: {
           class_id?: number;
           created_at?: string;
+          extra_data?: Json | null;
           grader_result_test_id?: number;
           id?: number;
           output?: string;
@@ -7892,6 +7895,10 @@ export type Database = {
         };
         Returns: undefined;
       };
+      release_all_grading_reviews_for_assignment: {
+        Args: { assignment_id: number };
+        Returns: number;
+      };
       reset_all_flashcard_progress: {
         Args: { p_class_id: number; p_student_id: string; p_card_ids: number[] };
         Returns: undefined;
@@ -7915,6 +7922,10 @@ export type Database = {
       sync_student_github_team: {
         Args: { class_id: number };
         Returns: undefined;
+      };
+      unrelease_all_grading_reviews_for_assignment: {
+        Args: { assignment_id: number };
+        Returns: number;
       };
       update_card_progress: {
         Args: {

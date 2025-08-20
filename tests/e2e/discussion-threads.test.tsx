@@ -1,6 +1,6 @@
 import { Course } from "@/utils/supabase/DatabaseTypes";
-import percySnapshot from "@percy/playwright";
 import { expect, test } from "@playwright/test";
+import { argosScreenshot } from "@argos-ci/playwright";
 import dotenv from "dotenv";
 import { createClass, createUserInClass, loginAsUser, TestingUser } from "./TestingUtils";
 dotenv.config({ path: ".env.local" });
@@ -31,7 +31,7 @@ test.describe("Discussion Thread Page", () => {
   test("A student can view the discussion feed", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
-    await percySnapshot(page, "Discussion Thread Page");
+    await argosScreenshot(page, "Discussion Thread Page");
     await expect(page.getByRole("heading", { name: "Discussion Feed" })).toBeVisible();
     await expect(page.getByRole("link").filter({ hasText: "New Thread" })).toBeVisible();
     await expect(page.getByPlaceholder("Search threads...")).toBeVisible();
@@ -44,8 +44,9 @@ test.describe("Discussion Thread Page", () => {
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
     await page.getByRole("link").filter({ hasText: "New Thread" }).click();
-    await percySnapshot(page, "Create New Thread Form");
+    await argosScreenshot(page, "Create New Thread Form");
     await expect(page.getByRole("heading", { name: "New Discussion Thread" })).toBeVisible();
     await expect(page.getByText("Topic")).toBeVisible();
     // await expect(page.getByText("Assignments", { exact: true })).toBeVisible(); // Too annoying to test
@@ -102,6 +103,7 @@ test.describe("Discussion Thread Page", () => {
   test("Another student cannot view a private thread", async ({ page }) => {
     await loginAsUser(page, student2!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
     await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1 correct?" })).not.toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).not.toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).not.toBeVisible();
@@ -111,6 +113,7 @@ test.describe("Discussion Thread Page", () => {
   test("Another student creates a public thread", async ({ page }) => {
     await loginAsUser(page, student2!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
     await page.getByRole("link").filter({ hasText: "New Thread" }).click();
     // Test the form with a public thread
     await page.getByText("Anything else about the class").click();
@@ -135,6 +138,7 @@ test.describe("Discussion Thread Page", () => {
     await loginAsUser(page, instructor!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
     // Check that the threads are visible
+    await page.waitForURL("**/discussion");
     await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1" }).nth(1)).toBeVisible();
     await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
     // Check that the instructor can reply to the private thread

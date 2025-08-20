@@ -41,6 +41,7 @@ export type AutograderFeedback = {
     part?: string;
     hide_until_released?: boolean;
     extra_data?: Json;
+    hidden_extra_data?: Json;
   }[];
   artifacts?: {
     name: string;
