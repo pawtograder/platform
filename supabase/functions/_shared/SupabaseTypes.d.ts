@@ -4653,6 +4653,51 @@ export type Database = {
           }
         ];
       };
+      student_deadline_extensions: {
+        Row: {
+          class_id: number;
+          created_at: string;
+          hours: number;
+          id: number;
+          includes_lab: boolean;
+          student_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          created_at?: string;
+          hours: number;
+          id?: number;
+          includes_lab: boolean;
+          student_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          created_at?: string;
+          hours?: number;
+          id?: number;
+          includes_lab?: boolean;
+          student_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "student_deadline_extensions_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "student_deadline_extensions_student_id_fkey";
+            columns: ["student_id"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          }
+        ];
+      };
       student_flashcard_deck_progress: {
         Row: {
           card_id: number;
