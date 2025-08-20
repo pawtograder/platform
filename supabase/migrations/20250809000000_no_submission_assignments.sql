@@ -6,6 +6,7 @@ CREATE OR REPLACE FUNCTION public.create_gradebook_column_for_assignment()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $function$
 DECLARE
     gradebook_id bigint;
