@@ -73,5 +73,136 @@ to authenticated
 using (authorizeforclassinstructor(class_id))
 with check (authorizeforclassinstructor(class_id));
 
+-- Prevent duplicate extensions for same student/class
+CREATE UNIQUE INDEX student_deadline_extensions_unique_student_class 
+ON public.student_deadline_extensions USING btree (student_id, class_id);
 
+alter table "public"."student_deadline_extensions" 
+add constraint "student_deadline_extensions_unique_student_class" 
+UNIQUE using index "student_deadline_extensions_unique_student_class";
+
+-- Function to create assignment exceptions when student extension is added
+CREATE OR REPLACE FUNCTION create_assignment_exceptions_from_extension()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Insert exceptions for all assignments in the class
+    -- Skip lab assignments if includes_lab is false
+    INSERT INTO assignment_due_date_exceptions (
+        assignment_id,
+        student_id,
+        class_id,
+        creator_id,
+        hours,
+        minutes,
+        tokens_consumed,
+        note
+    )
+    SELECT 
+        a.id,
+        NEW.student_id,
+        NEW.class_id,
+        auth.uid(), -- Current user as creator
+        NEW.hours,
+        0, -- No additional minutes
+        0, -- No tokens consumed for instructor-granted extensions
+        'Class-wide extension applied by instructor'
+    FROM assignments a
+    WHERE a.class_id = NEW.class_id
+        AND a.archived_at IS NULL
+        -- Skip lab assignments if includes_lab is false
+        AND (NEW.includes_lab = true OR a.minutes_due_after_lab IS NULL)
+        -- Don't create duplicate exceptions
+        AND NOT EXISTS (
+            SELECT 1 FROM assignment_due_date_exceptions ade
+            WHERE ade.assignment_id = a.id
+                AND ade.student_id = NEW.student_id
+        );
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create the trigger
+CREATE TRIGGER on_student_deadline_extension_created
+    AFTER INSERT ON student_deadline_extensions
+    FOR EACH ROW
+    EXECUTE FUNCTION create_assignment_exceptions_from_extension();
+
+-- Function to apply student extensions to new assignments
+CREATE OR REPLACE FUNCTION apply_extensions_to_new_assignment()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Only proceed if this is a regular assignment or a lab assignment with extensions that include labs
+    INSERT INTO assignment_due_date_exceptions (
+        assignment_id,
+        student_id,
+        class_id,
+        creator_id,
+        hours,
+        minutes,
+        tokens_consumed,
+        note
+    )
+    SELECT 
+        NEW.id,
+        sde.student_id,
+        NEW.class_id,
+        auth.uid(),
+        sde.hours,
+        0,
+        0,
+        'Class-wide extension automatically applied'
+    FROM student_deadline_extensions sde
+    WHERE sde.class_id = NEW.class_id
+        -- Apply if it includes labs OR if this isn't a lab assignment
+        AND (sde.includes_lab = true OR NEW.minutes_due_after_lab IS NULL);
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create the trigger
+CREATE TRIGGER on_assignment_created_apply_extensions
+    AFTER INSERT ON assignments
+    FOR EACH ROW
+    EXECUTE FUNCTION apply_extensions_to_new_assignment();
+
+-- Function to gift tokens to a student
+CREATE OR REPLACE FUNCTION gift_tokens_to_student(
+    p_student_id uuid,
+    p_class_id bigint,
+    p_assignment_id bigint,
+    p_tokens_to_gift integer,
+    p_note text DEFAULT 'Tokens gifted by instructor'
+)
+RETURNS void AS $$
+BEGIN
+    -- Verify instructor authorization
+    IF NOT authorizeforclassinstructor(p_class_id) THEN
+        RAISE EXCEPTION 'Unauthorized: Only instructors can gift tokens';
+    END IF;
+    
+    -- Create a negative token consumption entry
+    INSERT INTO assignment_due_date_exceptions (
+        assignment_id,
+        student_id,
+        class_id,
+        creator_id,
+        hours,
+        minutes,
+        tokens_consumed,
+        note
+    )
+    VALUES (
+        p_assignment_id,
+        p_student_id,
+        p_class_id,
+        auth.uid(),
+        0,
+        0,
+        -p_tokens_to_gift, -- Negative value represents gifted tokens
+        p_note
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
