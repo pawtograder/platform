@@ -13,7 +13,6 @@ DECLARE
 BEGIN
     -- Skip creating a gradebook column for no-submission assignments
     IF NEW.no_submission THEN
-        NEW.gradebook_column_id := NULL;
         RETURN NEW;
     END IF;
 
@@ -21,6 +20,11 @@ BEGIN
     SELECT g.id INTO gradebook_id
     FROM public.gradebooks g
     WHERE g.class_id = NEW.class_id;
+
+    IF NOT FOUND OR gradebook_id IS NULL THEN
+        RAISE EXCEPTION 'No gradebook found for class_id=% when creating gradebook column for assignment id=%',
+            NEW.class_id, NEW.id;
+    END IF;
 
     -- Create the gradebook column
     INSERT INTO public.gradebook_columns (
@@ -43,7 +47,10 @@ BEGIN
         jsonb_build_object('assignments', jsonb_build_array(NEW.id))
     ) RETURNING id into new_col_id;
 
-    NEW.gradebook_column_id = new_col_id;
+    -- Persist the generated column id on the assignment row
+    UPDATE public.assignments
+    SET gradebook_column_id = new_col_id
+    WHERE id = NEW.id;
 
     RETURN NEW;
 END;

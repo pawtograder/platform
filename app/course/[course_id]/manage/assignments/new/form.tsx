@@ -504,9 +504,9 @@ export default function AssignmentForm({
             </Field>
           </Fieldset.Content>
           <Fieldset.Content>
-            <Field helperText="Create an assignment that does not require submissions. No student repos, GitHub Actions, or gradebook column will be created.">
-              <Checkbox.Root {...register("no_submission")}>
-                <Checkbox.HiddenInput />
+            <Field helperText="Create an assignment that does not require submissions. Student repositories will still be created to distribute handouts, but GitHub Actions/check runs and the gradebook column will be disabled.">
+              <Checkbox.Root>
+                <Checkbox.HiddenInput {...register("no_submission")} />
                 <Checkbox.Control>
                   <LuCheck />
                 </Checkbox.Control>
@@ -514,14 +514,6 @@ export default function AssignmentForm({
               </Checkbox.Root>
             </Field>
           </Fieldset.Content>
-          {/* <Fieldset.Content>
-            <Field
-              label="Description URL"
-              helperText="A link to the description of the assignment, e.g. on a course website or in Canvas"
-            >
-              <Input name="description" />
-            </Field>
-          </Fieldset.Content> */}
           <Fieldset.Content>
             <Field
               label="Points Possible"
