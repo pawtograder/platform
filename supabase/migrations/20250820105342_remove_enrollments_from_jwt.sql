@@ -99,3 +99,4 @@ DECLARE
 BEGIN
   return event;
 END;
+$function$;
