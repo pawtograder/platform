@@ -6875,11 +6875,9 @@ export type Database = {
         Row: {
           assignment_id: number | null;
           class_id: number | null;
-          grader: string | null;
           groupname: string | null;
           student_private_profile_id: string | null;
           submission_id: number | null;
-          total_score: number | null;
         };
         Relationships: [];
       };
@@ -6892,6 +6890,24 @@ export type Database = {
           open_regrade_requests_count: number | null;
           release_date: string | null;
           title: string | null;
+        };
+        Insert: {
+          active_submissions_count?: never;
+          class_id?: number | null;
+          due_date?: string | null;
+          id?: number | null;
+          open_regrade_requests_count?: never;
+          release_date?: string | null;
+          title?: string | null;
+        };
+        Update: {
+          active_submissions_count?: never;
+          class_id?: number | null;
+          due_date?: string | null;
+          id?: number | null;
+          open_regrade_requests_count?: never;
+          release_date?: string | null;
+          title?: string | null;
         };
         Relationships: [
           {
@@ -8030,6 +8046,10 @@ export type Database = {
         };
         Returns: undefined;
       };
+      recalculate_discussion_thread_children_counts: {
+        Args: { target_class_id?: number };
+        Returns: number;
+      };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
@@ -8057,6 +8077,19 @@ export type Database = {
       sync_student_github_team: {
         Args: { class_id: number };
         Returns: undefined;
+      };
+      test_discussion_thread_insert_performance: {
+        Args: {
+          test_class_id: number;
+          test_topic_id: number;
+          test_author_id: string;
+          num_inserts?: number;
+        };
+        Returns: {
+          operation: string;
+          duration_ms: number;
+          inserts_per_second: number;
+        }[];
       };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
