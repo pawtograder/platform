@@ -44,6 +44,18 @@ interface SelectOption {
   label: string;
 }
 
+// Helper function to make strings safe for CSV export
+function csvSafe(value: unknown): string {
+  let s = String(value ?? "");
+  // Neutralize potential CSV formula injection
+  if (/^[=+\-@]/.test(s)) {
+    s = "'" + s;
+  }
+  // Escape embedded quotes by doubling them per RFC 4180, wrap in quotes
+  s = s.replace(/"/g, '""');
+  return `"${s}"`;
+}
+
 export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAssignmentDeleted }: ReviewsTableProps) {
   const { mutate: deleteReviewAssignment } = useDelete();
   const course = useCourse();
@@ -320,16 +332,16 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         headers.join(","),
         ...csvRows.map((row) =>
           [
-            `"${row.assignee}"`,
-            `"${row.assignee_email}"`,
-            `"${row.submission}"`,
-            `"${row.student_names}"`,
-            `"${row.student_emails}"`,
-            `"${row.rubric}"`,
-            `"${row.due_date}"`,
-            `"${row.status}"`,
-            `"${row.rubric_part}"`,
-            `"${row.extensions}"`
+            csvSafe(row.assignee),
+            csvSafe(row.assignee_email),
+            csvSafe(row.submission),
+            csvSafe(row.student_names),
+            csvSafe(row.student_emails),
+            csvSafe(row.rubric),
+            csvSafe(row.due_date),
+            csvSafe(row.status),
+            csvSafe(row.rubric_part),
+            csvSafe(row.extensions)
           ].join(",")
         )
       ].join("\n");
@@ -417,6 +429,26 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
           submissionReviewId = newReview.id;
         }
 
+        // Double-check we don't already have a code-walk assignment for this submission+assignee
+        const { data: existingCodeWalkRA } = await supabase
+          .from("review_assignments")
+          .select("id")
+          .eq("class_id", course.classes.id)
+          .eq("assignment_id", Number(assignmentId))
+          .eq("assignee_profile_id", row.assignee_profile_id)
+          .eq("submission_id", row.submission_id)
+          .eq("rubric_id", codeWalkRubric.id)
+          .maybeSingle();
+
+        if (existingCodeWalkRA?.id) {
+          toaster.create({
+            title: "Review assignment already exists",
+            description: "A code walk review assignment already exists for this submission and assignee.",
+            type: "info"
+          });
+          return;
+        }
+
         // Create the new review assignment with code walk rubric
         await createReviewAssignment({
           resource: "review_assignments",
@@ -435,11 +467,11 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
 
         toaster.success({
           title: "Success",
-          description: `Code walk reviewassignment created for ${row.profiles?.name || row.assignee_profile_id}`
+          description: `Code walk review assignment created for ${row.profiles?.name || row.assignee_profile_id}`
         });
       } catch (error) {
         toaster.error({
-          title: "Error duplicating reviewassignment",
+          title: "Error duplicating review assignment",
           description: error instanceof Error ? error.message : "An unexpected error occurred"
         });
       }
