@@ -22,7 +22,7 @@ test.describe("Rubric editor", () => {
 
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {
     await loginAsUser(page, instructor!);
-    await page.waitForURL(`/course`)
+    await page.waitForURL(`/course`);
 
     await page.goto(`/course/${course!.id}/manage/assignments/${assignment!.id}/rubric`);
 
@@ -38,7 +38,7 @@ test.describe("Rubric editor", () => {
     const rubricSidebar = page.getByRole("region", { name: "Rubric Part: Grading Review" });
     await expect(rubricSidebar).toContainText("Grading Review Criteria 0/20");
     await expect(rubricSidebar).toContainText("Criteria for grading review evaluation");
-    await expect(rubricSidebar).toContainText("Grading Review Check 1"); 
+    await expect(rubricSidebar).toContainText("Grading Review Check 1");
     await expect(rubricSidebar).toContainText("First check for grading review");
     await expect(rubricSidebar).toContainText("Grading Review Check 2");
     await expect(rubricSidebar).toContainText("Second check for grading review");

@@ -16,7 +16,21 @@ import {
   YmlRubricPartType,
   YmlRubricType
 } from "@/utils/supabase/DatabaseTypes";
-import { Box, Button, Center, Flex, Heading, HStack, Icon, Link, List, Spinner, Tabs, Text, VStack } from "@chakra-ui/react";
+import {
+  Box,
+  Button,
+  Center,
+  Flex,
+  Heading,
+  HStack,
+  Icon,
+  Link,
+  List,
+  Spinner,
+  Tabs,
+  Text,
+  VStack
+} from "@chakra-ui/react";
 import Editor, { Monaco } from "@monaco-editor/react";
 import { useCreate, useDataProvider, useDelete, useInvalidate, useUpdate } from "@refinedev/core";
 import { configureMonacoYaml } from "monaco-yaml";
@@ -408,9 +422,9 @@ function InnerRubricPage() {
     ): HydratedRubric => {
       const roundNameProper = reviewRound
         ? reviewRound
-          .split("-")
-          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-          .join(" ")
+            .split("-")
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(" ")
         : "New";
       const name = `${roundNameProper} Rubric for ${assignmentDetails?.title || "Assignment"}`;
 
@@ -1143,11 +1157,12 @@ function InnerRubricPage() {
             {assignmentDetails?.title ? `${assignmentDetails.title}: ` : ""}Handgrading Rubrics
           </Heading>
           <Text fontSize="sm" color="fg.muted">
-            Configure each rubric using the rich yaml editor. The &quot;Grading Review&quot; rubric is what will be used to grade submissions.
-            We suggest configuring this rubric so that students can see the rubric before they submit.
-            If you choose to assign a self-review round, the students will be assigned to complete that rubric.
-            The &quot;Meta Grading Review&quot; rubric can be used to have an internal review of the grading rubric, and would typically be configured to be hidden from students.
-            Read more about the rubric structure in the <Link href="https://docs.pawtograder.com/staff/assignments/rubrics">staff documentation</Link>.
+            Configure each rubric using the rich yaml editor. The &quot;Grading Review&quot; rubric is what will be used
+            to grade submissions. We suggest configuring this rubric so that students can see the rubric before they
+            submit. If you choose to assign a self-review round, the students will be assigned to complete that rubric.
+            The &quot;Meta Grading Review&quot; rubric can be used to have an internal review of the grading rubric, and
+            would typically be configured to be hidden from students. Read more about the rubric structure in the{" "}
+            <Link href="https://docs.pawtograder.com/staff/assignments/rubrics">staff documentation</Link>.
           </Text>
           <Button
             variant="surface"
@@ -1195,9 +1210,9 @@ function InnerRubricPage() {
               {" "}
               {rr
                 ? rr
-                  .split("-")
-                  .map((w) => w[0].toUpperCase() + w.slice(1))
-                  .join(" ")
+                    .split("-")
+                    .map((w) => w[0].toUpperCase() + w.slice(1))
+                    .join(" ")
                 : "Select Round"}
               {unsavedStatusPerTab[rr!] ? "* (Unsaved Changes)" : ""}
             </Tabs.Trigger>
@@ -1358,32 +1373,36 @@ function InnerRubricPage() {
             {updatePaused && <Alert variant="surface">Preview paused while typing</Alert>}
 
             {/* Points summary for autograder vs grading rubric vs assignment total */}
-            {rubric?.review_round === "grading-review" && <Box
-              role="region"
-              border="1px solid"
-              borderColor="border.subtle"
-              aria-label="Grading Rubric Points Summary"
-              mt={2}
-              mb={4}
-              p={3}
-              borderRadius="md"
-              bg={addsUp ? "bg.info" : "bg.warning"}
-            >
-              <Heading size="sm" mb={1}>
-                Grading Rubric Points Summary
-              </Heading>
-              <Text fontSize="sm" color="fg.muted">
-                The assignment&apos;s max points is set to {assignmentMaxPoints}, and the autograder is currently configured to award up to {autograderPoints} points, and the grading rubric is configured to award {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
-              </Text>
-              {!addsUp && (
-                <Text fontSize="sm" mt={1}>
-                  These do not add up to the assignment max points.{" "}
-                  {gradingRubricPoints < assignmentMaxPoints - autograderPoints
-                    ? `Update the autograder to award +${assignmentMaxPoints - autograderPoints - gradingRubricPoints} points.`
-                    : `Update the grading rubric to remove ${Math.abs(assignmentMaxPoints - autograderPoints - gradingRubricPoints)} points.`}
+            {rubric?.review_round === "grading-review" && (
+              <Box
+                role="region"
+                border="1px solid"
+                borderColor="border.subtle"
+                aria-label="Grading Rubric Points Summary"
+                mt={2}
+                mb={4}
+                p={3}
+                borderRadius="md"
+                bg={addsUp ? "bg.info" : "bg.warning"}
+              >
+                <Heading size="sm" mb={1}>
+                  Grading Rubric Points Summary
+                </Heading>
+                <Text fontSize="sm" color="fg.muted">
+                  The assignment&apos;s max points is set to {assignmentMaxPoints}, and the autograder is currently
+                  configured to award up to {autograderPoints} points, and the grading rubric is configured to award{" "}
+                  {gradingRubricPoints} points. {addsUp && <Icon as={FaCheck} color="fg.success" />}
                 </Text>
-              )}
-            </Box>}
+                {!addsUp && (
+                  <Text fontSize="sm" mt={1}>
+                    These do not add up to the assignment max points.{" "}
+                    {gradingRubricPoints < assignmentMaxPoints - autograderPoints
+                      ? `Update the autograder to award +${assignmentMaxPoints - autograderPoints - gradingRubricPoints} points.`
+                      : `Update the grading rubric to remove ${Math.abs(assignmentMaxPoints - autograderPoints - gradingRubricPoints)} points.`}
+                  </Text>
+                )}
+              </Box>
+            )}
 
             {isLoadingCurrentRubric && !rubricForSidebar && (
               <Center h="100%">
