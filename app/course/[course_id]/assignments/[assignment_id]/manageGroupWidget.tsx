@@ -4,7 +4,7 @@ import Link from "@/components/ui/link";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster, Toaster } from "@/components/ui/toaster";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
-import { useCourse } from "@/hooks/useCourseController";
+import { useCourse, useProfiles } from "@/hooks/useCourseController";
 import { useUserProfile } from "@/hooks/useUserProfiles";
 import {
   assignmentGroupApproveRequest,
@@ -153,7 +153,7 @@ function CreateGroupButton({
 }
 
 export function useUngroupedProfiles(groups: AssignmentGroupWithMembersInvitationsAndJoinRequests[]) {
-  const { profiles } = useClassProfiles();
+  const profiles = useProfiles();
   const ungroupedProfiles = useMemo(() => {
     if (!groups) {
       return [];
@@ -266,7 +266,7 @@ function InviteButton({
 }
 
 function GroupMemberList({ group }: { group: AssignmentGroupWithMembersInvitationsAndJoinRequests }) {
-  const { profiles } = useClassProfiles();
+  const profiles = useProfiles();
   return (
     <HStack>
       {group.assignment_groups_members.map((m) => (

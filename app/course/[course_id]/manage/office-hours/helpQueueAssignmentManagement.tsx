@@ -1,16 +1,16 @@
 "use client";
 
-import { Box, Flex, HStack, Stack, Text, Heading, Icon, Badge } from "@chakra-ui/react";
-import { Button } from "@/components/ui/button";
-import { useUpdate, useDelete } from "@refinedev/core";
-import { BsPerson, BsCalendar, BsStopwatch, BsTrash } from "react-icons/bs";
-import { formatDistanceToNow } from "date-fns";
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { PopConfirm } from "@/components/ui/popconfirm";
-import { useHelpQueues, useHelpQueueAssignments, useConnectionStatus } from "@/hooks/useOfficeHoursRealtime";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useAllProfilesForClass } from "@/hooks/useCourseController";
+import { useConnectionStatus, useHelpQueueAssignments, useHelpQueues } from "@/hooks/useOfficeHoursRealtime";
+import type { HelpQueue, HelpQueueAssignment, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { Badge, Box, Flex, Heading, HStack, Icon, Stack, Text } from "@chakra-ui/react";
+import { useDelete, useUpdate } from "@refinedev/core";
+import { formatDistanceToNow } from "date-fns";
 import { useMemo } from "react";
-import type { HelpQueueAssignment, HelpQueue, UserProfile } from "@/utils/supabase/DatabaseTypes";
+import { BsCalendar, BsPerson, BsStopwatch, BsTrash } from "react-icons/bs";
 
 type AssignmentWithDetails = HelpQueueAssignment & {
   help_queue?: HelpQueue;
@@ -32,7 +32,7 @@ export default function HelpQueueAssignmentManagement() {
   const realtimeLoading = !helpQueues || !helpQueueAssignments;
 
   // Get class profiles
-  const { profiles } = useClassProfiles();
+  const profiles = useAllProfilesForClass();
 
   // Mutations for assignment management - only use Refine for database operations
   const { mutateAsync: updateAssignment } = useUpdate();

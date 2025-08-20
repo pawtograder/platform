@@ -1204,6 +1204,32 @@ export type Database = {
           }
         ];
       };
+      discussion_thread_ordinal_counters: {
+        Row: {
+          class_id: number;
+          next_ordinal: number;
+          updated_at: string;
+        };
+        Insert: {
+          class_id: number;
+          next_ordinal?: number;
+          updated_at?: string;
+        };
+        Update: {
+          class_id?: number;
+          next_ordinal?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_thread_ordinal_counters_class_id_fkey";
+            columns: ["class_id"];
+            isOneToOne: true;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       discussion_thread_read_status: {
         Row: {
           created_at: string;
@@ -1250,6 +1276,35 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "users";
             referencedColumns: ["user_id"];
+          }
+        ];
+      };
+      discussion_thread_watcher_cache: {
+        Row: {
+          discussion_thread_root_id: number;
+          exists: boolean;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          discussion_thread_root_id: number;
+          exists?: boolean;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          discussion_thread_root_id?: number;
+          exists?: boolean;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "discussion_thread_watcher_cache_root_id_fkey";
+            columns: ["discussion_thread_root_id"];
+            isOneToOne: false;
+            referencedRelation: "discussion_threads";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -5601,6 +5656,66 @@ export type Database = {
           }
         ];
       };
+      submission_ordinal_counters: {
+        Row: {
+          assignment_group_id: number;
+          assignment_id: number;
+          next_ordinal: number;
+          profile_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          assignment_group_id?: number;
+          assignment_id: number;
+          next_ordinal?: number;
+          profile_id?: string;
+          updated_at?: string;
+        };
+        Update: {
+          assignment_group_id?: number;
+          assignment_id?: number;
+          next_ordinal?: number;
+          profile_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "submission_ordinal_counters_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignment_overview";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_ordinal_counters_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_ordinal_counters_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_for_student_dashboard";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_ordinal_counters_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "assignments_with_effective_due_dates";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "submission_ordinal_counters_assignment_id_fkey";
+            columns: ["assignment_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
+            referencedColumns: ["assignment_id"];
+          }
+        ];
+      };
       submission_regrade_request_comments: {
         Row: {
           assignment_id: number;
@@ -6756,6 +6871,18 @@ export type Database = {
       };
     };
     Views: {
+      active_submissions_for_class: {
+        Row: {
+          assignment_id: number | null;
+          class_id: number | null;
+          grader: string | null;
+          groupname: string | null;
+          student_private_profile_id: string | null;
+          submission_id: number | null;
+          total_score: number | null;
+        };
+        Relationships: [];
+      };
       assignment_overview: {
         Row: {
           active_submissions_count: number | null;
@@ -7782,6 +7909,14 @@ export type Database = {
       generate_anon_name: {
         Args: Record<PropertyKey, never>;
         Returns: string;
+      };
+      get_gradebook_records_for_all_students: {
+        Args: { class_id: number };
+        Returns: Json;
+      };
+      get_gradebook_records_for_all_students_array: {
+        Args: { class_id: number };
+        Returns: Json;
       };
       get_user_id_by_email: {
         Args: { email: string };
