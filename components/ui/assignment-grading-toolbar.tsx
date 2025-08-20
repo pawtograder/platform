@@ -15,6 +15,7 @@ import { Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
 import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/submission-author-names";
 import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
 
 interface SubmissionOptionRendererProps {
   submissionId: number;
@@ -172,16 +173,19 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
 function SubmissionSelector() {
   const { course_id, assignment_id } = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { groups, selectedOption, placeholder } = useGroupedSubmissionData();
 
   const handleSubmissionSelect = useCallback(
     (option: SubmissionOption | null) => {
       if (option) {
-        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files`;
+        const params = new URLSearchParams(searchParams.toString());
+        const qs = params.toString();
+        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files${qs ? `?${qs}` : ""}`;
         router.push(url);
       }
     },
-    [course_id, assignment_id, router]
+    [course_id, assignment_id, router, searchParams]
   );
 
   if (groups.length === 0) {
@@ -222,6 +226,7 @@ export default function AssignmentGradingToolbar() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const myReviewAssignments = useMyReviewAssignments();
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
 
   const { numCompleted, nextUncompleted, lastCompleted, completionPercent, selectOptions, currentlySelected } =
     useMemo(() => {
@@ -295,20 +300,26 @@ export default function AssignmentGradingToolbar() {
     (option: SubmissionSelectOption | null) => {
       if (option) {
         const reviewId = option.reviewAssignmentId;
-        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.submissionId}/files${reviewId ? `?review_assignment_id=${reviewId}` : ""}`;
+        const params = new URLSearchParams(searchParams.toString());
+        // Ensure the selected review assignment id persists (and clear ignore flag)
+        if (reviewId) {
+          params.set("review_assignment_id", String(reviewId));
+          params.delete("ignore_review");
+          params.delete("selected_review_id");
+        }
+        const qs = params.toString();
+        const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.submissionId}/files${qs ? `?${qs}` : ""}`;
         router.push(url);
       }
     },
-    [course_id, assignment_id, router]
+    [course_id, assignment_id, router, searchParams]
   );
 
   // Resolve selected option preference: exact review assignment via query param first, fallback to submission id
   const selectedOptionFromQuery = useMemo(() => {
-    const reviewAssignmentIdParam = searchParams?.get("review_assignment_id");
-    if (!reviewAssignmentIdParam) return null;
-    const rid = Number(reviewAssignmentIdParam);
-    return selectOptions.find((o) => o.reviewAssignmentId === rid) || null;
-  }, [searchParams, selectOptions]);
+    if (!activeReviewAssignmentId) return null;
+    return selectOptions.find((o) => o.reviewAssignmentId === activeReviewAssignmentId) || null;
+  }, [selectOptions, activeReviewAssignmentId]);
 
   if (myReviewAssignments.length === 0) {
     return (
@@ -375,7 +386,14 @@ export default function AssignmentGradingToolbar() {
           <HStack gap={3} fontSize="sm">
             {nextUncompleted ? (
               <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${nextUncompleted.submission_id}/files?review_assignment_id=${nextUncompleted.id}`}
+                href={(() => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set("review_assignment_id", String(nextUncompleted.id));
+                  params.delete("ignore_review");
+                  params.delete("selected_review_id");
+                  const qs = params.toString();
+                  return `/course/${course_id}/assignments/${assignment_id}/submissions/${nextUncompleted.submission_id}/files${qs ? `?${qs}` : ""}`;
+                })()}
               >
                 <FaArrowRight style={{ marginRight: "4px" }} />
                 Next Uncompleted
@@ -388,7 +406,14 @@ export default function AssignmentGradingToolbar() {
 
             {lastCompleted && (
               <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${lastCompleted.submission_id}/files?review_assignment_id=${lastCompleted.id}`}
+                href={(() => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set("review_assignment_id", String(lastCompleted.id));
+                  params.delete("ignore_review");
+                  params.delete("selected_review_id");
+                  const qs = params.toString();
+                  return `/course/${course_id}/assignments/${assignment_id}/submissions/${lastCompleted.submission_id}/files${qs ? `?${qs}` : ""}`;
+                })()}
                 colorPalette="green"
               >
                 Last Completed

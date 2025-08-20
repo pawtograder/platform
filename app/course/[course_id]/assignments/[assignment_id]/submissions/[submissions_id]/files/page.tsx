@@ -72,6 +72,8 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaCheckCircle, FaEyeSlash, FaTimesCircle } from "react-icons/fa";
+import { useActiveReviewAssignmentId } from "@/hooks/useSubmissionReview";
+import { useActiveRubricId } from "@/hooks/useSubmissionReview";
 
 function FilePicker({ curFile }: { curFile: number }) {
   const submission = useSubmission();
@@ -825,22 +827,18 @@ export default function FilesView() {
   const submissionData = useSubmissionMaybe();
   const isLoadingSubmission = submissionData === undefined;
 
-  const reviewAssignmentIdFromQuery = searchParams.get("review_assignment_id");
-  const selectedRubricIdFromQuery = searchParams.get("selected_rubric_id");
-  const writableSubmissionReviews = useWritableSubmissionReviews(
-    selectedRubricIdFromQuery ? Number(selectedRubricIdFromQuery) : undefined
-  );
+  const { activeRubricId } = useActiveRubricId();
+  const writableSubmissionReviews = useWritableSubmissionReviews(activeRubricId);
 
-  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(
-    reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined
-  );
+  const activeReviewAssignmentId = useActiveReviewAssignmentId();
+  const { reviewAssignment, isLoading: isLoadingReviewAssignment } = useReviewAssignment(activeReviewAssignmentId);
 
   const { submissionReview: currentSubmissionReview, isLoading: isLoadingSubmissionReviewList } =
-    useSubmissionReviewByAssignmentId(reviewAssignmentIdFromQuery ? Number(reviewAssignmentIdFromQuery) : undefined);
+    useSubmissionReviewByAssignmentId(activeReviewAssignmentId);
 
   const currentSubmissionReviewRecordId = currentSubmissionReview?.id;
 
-  const activeSubmissionReviewIdToUse = reviewAssignmentIdFromQuery
+  const activeSubmissionReviewIdToUse = activeReviewAssignmentId
     ? currentSubmissionReviewRecordId
     : writableSubmissionReviews?.[0]?.id;
 

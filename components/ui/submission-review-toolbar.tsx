@@ -463,7 +463,7 @@ function ReviewAssignmentActions() {
   const activeSubmissionReview = useActiveSubmissionReview();
 
   const ignoreAssignedReview = useIgnoreAssignedReview();
-  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId ?? ignoreAssignedReview);
+  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
 
   const assignedRubricParts = useReviewAssignmentRubricParts(activeReviewAssignmentId);
   const setIgnoreAssignedReview = useSetIgnoreAssignedReview();
@@ -477,10 +477,10 @@ function ReviewAssignmentActions() {
   }, [assignedRubricParts, rubric]); // rubric is not needed, but it's a dependency to force a re-render when the rubric changes
 
   const leaveReviewAssignment = useCallback(() => {
-    setIgnoreAssignedReview(activeReviewAssignmentId);
-  }, [setIgnoreAssignedReview, activeReviewAssignmentId]);
+    setIgnoreAssignedReview(true);
+  }, [setIgnoreAssignedReview]);
   const returnToReviewAssignment = useCallback(() => {
-    setIgnoreAssignedReview(undefined);
+    setIgnoreAssignedReview(false);
   }, [setIgnoreAssignedReview]);
 
   const isStudent = useIsStudent();
