@@ -5,7 +5,7 @@
 -- 1. Old slow triggers are still active (optimized versions exist but old ones weren't dropped)
 -- 2. Children count updates causing N UPDATE queries for N inserts (now 1 statement handles all)
 -- 3. Multiple AFTER ROW triggers causing O(N) overhead (now O(1) statement triggers)
--- 4. Audit and broadcast triggers with per-row overhead (now batched per statement)
+-- 4. Audit triggers with per-row overhead (now batched per statement)
 --
 -- Performance improvements:
 -- - Uses STATEMENT-level triggers with transition tables for bulk operations
@@ -14,7 +14,7 @@
 -- - Maintains per-row triggers only where absolutely necessary (ordinal assignment)
 
 -- Step 1: Preserve all existing trigger functionality but optimize performance  
--- The existing triggers do: ordinal setting, notifications, children count, broadcast, audit
+-- The existing triggers do: ordinal setting, notifications, children count, audit
 -- We need to maintain exact functional equivalence but with better performance
 
 -- Drop all old discussion_threads triggers that are causing performance issues
@@ -269,78 +269,6 @@ BEGIN
 END
 $$;
 
--- Step 4: Create STATEMENT-level broadcast and audit triggers
--- Process all changes in batches rather than per-row for much better performance
-
-CREATE OR REPLACE FUNCTION "public"."broadcast_discussion_threads_change_statement"() RETURNS "trigger"
-    LANGUAGE "plpgsql" SECURITY DEFINER
-    SET "search_path" TO ''
-    AS $$
-DECLARE
-    affected_classes bigint[];
-    class_id_val bigint;
-    staff_payload jsonb;
-    affected_profile_ids uuid[];
-    profile_id uuid;
-BEGIN
-    -- Get all affected class IDs from the statement
-    CASE TG_OP
-    WHEN 'INSERT' THEN
-        SELECT ARRAY_AGG(DISTINCT class_id) INTO affected_classes FROM NEW_TABLE;
-    WHEN 'UPDATE' THEN
-        SELECT ARRAY_AGG(DISTINCT COALESCE(n.class_id, o.class_id)) INTO affected_classes 
-        FROM NEW_TABLE n FULL OUTER JOIN OLD_TABLE o ON n.id = o.id;
-    WHEN 'DELETE' THEN
-        SELECT ARRAY_AGG(DISTINCT class_id) INTO affected_classes FROM OLD_TABLE;
-    END CASE;
-
-    -- Process each affected class (matches original broadcast_discussion_threads_change logic)
-    IF affected_classes IS NOT NULL THEN
-        FOREACH class_id_val IN ARRAY affected_classes
-        LOOP
-            -- Create payload matching original function format
-            staff_payload := jsonb_build_object(
-                'type', 'staff_data_change',
-                'operation', TG_OP,
-                'table', TG_TABLE_NAME,
-                'class_id', class_id_val,
-                'batch', true,
-                'timestamp', now()
-            );
-
-            -- Broadcast to staff channel (matches original behavior with realtime.send)
-            PERFORM realtime.send(
-                staff_payload,
-                'broadcast',
-                'class:' || class_id_val || ':staff',
-                true
-            );
-
-            -- Student-facing broadcasts (matches original behavior)
-            SELECT ARRAY(
-                SELECT ur.private_profile_id
-                FROM public.user_roles ur
-                WHERE ur.class_id = class_id_val AND ur.role = 'student'
-            ) INTO affected_profile_ids;
-
-            -- Broadcast to each student's individual channel (matches original behavior)
-            IF affected_profile_ids IS NOT NULL THEN
-                FOREACH profile_id IN ARRAY affected_profile_ids
-                LOOP
-                    PERFORM realtime.send(
-                        staff_payload,
-                        'broadcast',
-                        'class:' || class_id_val || ':user:' || profile_id,
-                        true
-                    );
-                END LOOP;
-            END IF;
-        END LOOP;
-    END IF;
-
-    RETURN NULL;
-END;
-$$;
 
 CREATE OR REPLACE FUNCTION "public"."audit_discussion_threads_statement"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -381,35 +309,6 @@ BEGIN
 END
 $$;
 
--- Replace the triggers with STATEMENT-level versions (split by event type)
-DROP TRIGGER IF EXISTS "broadcast_discussion_threads_realtime" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "broadcast_discussion_threads_realtime_optimized" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "broadcast_discussion_threads_realtime_statement" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "broadcast_discussion_threads_realtime_insert" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "broadcast_discussion_threads_realtime_update" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "broadcast_discussion_threads_realtime_delete" ON "public"."discussion_threads";
-
-CREATE TRIGGER "broadcast_discussion_threads_realtime_insert" 
-    AFTER INSERT ON "public"."discussion_threads" 
-    REFERENCING NEW TABLE AS NEW_TABLE
-    FOR EACH STATEMENT EXECUTE FUNCTION "public"."broadcast_discussion_threads_change_statement"();
-
-CREATE TRIGGER "broadcast_discussion_threads_realtime_update" 
-    AFTER UPDATE ON "public"."discussion_threads" 
-    REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE
-    FOR EACH STATEMENT EXECUTE FUNCTION "public"."broadcast_discussion_threads_change_statement"();
-
-CREATE TRIGGER "broadcast_discussion_threads_realtime_delete" 
-    AFTER DELETE ON "public"."discussion_threads" 
-    REFERENCING OLD TABLE AS OLD_TABLE
-    FOR EACH STATEMENT EXECUTE FUNCTION "public"."broadcast_discussion_threads_change_statement"();
-
-DROP TRIGGER IF EXISTS "audit_discussion_thread_insert_update" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "audit_discussion_thread_insert_update_optimized" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "audit_discussion_thread_insert_update_statement" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "audit_discussion_thread_insert" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "audit_discussion_thread_update" ON "public"."discussion_threads";
-DROP TRIGGER IF EXISTS "audit_discussion_thread_delete" ON "public"."discussion_threads";
 
 CREATE TRIGGER "audit_discussion_thread_insert" 
     AFTER INSERT ON "public"."discussion_threads" 
@@ -430,8 +329,6 @@ COMMENT ON FUNCTION "public"."update_children_count_statement"() IS
 COMMENT ON FUNCTION "public"."recalculate_discussion_thread_children_counts"(bigint) IS 
 'Recalculates children_count for all discussion threads. Useful for data integrity checks or repairs. Pass class_id to limit scope or NULL for all classes.';
 
-COMMENT ON FUNCTION "public"."broadcast_discussion_threads_change_statement"() IS 
-'STATEMENT-level broadcast trigger that sends batch notifications for all changes in a single operation. Much more efficient than per-row notifications for bulk operations.';
 
 COMMENT ON FUNCTION "public"."audit_discussion_threads_statement"() IS 
 'STATEMENT-level audit trigger that logs all changes in batch operations. Provides complete audit trail while being highly efficient for bulk operations.';
@@ -583,24 +480,6 @@ BEGIN
         RAISE NOTICE 'discussion_threads_children_delete trigger created successfully';
     ELSE
         RAISE WARNING 'discussion_threads_children_delete trigger was not created';
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'broadcast_discussion_threads_realtime_insert') THEN
-        RAISE NOTICE 'broadcast_discussion_threads_realtime_insert trigger created successfully';
-    ELSE
-        RAISE WARNING 'broadcast_discussion_threads_realtime_insert trigger was not created';
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'broadcast_discussion_threads_realtime_update') THEN
-        RAISE NOTICE 'broadcast_discussion_threads_realtime_update trigger created successfully';
-    ELSE
-        RAISE WARNING 'broadcast_discussion_threads_realtime_update trigger was not created';
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'broadcast_discussion_threads_realtime_delete') THEN
-        RAISE NOTICE 'broadcast_discussion_threads_realtime_delete trigger created successfully';
-    ELSE
-        RAISE WARNING 'broadcast_discussion_threads_realtime_delete trigger was not created';
     END IF;
     
     IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_discussion_thread_insert') THEN

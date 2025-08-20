@@ -210,8 +210,9 @@ export class RateLimitManager {
   }> {
     const limiter = this.rateLimiters[dataType];
     if (!limiter) {
-      console.warn(`⚠️ No rate limiter configured for data type: ${dataType}`);
-      return (await operation()) as unknown as {
+      return (await this.globalLimiter.schedule(async () => {
+        return await operation();
+      })) as unknown as {
         data: ResultType[];
         error: PostgrestError;
       };
@@ -252,11 +253,12 @@ export class RateLimitManager {
   }): Promise<UserResponse> {
     const limiter = this.rateLimiters.users;
     if (!limiter) {
-      console.warn(`⚠️ No rate limiter configured for data type: users`);
-      return await supabase.auth.admin.createUser({
-        email,
-        password,
-        email_confirm
+      return await this.globalLimiter.schedule(async () => {
+        return await supabase.auth.admin.createUser({
+          email,
+          password,
+          email_confirm
+        });
       });
     }
 
