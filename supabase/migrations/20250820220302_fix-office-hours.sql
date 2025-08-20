@@ -46,8 +46,6 @@ alter table "public"."notification_preferences" drop constraint "notification_pr
 
 alter table "public"."notification_preferences" drop constraint "notification_preferences_user_id_fkey";
 
-drop function if exists "public"."is_instructor_for_class"(_person_id uuid, _class_id integer);
-
 alter table "public"."notification_preferences" drop constraint "notification_preferences_pkey";
 
 drop index if exists "public"."notification_preferences_pkey";
@@ -58,82 +56,7 @@ drop type "public"."email_digest_frequency";
 
 drop type "public"."notification_type";
 
-CREATE INDEX idx_rubric_checks_criteria_ordinal ON public.rubric_checks USING btree (rubric_criteria_id, ordinal);
-
-CREATE INDEX idx_rubric_criteria_part_ordinal ON public.rubric_criteria USING btree (rubric_part_id, ordinal);
-
-CREATE INDEX idx_rubric_parts_rubric_ordinal ON public.rubric_parts USING btree (rubric_id, ordinal);
-
 set check_function_bodies = off;
-
-CREATE OR REPLACE FUNCTION public.create_all_repos_for_assignment(course_id integer, assignment_id integer)
- RETURNS void
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-BEGIN
-  -- Check if parameters are NULL
-  IF course_id IS NULL OR assignment_id IS NULL THEN
-    RAISE WARNING 'create_all_repos_for_assignment called with NULL parameters, skipping';
-    RETURN;
-  END IF;
-
-  RAISE NOTICE 'Creating all repos for assignment with course_id: %, assignment_id: %', course_id, assignment_id;
-  
-  PERFORM public.call_edge_function_internal(
-    '/functions/v1/assignment-create-all-repos', 
-    'POST', 
-    '{"Content-type":"application/json","x-supabase-webhook-source":"assignment-create-all-repos"}'::jsonb, 
-    jsonb_build_object('courseId', course_id, 'assignmentId', assignment_id), 
-    10000, -- Longer timeout since this creates multiple repos
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL
-  );
-
-END;
-$function$
-;
-
-CREATE OR REPLACE FUNCTION public.recalculate_gradebook_columns_in_range(start_id bigint, end_id bigint)
- RETURNS void
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-DECLARE
-    messages jsonb[];
-    column_record RECORD;
-BEGIN
-    -- Build messages for all gradebook columns in the specified range
-    SELECT  array_agg(
-            jsonb_build_object(
-                'gradebook_column_id', gcs.gradebook_column_id,
-                'student_id', gcs.student_id,
-                'is_private', gcs.is_private,
-                'gradebook_column_student_id', gcs.id,
-                'reason', 'score_expression_change',
-                'trigger_id', gcs.gradebook_column_id
-            )
-        )
-        INTO messages
-        FROM gradebook_column_students gcs
-        WHERE gcs.gradebook_column_id >= start_id AND gcs.gradebook_column_id <= end_id;
-
-    -- Send messages using the existing helper function
-    IF messages IS NOT NULL THEN
-        PERFORM public.send_gradebook_recalculation_messages(messages);
-        
-        -- Log the operation
-        RAISE NOTICE 'Triggered recalculation for % gradebook columns in range % to %', 
-            array_length(messages, 1), start_id, end_id;
-    ELSE
-        RAISE NOTICE 'No gradebook columns found in range % to %', start_id, end_id;
-    END IF;
-END;
-$function$
-;
 
 CREATE OR REPLACE FUNCTION public.assignment_before_update()
  RETURNS trigger
@@ -650,6 +573,37 @@ begin
 end$function$
 ;
 
+CREATE OR REPLACE FUNCTION public.create_all_repos_for_assignment(course_id integer, assignment_id integer)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+  -- Check if parameters are NULL
+  IF course_id IS NULL OR assignment_id IS NULL THEN
+    RAISE WARNING 'create_all_repos_for_assignment called with NULL parameters, skipping';
+    RETURN;
+  END IF;
+
+  RAISE NOTICE 'Creating all repos for assignment with course_id: %, assignment_id: %', course_id, assignment_id;
+  
+  PERFORM public.call_edge_function_internal(
+    '/functions/v1/assignment-create-all-repos', 
+    'POST', 
+    '{"Content-type":"application/json","x-supabase-webhook-source":"assignment-create-all-repos"}'::jsonb, 
+    jsonb_build_object('courseId', course_id, 'assignmentId', assignment_id), 
+    10000, -- Longer timeout since this creates multiple repos
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL
+  );
+
+END;
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.create_help_queue_channels()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -1083,6 +1037,44 @@ BEGIN
    
    RETURN NEW;
 END
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.recalculate_gradebook_columns_in_range(start_id bigint, end_id bigint)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+DECLARE
+    messages jsonb[];
+    column_record RECORD;
+BEGIN
+    -- Build messages for all gradebook columns in the specified range
+    SELECT  array_agg(
+            jsonb_build_object(
+                'gradebook_column_id', gcs.gradebook_column_id,
+                'student_id', gcs.student_id,
+                'is_private', gcs.is_private,
+                'gradebook_column_student_id', gcs.id,
+                'reason', 'score_expression_change',
+                'trigger_id', gcs.gradebook_column_id
+            )
+        )
+        INTO messages
+        FROM gradebook_column_students gcs
+        WHERE gcs.gradebook_column_id >= start_id AND gcs.gradebook_column_id <= end_id;
+
+    -- Send messages using the existing helper function
+    IF messages IS NOT NULL THEN
+        PERFORM public.send_gradebook_recalculation_messages(messages);
+        
+        -- Log the operation
+        RAISE NOTICE 'Triggered recalculation for % gradebook columns in range % to %', 
+            array_length(messages, 1), start_id, end_id;
+    ELSE
+        RAISE NOTICE 'No gradebook columns found in range % to %', start_id, end_id;
+    END IF;
+END;
 $function$
 ;
 
