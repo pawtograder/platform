@@ -207,9 +207,15 @@ export const RealtimeChat = ({
   }, [allMessages, markMessageAsRead, officeHoursController]);
 
   const handleSendMessage = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async (message: string, profile_id: string, close?: boolean) => {
-      if (!message.trim() || !sendMessage || !isConnected || moderationStatus.isBanned) return;
+    async (message: string) => {
+      if (!isConnected) {
+        toaster.error({
+          title: "Not connected to chat",
+          description: "Please wait for the chat to connect before sending messages."
+        });
+        return;
+      }
+      if (!message.trim() || !sendMessage || moderationStatus.isBanned) return;
 
       const replyToId =
         replyToMessage && "id" in replyToMessage && typeof replyToMessage.id === "number" ? replyToMessage.id : null;

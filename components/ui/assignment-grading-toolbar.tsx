@@ -1,5 +1,6 @@
 "use client";
 
+import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/submission-author-names";
 import Link from "@/components/ui/link";
 import {
   useActiveSubmissions,
@@ -7,14 +8,13 @@ import {
   useMyReviewAssignments,
   useReviewAssignment
 } from "@/hooks/useAssignment";
-import { HStack, Text, Box } from "@chakra-ui/react";
-import { useParams, useRouter } from "next/navigation";
-import { useCallback, useMemo } from "react";
-import { FaArrowLeft, FaArrowRight, FaCheckCircle, FaClock, FaChartBar } from "react-icons/fa";
+import { useAllProfilesForClass, useGradersAndInstructors } from "@/hooks/useCourseController";
+import { Box, HStack, Text } from "@chakra-ui/react";
 import { Select } from "chakra-react-select";
 import { formatRelative } from "date-fns";
-import SubmissionAuthorNames from "@/app/course/[course_id]/assignments/[assignment_id]/submissions/submission-author-names";
-import { useClassProfiles } from "@/hooks/useClassProfiles";
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useMemo } from "react";
+import { FaArrowLeft, FaArrowRight, FaChartBar, FaCheckCircle, FaClock } from "react-icons/fa";
 
 interface SubmissionOptionRendererProps {
   submissionId: number;
@@ -76,8 +76,9 @@ interface GroupedSubmissionData {
 // Hook that returns grouped submission data for the selector
 function useGroupedSubmissionData(): GroupedSubmissionData {
   const submissions = useActiveSubmissions();
-  const classProfiles = useClassProfiles();
+  const classProfiles = useAllProfilesForClass();
   const assignmentGroups = useAssignmentGroups();
+  const staffProfiles = useGradersAndInstructors();
   const { submissions_id } = useParams();
 
   return useMemo(() => {
@@ -90,7 +91,7 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
       let authorName = "";
       if (submission.profile_id) {
         // Individual submission - get profile name
-        const profile = classProfiles.profiles.find((p) => p.id === submission.profile_id);
+        const profile = classProfiles.find((p) => p.id === submission.profile_id);
         authorName = profile?.name || `Submission ${submission.id}`;
       } else if (submission.assignment_group_id) {
         // Group submission - get group name
@@ -104,10 +105,8 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
       let isStudent = true; // Default to student
       if (submission.profile_id) {
         // Check if the profile belongs to a student role
-        const userRole = classProfiles.allVisibleRoles.find(
-          (role) => role.private_profile_id === submission.profile_id
-        );
-        isStudent = userRole?.role === "student";
+        const userRole = staffProfiles.find((p) => p.id === submission.profile_id);
+        isStudent = !userRole;
       }
 
       const option: SubmissionOption = {
@@ -163,7 +162,7 @@ function useGroupedSubmissionData(): GroupedSubmissionData {
       selectedOption,
       placeholder: "Select any submission to view..."
     };
-  }, [submissions, classProfiles, assignmentGroups, submissions_id]);
+  }, [submissions, classProfiles, assignmentGroups, submissions_id, staffProfiles]);
 }
 
 function SubmissionSelector() {

@@ -17,7 +17,7 @@ import {
   Table
 } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
-import { useStudentRoster } from "@/hooks/useClassProfiles";
+import { useStudentRoster } from "@/hooks/useCourseController";
 import { GroupCreateData, useGroupManagement } from "./GroupManagementContext";
 import { createClient } from "@/utils/supabase/client";
 import { MultiValue, Select } from "chakra-react-select";
@@ -31,7 +31,7 @@ export function useUngroupedStudentProfiles(groups: AssignmentGroupWithMembersIn
     if (!groups) {
       return [];
     }
-    return students.filter(
+    return students?.filter(
       (p: { is_private_profile: boolean; id: string }) =>
         p.is_private_profile && !groups.some((g) => g.assignment_groups_members.some((m) => m.profile_id === p.id))
     );
@@ -48,7 +48,7 @@ export default function BulkCreateGroup({
 }) {
   const [groupTextField, setGroupTextField] = useState<string>("");
   const [groupSize, setGroupSize] = useState<number>(0);
-  const ungroupedProfiles = useUngroupedStudentProfiles(groups);
+  const ungroupedProfiles = useUngroupedStudentProfiles(groups) || [];
   const [generatedGroups, setGeneratedGroups] = useState<GroupCreateData[]>([]);
   const { addGroupsToCreate } = useGroupManagement();
   const supabase = createClient();

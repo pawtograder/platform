@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import Link from "@/components/ui/link";
 import TagDisplay from "@/components/ui/tag";
 import { toaster } from "@/components/ui/toaster";
-import { useCourse } from "@/hooks/useAuthState";
 import useTags from "@/hooks/useTags";
 import { RubricPart, Tag } from "@/utils/supabase/DatabaseTypes";
 import {
@@ -30,6 +29,7 @@ import { FaArrowLeft } from "react-icons/fa";
 import { AssignmentResult, TAAssignmentSolver } from "../assignmentCalculator";
 import DragAndDropExample from "../dragAndDrop";
 import { DraftReviewAssignment, RubricWithParts, SubmissionWithGrading, UserRoleWithConflictsAndName } from "../page";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 
 // Main Page Component
 export default function ReassignGradingPage() {
@@ -92,7 +92,8 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
 
   const { mutateAsync } = useCreate();
   const { mutateAsync: deleteValues } = useDelete();
-  const course = useCourse();
+  const { role: classRole } = useClassProfiles();
+  const course = classRole.classes;
   const { tags } = useTags();
   const supabase = createClient();
 
@@ -641,7 +642,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
         rubric_id: selectedRubric.id,
         class_id: Number(course_id),
         submission_review_id: submissionReviewId,
-        due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
+        due_date: new TZDate(dueDate, course.time_zone ?? "America/New_York").toISOString()
       }));
     await supabase.from("review_assignments").insert(assignmentsToCreate);
 
@@ -955,14 +956,14 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
             </Field.Root>
 
             <Field.Root>
-              <Field.Label>Review due date ({course.classes.time_zone ?? "America/New_York"})</Field.Label>
+              <Field.Label>Review due date ({course.time_zone ?? "America/New_York"})</Field.Label>
               <Input
                 type="datetime-local"
                 value={
                   dueDate
                     ? new Date(dueDate)
                         .toLocaleString("sv-SE", {
-                          timeZone: course.classes.time_zone ?? "America/New_York"
+                          timeZone: course.time_zone ?? "America/New_York"
                         })
                         .replace(" ", "T")
                     : ""
@@ -984,7 +985,7 @@ function ReassignGradingForm({ handleReviewAssignmentChange }: { handleReviewAss
                       parseInt(minute),
                       0,
                       0,
-                      course.classes.time_zone ?? "America/New_York"
+                      course.time_zone ?? "America/New_York"
                     );
                     setDueDate(tzDate.toString());
                   } else {

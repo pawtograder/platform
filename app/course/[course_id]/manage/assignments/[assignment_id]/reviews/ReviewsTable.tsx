@@ -5,7 +5,7 @@ import PersonName from "@/components/ui/person-name";
 import { PopConfirm } from "@/components/ui/popconfirm";
 import { toaster } from "@/components/ui/toaster";
 import { useRubrics } from "@/hooks/useAssignment";
-import { useCourse } from "@/hooks/useAuthState";
+import { useClassProfiles } from "@/hooks/useClassProfiles";
 import { useCourseController } from "@/hooks/useCourseController";
 import { useTableControllerTable } from "@/hooks/useTableControllerTable";
 import TableController from "@/lib/TableController";
@@ -45,7 +45,7 @@ interface SelectOption {
 
 export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAssignmentDeleted }: ReviewsTableProps) {
   const { mutate: deleteReviewAssignment } = useDelete();
-  const course = useCourse();
+  const { role: course } = useClassProfiles();
   const { classRealTimeController } = useCourseController();
   const rubrics = useRubrics();
   const selfReviewRubric = rubrics?.find((r) => r.review_round === "self-review");
