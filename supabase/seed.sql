@@ -1328,3 +1328,11 @@ BEGIN
         FALSE
     );
 END $$;
+
+-- Backfill code-walk submission reviews for existing submissions
+INSERT INTO public.submission_reviews (submission_id, rubric_id, class_id, total_score, total_autograde_score, tweak, released, name)
+SELECT s.id, r.id, s.class_id, 0, 0, 0, false, COALESCE(r.name, 'Code Walk')
+FROM public.submissions s
+JOIN public.rubrics r ON r.assignment_id = s.assignment_id AND r.review_round::text = 'code-walk'
+LEFT JOIN public.submission_reviews sr ON sr.submission_id = s.id AND sr.rubric_id = r.id
+WHERE sr.id IS NULL;
