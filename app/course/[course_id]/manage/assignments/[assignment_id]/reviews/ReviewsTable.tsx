@@ -13,14 +13,15 @@ import { createClient } from "@/utils/supabase/client";
 import { Database } from "@/utils/supabase/SupabaseTypes";
 import { EmptyState, HStack, IconButton, Input, NativeSelect, Spinner, Table, Text, VStack } from "@chakra-ui/react";
 import { TZDate } from "@date-fns/tz";
-import { useDelete } from "@refinedev/core";
+import { useDelete, useCreate } from "@refinedev/core";
 import { UnstableGetResult as GetResult } from "@supabase/postgrest-js";
-import { ColumnDef, flexRender, Row } from "@tanstack/react-table";
+import { ColumnDef, flexRender, Row, Table as TanstackTable } from "@tanstack/react-table";
 import { MultiValue, Select } from "chakra-react-select";
 import { format } from "date-fns";
 import { useCallback, useEffect, useMemo } from "react";
 import { FaEdit, FaTrash, FaDownload } from "react-icons/fa";
 import { MdOutlineAssignment } from "react-icons/md";
+import { FaCopy } from "react-icons/fa";
 
 // Type definitions
 export type PopulatedReviewAssignment = GetResult<
@@ -50,6 +51,8 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
   const rubrics = useRubrics();
   const selfReviewRubric = rubrics?.find((r) => r.review_round === "self-review");
   const supabase = createClient();
+
+  const { mutateAsync: createReviewAssignment } = useCreate();
 
   const handleDelete = useCallback(
     async (id: number) => {
@@ -357,6 +360,91 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
     []
   );
 
+  const handleDuplicateAsCodeWalk = useCallback(
+    async (row: PopulatedReviewAssignment) => {
+      try {
+        // Find the code walk rubric from the existing rubrics data
+        const codeWalkRubric = rubrics?.find((r) => r.review_round === "code-walk");
+
+        if (!codeWalkRubric) {
+          toaster.error({
+            title: "Error",
+            description: "Code walk rubric not found for this assignment"
+          });
+          return;
+        }
+
+        // First, ensure submission_review exists for the code walk rubric
+        let submissionReviewId: number | undefined;
+
+        // Check if submission_review already exists
+        const { data: existingReview } = await supabase
+          .from("submission_reviews")
+          .select("id")
+          .eq("submission_id", row.submission_id)
+          .eq("rubric_id", codeWalkRubric.id)
+          .single();
+
+        if (existingReview?.id) {
+          submissionReviewId = existingReview.id;
+        } else {
+          // Create new submission_review
+          const { data: newReview, error: createError } = await supabase
+            .from("submission_reviews")
+            .insert({
+              class_id: course.classes.id,
+              submission_id: row.submission_id,
+              rubric_id: codeWalkRubric.id,
+              name: codeWalkRubric.name || "Code Walk Review",
+              total_score: 0,
+              total_autograde_score: 0,
+              tweak: 0,
+              released: false
+            })
+            .select("id")
+            .single();
+
+          if (createError || !newReview) {
+            toaster.error({
+              title: "Error creating submission review",
+              description: createError?.message || "Failed to create submission review"
+            });
+            return;
+          }
+
+          submissionReviewId = newReview.id;
+        }
+
+        // Create the new review assignment with code walk rubric
+        await createReviewAssignment({
+          resource: "review_assignments",
+          values: {
+            class_id: course.classes.id,
+            assignment_id: Number(assignmentId),
+            assignee_profile_id: row.assignee_profile_id,
+            submission_id: row.submission_id,
+            submission_review_id: submissionReviewId,
+            rubric_id: codeWalkRubric.id,
+            due_date: row.due_date,
+            release_date: row.release_date,
+            max_allowable_late_tokens: row.max_allowable_late_tokens
+          }
+        });
+
+        toaster.success({
+          title: "Success",
+          description: `Code walk reviewassignment created for ${row.profiles?.name || row.assignee_profile_id}`
+        });
+      } catch (error) {
+        toaster.error({
+          title: "Error duplicating reviewassignment",
+          description: error instanceof Error ? error.message : "An unexpected error occurred"
+        });
+      }
+    },
+    [rubrics, supabase, course.classes.id, createReviewAssignment, assignmentId]
+  );
+
   const columns = useMemo<ColumnDef<PopulatedReviewAssignment>[]>(
     () => [
       {
@@ -499,7 +587,36 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         accessorKey: "id",
         enableSorting: false,
         enableColumnFilter: false,
-        cell: function render({ row }) {
+        cell: function render({
+          row,
+          table
+        }: {
+          row: Row<PopulatedReviewAssignment>;
+          table: TanstackTable<PopulatedReviewAssignment>;
+        }) {
+          const currentRubricRound = row.original.rubrics?.review_round;
+          const codeWalkRubric = rubrics?.find((r) => r.review_round === "code-walk");
+
+          let shouldShowDuplicate = false;
+
+          if (
+            currentRubricRound &&
+            currentRubricRound !== "code-walk" &&
+            currentRubricRound !== "self-review" &&
+            codeWalkRubric
+          ) {
+            const existingCodeWalkAssignment = table
+              .getRowModel()
+              .rows.find(
+                (r: Row<PopulatedReviewAssignment>) =>
+                  r.original.submission_id === row.original.submission_id &&
+                  r.original.assignee_profile_id === row.original.assignee_profile_id &&
+                  r.original.rubrics?.review_round === "code-walk"
+              );
+
+            shouldShowDuplicate = !existingCodeWalkAssignment;
+          }
+
           return (
             <HStack gap={1} justifyContent="center">
               <IconButton
@@ -512,6 +629,18 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
               >
                 <FaEdit />
               </IconButton>
+              {shouldShowDuplicate && (
+                <IconButton
+                  aria-label="Duplicate review assignment as code walk"
+                  onClick={() => handleDuplicateAsCodeWalk(row.original)}
+                  variant="ghost"
+                  size="sm"
+                  colorPalette="blue"
+                  title="Create code walk assignment for this submission and assignee"
+                >
+                  <FaCopy />
+                </IconButton>
+              )}
               <PopConfirm
                 triggerLabel="Delete review assignment"
                 confirmHeader="Delete Review Assignment"
@@ -528,7 +657,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         }
       }
     ],
-    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone]
+    [handleDelete, openAssignModal, getReviewStatus, course.classes.time_zone, rubrics, handleDuplicateAsCodeWalk]
   );
   const tableController = useMemo(() => {
     const joinedSelect =
