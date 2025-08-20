@@ -22,7 +22,7 @@ test.describe("Rubric editor", () => {
 
   test("Shows assignment, autograder, and rubric points with status", async ({ page }) => {
     await loginAsUser(page, instructor!);
-    await page.waitForURL(`/course/**`)
+    await page.waitForURL(`/course`)
 
     await page.goto(`/course/${course!.id}/manage/assignments/${assignment!.id}/rubric`);
 
