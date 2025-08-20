@@ -373,8 +373,12 @@ class GradebookWhatIfController {
           const submission = this.gradebookController.studentSubmissions
             .get(this.private_profile_id)
             ?.find((s) => s.assignment_id === matchingAssignments[0].id);
-          if (!submission || submission.total_score === null) return null;
-          return submission.total_score;
+
+          // Type assertion to include total_score
+          const submissionWithScore = submission as typeof submission & { total_score?: number | null };
+
+          if (!submissionWithScore || submissionWithScore.total_score === null) return null;
+          return submissionWithScore.total_score;
         };
         if (Array.isArray(assignmentSlug)) {
           const ret = assignmentSlug.map(findOne);
