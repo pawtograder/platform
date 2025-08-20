@@ -580,6 +580,11 @@ export default function SubmissionReviewToolbar() {
   const isStudent = useIsStudent();
   const ignoreAssignedReview = useIgnoreAssignedReview();
   const canSubmitEarlyForSelfReview = selfReviewSettings.enabled && selfReviewSettings.allow_early && isStudent;
+
+  // Check if there's an active, incomplete review assignment
+  const activeReviewAssignment = useReviewAssignment(activeReviewAssignmentId);
+  const hasActiveIncompleteReview = activeReviewAssignment && !activeReviewAssignment.completed_at;
+
   if (
     !ignoreAssignedReview &&
     (!writableReviews || writableReviews.length === 0 || writableReviews.length === 1) &&
@@ -588,6 +593,7 @@ export default function SubmissionReviewToolbar() {
   ) {
     return <></>;
   }
+
   return (
     <Box w="100%" p={2} borderRadius="md" borderWidth="1px" borderColor="border.info" bg="bg.info">
       <SelfReviewDueDateInformation />
@@ -595,7 +601,8 @@ export default function SubmissionReviewToolbar() {
         {writableReviews && writableReviews.length > 1 && <ActiveReviewPicker />}
         <ReviewAssignmentActions />
       </HStack>
-      <CompletedReviewHistory />
+      {/* Only show completed history when NOT actively working on another review */}
+      {!hasActiveIncompleteReview && <CompletedReviewHistory />}
     </Box>
   );
 }
