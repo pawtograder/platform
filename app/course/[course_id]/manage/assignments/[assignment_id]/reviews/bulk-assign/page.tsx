@@ -716,12 +716,14 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           );
         })
         .map((assignment) => assignment.id);
-      await supabase
-        .from("review_assignments")
-        .update({
-          completed_at: null
-        })
-        .in("id", assignmentsToUpdate);
+      if (assignmentsToUpdate.length > 0) {
+        await supabase
+          .from("review_assignments")
+          .update({
+            completed_at: null
+          })
+          .in("id", assignmentsToUpdate);
+      }
 
       const assignmentsToCreate = validReviews
         .filter(({ review, submissionReviewId }) => {
@@ -740,10 +742,12 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
           submission_review_id: submissionReviewId,
           due_date: new TZDate(dueDate, course.classes.time_zone ?? "America/New_York").toISOString()
         }));
-      const { error: insertAssignmentsError } = await supabase.from("review_assignments").insert(assignmentsToCreate);
-      if (insertAssignmentsError) {
-        toaster.error({ title: "Error creating review assignments", description: insertAssignmentsError.message });
-        return false;
+      if (assignmentsToCreate.length > 0) {
+        const { error: insertAssignmentsError } = await supabase.from("review_assignments").insert(assignmentsToCreate);
+        if (insertAssignmentsError) {
+          toaster.error({ title: "Error creating review assignments", description: insertAssignmentsError.message });
+          return false;
+        }
       }
 
       const { data: allReviewAssignments, error: allReviewAssignmentsError } = await supabase
@@ -761,7 +765,7 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         });
         return false;
       }
-      //Now insert all the reivew assignment parts as needed
+      //Now insert all the review assignment parts as needed (skip any that already exist)
       const reviewAssignmentPartsToCreate = validReviews
         .map(({ review, submissionReviewId }) => {
           if (review.part) {
@@ -774,6 +778,13 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
               toaster.error({ title: "Error", description: "Error finding review assignment for review" });
               return undefined;
             }
+            // Skip if the part already exists on this review assignment
+            const alreadyHasPart = assignment.review_assignment_rubric_parts?.some(
+              (p) => p.rubric_part_id === review.part!.id
+            );
+            if (alreadyHasPart) {
+              return undefined;
+            }
             return {
               review_assignment_id: assignment.id,
               rubric_part_id: review.part.id,
@@ -783,13 +794,30 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
             return undefined;
           }
         })
-        .filter((part) => part !== undefined);
-      const { error: insertPartsError } = await supabase
-        .from("review_assignment_rubric_parts")
-        .insert(reviewAssignmentPartsToCreate);
-      if (insertPartsError) {
-        toaster.error({ title: "Error creating review assignment parts", description: insertPartsError.message });
-        return false;
+        .filter((part) => part !== undefined) as Array<{
+        review_assignment_id: number;
+        rubric_part_id: number;
+        class_id: number;
+      }>;
+
+      // Ensure final payload only contains unique (review_assignment_id, rubric_part_id) pairs
+      const seenPairs = new Set<string>();
+      const uniqueReviewAssignmentPartsToCreate = reviewAssignmentPartsToCreate.filter((part) => {
+        const key = `${part.review_assignment_id}:${part.rubric_part_id}`;
+        if (seenPairs.has(key)) return false;
+        seenPairs.add(key);
+        return true;
+      });
+
+      if (uniqueReviewAssignmentPartsToCreate.length > 0) {
+        const { error: insertPartsError } = await supabase
+          .from("review_assignment_rubric_parts")
+          .insert(uniqueReviewAssignmentPartsToCreate);
+        // Alternatively, if a unique constraint exists, prefer upsert with onConflict("review_assignment_id,rubric_part_id")
+        if (insertPartsError) {
+          toaster.error({ title: "Error creating review assignment parts", description: insertPartsError.message });
+          return false;
+        }
       }
 
       toaster.success({

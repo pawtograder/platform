@@ -16,6 +16,7 @@ CREATE OR REPLACE FUNCTION public.create_gradebook_column_for_code_walk_rubric()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $function$
 DECLARE
   assignment_slug text;
@@ -26,8 +27,15 @@ DECLARE
   new_slug text;
 BEGIN
   -- Only act when we have an assignment_id and the rubric is for code-walk
-  IF (TG_OP = 'INSERT' AND NEW.assignment_id IS NOT NULL AND NEW.review_round::text = 'code-walk') OR
-     (TG_OP = 'UPDATE' AND NEW.assignment_id IS NOT NULL AND NEW.review_round::text = 'code-walk' AND (OLD.review_round IS DISTINCT FROM NEW.review_round)) THEN
+  IF (TG_OP = 'INSERT' AND NEW.assignment_id IS NOT NULL AND NEW.review_round::text = 'code-walk') OR  
+     (TG_OP = 'UPDATE'  
+       AND NEW.assignment_id IS NOT NULL  
+       AND NEW.review_round::text = 'code-walk'  
+       AND (  
+         (OLD.review_round IS DISTINCT FROM NEW.review_round)  
+         OR (OLD.assignment_id IS DISTINCT FROM NEW.assignment_id)  
+       )  
+     ) THEN
 
     SELECT a.slug, a.title, a.total_points, a.class_id
       INTO assignment_slug, assignment_title, assignment_total_points, assignment_class_id

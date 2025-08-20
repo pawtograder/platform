@@ -5,6 +5,7 @@ CREATE OR REPLACE FUNCTION public.submissions_after_insert_hook()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
+ SET search_path = public
 AS $function$
 DECLARE
   new_review_id bigint;
@@ -18,7 +19,7 @@ BEGIN
     -- Existing behavior: load assignment rubric pointers
     SELECT grading_rubric_id, meta_grading_rubric_id, self_review_rubric_id
       INTO the_grading_rubric_id, the_meta_grading_rubric_id, the_self_review_rubric_id
-      FROM assignments WHERE id = NEW.assignment_id;
+      FROM public.assignments WHERE id = NEW.assignment_id;
 
     -- Grading Review
     IF the_grading_rubric_id IS NOT NULL THEN
@@ -68,12 +69,11 @@ BEGIN
 END
 $function$;
 
--- SECURITY DEFINER function to get or create a submission_review for a (submission_id, rubric_id)
--- REMOVED get_or_create_submission_review RPC per request; reviews are auto-created on submission insert
+DROP FUNCTION IF EXISTS public.get_or_create_submission_review(bigint, bigint);
 
 -- Backfill code-walk submission reviews for existing submissions
-INSERT INTO public.submission_reviews (submission_id, rubric_id, class_id, total_score, tweak, released, name)
-SELECT s.id, r.id, s.class_id, 0, 0, false, COALESCE(r.name, 'Code Walk')
+INSERT INTO public.submission_reviews (submission_id, rubric_id, class_id, total_score, total_autograde_score, tweak, released, name)
+SELECT s.id, r.id, s.class_id, 0, 0, 0, false, COALESCE(r.name, 'Code Walk')
 FROM public.submissions s
 JOIN public.rubrics r ON r.assignment_id = s.assignment_id AND r.review_round::text = 'code-walk'
 LEFT JOIN public.submission_reviews sr ON sr.submission_id = s.id AND sr.rubric_id = r.id

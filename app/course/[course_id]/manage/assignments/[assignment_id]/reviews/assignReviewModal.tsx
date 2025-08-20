@@ -266,26 +266,61 @@ export default function AssignReviewModal({
     // Resolve submission_review_id for this submission + rubric (required by DB)
     let submissionReviewId: number | undefined;
     try {
-      const { data: sr, error } = await supabaseClient
+      const { data: sr, error: selectError } = await supabaseClient
         .from("submission_reviews")
         .select("id")
         .eq("submission_id", restOfData.submission_id)
         .eq("rubric_id", restOfData.rubric_id)
         .single();
 
-      if (error || !sr?.id) {
-        toaster.error({
-          title: "Error creating review assignment",
-          description:
-            "Failed to find submission review for this submission and rubric. Please ensure the rubric exists for this assignment."
-        });
-        return;
+      if (sr?.id) {
+        submissionReviewId = Number(sr.id);
+      } else {
+        // Create the submission_review if it's missing
+        const rubricName = rubricsData?.data?.find((r) => r.id === restOfData.rubric_id)?.name || "Review";
+        const { data: created, error: insertError } = await supabaseClient
+          .from("submission_reviews")
+          .insert({
+            class_id: courseId,
+            submission_id: restOfData.submission_id,
+            rubric_id: restOfData.rubric_id,
+            name: rubricName,
+            total_score: 0,
+            total_autograde_score: 0,
+            tweak: 0,
+            released: false
+          })
+          .select("id")
+          .single();
+
+        if (created?.id) {
+          submissionReviewId = Number(created.id);
+        } else {
+          // Handle potential race: if insert failed due to conflict, try fetching again once
+          const { data: sr2 } = await supabaseClient
+            .from("submission_reviews")
+            .select("id")
+            .eq("submission_id", restOfData.submission_id)
+            .eq("rubric_id", restOfData.rubric_id)
+            .single();
+
+          if (sr2?.id) {
+            submissionReviewId = Number(sr2.id);
+          } else {
+            toaster.error({
+              title: "Error creating review assignment",
+              description:
+                insertError?.message ||
+                (selectError?.message ?? "Failed to find or create submission review for this submission and rubric.")
+            });
+            return;
+          }
+        }
       }
-      submissionReviewId = Number(sr.id);
     } catch (e) {
       toaster.error({
         title: "Error creating review assignment",
-        description: e instanceof Error ? e.message : "Unable to look up submission review."
+        description: e instanceof Error ? e.message : "Unable to look up or create submission review."
       });
       return;
     }
