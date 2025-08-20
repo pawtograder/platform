@@ -44,6 +44,7 @@ test.describe("Discussion Thread Page", () => {
   test("A student can view the create new thread form and create a new private thread", async ({ page }) => {
     await loginAsUser(page, student1!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
     await page.getByRole("link").filter({ hasText: "New Thread" }).click();
     await argosScreenshot(page, "Create New Thread Form");
     await expect(page.getByRole("heading", { name: "New Discussion Thread" })).toBeVisible();
@@ -102,6 +103,7 @@ test.describe("Discussion Thread Page", () => {
   test("Another student cannot view a private thread", async ({ page }) => {
     await loginAsUser(page, student2!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
     await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1 correct?" })).not.toBeVisible();
     await expect(page.getByText("Viewable by poster and staff only")).not.toBeVisible();
     await expect(page.getByRole("button").filter({ hasText: "Unwatch" })).not.toBeVisible();
@@ -111,6 +113,7 @@ test.describe("Discussion Thread Page", () => {
   test("Another student creates a public thread", async ({ page }) => {
     await loginAsUser(page, student2!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
+    await page.waitForURL("**/discussion");
     await page.getByRole("link").filter({ hasText: "New Thread" }).click();
     // Test the form with a public thread
     await page.getByText("Anything else about the class").click();
@@ -135,6 +138,7 @@ test.describe("Discussion Thread Page", () => {
     await loginAsUser(page, instructor!, course);
     await page.getByRole("link").filter({ hasText: "Discussion" }).click();
     // Check that the threads are visible
+    await page.waitForURL("**/discussion");
     await expect(page.getByRole("link", { name: "#1 Is my answer for HW1 Q1" }).nth(1)).toBeVisible();
     await expect(page.getByRole("link", { name: "JAVA SUCKS" })).toBeVisible();
     // Check that the instructor can reply to the private thread

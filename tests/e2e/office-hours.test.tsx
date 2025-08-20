@@ -53,6 +53,7 @@ test.describe("Office Hours", () => {
   test("Student can request help", async ({ page }) => {
     await loginAsUser(page, student!, course);
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
+    await page.waitForURL("**/office-hours/**");
 
     //Make a private request first
     await page.getByRole("link", { name: "New Request" }).click();
@@ -89,6 +90,8 @@ test.describe("Office Hours", () => {
   test("Another student can view the public request and comment on it, but cant see the private", async ({ page }) => {
     await loginAsUser(page, student2!, course);
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
+    await page.waitForURL("**/office-hours/**");
+
     await page.getByRole("button", { name: "View Chat" }).click();
     await argosScreenshot(page, "Office Hours - View Queue with a public request");
     await expect(page.getByText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1)).toBeVisible();
@@ -101,6 +104,8 @@ test.describe("Office Hours", () => {
   test("Instructor can view all, comment, and start a video call", async ({ page }) => {
     await loginAsUser(page, instructor!, course);
     await page.getByRole("link").filter({ hasText: "Office Hours" }).click();
+    await page.waitForURL("**/manage/office-hours");
+
     await page.getByRole("link", { name: HELP_REQUEST_MESSAGE_1 }).click();
     await expect(page.locator("body")).toContainText(HELP_REQUEST_FOLLOW_UP_MESSAGE_1);
     await expect(page.locator("body")).toContainText(HELP_REQUEST_OTHER_STUDENT_MESSAGE_1);
