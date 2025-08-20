@@ -60,12 +60,14 @@ export function useAllStudentProfiles() {
       return [];
     }
 
-    // Get all student tags (case-insensitive)
-    const studentTags = allTags.filter((tag) => tag.name.toLowerCase() === "student");
-    const studentProfileIds = new Set(studentTags.map((tag) => tag.profile_id));
+    // Get all staff tags (case-insensitive)
+    const staffTags = allTags.filter(
+      (tag) => tag.name.toLowerCase() === "instructor" || tag.name.toLowerCase() === "grader"
+    );
+    const staffProfileIds = new Set(staffTags.map((tag) => tag.profile_id));
 
-    // Filter profiles to only include those with student tags
-    return allProfiles.filter((profile) => studentProfileIds.has(profile.id));
+    // Filter profiles to only include those without staff tags
+    return allProfiles.filter((profile) => !staffProfileIds.has(profile.id));
   }, [allProfiles, allTags]);
 }
 export function useGradersAndInstructors() {
