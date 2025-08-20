@@ -67,7 +67,7 @@ export function useAllStudentProfiles() {
     const staffProfileIds = new Set(staffTags.map((tag) => tag.profile_id));
 
     // Filter profiles to only include those without staff tags
-    return allProfiles.filter((profile) => !staffProfileIds.has(profile.id));
+    return allProfiles.filter((profile) => !staffProfileIds.has(profile.id) && profile.is_private_profile);
   }, [allProfiles, allTags]);
 }
 export function useGradersAndInstructors() {
