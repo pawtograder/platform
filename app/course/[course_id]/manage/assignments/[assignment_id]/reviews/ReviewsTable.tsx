@@ -635,7 +635,6 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
                   onClick={() => handleDuplicateAsCodeWalk(row.original)}
                   variant="ghost"
                   size="sm"
-                  colorPalette="blue"
                   title="Create code walk assignment for this submission and assignee"
                 >
                   <FaCopy />
@@ -822,7 +821,7 @@ export default function ReviewsTable({ assignmentId, openAssignModal, onReviewAs
         <Text fontSize="lg" fontWeight="bold">
           Review Assignments
         </Text>
-        <Button onClick={exportToCSV} size="sm" variant="outline" colorPalette="blue">
+        <Button onClick={exportToCSV} size="sm" variant="outline">
           <FaDownload style={{ marginRight: "8px" }} />
           Export CSV
         </Button>
