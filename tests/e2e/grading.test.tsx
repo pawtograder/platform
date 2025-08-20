@@ -183,7 +183,9 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     // Release All Submission Reviews
     await page.goto(`/course/${course.id}/manage/assignments/${assignment!.id}`);
+
     await page.getByRole("button", { name: "Release All Submission Reviews", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Release All Submission Reviews", exact: true })).toBeEnabled();
     await page.goto(`/course/${course.id}/assignments/${assignment!.id}/submissions/${submission_id}`);
     await expect(page.getByText("Released to studentYes")).toBeVisible();
   });
@@ -192,6 +194,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
 
     await expect(page.getByText("Upcoming Assignments")).toBeVisible();
     await page.getByRole("link").filter({ hasText: "Assignments" }).click();
+    await page.waitForURL("**/assignments");
     await page.getByRole("link", { name: assignment!.title, exact: true }).click();
     await page.getByRole("link", { name: "1", exact: true }).click();
 
@@ -246,10 +249,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByLabel("Add Comment", { exact: true })
       .click();
     await expect(
-      page
-        .getByLabel("Grading checks on line 4")
-        .getByRole("paragraph")
-        .filter({ hasText: "I do not think it is possible" })
+      page.getByLabel("Grading checks on line 4").filter({ hasText: "I do not think it is possible" })
     ).toBeVisible();
     await expect(page.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Resolve Request" }).click();
@@ -299,9 +299,7 @@ test.describe("An end-to-end grading workflow self-review to grading", () => {
       .getByRole("region", { name: "Grading checks on line 4" })
       .getByLabel("Add Comment", { exact: true })
       .click();
-    await expect(
-      page.getByLabel("Grading checks on line 4").getByRole("paragraph").filter({ hasText: REGRADE_FINAL_COMMENT })
-    ).toBeVisible();
+    await expect(page.getByLabel("Grading checks on line 4").filter({ hasText: REGRADE_FINAL_COMMENT })).toBeVisible();
     await expect(region.getByText("Submitting your comment...")).not.toBeVisible();
     await page.getByLabel("Grading checks on line 4").getByRole("button", { name: "Decide Appeal" }).click();
     await page.getByRole("spinbutton").fill("100");

@@ -2,11 +2,13 @@
 
 import Roster from "@/components/videocall/roster";
 import VideoGrid from "@/components/videocall/videogrid";
-import useUserProfiles from "@/hooks/useUserProfiles";
+import { useCourseController } from "@/hooks/useCourseController";
 import { useHelpRequest } from "@/hooks/useOfficeHoursRealtime";
 import MeetingControls from "@/lib/aws-chime-sdk-meeting/containers/MeetingControls";
 import { NavigationProvider } from "@/lib/aws-chime-sdk-meeting/providers/NavigationProvider";
 import { VideoTileGridProvider } from "@/lib/aws-chime-sdk-meeting/providers/VideoTileGridProvider";
+import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
+import { createClient } from "@/utils/supabase/client";
 import {
   BackgroundBlurProvider,
   BackgroundReplacementProvider,
@@ -14,17 +16,15 @@ import {
   MeetingProvider,
   UserActivityProvider,
   VoiceFocusProvider,
-  lightTheme,
   darkTheme,
+  lightTheme,
   useMeetingManager
 } from "amazon-chime-sdk-component-library-react";
 import { MeetingSessionConfiguration } from "amazon-chime-sdk-js";
+import { useTheme } from "next-themes";
+import { useParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { StyleSheetManager, ThemeProvider } from "styled-components";
-import { useParams } from "next/navigation";
-import { liveMeetingForHelpRequest } from "@/lib/edgeFunctions";
-import { createClient } from "@/utils/supabase/client";
-import { useTheme } from "next-themes";
 
 const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => {
   const { theme } = useTheme();
@@ -52,7 +52,7 @@ const MeetingProviderWrapper = ({ children }: { children: React.ReactNode }) => 
 
 function HelpMeeting() {
   const meetingManager = useMeetingManager();
-  const { users } = useUserProfiles();
+  const courseController = useCourseController();
   const { help_request_id, course_id } = useParams();
 
   // Use individual hook to monitor help request status
@@ -60,13 +60,13 @@ function HelpMeeting() {
 
   useEffect(() => {
     meetingManager.getAttendee = async (chimeAttendeeId: string, externalUserId?: string) => {
-      const user = users.find((user) => user.id === externalUserId);
+      const user = await courseController.profiles.getByIdAsync(externalUserId as string);
       if (!user) {
         throw new Error("User not found");
       }
       return { chimeAttendeeId, externalUserId, name: user.name! };
     };
-  }, [users, meetingManager]);
+  }, [courseController.profiles, meetingManager]);
 
   const initialized = useRef(false);
 

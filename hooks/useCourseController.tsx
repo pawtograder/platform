@@ -181,7 +181,7 @@ export function useDiscussionThreadReadStatus(threadId: number) {
 
   const setUnread = useCallback(
     (root_threadId: number, threadId: number, isUnread: boolean) => {
-      if (!controller.discussionThreadReadStatus.ready) {
+      if (!controller.discussionThreadReadStatus.ready || readStatus === undefined) {
         return;
       }
       if (readStatus) {
@@ -313,15 +313,16 @@ export class CourseController {
   private _userId: string;
 
   // Lazily created TableController instances to avoid realtime subscription bursts
-  private _profiles?: TableController<"profiles">;
   private _discussionThreadTeasers?: TableController<"discussion_threads">;
   private _discussionThreadReadStatus?: TableController<"discussion_thread_read_status">;
   private _tags?: TableController<"tags">;
   private _labSections?: TableController<"lab_sections">;
   private _labSectionMeetings?: TableController<"lab_section_meetings">;
+  private _profiles?: TableController<"profiles">;
   private _userRolesWithProfiles?: TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">;
 
   constructor(
+    public role: Database["public"]["Enums"]["app_role"],
     public courseId: number,
     client: SupabaseClient<Database>,
     classRealTimeController: ClassRealTimeController,
@@ -330,6 +331,17 @@ export class CourseController {
     this._classRealTimeController = classRealTimeController;
     this._client = client as SupabaseClient<Database>;
     this._userId = userId;
+  }
+
+  /**
+   * Initialize critical TableControllers immediately after construction
+   * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
+   */
+  initializeEagerControllers() {
+    // Create profiles and userRolesWithProfiles immediately
+    // These are accessed frequently and should be ready
+    void this.profiles; // Triggers lazy creation
+    void this.userRolesWithProfiles; // Triggers lazy creation
   }
 
   get classRealTimeController(): ClassRealTimeController {
@@ -621,13 +633,8 @@ export class CourseController {
     };
   }
 
-  getUserProfile(id: string, callback?: UpdateCallback<UserProfileWithPrivateProfile>) {
-    if (callback) {
-      return this.profiles.getById(id, (data) => {
-        if (data) callback(data as UserProfileWithPrivateProfile);
-      });
-    }
-    return this.profiles.getById(id);
+  get isStaff() {
+    return this.role === "instructor" || this.role === "grader";
   }
 
   getUserRole(user_id: string) {
@@ -816,24 +823,24 @@ export class CourseController {
       | TableController<"user_roles", "*, profiles!private_profile_id(*), users(*)">
     > = [];
     if (this._profiles) createdControllers.push(this._profiles);
+    if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
     if (this._discussionThreadTeasers) createdControllers.push(this._discussionThreadTeasers);
     if (this._discussionThreadReadStatus) createdControllers.push(this._discussionThreadReadStatus);
     if (this._tags) createdControllers.push(this._tags);
     if (this._labSections) createdControllers.push(this._labSections);
     if (this._labSectionMeetings) createdControllers.push(this._labSectionMeetings);
-    if (this._userRolesWithProfiles) createdControllers.push(this._userRolesWithProfiles);
     return createdControllers.every((c) => c.ready);
   }
 
   // Close method to clean up TableController instances
   close(): void {
     this._profiles?.close();
+    this._userRolesWithProfiles?.close();
     this._discussionThreadTeasers?.close();
     this._discussionThreadReadStatus?.close();
     this._tags?.close();
     this._labSections?.close();
     this._labSectionMeetings?.close();
-    this._userRolesWithProfiles?.close();
 
     if (this._classRealTimeController) {
       this._classRealTimeController.close();
@@ -972,8 +979,6 @@ export function CourseControllerProvider({
   course_id: number;
   children: React.ReactNode;
 }) {
-  // const controller = useRef<CourseController | null>(null);
-  const client = createClient();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_classRealTimeController, setClassRealTimeController] = useState<ClassRealTimeController | null>(null);
   const [courseController, setCourseController] = useState<CourseController | null>(null);
@@ -983,6 +988,7 @@ export function CourseControllerProvider({
   useEffect(() => {
     if (userId) {
       let cancelled = false;
+      const client = createClient();
       const realTimeController = new ClassRealTimeController({
         client,
         classId: course_id,
@@ -994,17 +1000,24 @@ export function CourseControllerProvider({
       const start = async () => {
         try {
           await realTimeController.start();
-          _courseController = new CourseController(course_id, client, realTimeController, userId);
+
+          _courseController = new CourseController(role, course_id, client, realTimeController, userId);
 
           if (cancelled) {
+            _courseController?.close();
             await realTimeController.close();
             return;
           }
+
+          // Initialize the critical controllers now that everything is stable
+          _courseController.initializeEagerControllers();
+
           setCourseController(_courseController);
           setClassRealTimeController(realTimeController);
         } catch (e) {
           // eslint-disable-next-line no-console
           console.error("Failed to start ClassRealTimeController:", e);
+          _courseController?.close();
           await realTimeController.close();
         }
       };
@@ -1012,11 +1025,11 @@ export function CourseControllerProvider({
 
       return () => {
         cancelled = true;
-        realTimeController.close();
         _courseController?.close();
+        realTimeController.close();
       };
     }
-  }, [client, course_id, profile_id, role, userId]);
+  }, [course_id, profile_id, role, userId]);
 
   if (!courseController) {
     return (

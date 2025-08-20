@@ -296,13 +296,13 @@ This test replicates the exact same API calls as insertSubmissionViaAPI:
 Usage examples:
 
 1. Basic test (5 VUs for 30 seconds):
-   npm run test:k6:http
+   k6 run dist/k6-tests/submissions-api.js
 
 2. Medium load (10 VUs for 60 seconds):
-   k6 run -e SUBMISSION_RATE=10 -e TEST_DURATION=60s dist/k6-tests/db-tps-http.js
+   k6 run dist/k6-tests/submissions-api.js
 
 3. Higher load (20 VUs for 2 minutes):
-   k6 run -e SUBMISSION_RATE=20 -e TEST_DURATION=2m dist/k6-tests/db-tps-http.js
+   k6 run dist/k6-tests/submissions-api.js
 
 Environment variables required:
 - SUPABASE_URL: Your Supabase project URL  

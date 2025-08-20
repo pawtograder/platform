@@ -1,8 +1,7 @@
-import { UserProfile } from "@/utils/supabase/DatabaseTypes";
-import { useList } from "@refinedev/core";
-import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { useCourseController, UserProfileWithPrivateProfile } from "./useCourseController";
+import { useFindTableControllerValue, useTableControllerValueById } from "@/lib/TableController";
+import { UserProfile, UserRoleWithPrivateProfileAndUser } from "@/utils/supabase/DatabaseTypes";
+import { useCallback, useMemo } from "react";
+import { useCourseController } from "./useCourseController";
 
 export function getUserProfile(
   allProfiles: UserProfile[],
@@ -27,21 +26,15 @@ export function useUserProfile(
   | { flair?: string; flair_color?: string; id: string; name: string; avatar_url: string; real_name?: string }
   | undefined {
   const controller = useCourseController();
-  const [profile, setProfile] = useState<UserProfileWithPrivateProfile | undefined>(
-    id ? controller.getUserProfile(id).data : undefined
+  const findFunction = useCallback(
+    (row: UserRoleWithPrivateProfileAndUser) => {
+      return row.private_profile_id === id || row.public_profile_id === id;
+    },
+    [id]
   );
-  useEffect(() => {
-    if (id) {
-      const { data, unsubscribe } = controller.getUserProfile(id, (data) => {
-        setProfile(data);
-      });
-      setProfile(data);
-      return unsubscribe;
-    } else {
-      // Clear profile when id becomes null/undefined
-      setProfile(undefined);
-    }
-  }, [id, controller]);
+  const userRole = useFindTableControllerValue(controller.userRolesWithProfiles, findFunction);
+  const profile = useTableControllerValueById(controller.profiles, id);
+
   const ret = useMemo(() => {
     if (!profile) {
       return undefined;
@@ -52,32 +45,8 @@ export function useUserProfile(
       avatar_url: profile.avatar_url || `https://api.dicebear.com/9.x/identicon/svg?seed=${profile.name}`,
       flair: profile.flair || "",
       flair_color: profile.flair_color || "",
-      real_name: profile.private_profile?.name || ""
+      real_name: userRole?.profiles?.name || ""
     };
-  }, [profile]);
+  }, [profile, userRole]);
   return ret;
-}
-export default function useUserProfiles(): {
-  users: UserProfile[];
-} {
-  const { course_id } = useParams();
-  const { data: userProfiles, isLoading: userProfilesLoading } = useList<UserProfile>({
-    resource: "profiles",
-    queryOptions: {
-      staleTime: Infinity
-    },
-    pagination: {
-      pageSize: 1000
-    },
-    filters: [{ field: "class_id", operator: "eq", value: Number(course_id as string) }],
-    liveMode: "auto"
-  });
-  if (userProfilesLoading) {
-    return {
-      users: []
-    };
-  }
-  return {
-    users: userProfiles?.data || []
-  };
 }

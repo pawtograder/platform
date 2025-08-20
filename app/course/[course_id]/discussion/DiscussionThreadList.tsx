@@ -59,11 +59,12 @@ export const DiscussionThreadTeaser = (props: Props) => {
     return childrenReadStatuses.filter((status) => status.read_at != null).length;
   }, [childrenReadStatuses]);
   const userProfile = useUserProfile(thread?.author);
+  const isUnread = readStatus === null || readStatus?.read_at === null;
   return (
     <Box position="relative" width={props.width || "100%"}>
       <NextLink href={`/course/${thread?.class_id}/discussion/${thread?.id}`} prefetch={true}>
         <Box position="absolute" left="1" top="50%" transform="translateY(-50%)">
-          {!readStatus?.read_at && <Box w="8px" h="8px" bg="blue.500" rounded="full"></Box>}
+          {isUnread && <Box w="8px" h="8px" bg="blue.500" rounded="full"></Box>}
         </Box>
         <HStack
           align="flex-start"
@@ -73,7 +74,7 @@ export const DiscussionThreadTeaser = (props: Props) => {
           _hover={{ bg: "bg.muted" }}
           rounded="md"
           width="100%"
-          bg={!readStatus?.read_at ? "bg.info" : selected ? "bg.muted" : ""}
+          bg={isUnread ? "bg.info" : selected ? "bg.muted" : ""}
         >
           <Box pt="1">
             <Tooltip ids={{ trigger: avatarTriggerId }} openDelay={0} showArrow content={userProfile?.name}>

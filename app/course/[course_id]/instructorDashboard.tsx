@@ -140,7 +140,7 @@ export default async function InstructorDashboard({ course_id }: { course_id: nu
 
   const { data: helpRequests, error: helpRequestsError } = await supabase
     .from("help_requests")
-    .select("*, profiles(*)")
+    .select("*")
     .eq("class_id", course_id)
     .eq("status", "open")
     .order("created_at", { ascending: true });

@@ -181,21 +181,57 @@ export function useFindTableControllerValue<
   predicate: (row: PossiblyTentativeResult<ResultType>) => boolean
 ) {
   const [id, setID] = useState<ExtractIdType<T> | undefined>(undefined);
-  const [value, setValue] = useState<PossiblyTentativeResult<ResultType> | undefined>(undefined);
+  const [value, setValue] = useState<PossiblyTentativeResult<ResultType> | undefined | null>(undefined);
 
   useEffect(() => {
-    if (id) {
-      return;
-    }
-    const { unsubscribe } = controller.list((data) => {
-      const row = data.find((row) => predicate(row as PossiblyTentativeResult<ResultType>));
-      if (row && typeof row === "object" && row !== null && "id" in row) {
-        setID((row as { id: ExtractIdType<T> }).id);
-        setValue(row as PossiblyTentativeResult<ResultType>);
+    // Reset state when controller or predicate changes
+    setID(undefined);
+    setValue(undefined);
+
+    let unsubscribe: (() => void) | undefined;
+    let cleanedUp = false;
+
+    function findValueAndSubscribe() {
+      if (cleanedUp) return;
+
+      const { data, unsubscribe: listUnsubscribe } = controller.list((data) => {
+        if (cleanedUp) return;
+
+        const row = data.find((row) => predicate(row as PossiblyTentativeResult<ResultType>));
+        if (row && typeof row === "object" && row !== null && "id" in row) {
+          setID((row as { id: ExtractIdType<T> }).id);
+          setValue(row as PossiblyTentativeResult<ResultType>);
+        } else {
+          setValue(null);
+        }
+      });
+      const foundItem = data.find((row) => predicate(row as PossiblyTentativeResult<ResultType>));
+      if (foundItem) {
+        setID((foundItem as unknown as { id: ExtractIdType<T> }).id);
+        setValue(foundItem as PossiblyTentativeResult<ResultType>);
+      } else {
+        setValue(null);
       }
-    });
-    return unsubscribe;
-  }, [controller, predicate, id]);
+      unsubscribe = listUnsubscribe;
+    }
+
+    if (!controller.ready) {
+      controller.readyPromise.then(() => {
+        if (!cleanedUp) {
+          findValueAndSubscribe();
+        }
+      });
+    } else {
+      findValueAndSubscribe();
+    }
+
+    return () => {
+      cleanedUp = true;
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [controller, predicate]);
 
   useEffect(() => {
     if (id) {
@@ -208,6 +244,62 @@ export function useFindTableControllerValue<
 
   return value;
 }
+export function useTableControllerValueById<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T> | undefined | null,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(controller: TableController<T, Query, IDType, ResultType>, id: IDType | undefined | null) {
+  const [value, setValue] = useState<PossiblyTentativeResult<ResultType> | undefined | null>(() => {
+    if (id === undefined) {
+      return undefined;
+    }
+    return controller.getById(id as IDType).data;
+  });
+
+  useEffect(() => {
+    if (id === undefined) {
+      return;
+    }
+    const { unsubscribe, data } = controller.getById(id as IDType, (data) => {
+      setValue(data);
+    });
+    // Guards against race!
+    setValue(data);
+    return unsubscribe;
+  }, [controller, id]);
+
+  return value;
+}
+export function useTableControllerTableValues<
+  T extends TablesThatHaveAnIDField,
+  Query extends string = "*",
+  IDType = ExtractIdType<T>,
+  ResultType = GetResult<
+    Database["public"],
+    Database["public"]["Tables"][T]["Row"],
+    T,
+    Database["public"]["Tables"][T]["Relationships"],
+    Query
+  >
+>(controller: TableController<T, Query, IDType, ResultType>): PossiblyTentativeResult<ResultType>[] {
+  const [values, setValues] = useState<PossiblyTentativeResult<ResultType>[]>([]);
+  useEffect(() => {
+    const { unsubscribe, data } = controller.list((data) => {
+      setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
+    });
+    setValues(data.map((row) => row as PossiblyTentativeResult<ResultType>));
+    return unsubscribe;
+  }, [controller]);
+  return values;
+}
+
 export type PossiblyTentativeResult<T> = T & {
   __db_pending?: boolean;
 };
@@ -275,6 +367,10 @@ export default class TableController<
   ) => void)[] = [];
   private _itemDataListeners: Map<IDType, ((data: PossiblyTentativeResult<ResultOne> | undefined) => void)[]> =
     new Map();
+
+  get table() {
+    return this._table;
+  }
 
   get ready() {
     return this._ready;
@@ -410,6 +506,11 @@ export default class TableController<
    * realtime subscriptions were established by the consumer.
    */
   async refetchAll(): Promise<void> {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call refetchAll(). This indicates a stale reference is being used.`
+      );
+    }
     if (this._isRefetching) {
       return;
     }
@@ -541,9 +642,8 @@ export default class TableController<
           const row = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
           if (row) {
             listeners.forEach((listener) => listener(row));
-          } else {
-            listeners.forEach((listener) => listener(undefined));
           }
+          // Don't call listener(undefined) - let the hook keep its initial value if we don't have data yet
         });
         resolve();
       } catch (error) {
@@ -841,38 +941,77 @@ export default class TableController<
   }
 
   private _nonExistantKeys: Set<IDType> = new Set();
-  private _maybeRefetchKey(id: IDType) {
+  private async _maybeRefetchKey(id: IDType) {
     if (!this._ready) {
       return;
     }
     if (this._nonExistantKeys.has(id)) {
       return;
     }
+
     this._nonExistantKeys.add(id);
-    this._fetchRow(id)
-      .then((row) => {
-        if (row) {
-          this._addRow({
-            ...row,
-            __db_pending: false
-          });
-          this._nonExistantKeys.delete(id);
-        }
-      })
-      .catch(() => {
-        // console.error("Error fetching row, will not try again", error);
+
+    const row = await this._fetchRow(id);
+
+    if (row) {
+      this._addRow({
+        ...row,
+        __db_pending: false
       });
+      this._nonExistantKeys.delete(id);
+    }
+    return row;
   }
-  getById(id: IDType, listener?: (data: PossiblyTentativeResult<ResultOne> | undefined) => void) {
+
+  async getByIdAsync(id: IDType) {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call getByIdAsync(${id}). This indicates a stale reference is being used.`
+      );
+    }
     if (id === 0) {
       throw new Error("0 is not a valid ID, ever.");
+    }
+    if (id === undefined) {
+      throw new Error("Undefined ID is not a valid ID, ever.");
     }
     const data = this._rows.find(
       (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
     ) as PossiblyTentativeResult<ResultOne>;
-    if (!data) {
-      this._maybeRefetchKey(id);
+    if (data) {
+      return data;
     }
+    return await this._maybeRefetchKey(id);
+  }
+  getById(id: IDType, listener?: (data: PossiblyTentativeResult<ResultOne> | undefined) => void) {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call getById(${id}). This indicates a stale reference is being used.`
+      );
+    }
+    if (id === 0) {
+      throw new Error("0 is not a valid ID, ever.");
+    }
+    if (id === undefined) {
+      throw new Error("Undefined ID is not a valid ID, ever.");
+    }
+
+    // First try to find the data
+    let data = this._rows.find(
+      (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
+    ) as PossiblyTentativeResult<ResultOne>;
+
+    // If not found and we haven't tried refetching this key yet, try refetching
+    if (!data && !this._nonExistantKeys.has(id)) {
+      this._maybeRefetchKey(id);
+
+      // Try to find it again immediately after triggering refetch
+      // This handles the case where the data was already loaded but not in _rows due to timing issues
+      data = this._rows.find(
+        (row) => (row as ResultOne & { id: ExtractIdType<RelationName> }).id === id
+      ) as PossiblyTentativeResult<ResultOne>;
+    }
+
     if (!listener) {
       return {
         data,
@@ -895,6 +1034,11 @@ export default class TableController<
   }
 
   list(listener?: (data: ResultOne[], { entered, left }: { entered: ResultOne[]; left: ResultOne[] }) => void) {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call list(). This indicates a stale reference is being used.`
+      );
+    }
     if (!listener) {
       return {
         data: this._rows,
@@ -911,6 +1055,11 @@ export default class TableController<
   }
 
   async invalidate(id: IDType) {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call invalidate(${id}). This indicates a stale reference is being used.`
+      );
+    }
     const selectClause = (this._selectForSingleRow as string | undefined) ?? "*";
     const { data, error } = await this._client.from(this._table).select(selectClause).eq("id", id).single();
     if (error) {
@@ -1006,6 +1155,11 @@ export default class TableController<
   async create(
     row: Omit<ResultOne, "id" | "created_at" | "updated_at" | "deleted_at" | "edited_at" | "edited_by">
   ): Promise<ResultOne> {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call create(). This indicates a stale reference is being used.`
+      );
+    }
     const newRow = {
       ...(row as ResultOne),
       created_at: new Date(),
@@ -1042,6 +1196,11 @@ export default class TableController<
   }
 
   async delete(id: ExtractIdType<RelationName>): Promise<void> {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call delete(${id}). This indicates a stale reference is being used.`
+      );
+    }
     const existingRow = this._rows.find((r) => (r as ResultOne & { id: ExtractIdType<RelationName> }).id === id);
     if (!existingRow) {
       throw new Error("Row not found");
@@ -1061,6 +1220,11 @@ export default class TableController<
     return;
   }
   async update(id: IDType, row: Partial<ResultOne>): Promise<ResultOne> {
+    if (this._closed) {
+      throw new Error(
+        `TableController for table '${this._table}' is closed. Cannot call update(${id}). This indicates a stale reference is being used.`
+      );
+    }
     const oldRow = this._rows.find((r) => (r as ResultOne & { id: IDType }).id === id);
     if (!oldRow) {
       throw new Error("Row not found");
