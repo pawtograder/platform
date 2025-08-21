@@ -3481,54 +3481,6 @@ export type Database = {
         };
         Relationships: [];
       };
-      notification_preferences: {
-        Row: {
-          class_id: number;
-          created_at: string;
-          email_digest_frequency: Database["public"]["Enums"]["email_digest_frequency"];
-          help_request_message_notifications: Database["public"]["Enums"]["notification_type"];
-          help_request_notifications: Database["public"]["Enums"]["notification_type"];
-          id: number;
-          updated_at: string | null;
-          user_id: string;
-        };
-        Insert: {
-          class_id: number;
-          created_at?: string;
-          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
-          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
-          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
-          id?: number;
-          updated_at?: string | null;
-          user_id: string;
-        };
-        Update: {
-          class_id?: number;
-          created_at?: string;
-          email_digest_frequency?: Database["public"]["Enums"]["email_digest_frequency"];
-          help_request_message_notifications?: Database["public"]["Enums"]["notification_type"];
-          help_request_notifications?: Database["public"]["Enums"]["notification_type"];
-          id?: number;
-          updated_at?: string | null;
-          user_id?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "notification_preferences_class_id_fkey";
-            columns: ["class_id"];
-            isOneToOne: false;
-            referencedRelation: "classes";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "notification_preferences_user_id_fkey";
-            columns: ["user_id"];
-            isOneToOne: false;
-            referencedRelation: "users";
-            referencedColumns: ["user_id"];
-          }
-        ];
-      };
       notifications: {
         Row: {
           body: Json;
@@ -7905,7 +7857,7 @@ export type Database = {
         Returns: boolean;
       };
       create_all_repos_for_assignment: {
-        Args: { course_id: number; assignment_id: number } | { course_id: number; assignment_id: number };
+        Args: { course_id: number; assignment_id: number };
         Returns: undefined;
       };
       create_help_request_message_notification: {
@@ -8095,10 +8047,6 @@ export type Database = {
         Args: { target_class_id?: number };
         Returns: number;
       };
-      recalculate_gradebook_columns_in_range: {
-        Args: { start_id: number; end_id: number };
-        Returns: undefined;
-      };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
@@ -8174,7 +8122,6 @@ export type Database = {
       assignment_group_join_status: "pending" | "approved" | "rejected" | "withdrawn";
       assignment_group_mode: "individual" | "groups" | "both";
       day_of_week: "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
-      email_digest_frequency: "daily" | "weekly" | "disabled";
       feedback_visibility: "visible" | "hidden" | "after_due_date" | "after_published";
       flashcard_actions:
         | "deck_viewed"
@@ -8189,7 +8136,6 @@ export type Database = {
       help_request_status: "open" | "in_progress" | "resolved" | "closed";
       location_type: "remote" | "in_person" | "hybrid";
       moderation_action_type: "warning" | "temporary_ban" | "permanent_ban";
-      notification_type: "immediate" | "digest" | "disabled";
       regrade_status: "draft" | "opened" | "resolved" | "escalated" | "closed";
       review_round: "self-review" | "grading-review" | "meta-grading-review";
       rubric_check_student_visibility: "always" | "if_released" | "if_applied" | "never";
@@ -8313,7 +8259,6 @@ export const Constants = {
       assignment_group_join_status: ["pending", "approved", "rejected", "withdrawn"],
       assignment_group_mode: ["individual", "groups", "both"],
       day_of_week: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
-      email_digest_frequency: ["daily", "weekly", "disabled"],
       feedback_visibility: ["visible", "hidden", "after_due_date", "after_published"],
       flashcard_actions: [
         "deck_viewed",
@@ -8329,7 +8274,6 @@ export const Constants = {
       help_request_status: ["open", "in_progress", "resolved", "closed"],
       location_type: ["remote", "in_person", "hybrid"],
       moderation_action_type: ["warning", "temporary_ban", "permanent_ban"],
-      notification_type: ["immediate", "digest", "disabled"],
       regrade_status: ["draft", "opened", "resolved", "escalated", "closed"],
       review_round: ["self-review", "grading-review", "meta-grading-review"],
       rubric_check_student_visibility: ["always", "if_released", "if_applied", "never"],
