@@ -36,6 +36,7 @@ export type GraderResultTestData = {
   icon?: string;
   pyret_repl?: PyretReplConfig;
 };
+
 function format_result_output(result: { output: string | null | undefined; output_format: string | null | undefined }) {
   if (result.output === undefined && result.output_format === undefined) {
     return (
@@ -132,59 +133,52 @@ function PyretRepl({
   }, [isExpanded, testId, config.initial_code, config.initial_interactions, config.repl_contents]);
 
   return (
-    <Box>
+    <Box borderWidth="1px" borderRadius="md" borderColor="border.default" overflow="hidden">
       <Box
+        as="button"
         onClick={handleExpand}
+        aria-expanded={isExpanded}
+        width="100%"
+        textAlign="left"
+        bg="bg.muted"
+        _hover={{ bg: "bg.muted" }}
+        _focusVisible={{ outline: "2px solid", outlineColor: "focus" }}
+        px={3}
+        py={2}
         cursor="pointer"
-        p={3}
-        bg="blue.50"
-        border="1px solid"
-        borderColor="blue.200"
-        borderRadius="md"
-        _hover={{ bg: "blue.100" }}
-        transition="background-color 0.2s"
+        display="flex"
+        alignItems="center"
+        justifyContent="space-between"
+        gap={3}
       >
-        <HStack justify="space-between" align="center">
-          <HStack>
-            <Text fontWeight="semibold" color="blue.700">
-              {hidden && (
-                <Text as="span" color="purple.600">
-                  (Instructor-Only){" "}
-                </Text>
-              )}
-              Interactive Pyret REPL
-            </Text>
-            {isLoading && (
-              <HStack>
-                <Spinner size="sm" color="blue.600" />
-                <Text fontSize="sm" color="blue.600">
-                  Loading...
-                </Text>
-              </HStack>
-            )}
-            {error && (
-              <Text fontSize="sm" color="red.600">
-                {error}
+        <HStack gap={3} align="center">
+          <Text fontWeight="semibold" color="fg.emphasized">
+            {hidden && (
+              <Text as="span" color="fg.muted">
+                (Instructor-Only){" "}
               </Text>
             )}
-          </HStack>
-          <Text fontSize="lg" color="blue.600">
-            {isExpanded ? "−" : "+"}
+            Interactive Pyret REPL
           </Text>
+          {isLoading && (
+            <HStack gap={1} color="fg.muted">
+              <Spinner size="xs" />
+              <Text fontSize="xs">Loading...</Text>
+            </HStack>
+          )}
+          {error && !isLoading && (
+            <Text fontSize="xs" color="red.600">
+              {error}
+            </Text>
+          )}
         </HStack>
+        <Text fontSize="lg" color="fg.muted" userSelect="none">
+          {isExpanded ? "−" : "+"}
+        </Text>
       </Box>
       {isExpanded && (
-        <Box mt={2}>
-          <Box
-            height="400px"
-            width="100%"
-            border="1px solid"
-            borderColor="border.default"
-            borderRadius="md"
-            overflow="hidden"
-            position="relative"
-            bg="transparent"
-          >
+        <Box borderTopWidth="1px" borderColor="border.default">
+          <Box height="400px" width="100%" position="relative" bg="bg.canvas" _dark={{ bg: "bg.subtle" }}>
             <Box ref={containerRef} height="100%" width="100%" />
             {isLoading && (
               <Box
@@ -193,13 +187,12 @@ function PyretRepl({
                 display="flex"
                 alignItems="center"
                 justifyContent="center"
-                bg="whiteAlpha.70"
-                _dark={{ bg: "blackAlpha.50" }}
+                bg="bg.overlay"
                 backdropFilter="blur(2px)"
               >
-                <HStack>
-                  <Spinner color="blue.600" />
-                  <Text fontSize="sm" color="blue.700">
+                <HStack gap={2}>
+                  <Spinner size="sm" />
+                  <Text fontSize="sm" color="fg.muted">
                     Initializing REPL...
                   </Text>
                 </HStack>
