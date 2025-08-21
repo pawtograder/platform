@@ -3,6 +3,10 @@ import { all, create, FunctionNode, isArray, MathNode, Matrix } from "mathjs";
 import { minimatch } from "minimatch";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { GradebookController, useGradebookController } from "./useGradebook";
+import TableController from "@/lib/TableController";
+import { Database } from "@/utils/supabase/SupabaseTypes";
+import { createClient } from "@/utils/supabase/client";
+import { CourseController, useCourseController } from "./useCourseController";
 export type ExpressionContext = {
   student_id: string;
   is_private_calculation: boolean;
@@ -50,21 +54,35 @@ function isGradebookColumnStudent(value: unknown): value is GradebookColumnStude
   );
 }
 
+type AssignmentForStudentDashboard = Database["public"]["Views"]["assignments_for_student_dashboard"]["Row"];
 class GradebookWhatIfController {
   private _grades: GradebookWhatIfGradeMap = {};
   private _incompleteValues: GradebookWhatIfIncompleteValuesMap = {};
   private _subscribers: (() => void)[] = [];
   private _gradebookUnsubscribe: (() => void) | null = null;
+  private _assignments: AssignmentForStudentDashboard[] = [];
 
   constructor(
     private gradebookController: GradebookController,
-    private private_profile_id: string
+    private private_profile_id: string,
+    private courseController: CourseController
   ) {
     this.initializeGradebookGrades();
     this.setupGradebookListener();
   }
 
   private initializeGradebookGrades() {
+    //Fetch all assignments for the student with their submissions
+    const client = createClient();
+    client
+      .from("assignments_for_student_dashboard")
+      .select("*")
+      .eq("class_id", this.gradebookController.class_id)
+      .eq("student_user_id", this.courseController.userId)
+      .eq("student_profile_id", this.private_profile_id)
+      .then(({ data }) => {
+        this._assignments = data ?? [];
+      });
     // Initialize with current grades from the gradebook
     const allColumns = this.gradebookController.columns as GradebookColumnWithEntries[];
     for (const column of allColumns) {
@@ -370,14 +388,9 @@ class GradebookWhatIfController {
             const whatIfVal = this.getGrade(column.id);
             if (whatIfVal) return whatIfVal;
           }
-          const submission = this.gradebookController.studentSubmissions
-            .get(this.private_profile_id)
-            ?.find((s) => s.assignment_id === matchingAssignments[0].id);
-          // Type assertion to include total_score
-          const submissionWithScore = submission as typeof submission & { total_score?: number | null };
-
-          if (!submissionWithScore || submissionWithScore.total_score === null) return null;
-          return submissionWithScore.total_score;
+          const assignment = this._assignments.find((a) => a.id === matchingAssignments[0].id);
+          if (!assignment || assignment.total_points === null) return null;
+          return assignment.total_points;
         };
         if (Array.isArray(assignmentSlug)) {
           const ret = assignmentSlug.map(findOne);
@@ -686,11 +699,12 @@ export function GradebookWhatIfProvider({
   private_profile_id: string;
 }) {
   const gradebookController = useGradebookController();
+  const courseController = useCourseController();
   const controllerRef = useRef<GradebookWhatIfController>();
 
   // Initialize controller synchronously if it doesn't exist
   if (!controllerRef.current) {
-    controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id);
+    controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id, courseController);
   }
 
   // Cleanup and reinitialize when private_profile_id changes
@@ -698,7 +712,7 @@ export function GradebookWhatIfProvider({
     // If private_profile_id changed, cleanup and create new controller
     if (controllerRef.current) {
       controllerRef.current.cleanup();
-      controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id);
+      controllerRef.current = new GradebookWhatIfController(gradebookController, private_profile_id, courseController);
     }
 
     return () => {
@@ -706,7 +720,7 @@ export function GradebookWhatIfProvider({
         controllerRef.current.cleanup();
       }
     };
-  }, [private_profile_id, gradebookController]);
+  }, [private_profile_id, gradebookController, courseController]);
 
   return <GradebookWhatIfContext.Provider value={controllerRef.current}>{children}</GradebookWhatIfContext.Provider>;
 }
