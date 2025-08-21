@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
@@ -11,9 +11,10 @@ interface SISClass {
   class_id: number;
   class_name: string;
   term: string;
-  year: number;
   sis_sections_count: number;
-  last_sync_attempt: string | null;
+  last_sync_time: string | null;
+  last_sync_status: string | null;
+  last_sync_message: string | null;
   sync_enabled: boolean;
   total_invitations: number;
   pending_invitations: number;
@@ -26,9 +27,9 @@ export default function SISSyncPage() {
   const [syncingClassId, setSyncingClassId] = useState<number | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
 
-  const supabase = createClient();
 
-  const loadSISStatus = async () => {
+  const loadSISStatus = useCallback(async () => {
+    const supabase = createClient();
     setIsLoading(true);
     try {
       const { data, error } = await supabase.rpc("admin_get_sis_sync_status");
@@ -44,9 +45,10 @@ export default function SISSyncPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const triggerSync = async (classId?: number) => {
+  const triggerSync = useCallback(async (classId?: number) => {
+    const supabase = createClient();
     if (classId) {
       setSyncingClassId(classId);
     } else {
@@ -78,9 +80,10 @@ export default function SISSyncPage() {
       setSyncingClassId(null);
       setSyncingAll(false);
     }
-  };
+  }, [loadSISStatus]);
 
-  const toggleSyncEnabled = async (classId: number, enabled: boolean) => {
+  const toggleSyncEnabled = useCallback(async (classId: number, enabled: boolean) => {
+    const supabase = createClient();
     try {
       const { error } = await supabase.rpc("admin_set_sis_sync_enabled", {
         p_class_id: classId,
@@ -103,11 +106,11 @@ export default function SISSyncPage() {
         type: "error"
       });
     }
-  };
+  }, [loadSISStatus]);
 
   useEffect(() => {
     loadSISStatus();
-  }, []);
+  }, [loadSISStatus]);
 
   const formatLastSync = (dateString: string | null) => {
     if (!dateString) return "Never";
@@ -122,6 +125,17 @@ export default function SISSyncPage() {
       return `${Math.floor(diffMinutes / 60)} hours ago`;
     } else {
       return `${Math.floor(diffMinutes / 1440)} days ago`;
+    }
+  };
+
+  const getSyncStatusColor = (status: string | null) => {
+    if (!status) return "gray";
+    switch (status) {
+      case "success": return "green";
+      case "error": return "red";
+      case "enabled": return "blue";
+      case "disabled": return "orange";
+      default: return "gray";
     }
   };
 
@@ -236,7 +250,7 @@ export default function SISSyncPage() {
                     </Table.Cell>
                     <Table.Cell>
                       <Text fontWeight="medium">
-                        {class_.term} {class_.year}
+                        {class_.term}
                       </Text>
                     </Table.Cell>
                     <Table.Cell>
@@ -262,17 +276,35 @@ export default function SISSyncPage() {
                       </VStack>
                     </Table.Cell>
                     <Table.Cell>
-                      <Badge
-                        colorPalette={class_.sync_enabled ? "green" : "orange"}
-                        variant={class_.sync_enabled ? "solid" : "outline"}
-                      >
-                        {class_.sync_enabled ? "Enabled" : "Disabled"}
-                      </Badge>
+                      <VStack align="start" gap={1}>
+                        <Badge
+                          colorPalette={class_.sync_enabled ? "green" : "orange"}
+                          variant={class_.sync_enabled ? "solid" : "outline"}
+                        >
+                          {class_.sync_enabled ? "Enabled" : "Disabled"}
+                        </Badge>
+                        {class_.last_sync_status && (
+                          <Badge 
+                            size="sm"
+                            colorPalette={getSyncStatusColor(class_.last_sync_status)}
+                            variant="subtle"
+                          >
+                            {class_.last_sync_status}
+                          </Badge>
+                        )}
+                      </VStack>
                     </Table.Cell>
                     <Table.Cell>
-                      <Text fontSize="sm" color="fg.muted">
-                        {formatLastSync(class_.last_sync_attempt)}
-                      </Text>
+                      <VStack align="start" gap={1}>
+                        <Text fontSize="sm" color="fg.muted">
+                          {formatLastSync(class_.last_sync_time)}
+                        </Text>
+                        {class_.last_sync_message && (
+                          <Text fontSize="xs" color="fg.subtle" maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+                            {class_.last_sync_message}
+                          </Text>
+                        )}
+                      </VStack>
                     </Table.Cell>
                     <Table.Cell>
                       <HStack gap={2}>
@@ -316,7 +348,7 @@ export default function SISSyncPage() {
               <strong>Automatic Sync:</strong> Runs every hour at :15 minutes past the hour for all enabled classes
             </Text>
             <Text>
-              <strong>Manual Sync:</strong> Click "Sync Now" to immediately sync a specific class
+              <strong>Manual Sync:</strong> Click &quot;Sync Now&quot; to immediately sync a specific class
             </Text>
             <Text>
               <strong>Sync Process:</strong>

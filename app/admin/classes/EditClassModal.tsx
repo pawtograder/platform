@@ -75,12 +75,11 @@ export default function EditClassModal({ class_, open, onOpenChange, onClassUpda
         onClassUpdated({
           ...class_,
           name: formData.name.trim(),
-          term: formData.term.trim(),
+          term: Number(formData.term.trim() || 0),
           description: formData.description.trim() || "",
           github_org_name: formData.github_org_name.trim() || "",
           github_template_prefix: formData.github_template_prefix.trim() || "",
           created_at: class_.created_at,
-          updated_at: new Date().toISOString(),
           student_count: class_.student_count,
           instructor_count: class_.instructor_count,
           archived: class_.archived

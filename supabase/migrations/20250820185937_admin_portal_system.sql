@@ -142,11 +142,10 @@ BEGIN
         term = COALESCE(p_term, term),
         description = COALESCE(p_description, description),
         github_org = COALESCE(p_github_org_name, github_org),
-        github_template_prefix = COALESCE(p_github_template_prefix, slug),
+        slug = COALESCE(p_github_template_prefix, slug),
         course_title = COALESCE(p_course_title, course_title),
         start_date = COALESCE(p_start_date, start_date),
-        end_date = COALESCE(p_end_date, end_date),
-        updated_at = now()
+        end_date = COALESCE(p_end_date, end_date)
     WHERE id = p_class_id;
 
     RETURN true;
@@ -172,8 +171,7 @@ BEGIN
 
     -- Soft delete by setting archived (assuming this field exists, otherwise we can add it)
     UPDATE public.classes SET
-        archived = true,
-        updated_at = now()
+        archived = true
     WHERE id = p_class_id;
 
     RETURN true;
@@ -185,12 +183,11 @@ CREATE OR REPLACE FUNCTION admin_get_classes()
 RETURNS TABLE (
     id bigint,
     name text,
-    term text,
+    term integer,
     description text,
     github_org_name text,
     github_template_prefix text,
     created_at timestamptz,
-    updated_at timestamptz,
     student_count bigint,
     instructor_count bigint,
     archived boolean
@@ -210,7 +207,6 @@ BEGIN
         c.github_org as github_org_name,
         c.slug as github_template_prefix,
         c.created_at,
-        c.updated_at,
         COALESCE(student_counts.student_count, 0) as student_count,
         COALESCE(instructor_counts.instructor_count, 0) as instructor_count,
         COALESCE(c.archived, false) as archived
@@ -281,6 +277,24 @@ BEGIN
     )
     RETURNING id INTO v_section_id;
 
+    -- Create initial SIS sync status record if SIS CRN is provided
+    IF p_sis_crn IS NOT NULL THEN
+        INSERT INTO public.sis_sync_status (
+            course_id,
+            course_section_id,
+            last_sync_status,
+            last_sync_message,
+            sync_enabled
+        )
+        VALUES (
+            p_class_id,
+            v_section_id,
+            'created',
+            'Section created with SIS CRN - ready for sync',
+            true
+        );
+    END IF;
+
     RETURN v_section_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -346,6 +360,24 @@ BEGIN
         now()
     )
     RETURNING id INTO v_section_id;
+
+    -- Create initial SIS sync status record if SIS CRN is provided
+    IF p_sis_crn IS NOT NULL THEN
+        INSERT INTO public.sis_sync_status (
+            course_id,
+            lab_section_id,
+            last_sync_status,
+            last_sync_message,
+            sync_enabled
+        )
+        VALUES (
+            p_class_id,
+            v_section_id,
+            'created',
+            'Lab section created with SIS CRN - ready for sync',
+            true
+        );
+    END IF;
 
     RETURN v_section_id;
 END;

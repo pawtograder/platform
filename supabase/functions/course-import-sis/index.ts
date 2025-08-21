@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { wrapRequestHandler, UserVisibleError } from "../_shared/HandlerUtils.ts";
 import type { Database } from "../_shared/SupabaseTypes.d.ts";
 import { createInvitationsBulk, type InvitationRequest } from "../_shared/InvitationUtils.ts";
@@ -130,9 +130,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
     .from("classes")
     .select(
       `
-      id, name, term, year,
-      class_sections!inner(sis_crn),
-      lab_sections!inner(sis_crn)
+      id, name, term,
+      class_sections!inner(id, sis_crn),
+      lab_sections!inner(id, sis_crn)
     `
     )
     .not("class_sections.sis_crn", "is", null);
@@ -163,15 +163,42 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
   // Process each class
   for (const classData of sisLinkedClasses) {
     try {
-      // Get all CRNs for this class
+
+      // Check if sync is enabled for sections in this class
+      const { data: syncStatus } = await adminSupabase
+        .from("sis_sync_status")
+        .select("sync_enabled, course_section_id, lab_section_id")
+        .eq("course_id", classData.id);
+
+      // Get enabled sections only
+      const enabledClassSections = classData.class_sections.filter(s => {
+        const status = syncStatus?.find(ss => ss.course_section_id === s.id);
+        return status ? status.sync_enabled : true; // Default to enabled if no status record
+      });
+
+      const enabledLabSections = classData.lab_sections.filter(s => {
+        const status = syncStatus?.find(ss => ss.lab_section_id === s.id);
+        return status ? status.sync_enabled : true; // Default to enabled if no status record
+      });
+
+      if (enabledClassSections.length === 0 && enabledLabSections.length === 0) {
+        scope?.addBreadcrumb({
+          message: `All sections disabled for class ${classData.name}`,
+          category: "info",
+          data: { classId: classData.id }
+        });
+        continue;
+      }
+
+      // Get all CRNs for enabled sections only
       const allCRNs = [
-        ...classData.class_sections.map((s) => s.sis_crn).filter((crn) => crn !== null),
-        ...classData.lab_sections.map((s) => s.sis_crn).filter((crn) => crn !== null)
+        ...enabledClassSections.map((s) => s.sis_crn).filter((crn) => crn !== null),
+        ...enabledLabSections.map((s) => s.sis_crn).filter((crn) => crn !== null)
       ];
 
       // Fetch current rosters for all CRNs
       const rosterPromises = allCRNs.map(async (crn) => {
-        const response = await fetch(`${SIS_API_URL}/roster/?semester=${semesterCode}&crn=${crn}`, {
+        const response = await fetch(`${SIS_API_URL}/roster/?semester=${classData.term}&crn=${crn}`, {
           headers: { Authorization: `Token ${SIS_AUTH_TOKEN}` }
         });
 
@@ -186,7 +213,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           );
         }
 
-        const data = await response.json();
+        const data = await response.json() as SISRosterResponse;
         return { crn, roster: data[crn.toString()] };
       });
 
@@ -222,8 +249,8 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       rosterResults.forEach(({ crn, roster }) => {
         if (!roster) return;
 
-        // Determine section type based on original class structure
-        const isClassSection = classData.class_sections.some((s) => s.sis_crn === crn);
+        // Determine section type based on enabled sections
+        const isClassSection = enabledClassSections.some((s) => s.sis_crn === crn);
         const sectionType = isClassSection ? "class" : "lab";
 
         sisEnrollmentByCRN.set(crn, {
@@ -256,7 +283,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const { data: currentEnrollments } = await adminSupabase
         .from("user_roles")
         .select(
-          "id, sis_user_id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)"
+          "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)"
         )
         .eq("class_id", classData.id)
         .not("users.sis_user_id", "is", null);
@@ -417,9 +444,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           scope?.addBreadcrumb({
             message: `Error in invitation creation`,
             category: "error",
-            data: { classId: classData.id, error: error.message }
+            data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
           });
-          throw new UserVisibleError(`Failed to create invitations: ${error.message || error}`);
+          throw new UserVisibleError(`Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
@@ -546,6 +573,51 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         }
       }
 
+      // Update sync status for all processed sections
+      const syncMessage = `Synced ${rosterResults.length} sections. New invitations: ${newInvitationsCount}, Expired: ${expiredInvitationsCount}, Re-enabled: ${reenabledUsersCount}`;
+      
+      // Update status for class sections
+      for (const section of enabledClassSections) {
+        if (rosterResults.some(r => r.crn === section.sis_crn)) {
+          try {
+            await adminSupabase.rpc("update_sis_sync_status", {
+              p_course_id: classData.id,
+              p_course_section_id: section.id,
+              p_sync_status: "success",
+              p_sync_message: syncMessage
+            });
+          } catch (statusError) {
+            errorCount++;
+            scope?.addBreadcrumb({
+              message: `Failed to update sync status for class section ${section.id}`,
+              category: "warning",
+              data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
+            });
+          }
+        }
+      }
+
+      // Update status for lab sections
+      for (const section of enabledLabSections) {
+        if (rosterResults.some(r => r.crn === section.sis_crn)) {
+          try {
+            await adminSupabase.rpc("update_sis_sync_status", {
+              p_course_id: classData.id,
+              p_lab_section_id: section.id,
+              p_sync_status: "success",
+              p_sync_message: syncMessage
+            });
+          } catch (statusError) {
+            errorCount++;
+            scope?.addBreadcrumb({
+              message: `Failed to update sync status for lab section ${section.id}`,
+              category: "warning",
+              data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
+            });
+          }
+        }
+      }
+
       scope?.addBreadcrumb({
         message: `Synced class ${classData.name}`,
         category: "success",
@@ -562,10 +634,51 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       syncedCount++;
     } catch (error) {
+      // Update sync status for all sections with error
+      const errorMessage = `Sync failed: ${error instanceof Error ? error.message : String(error)}`;
+      
+      // Update status for class sections
+      for (const section of classData.class_sections) {
+        try {
+          await adminSupabase.rpc("update_sis_sync_status", {
+            p_course_id: classData.id,
+            p_course_section_id: section.id,
+            p_sync_status: "error",
+            p_sync_message: errorMessage
+          });
+        } catch (statusError) {
+          scope?.addBreadcrumb({
+            message: `Failed to update error status for class section ${section.id}`,
+            category: "warning",
+            data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
+          });
+          errorCount++;
+        }
+      }
+
+      // Update status for lab sections
+      for (const section of classData.lab_sections) {
+        try {
+          await adminSupabase.rpc("update_sis_sync_status", {
+            p_course_id: classData.id,
+            p_lab_section_id: section.id,
+            p_sync_status: "error",
+            p_sync_message: errorMessage
+          });
+        } catch (statusError) {
+          scope?.addBreadcrumb({
+            message: `Failed to update error status for lab section ${section.id}`,
+            category: "warning",
+            data: { error: statusError instanceof Error ? statusError.message : String(statusError) }
+          });
+          errorCount++;
+        }
+      }
+
       scope?.addBreadcrumb({
         message: `Failed to sync class ${classData.name}`,
         category: "error",
-        data: { classId: classData.id, error: error.message }
+        data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
       });
       errorCount++;
     }
@@ -635,8 +748,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     EdgeRuntime.waitUntil(syncHandler());
 
     return {
-      message: "SIS sync started in background",
-      classId: classId || "all"
+      message: "SIS sync started in background"
     };
   }
 
@@ -889,7 +1001,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     };
   } catch (error) {
     scope?.captureException(error);
-    throw error instanceof UserVisibleError ? error : new UserVisibleError(`Import failed: ${error.message}`);
+    throw error instanceof UserVisibleError ? error : new UserVisibleError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
