@@ -53,24 +53,37 @@ CREATE POLICY "Admin users can update sync status" ON "public"."sis_sync_status"
 -- 2. Create function to trigger SIS sync via edge function
 CREATE OR REPLACE FUNCTION trigger_sis_sync(p_class_id bigint DEFAULT NULL)
 RETURNS json AS $$
-DECLARE
-    sync_result json;
 BEGIN
-    -- Call the edge function to sync SIS data
-    SELECT content INTO sync_result
-    FROM call_edge_function_internal(
-        'course-import-sis',
+    -- Call the edge function to sync SIS data asynchronously
+    PERFORM public.call_edge_function_internal(
+        '/functions/v1/course-import-sis',
         'POST',
-        '{"x-edge-function-secret": "' || current_setting('app.edge_function_secret', true) || '"}',
+        '{"Content-type":"application/json","x-supabase-webhook-source":"sis_sync"}'::jsonb,
         CASE 
             WHEN p_class_id IS NOT NULL THEN 
-                json_build_object('classId', p_class_id::text)
+                json_build_object('classId', p_class_id::text)::jsonb
             ELSE 
-                '{}'::json
-        END
+                '{}'::jsonb
+        END, 
+        5000,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
     );
     
-    RETURN sync_result;
+    -- Return success message since the function is asynchronous
+    RETURN json_build_object(
+        'success', true,
+        'message', CASE 
+            WHEN p_class_id IS NOT NULL THEN 
+                'SIS sync triggered for class ' || p_class_id::text
+            ELSE 
+                'SIS sync triggered for all classes'
+        END,
+        'timestamp', now()
+    );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -140,14 +153,11 @@ BEGIN
         c.id as class_id,
         c.name as class_name,
         c.term,
-        (
-            (SELECT COUNT(*) FROM public.class_sections cs WHERE cs.class_id = c.id AND cs.sis_crn IS NOT NULL) +
-            (SELECT COUNT(*) FROM public.lab_sections ls WHERE ls.class_id = c.id AND ls.sis_crn IS NOT NULL)
-        ) as sis_sections_count,
+        sync_summary.sis_sections_count,
         sync_summary.last_sync_time,
         sync_summary.last_sync_status,
         sync_summary.last_sync_message,
-        NOT COALESCE(c.archived, false) as sync_enabled,
+        COALESCE(sync_summary.sync_enabled, false) as sync_enabled,
         COALESCE(invite_stats.total_invitations, 0) as total_invitations,
         COALESCE(invite_stats.pending_invitations, 0) as pending_invitations,
         COALESCE(invite_stats.expired_invitations, 0) as expired_invitations
@@ -164,6 +174,7 @@ BEGIN
     LEFT JOIN (
         SELECT 
             sss.course_id,
+            COUNT(*) as sis_sections_count,
             MAX(sss.last_sync_time) as last_sync_time,
             -- Get the most recent sync status (from the row with latest last_sync_time)
             (SELECT sss2.last_sync_status FROM public.sis_sync_status sss2 
@@ -174,42 +185,52 @@ BEGIN
             (SELECT sss2.last_sync_message FROM public.sis_sync_status sss2 
              WHERE sss2.course_id = sss.course_id 
              ORDER BY sss2.last_sync_time DESC NULLS LAST 
-             LIMIT 1) as last_sync_message
+             LIMIT 1) as last_sync_message,
+            -- Class is sync enabled if ANY section has sync enabled AND class is not archived
+            (BOOL_OR(sss.sync_enabled) AND NOT COALESCE(c_inner.archived, false)) as sync_enabled
         FROM public.sis_sync_status sss
-        GROUP BY sss.course_id
+        INNER JOIN public.classes c_inner ON c_inner.id = sss.course_id
+        GROUP BY sss.course_id, c_inner.archived
     ) sync_summary ON c.id = sync_summary.course_id
-    WHERE EXISTS (
-        SELECT 1 FROM public.class_sections cs 
-        WHERE cs.class_id = c.id AND cs.sis_crn IS NOT NULL
-    )
-    OR EXISTS (
-        SELECT 1 FROM public.lab_sections ls 
-        WHERE ls.class_id = c.id AND ls.sis_crn IS NOT NULL
-    )
+    WHERE sync_summary.course_id IS NOT NULL  -- Only show classes that have SIS sync status records
     ORDER BY c.term DESC, c.name;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6. Create function to enable/disable SIS sync for a class (by archiving/unarchiving)
+-- 6. Create function to enable/disable SIS sync for all sections in a class
 CREATE OR REPLACE FUNCTION admin_set_sis_sync_enabled(
     p_class_id bigint,
     p_enabled boolean,
     p_admin_user_id uuid DEFAULT auth.uid()
 )
 RETURNS boolean AS $$
+DECLARE
+    v_updated_count integer;
 BEGIN
     -- Check admin authorization
     IF NOT authorize_for_admin(p_admin_user_id) THEN
         RAISE EXCEPTION 'Access denied: Admin role required';
     END IF;
 
-    -- Enable/disable by archiving/unarchiving the class
-    UPDATE public.classes SET
-        archived = NOT p_enabled,
-        updated_at = now()
-    WHERE classes.id = p_class_id;
+    -- Update sync_enabled for all sync status records for this class
+    UPDATE public.sis_sync_status SET
+        sync_enabled = p_enabled,
+        last_sync_status = CASE WHEN p_enabled THEN 'enabled' ELSE 'disabled' END,
+        last_sync_time = now(),
+        last_sync_message = CASE 
+            WHEN p_enabled THEN 'Sync enabled for all sections by admin' 
+            ELSE 'Sync disabled for all sections by admin' 
+        END
+    WHERE course_id = p_class_id;
 
-    RETURN FOUND;
+    GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+
+    -- If no sync status records exist, this class doesn't have SIS sections
+    IF v_updated_count = 0 THEN
+        RAISE EXCEPTION 'No SIS sync status records found for class %', p_class_id;
+    END IF;
+
+    RETURN true;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -339,7 +360,7 @@ COMMENT ON TABLE sis_sync_status IS 'Tracks SIS sync status and history for clas
 COMMENT ON FUNCTION trigger_sis_sync IS 'Triggers SIS enrollment sync via edge function. Can sync all classes or specific class.';
 COMMENT ON FUNCTION admin_trigger_sis_sync IS 'Admin-only function to manually trigger SIS sync';
 COMMENT ON FUNCTION admin_get_sis_sync_status IS 'Gets status of all SIS-linked classes for admin monitoring';
-COMMENT ON FUNCTION admin_set_sis_sync_enabled IS 'Enables/disables SIS sync for a class by archiving/unarchiving';
+COMMENT ON FUNCTION admin_set_sis_sync_enabled IS 'Enables/disables SIS sync for all sections in a class by updating sync_enabled flags';
 COMMENT ON FUNCTION update_sis_sync_status IS 'Updates or creates SIS sync status record for a section. Used by edge functions.';
 COMMENT ON FUNCTION admin_set_section_sync_enabled IS 'Admin function to enable/disable sync for specific class or lab sections';
 

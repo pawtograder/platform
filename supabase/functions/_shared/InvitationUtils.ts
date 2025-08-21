@@ -3,7 +3,15 @@ import type { Database } from "./SupabaseTypes.d.ts";
 import { UserVisibleError } from "./HandlerUtils.ts";
 import * as Sentry from "npm:@sentry/deno";
 import Bottleneck from "npm:bottleneck@2.19.5";
-
+if (Deno.env.get("SENTRY_DSN")) {
+  Sentry.init({
+    dsn: Deno.env.get("SENTRY_DSN")!,
+    release: Deno.env.get("RELEASE_VERSION") || Deno.env.get("GIT_COMMIT_SHA") || Deno.env.get("SUPABASE_URL")!,
+    sendDefaultPii: true,
+    integrations: [],
+    tracesSampleRate: 0
+  });
+}
 // Types for invitation processing
 export interface InvitationRequest {
   sis_user_id: string;
@@ -172,19 +180,22 @@ async function processInvitation(
       p_class_id: courseId,
       p_role: invitation.role as Database["public"]["Enums"]["app_role"],
       p_sis_user_id: invitation.sis_user_id,
-      p_email: invitation.email || null,
-      p_name: invitation.name || null,
+      p_email: invitation.email || undefined,
+      p_name: invitation.name || undefined,
       p_invited_by: invitedByUserId,
-      p_class_section_id: invitation.class_section_id || null,
-      p_lab_section_id: invitation.lab_section_id || null
+      p_class_section_id: invitation.class_section_id || undefined,
+      p_lab_section_id: invitation.lab_section_id || undefined
     });
 
     if (invitationError) {
-      scope?.addBreadcrumb({
-        message: `Error creating invitation for ${invitation.sis_user_id}`,
-        category: "error",
-        data: { error: invitationError.message }
-      });
+      const localScope = scope?.clone();
+      localScope?.setTag("sis_user_id", invitation.sis_user_id);
+      localScope?.setTag("role", invitation.role);
+      localScope?.setTag("class_id", courseId);
+      localScope?.setTag("invited_by", invitedByUserId);
+      localScope?.setTag("class_section_id", invitation.class_section_id);
+      localScope?.setTag("lab_section_id", invitation.lab_section_id);
+      Sentry.captureMessage(`Error creating invitation: ${invitationError.message}`, localScope);
       return {
         success: false,
         error: {
@@ -215,11 +226,14 @@ async function processInvitation(
       .single();
 
     if (fetchError) {
-      scope?.addBreadcrumb({
-        message: `Error fetching created invitation for ${invitation.sis_user_id}`,
-        category: "error",
-        data: { error: fetchError.message }
-      });
+      const localScope = scope?.clone();
+      localScope?.setTag("sis_user_id", invitation.sis_user_id);
+      localScope?.setTag("role", invitation.role);
+      localScope?.setTag("class_id", courseId);
+      localScope?.setTag("invited_by", invitedByUserId);
+      localScope?.setTag("class_section_id", invitation.class_section_id);
+      localScope?.setTag("lab_section_id", invitation.lab_section_id);
+      Sentry.captureMessage(`Error fetching created invitation: ${fetchError.message}`, localScope);
       return {
         success: false,
         error: {
@@ -251,16 +265,12 @@ async function processInvitation(
       }
     };
   } catch (error) {
-    scope?.addBreadcrumb({
-      message: `Error processing invitation for ${invitation.sis_user_id}`,
-      category: "error",
-      data: { error: error.message }
-    });
+    Sentry.captureException(error, scope);
     return {
       success: false,
       error: {
         sis_user_id: invitation.sis_user_id,
-        error: error.message
+        error: error instanceof Error ? error.message : String(error)
       }
     };
   }

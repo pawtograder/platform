@@ -1377,7 +1377,7 @@ export default function CourseImportPage() {
                       </Box>
 
                       <Text fontSize="xs" color="blue.fg" textAlign="center">
-                        Please wait while invitations are processed in batches of 100...
+                        Please wait while invitations are processed in batches of 50...
                       </Text>
                     </VStack>
                   </Box>

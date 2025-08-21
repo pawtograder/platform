@@ -7,11 +7,10 @@ import { redirect } from "next/navigation";
 export const confirmEmailAction = async (formData: FormData) => {
   const token_hash = formData.get("token_hash");
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.verifyOtp({
+  const { error } = await supabase.auth.verifyOtp({
     token_hash: token_hash as string,
     type: "email"
   });
-  console.log(data);
   if (error) {
     return encodedRedirect("error", "/auth/confirm", error.message);
   }
@@ -146,6 +145,16 @@ export const signInWithMicrosoftAction = async () => {
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
+  //Check and see if the user already has a SIS_USER_ID, if not, invoke the edge function to get from AzureAD
+  const { data: user } = await supabase.auth.getUser();
+  const { data: userData } = await supabase.from("users").select("*").eq("id", user.user?.id).single();
+  if (!userData?.sis_user_id) {
+    const { data, error } = await supabase.rpc("trigger_sis_sync");
+    if (error) {
+      return encodedRedirect("error", "/sign-in", error.message);
+    }
+  }
+
   if (data.url) {
     console.log(`Redirecting to ${data.url}`);
     return redirect(data.url);

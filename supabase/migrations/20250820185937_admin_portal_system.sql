@@ -5,6 +5,11 @@
 CREATE OR REPLACE FUNCTION authorize_for_admin(p_user_id uuid DEFAULT auth.uid())
 RETURNS boolean AS $$
 BEGIN
+    -- Allow service role (for edge functions)
+    IF auth.role() = 'service_role' THEN
+        RETURN true;
+    END IF;
+    
     -- Check if user has admin role in any class
     RETURN EXISTS (
         SELECT 1 FROM public.user_roles ur
@@ -900,10 +905,15 @@ begin
 end;
 $$;
 
--- Update authorize_for_admin function to check disabled status
+-- Update authorize_for_admin function to check disabled status and allow service role
 CREATE OR REPLACE FUNCTION authorize_for_admin(p_user_id uuid DEFAULT auth.uid())
 RETURNS boolean AS $$
 BEGIN
+    -- Allow service role (for edge functions)
+    IF auth.role() = 'service_role' THEN
+        RETURN true;
+    END IF;
+    
     -- Check if user has admin role in any class and is not disabled
     RETURN EXISTS (
         SELECT 1 FROM public.user_roles ur

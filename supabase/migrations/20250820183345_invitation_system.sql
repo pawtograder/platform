@@ -162,7 +162,7 @@ DECLARE
 BEGIN
     -- Validate that the calling user is an instructor for this class or admin
     -- This function checks instructor role OR admin role globally, and respects disabled status
-    IF NOT authorizeforclassinstructor(p_class_id) THEN
+    IF NOT (authorizeforclassinstructor(p_class_id) OR authorize_for_admin()) THEN
         RAISE EXCEPTION 'Only instructors or admins can create invitations for this class';
     END IF;
 

@@ -112,6 +112,7 @@ interface CourseImportResponse {
 async function syncSISClasses(supabase: SupabaseClient<Database>, classId: number | null, scope: Sentry.Scope) {
   scope?.setTag("function", "sis-sync");
 
+  console.log("Syncing SIS classes");
   const adminSupabase = createClient<Database>(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -278,7 +279,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const { data: currentInvitations } = await adminSupabase
         .from("invitations")
         .select("id, sis_user_id, role, status, class_section_id, lab_section_id")
-        .eq("class_id", classData.id);
+        .eq("class_id", classData.id).limit(1000);
 
       const { data: currentEnrollments } = await adminSupabase
         .from("user_roles")
@@ -286,7 +287,8 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)"
         )
         .eq("class_id", classData.id)
-        .not("users.sis_user_id", "is", null);
+        .not("users.sis_user_id", "is", null)
+        .limit(1000);
 
       // Step 3: Build current state maps
       const currentInvitationsBySIS = new Map((currentInvitations || []).map((inv) => [inv.sis_user_id, inv]));
@@ -405,6 +407,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             data: { classId: classData.id, count: newInvitations.length }
           });
 
+          console.log("Creating invitations", newInvitations);
           // Use shared utility to create all invitations at once (no batching needed)
           const inviteResult = await createInvitationsBulk(
             supabase, //Act as user!
@@ -439,6 +442,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
                 sampleErrors: inviteResult.errors.slice(0, 5) // Include first 5 errors for context
               }
             });
+            Sentry.captureMessage(`SIS Import: ${inviteResult.errors.length} invitation errors encountered`, scope);
           }
         } catch (error) {
           scope?.addBreadcrumb({
@@ -446,6 +450,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             category: "error",
             data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
           });
+          Sentry.captureMessage(`Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`, scope);
           throw new UserVisibleError(`Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
@@ -575,7 +580,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       // Update sync status for all processed sections
       const syncMessage = `Synced ${rosterResults.length} sections. New invitations: ${newInvitationsCount}, Expired: ${expiredInvitationsCount}, Re-enabled: ${reenabledUsersCount}`;
-      
+
       // Update status for class sections
       for (const section of enabledClassSections) {
         if (rosterResults.some(r => r.crn === section.sis_crn)) {
@@ -636,7 +641,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
     } catch (error) {
       // Update sync status for all sections with error
       const errorMessage = `Sync failed: ${error instanceof Error ? error.message : String(error)}`;
-      
+
       // Update status for class sections
       for (const section of classData.class_sections) {
         try {
@@ -735,7 +740,6 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
 
     const syncHandler = async () => {
       try {
-        //TODO will throw error because validates auth.uid()
         const result = await syncSISClasses(adminSupabase, classId ? parseInt(classId) : null, scope);
         scope?.setContext("sync_result", result);
       } catch (error) {
@@ -1025,7 +1029,6 @@ async function routeRequest(req: Request, scope: Sentry.Scope) {
     );
     const syncHandler = async () => {
       try {
-        //TODO will throw error because validates auth.uid()
         const result = await syncSISClasses(adminSupabase, classId ? parseInt(classId) : null, scope);
         scope?.setContext("sync_result", result);
       } catch (error) {

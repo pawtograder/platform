@@ -300,7 +300,7 @@ export default function SISSyncPage() {
                           {formatLastSync(class_.last_sync_time)}
                         </Text>
                         {class_.last_sync_message && (
-                          <Text fontSize="xs" color="fg.subtle" maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+                          <Text fontSize="xs" color="fg.subtle" maxW="200px">
                             {class_.last_sync_message}
                           </Text>
                         )}
