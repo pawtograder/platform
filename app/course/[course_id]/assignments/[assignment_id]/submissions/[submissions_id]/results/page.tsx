@@ -116,6 +116,7 @@ function PyretRepl({
             replContents: config.repl_contents ?? ""
           });
         }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (e: any) {
         if (!cancelled) {
           console.error("Failed to initialize Pyret REPL:", e);
