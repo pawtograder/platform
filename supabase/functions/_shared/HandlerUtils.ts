@@ -333,7 +333,11 @@ type FetchAllPagesResult<T> = { data: NonNullable<T[]>; error: null } | { data: 
  * ```
  */
 export async function fetchAllPages<T>(
-  query: PostgrestFilterBuilder<Database, T[], T>,
+  query: PostgrestFilterBuilder<
+    Database["public"],
+    Database["public"]["Tables"]["user_roles"]["Row"],
+    Database["public"]["Tables"]["user_roles"]["Row"][]
+  >,
   pageSize: number = 1000
 ): Promise<FetchAllPagesResult<T>> {
   try {
@@ -352,7 +356,8 @@ export async function fetchAllPages<T>(
       if (data === null) {
         // This shouldn't happen with Supabase, but handle it defensively
         hasMoreData = false;
-      } else if (data.length > 0) {
+      } else if (Array.isArray(data) && data.length > 0) {
+        // @ts-expect-error Types are weird and sometimes it doesn't know that data is T[]
         allResults.push(...data);
 
         // If we got less than the page size, we've reached the end

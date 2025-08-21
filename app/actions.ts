@@ -138,7 +138,6 @@ export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
   const redirectTo = `${env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback?next=/course`;
-  console.log("Redirecting to", redirectTo);
   const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
     options: { scopes: "email User.Read", redirectTo }
@@ -168,10 +167,6 @@ export const linkGitHubAction = async () => {
   if (!session) {
     return redirect("/sign-in");
   }
-  console.log("Linking GitHub");
-  console.log(session);
-  const { data, error } = await supabase.auth.linkIdentity({ provider: "github" });
-  console.log(data);
-  console.log(error);
+  const { data } = await supabase.auth.linkIdentity({ provider: "github" });
   if (data.url) return redirect(data.url);
 };

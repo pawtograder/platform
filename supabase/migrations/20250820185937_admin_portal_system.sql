@@ -1108,7 +1108,7 @@ BEGIN
             i.class_section_id,
             i.lab_section_id,
             false,  -- Start as active user
-            NEW.sis_user_id::numeric  -- Store SIS ID as canvas_id for sync tracking
+            CASE WHEN NEW.sis_user_id ~ '^[0-9]+$' THEN NEW.sis_user_id::numeric ELSE NULL END  -- Store SIS ID as canvas_id for sync tracking
         FROM public.invitations i
         WHERE i.sis_user_id = NEW.sis_user_id 
           AND i.status = 'pending'
@@ -1130,7 +1130,7 @@ BEGIN
             class_section_id = i.class_section_id,
             lab_section_id = i.lab_section_id,
             disabled = false,  -- Ensure reactivated if was disabled
-            canvas_id = NEW.sis_user_id::numeric  -- Update sync tracking ID
+            canvas_id = CASE WHEN NEW.sis_user_id ~ '^[0-9]+$' THEN NEW.sis_user_id::numeric ELSE NULL END  -- Update sync tracking ID
         FROM public.invitations i
         WHERE user_roles.user_id = NEW.user_id 
           AND user_roles.class_id = i.class_id

@@ -53,17 +53,17 @@ interface ProcessedSection {
   meetingInfo: string;
   location: string;
   instructors: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     name: string;
     role: "instructor";
   }>;
   tas: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     name: string;
     role: "grader";
   }>;
   students: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     name: string;
     role: "student";
   }>;
@@ -235,9 +235,9 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         number,
         {
           sectionType: "class" | "lab";
-          instructors: Array<{ sis_user_id: string; name: string; role: "instructor" }>;
-          graders: Array<{ sis_user_id: string; name: string; role: "grader" }>;
-          students: Array<{ sis_user_id: string; name: string; role: "student" }>;
+          instructors: Array<{ sis_user_id: number; name: string; role: "instructor" }>;
+          graders: Array<{ sis_user_id: number; name: string; role: "grader" }>;
+          students: Array<{ sis_user_id: number; name: string; role: "student" }>;
           sectionMeta: {
             meeting_location: string;
             meeting_times: string;
@@ -256,17 +256,17 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         sisEnrollmentByCRN.set(crn, {
           sectionType,
           instructors: roster.instructors.map((inst) => ({
-            sis_user_id: inst.nuid.toString(),
+            sis_user_id: inst.nuid,
             name: `${inst.first_name} ${inst.last_name}`,
             role: "instructor" as const
           })),
           graders: roster.tas.map((ta) => ({
-            sis_user_id: ta.nuid.toString(),
+            sis_user_id: ta.nuid,
             name: `${ta.first_name} ${ta.last_name}`,
             role: "grader" as const
           })),
           students: roster.students.map((student) => ({
-            sis_user_id: student.nuid,
+            sis_user_id: Number(student.nuid),
             name: `${student.first_name} ${student.last_name}`,
             role: "student" as const
           })),
@@ -295,7 +295,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       // Step 4: Collect all SIS users across all sections for this class
       const allSISUsers = new Map<
-        string,
+        number,
         {
           name: string;
           role: "instructor" | "grader" | "student";
@@ -307,11 +307,11 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       sisEnrollmentByCRN.forEach((sectionData, crn) => {
         [...sectionData.instructors, ...sectionData.graders, ...sectionData.students].forEach((user) => {
           // Use role hierarchy - highest role wins if user appears in multiple sections
-          const existing = allSISUsers.get(user.sis_user_id);
+          const existing = allSISUsers.get(Number(user.sis_user_id));
           const roleHierarchy = { instructor: 3, grader: 2, student: 1 };
 
           if (!existing || roleHierarchy[user.role] > roleHierarchy[existing.role]) {
-            allSISUsers.set(user.sis_user_id, {
+            allSISUsers.set(Number(user.sis_user_id), {
               name: user.name,
               role: user.role,
               crn,
@@ -337,7 +337,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         }
 
         // Skip if user already has a pending invitation with the same role
-        const existingInvitation = currentInvitationsBySIS.get(sisUserId);
+        const existingInvitation = currentInvitationsBySIS.get(Number(sisUserId));
         if (
           existingInvitation &&
           existingInvitation.status === "pending" &&
@@ -463,7 +463,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       // 6a. Mark invitations as expired for users no longer in SIS
       const invitationsToExpire = (currentInvitations || []).filter(
-        (inv) => inv.status === "pending" && !sisUserIds.has(inv.sis_user_id)
+        (inv) => inv.status === "pending" && !sisUserIds.has(Number(inv.sis_user_id))
       );
 
       if (invitationsToExpire.length > 0) {
@@ -492,7 +492,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       // 6b. Disable user_roles for enrolled users no longer in SIS (using canvas_id as nuid tracker)
       // Only disable users who were originally from SIS (have canvas_id set to their nuid)
       const enrolledUsersToDisable = (currentEnrollments || []).filter(
-        (enr) => enr.users.sis_user_id && enr.canvas_id && !sisUserIds.has(enr.users.sis_user_id) && !enr.disabled // Don't re-disable already disabled users
+        (enr) => enr.users.sis_user_id && enr.canvas_id && !sisUserIds.has(Number(enr.users.sis_user_id)) && !enr.disabled // Don't re-disable already disabled users
       );
 
       if (enrolledUsersToDisable.length > 0) {
@@ -907,17 +907,17 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
         meetingInfo: data.section_meta.meeting_times,
         location: data.section_meta.meeting_location,
         instructors: data.instructors.map((inst) => ({
-          sis_user_id: inst.nuid.toString(),
+          sis_user_id: inst.nuid,
           name: `${inst.first_name} ${inst.last_name}`,
           role: "instructor" as const
         })),
         tas: data.tas.map((ta) => ({
-          sis_user_id: ta.nuid.toString(),
+          sis_user_id: ta.nuid,
           name: `${ta.first_name} ${ta.last_name}`,
           role: "grader" as const
         })),
         students: data.students.map((student) => ({
-          sis_user_id: student.nuid,
+          sis_user_id: Number(student.nuid),
           name: `${student.first_name} ${student.last_name}`,
           role: "student" as const
         }))
@@ -974,7 +974,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     };
 
     // Calculate enrollment status for each role
-    const calculateRoleStatus = (sisUsers: Set<string>, role: "instructor" | "grader" | "student") => {
+    const calculateRoleStatus = (sisUsers: Set<number>, role: "instructor" | "grader" | "student") => {
       const inPawtograder = Array.from(sisUsers).filter((id) => existingSISIds.has(id)).length;
       const pendingInvitations = Array.from(sisUsers).filter((id) => pendingInvitationsByRole[role].has(id)).length;
       const newInvitations = sisUsers.size - inPawtograder - pendingInvitations;

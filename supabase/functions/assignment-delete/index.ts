@@ -221,10 +221,11 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<{ me
   console.log("Phase 3: Deleting all related data from database using RPC function...");
 
   // Call the RPC function to delete all assignment data
-  const { data: deleteResult, error: deleteError } = await adminSupabase.rpc("delete_assignment_with_all_data", {
+  const { data: deleteResultRaw, error: deleteError } = await adminSupabase.rpc("delete_assignment_with_all_data", {
     p_assignment_id: assignment_id,
     p_class_id: class_id
   });
+  const deleteResult = deleteResultRaw as { success: boolean; message: string; assignment_id: number; class_id: number };
 
   if (deleteError) {
     console.error("Failed to delete assignment data:", deleteError);

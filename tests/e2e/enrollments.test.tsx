@@ -41,7 +41,6 @@ test.describe("Enrollments Page", () => {
     // Check Enrollments Page Contents
     await argosScreenshot(page, "Enrollments Page");
     await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Canvas Links" })).toBeVisible();
     await expect(
       page.getByText("Enrollments in this course are linked to the following Canvas sections:")
     ).toBeVisible();

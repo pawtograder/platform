@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Open as openZip } from "npm:unzipper";
-import { create, verify } from "https://deno.land/x/djwt@v3.0.1/mod.ts";
+import { create, Payload, verify } from "https://deno.land/x/djwt@v3.0.1/mod.ts";
 import { assertUserIsInstructorOrGrader, SecurityError, UserVisibleError } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
@@ -157,7 +157,7 @@ const handleAuthRequest = async (req: Request): Promise<Response> => {
 
   // Sign the JWT
   const key = await getJWTSecret();
-  const jwt = await create({ alg: "HS256", typ: "JWT" }, accessToken, key);
+  const jwt = await create({ alg: "HS256", typ: "JWT" }, accessToken as unknown as Payload, key);
 
   // Construct the base URL for serving files
   const requestUrl = new URL(req.url);
@@ -179,7 +179,7 @@ const verifyJWTFromUrl = async (jwt: string): Promise<ArtifactAccessToken> => {
   try {
     const key = await getJWTSecret();
     console.log("Verifying JWT", jwt);
-    const payload = (await verify(jwt, key)) as ArtifactAccessToken;
+    const payload = (await verify(jwt, key)) as unknown as ArtifactAccessToken;
     return payload;
   } catch (err) {
     console.error("Invalid or expired JWT", err);
@@ -271,13 +271,13 @@ async function handleRequest(req: Request): Promise<Response> {
 
       // If exact match not found, try without leading slash
       if (!targetFile) {
-        targetFile = zip.files.find((file: any) => file.path.replace(/^[^\/]+\//, "") === filePath);
+        targetFile = zip.files.find((file: { path: string }) => file.path.replace(/^[^\/]+\//, "") === filePath);
       }
 
       // If still not found and requesting a directory, try index.html
       if (!targetFile && (filePath === "" || filePath.endsWith("/"))) {
         const indexPath = filePath + (filePath.endsWith("/") ? "" : "/") + "index.html";
-        targetFile = zip.files.find((file: any) => file.path === indexPath || file.path.endsWith(indexPath));
+        targetFile = zip.files.find((file: { path: string }) => file.path === indexPath || file.path.endsWith(indexPath));
       }
 
       if (!targetFile) {

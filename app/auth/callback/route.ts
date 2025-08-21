@@ -13,8 +13,6 @@ export async function GET(request: Request) {
   if (code) {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    console.log("Data", data);
-    console.log("Error", error);
     if (!error) {
       if (data.session) {
         // Check if this was an Azure OAuth login and if user needs SIS ID populated
@@ -43,7 +41,6 @@ export async function GET(request: Request) {
         }
       } else {
         console.log("No Azure session data returned");
-        console.log(data);
       }
 
       const forwardedHost = request.headers.get("x-forwarded-host"); // original origin before load balancer

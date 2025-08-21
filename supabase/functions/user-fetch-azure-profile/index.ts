@@ -197,7 +197,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const { error: updateError } = await adminSupabase
       .from("users")
       .update({
-        sis_user_id: azureProfile.employeeId
+        sis_user_id: Number(azureProfile.employeeId)
       })
       .eq("user_id", user.id);
 
@@ -242,7 +242,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     return new Response(
       JSON.stringify({
         success: false,
-        error: error.message
+        error: error instanceof Error ? error.message : "Unknown error"
       }),
       {
         status: 500,

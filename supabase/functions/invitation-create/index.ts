@@ -1,13 +1,10 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { wrapRequestHandler, assertUserIsInstructor } from "../_shared/HandlerUtils.ts";
-import type { Database } from "../_shared/SupabaseTypes.d.ts";
+import * as Sentry from "npm:@sentry/deno";
+import { assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
 import {
   createInvitationsBulk,
-  validateInvitationRequest,
   type InvitationRequest
 } from "../_shared/InvitationUtils.ts";
-import * as Sentry from "npm:@sentry/deno";
 
 // Request/Response types
 interface CreateInvitationRequest {
@@ -19,7 +16,7 @@ interface CreateInvitationResponse {
   success: boolean;
   invitations: Array<{
     id: number;
-    sis_user_id: string;
+    sis_user_id: number;
     role: string;
     email?: string;
     name?: string;
@@ -30,7 +27,7 @@ interface CreateInvitationResponse {
     lab_section_id?: number;
   }>;
   errors?: Array<{
-    sis_user_id: string;
+    sis_user_id: number;
     error: string;
   }>;
 }
