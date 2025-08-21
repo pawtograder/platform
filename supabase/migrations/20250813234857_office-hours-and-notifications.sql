@@ -2424,3 +2424,4 @@ CREATE TRIGGER broadcast_student_help_activity_change AFTER INSERT OR DELETE OR 
 
 CREATE TRIGGER broadcast_student_karma_notes_change AFTER INSERT OR DELETE OR UPDATE ON public.student_karma_notes FOR EACH ROW EXECUTE FUNCTION broadcast_help_request_staff_data_change();
 
+
