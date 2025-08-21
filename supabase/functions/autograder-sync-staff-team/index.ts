@@ -45,8 +45,8 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope?.setTag("slug", classData.slug!);
     await syncStaffTeam(classData.github_org!, classData.slug!, async () => {
       const { data: staff, error: staffError } = await adminSupabase
-          .from("user_roles")
-          .select("users(github_username)")
+        .from("user_roles")
+        .select("users(github_username)")
         .eq("class_id", course_id)
         .or("role.eq.instructor,role.eq.grader")
         .limit(1000);

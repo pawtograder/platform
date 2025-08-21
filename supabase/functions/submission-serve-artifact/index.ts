@@ -277,7 +277,9 @@ async function handleRequest(req: Request): Promise<Response> {
       // If still not found and requesting a directory, try index.html
       if (!targetFile && (filePath === "" || filePath.endsWith("/"))) {
         const indexPath = filePath + (filePath.endsWith("/") ? "" : "/") + "index.html";
-        targetFile = zip.files.find((file: { path: string }) => file.path === indexPath || file.path.endsWith(indexPath));
+        targetFile = zip.files.find(
+          (file: { path: string }) => file.path === indexPath || file.path.endsWith(indexPath)
+        );
       }
 
       if (!targetFile) {

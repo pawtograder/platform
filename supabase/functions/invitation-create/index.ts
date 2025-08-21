@@ -1,10 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as Sentry from "npm:@sentry/deno";
 import { assertUserIsInstructor, wrapRequestHandler } from "../_shared/HandlerUtils.ts";
-import {
-  createInvitationsBulk,
-  type InvitationRequest
-} from "../_shared/InvitationUtils.ts";
+import { createInvitationsBulk, type InvitationRequest } from "../_shared/InvitationUtils.ts";
 
 // Request/Response types
 interface CreateInvitationRequest {

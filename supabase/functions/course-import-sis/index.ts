@@ -492,7 +492,8 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       // 6b. Disable user_roles for enrolled users no longer in SIS (using canvas_id as nuid tracker)
       // Only disable users who were originally from SIS (have canvas_id set to their nuid)
       const enrolledUsersToDisable = (currentEnrollments || []).filter(
-        (enr) => enr.users.sis_user_id && enr.canvas_id && !sisUserIds.has(Number(enr.users.sis_user_id)) && !enr.disabled // Don't re-disable already disabled users
+        (enr) =>
+          enr.users.sis_user_id && enr.canvas_id && !sisUserIds.has(Number(enr.users.sis_user_id)) && !enr.disabled // Don't re-disable already disabled users
       );
 
       if (enrolledUsersToDisable.length > 0) {

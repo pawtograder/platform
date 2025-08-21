@@ -205,15 +205,11 @@ export async function getOctoKit(repoOrOrgName: string, scope?: Sentry.Scope) {
             id: "pawtograder-production",
             Bottleneck,
             onRateLimit: () => {
-              console.warn(
-                `Request quota exhausted for request retrying`
-              );
+              console.warn(`Request quota exhausted for request retrying`);
               return true;
             },
             onSecondaryRateLimit: () => {
-              console.warn(
-                `SecondaryRateLimit detected for request retrying `
-              );
+              console.warn(`SecondaryRateLimit detected for request retrying `);
               return true;
             }
           }

@@ -225,7 +225,12 @@ async function deleteAssignment(req: Request, scope: Sentry.Scope): Promise<{ me
     p_assignment_id: assignment_id,
     p_class_id: class_id
   });
-  const deleteResult = deleteResultRaw as { success: boolean; message: string; assignment_id: number; class_id: number };
+  const deleteResult = deleteResultRaw as {
+    success: boolean;
+    message: string;
+    assignment_id: number;
+    class_id: number;
+  };
 
   if (deleteError) {
     console.error("Failed to delete assignment data:", deleteError);

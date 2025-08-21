@@ -74,7 +74,12 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     scope?.setTag("github_org", classData.github_org!);
     scope?.setTag("slug", classData.slug!);
     await syncStudentTeam(classData.github_org!, classData.slug!, async () => {
-      const { data: students, error: studentsError } = await supabase.from("user_roles").select("users(github_username)").eq("class_id", course_id).or("role.eq.student").limit(1000);
+      const { data: students, error: studentsError } = await supabase
+        .from("user_roles")
+        .select("users(github_username)")
+        .eq("class_id", course_id)
+        .or("role.eq.student")
+        .limit(1000);
       if (studentsError) {
         console.error(studentsError);
         throw new UserVisibleError("Error fetching students");
