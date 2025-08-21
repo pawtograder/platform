@@ -48,12 +48,6 @@ alter table "public"."notification_preferences" drop constraint "notification_pr
 
 alter table "public"."notification_preferences" drop constraint "notification_preferences_pkey";
 
-drop index if exists "public"."idx_rubric_checks_criteria_ordinal";
-
-drop index if exists "public"."idx_rubric_criteria_part_ordinal";
-
-drop index if exists "public"."idx_rubric_parts_rubric_ordinal";
-
 drop index if exists "public"."notification_preferences_pkey";
 
 drop table "public"."notification_preferences";
