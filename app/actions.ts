@@ -137,9 +137,10 @@ export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
   const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
+  console.log("Redirecting to", redirectTo);
   const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
-    options: { scopes: "email", redirectTo }
+    options: { scopes: "email User.Read", redirectTo }
   });
 
   if (error) {
