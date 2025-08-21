@@ -31,7 +31,7 @@ type ReviewToolbarStats = {
   completedReviews: number;
   completionPercent: number;
   allComplete: boolean;
-  nextIncomplete: { id: number; submission_id: number } | null;
+  nextIncomplete: { reviewAssignmentId: number; submissionId: number } | null;
 };
 
 // Data types for grouped submission selector
@@ -155,6 +155,10 @@ function SubmissionSelector() {
     (option: SubmissionOption | null) => {
       if (option) {
         const params = new URLSearchParams(searchParams.toString());
+        // Strip review-specific params when navigating generically
+        params.delete("review_assignment_id");
+        params.delete("ignore_review");
+        params.delete("selected_review_id");
         const qs = params.toString();
         const url = `/course/${course_id}/assignments/${assignment_id}/submissions/${option.value}/files${qs ? `?${qs}` : ""}`;
         router.push(url);
@@ -266,7 +270,11 @@ export default function AssignmentGradingToolbar() {
       options.find((opt) => opt.hasIncompleteReview);
 
     const nextIncomplete = nextIncompleteOption
-      ? (reviewAssignmentsBySubmission.get(nextIncompleteOption.submissionId)?.[0] ?? null)
+      ? (() => {
+          const ras = reviewAssignmentsBySubmission.get(nextIncompleteOption.submissionId) ?? [];
+          const target = ras.find((ra) => !ra.completed_at) ?? ras[0];
+          return target ? { reviewAssignmentId: target.id, submissionId: target.submission_id } : null;
+        })()
       : null;
 
     return {
@@ -278,7 +286,7 @@ export default function AssignmentGradingToolbar() {
         completionPercent,
         allComplete,
         nextIncomplete
-      } as ReviewToolbarStats
+      }
     };
   }, [isInReviewMode, reviewAssignmentsBySubmission, submissions_id, myReviewAssignments]);
 
@@ -290,6 +298,11 @@ export default function AssignmentGradingToolbar() {
         // Only set review assignment if it is an incomplete review for this submission
         if (option.hasIncompleteReview && reviewId) {
           params.set("review_assignment_id", String(reviewId));
+          params.delete("ignore_review");
+          params.delete("selected_review_id");
+        } else {
+          // Ensure no stale RA id is carried over from a prior selection
+          params.delete("review_assignment_id");
           params.delete("ignore_review");
           params.delete("selected_review_id");
         }
@@ -380,7 +393,7 @@ export default function AssignmentGradingToolbar() {
           <HStack gap={3} fontSize="sm">
             {stats && !stats.allComplete && stats.nextIncomplete ? (
               <Link
-                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${stats.nextIncomplete.submission_id}/files?review_assignment_id=${stats.nextIncomplete.id}`}
+                href={`/course/${course_id}/assignments/${assignment_id}/submissions/${stats.nextIncomplete.submissionId}/files?review_assignment_id=${stats.nextIncomplete.reviewAssignmentId}`}
               >
                 <FaArrowRight style={{ marginRight: "4px" }} />
                 Next Incomplete

@@ -719,12 +719,17 @@ function BulkAssignGradingForm({ handleReviewAssignmentChange }: { handleReviewA
         .map((assignment) => assignment.id);
 
       if (assignmentsToUpdate.length > 0) {
-        await supabase
+        const { error: updateAssignmentsError } = await supabase
           .from("review_assignments")
-          .update({
-            completed_at: null
-          })
+          .update({ completed_at: null })
           .in("id", assignmentsToUpdate);
+        if (updateAssignmentsError) {
+          toaster.error({
+            title: "Error updating review assignments",
+            description: updateAssignmentsError.message
+          });
+          return false;
+        }
       }
 
       const assignmentsToCreate = validReviews
