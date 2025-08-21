@@ -701,8 +701,9 @@ export class CourseController {
   }
 
   getProfileBySisId(sis_id: string) {
-    const result = this.profiles.list();
-    return result.data.find((profile) => profile.sis_user_id === sis_id);
+    const userRoles = this.userRolesWithProfiles.list();
+    const role = userRoles.data.find((role) => role.users.sis_user_id === sis_id);
+    return role?.profiles;
   }
   setObfuscatedGradesMode(val: boolean) {
     this._isObfuscatedGrades = val;

@@ -81,8 +81,17 @@ export async function assertUserIsInstructor(courseId: number, authHeader: strin
     .eq("user_id", user.id)
     .eq("class_id", courseId)
     .eq("role", "instructor")
-    .single();
+    .maybeSingle();
   if (!enrollment) {
+    //OK if user is an ADMIN of any course
+    const { data: adminEnrollment } = await supabase
+      .from("user_roles")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("role", "admin");
+    if (adminEnrollment && adminEnrollment.length > 0) {
+      return { supabase, enrollment: adminEnrollment[0] };
+    }
     throw new SecurityError("User is not an instructor for this course");
   }
   return { supabase, enrollment };
