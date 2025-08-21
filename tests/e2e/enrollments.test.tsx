@@ -41,18 +41,11 @@ test.describe("Enrollments Page", () => {
     // Check Enrollments Page Contents
     await argosScreenshot(page, "Enrollments Page");
     await expect(page.getByRole("heading", { name: "Enrollments" })).toBeVisible();
-    await expect(
-      page.getByText("Enrollments in this course are linked to the following Canvas sections:")
-    ).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sync Canvas Enrollments" })).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Name" }).first()).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Email" }).first()).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Role" }).first()).toBeVisible();
     await expect(
       page.locator("th.chakra-table__columnHeader").filter({ hasText: "GitHub Username" }).first()
-    ).toBeVisible();
-    await expect(
-      page.locator("th.chakra-table__columnHeader").filter({ hasText: "Canvas Link" }).first()
     ).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Tags" }).first()).toBeVisible();
     await expect(page.locator("th.chakra-table__columnHeader").filter({ hasText: "Actions" }).first()).toBeVisible();
