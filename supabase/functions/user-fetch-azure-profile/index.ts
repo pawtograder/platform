@@ -82,7 +82,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
 
     const { data: existingUser, error: userFetchError } = await adminSupabase
       .from("users")
-      .select("sis_user_id, email")
+      .select("sis_user_id, email, name")
       .eq("user_id", user.id)
       .single();
 
@@ -197,11 +197,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope) {
     const { error: updateError } = await adminSupabase
       .from("users")
       .update({
-        sis_user_id: azureProfile.employeeId,
-        name:
-          azureProfile.givenName && azureProfile.surname
-            ? `${azureProfile.givenName} ${azureProfile.surname}`
-            : existingUser.name || azureProfile.givenName || azureProfile.surname || azureProfile.userPrincipalName
+        sis_user_id: azureProfile.employeeId
       })
       .eq("user_id", user.id);
 

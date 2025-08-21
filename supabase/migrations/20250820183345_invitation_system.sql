@@ -4,7 +4,7 @@
 
 -- 1. Add sis_user_id column to users table
 ALTER TABLE "public"."users" 
-ADD COLUMN "sis_user_id" text UNIQUE;
+ADD COLUMN "sis_user_id" integer UNIQUE;
 ALTER TABLE "public"."profiles" 
 DROP COLUMN "sis_user_id";
 
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS "public"."invitations" (
     "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
     "class_id" bigint NOT NULL,
     "role" public.app_role NOT NULL,
-    "sis_user_id" text NOT NULL,
+    "sis_user_id" integer NOT NULL,
     "email" text,
     "name" text,
     "public_profile_id" uuid NOT NULL,
@@ -86,7 +86,7 @@ RETURNS TRIGGER AS $$
 BEGIN
     -- Only proceed if sis_user_id was just set (was NULL, now has value)
     IF OLD.sis_user_id IS NULL AND NEW.sis_user_id IS NOT NULL THEN
-        -- Find any pending invitations for this sis_user_id
+        -- Insert new enrollments for classes where user has no existing role
         INSERT INTO public.user_roles (
             user_id,
             class_id,
@@ -110,15 +110,29 @@ BEGIN
         WHERE i.sis_user_id = NEW.sis_user_id 
           AND i.status = 'pending'
           AND (i.expires_at IS NULL OR i.expires_at > NOW())
-        ON CONFLICT (user_id, class_id) DO UPDATE SET
+          AND NOT EXISTS (
+              SELECT 1 FROM public.user_roles ur 
+              WHERE ur.user_id = NEW.user_id AND ur.class_id = i.class_id
+          );
+
+        -- Update existing roles if the invitation has a higher priority role
+        UPDATE public.user_roles 
+        SET 
             role = CASE 
-                WHEN EXCLUDED.role = 'instructor' THEN 'instructor'
-                WHEN EXCLUDED.role = 'grader' AND user_roles.role != 'instructor' THEN 'grader'
+                WHEN i.role = 'instructor' THEN 'instructor'
+                WHEN i.role = 'grader' AND user_roles.role != 'instructor' THEN 'grader'
                 ELSE user_roles.role
             END,
-            invitation_id = EXCLUDED.invitation_id,
-            class_section_id = EXCLUDED.class_section_id,
-            lab_section_id = EXCLUDED.lab_section_id;
+            invitation_id = i.id,
+            class_section_id = i.class_section_id,
+            lab_section_id = i.lab_section_id
+        FROM public.invitations i
+        WHERE user_roles.user_id = NEW.user_id 
+          AND user_roles.class_id = i.class_id
+          AND i.sis_user_id = NEW.sis_user_id 
+          AND i.status = 'pending'
+          AND (i.expires_at IS NULL OR i.expires_at > NOW())
+          AND (i.role = 'instructor' OR (i.role = 'grader' AND user_roles.role = 'student'));
 
         -- Mark invitations as accepted
         UPDATE public.invitations 
@@ -146,7 +160,7 @@ CREATE TRIGGER trigger_user_sis_id_update
 CREATE OR REPLACE FUNCTION create_invitation(
     p_class_id bigint,
     p_role public.app_role,
-    p_sis_user_id text,
+    p_sis_user_id integer,
     p_email text DEFAULT NULL,
     p_name text DEFAULT NULL,
     p_invited_by uuid DEFAULT auth.uid(),
@@ -175,7 +189,7 @@ BEGIN
     END IF;
 
     -- Set display name (use provided name or email prefix)
-    v_display_name := COALESCE(p_name, split_part(p_email, '@', 1), p_sis_user_id);
+    v_display_name := COALESCE(p_name, split_part(p_email, '@', 1), p_sis_user_id::text);
 
     -- Create public profile
     INSERT INTO public.profiles (

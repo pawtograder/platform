@@ -1,6 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
+import { userFetchAzureProfile } from "@/lib/edgeFunctions";
 
 export async function GET(request: Request) {
   // The `/auth/callback` route is required for the server-side auth flow implemented
@@ -28,23 +29,7 @@ export async function GET(request: Request) {
           if (!userData?.sis_user_id) {
             const accessToken = data.session.provider_token;
             if (accessToken) {
-              // Call our edge function to fetch and populate SIS ID
-              const edgeFunctionUrl = `${process.env.SUPABASE_URL}/functions/v1/user-fetch-azure-profile`;
-              const response = await fetch(edgeFunctionUrl, {
-                method: "POST",
-                headers: {
-                  Authorization: `Bearer ${data.session.access_token}`,
-                  "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ accessToken })
-              });
-
-              const result = await response.json();
-              if (!result.success) {
-                Sentry.captureException(new Error("Failed to fetch Azure profile: " + result.error));
-                console.warn("Failed to fetch Azure profile:", result.error);
-                // Continue with login even if profile fetch fails
-              }
+              await userFetchAzureProfile({ accessToken }, supabase);
             }
           }
         } catch (error) {

@@ -27,7 +27,6 @@ export default function SISSyncPage() {
   const [syncingClassId, setSyncingClassId] = useState<number | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
 
-
   const loadSISStatus = useCallback(async () => {
     const supabase = createClient();
     setIsLoading(true);
@@ -47,66 +46,72 @@ export default function SISSyncPage() {
     }
   }, []);
 
-  const triggerSync = useCallback(async (classId?: number) => {
-    const supabase = createClient();
-    if (classId) {
-      setSyncingClassId(classId);
-    } else {
-      setSyncingAll(true);
-    }
+  const triggerSync = useCallback(
+    async (classId?: number) => {
+      const supabase = createClient();
+      if (classId) {
+        setSyncingClassId(classId);
+      } else {
+        setSyncingAll(true);
+      }
 
-    try {
-      const { error } = await supabase.rpc("admin_trigger_sis_sync", {
-        p_class_id: classId || undefined
-      });
+      try {
+        const { error } = await supabase.rpc("admin_trigger_sis_sync", {
+          p_class_id: classId || undefined
+        });
 
-      if (error) throw error;
+        if (error) throw error;
 
-      toaster.create({
-        title: "SIS Sync Triggered",
-        description: classId ? `Sync started for class ID ${classId}` : "Sync started for all SIS-linked classes",
-        type: "success"
-      });
+        toaster.create({
+          title: "SIS Sync Triggered",
+          description: classId ? `Sync started for class ID ${classId}` : "Sync started for all SIS-linked classes",
+          type: "success"
+        });
 
-      // Reload status after a brief delay
-      setTimeout(loadSISStatus, 2000);
-    } catch (error) {
-      toaster.create({
-        title: "Sync Error",
-        description: error instanceof Error ? error.message : "Failed to trigger sync",
-        type: "error"
-      });
-    } finally {
-      setSyncingClassId(null);
-      setSyncingAll(false);
-    }
-  }, [loadSISStatus]);
+        // Reload status after a brief delay
+        setTimeout(loadSISStatus, 2000);
+      } catch (error) {
+        toaster.create({
+          title: "Sync Error",
+          description: error instanceof Error ? error.message : "Failed to trigger sync",
+          type: "error"
+        });
+      } finally {
+        setSyncingClassId(null);
+        setSyncingAll(false);
+      }
+    },
+    [loadSISStatus]
+  );
 
-  const toggleSyncEnabled = useCallback(async (classId: number, enabled: boolean) => {
-    const supabase = createClient();
-    try {
-      const { error } = await supabase.rpc("admin_set_sis_sync_enabled", {
-        p_class_id: classId,
-        p_enabled: enabled
-      });
+  const toggleSyncEnabled = useCallback(
+    async (classId: number, enabled: boolean) => {
+      const supabase = createClient();
+      try {
+        const { error } = await supabase.rpc("admin_set_sis_sync_enabled", {
+          p_class_id: classId,
+          p_enabled: enabled
+        });
 
-      if (error) throw error;
+        if (error) throw error;
 
-      toaster.create({
-        title: "Sync Status Updated",
-        description: `SIS sync ${enabled ? "enabled" : "disabled"} for class`,
-        type: "success"
-      });
+        toaster.create({
+          title: "Sync Status Updated",
+          description: `SIS sync ${enabled ? "enabled" : "disabled"} for class`,
+          type: "success"
+        });
 
-      loadSISStatus();
-    } catch (error) {
-      toaster.create({
-        title: "Update Error",
-        description: error instanceof Error ? error.message : "Failed to update sync status",
-        type: "error"
-      });
-    }
-  }, [loadSISStatus]);
+        loadSISStatus();
+      } catch (error) {
+        toaster.create({
+          title: "Update Error",
+          description: error instanceof Error ? error.message : "Failed to update sync status",
+          type: "error"
+        });
+      }
+    },
+    [loadSISStatus]
+  );
 
   useEffect(() => {
     loadSISStatus();
@@ -131,11 +136,16 @@ export default function SISSyncPage() {
   const getSyncStatusColor = (status: string | null) => {
     if (!status) return "gray";
     switch (status) {
-      case "success": return "green";
-      case "error": return "red";
-      case "enabled": return "blue";
-      case "disabled": return "orange";
-      default: return "gray";
+      case "success":
+        return "green";
+      case "error":
+        return "red";
+      case "enabled":
+        return "blue";
+      case "disabled":
+        return "orange";
+      default:
+        return "gray";
     }
   };
 
@@ -249,9 +259,7 @@ export default function SISSyncPage() {
                       <Text fontWeight="medium">{class_.class_name}</Text>
                     </Table.Cell>
                     <Table.Cell>
-                      <Text fontWeight="medium">
-                        {class_.term}
-                      </Text>
+                      <Text fontWeight="medium">{class_.term}</Text>
                     </Table.Cell>
                     <Table.Cell>
                       <Badge colorPalette="blue">{class_.sis_sections_count} sections</Badge>
@@ -284,11 +292,7 @@ export default function SISSyncPage() {
                           {class_.sync_enabled ? "Enabled" : "Disabled"}
                         </Badge>
                         {class_.last_sync_status && (
-                          <Badge 
-                            size="sm"
-                            colorPalette={getSyncStatusColor(class_.last_sync_status)}
-                            variant="subtle"
-                          >
+                          <Badge size="sm" colorPalette={getSyncStatusColor(class_.last_sync_status)} variant="subtle">
                             {class_.last_sync_status}
                           </Badge>
                         )}

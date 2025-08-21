@@ -306,6 +306,14 @@ export async function invitationCreate(
   }
   return data as FunctionTypes.CreateInvitationResponse;
 }
+
+export async function userFetchAzureProfile(params: { accessToken: string }, supabase: SupabaseClient<Database>) {
+  const { data } = await supabase.functions.invoke("user-fetch-azure-profile", { body: params });
+  const { error } = data as FunctionTypes.GenericResponse;
+  if (error) {
+    throw new EdgeFunctionError(error);
+  }
+}
 export class EdgeFunctionError extends Error {
   details: string;
   recoverable: boolean;

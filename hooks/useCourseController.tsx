@@ -700,7 +700,7 @@ export class CourseController {
     };
   }
 
-  getProfileBySisId(sis_id: string) {
+  getProfileBySisId(sis_id: number) {
     const userRoles = this.userRolesWithProfiles.list();
     const role = userRoles.data.find((role) => role.users.sis_user_id === sis_id);
     return role?.profiles;

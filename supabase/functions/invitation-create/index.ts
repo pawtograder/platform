@@ -51,8 +51,7 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CreateI
   const { supabase, enrollment } = await assertUserIsInstructor(courseId, req.headers.get("Authorization")!);
 
   scope?.setUser({
-    id: enrollment.user_id,
-    email: enrollment.email
+    id: enrollment.user_id
   });
 
   // Use shared utility to create invitations

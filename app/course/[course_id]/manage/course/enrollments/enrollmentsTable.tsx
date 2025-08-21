@@ -60,20 +60,7 @@ type RemoveStudentModalData = {
 };
 
 // Invitation type for display
-type InvitationRow = {
-  id: number;
-  type: "invitation";
-  sis_user_id: string;
-  email: string | null;
-  name: string | null;
-  role: Database["public"]["Enums"]["app_role"];
-  status: string;
-  created_at: string;
-  expires_at: string | null;
-  class_section_id: number | null;
-  lab_section_id: number | null;
-  invited_by: string | null;
-};
+type InvitationRow = Database["public"]["Tables"]["invitations"]["Row"] & { type: "invitation" };
 
 // Combined type for table rows
 type EnrollmentTableRow = (UserRoleWithPrivateProfileAndUser & { type: "enrollment" }) | InvitationRow;
@@ -326,7 +313,7 @@ export default function EnrollmentsTable() {
         filterFn: (row, id, filterValue) => {
           const filterString = String(filterValue).toLowerCase();
           if (row.original.type === "invitation") {
-            const invitationName = row.original.name || row.original.sis_user_id || "";
+            const invitationName = row.original.name || `${row.original.sis_user_id}` || "";
             return invitationName.toLowerCase().includes(filterString);
           }
           const name = row.original.profiles?.name;

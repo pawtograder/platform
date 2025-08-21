@@ -285,7 +285,7 @@ export default function ImportGradebookColumns() {
                                     .getRosterWithUserInfo()
                                     .data.find((r) => r.users.email === identifier)?.private_profile_id ?? null;
                               } else if (idType === "sid") {
-                                const sid = (identifier ?? "").toString();
+                                const sid = Number(identifier ?? 0);
                                 studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
                               }
                               let oldValue = null;
@@ -409,7 +409,7 @@ export default function ImportGradebookColumns() {
                                 const rosterEntry = courseController
                                   .getRosterWithUserInfo()
                                   .data.find((r) => r.private_profile_id === student.id);
-                                identifier = rosterEntry?.users.sis_user_id ?? null;
+                                identifier = `${rosterEntry?.users.sis_user_id}`;
                               }
                               if (!identifier) return null;
                               const importIdx = filteredPreviewCols[0]?.students.findIndex(
@@ -622,7 +622,7 @@ export default function ImportGradebookColumns() {
                                       .getRosterWithUserInfo()
                                       .data.some((r) => r.users.email === s.identifier);
                                   } else if (previewData.idType === "sid") {
-                                    return courseController.getProfileBySisId(s.identifier)?.id !== null;
+                                    return courseController.getProfileBySisId(Number(s.identifier))?.id !== null;
                                   }
                                   return false;
                                 });
@@ -636,7 +636,7 @@ export default function ImportGradebookColumns() {
                                           .getRosterWithUserInfo()
                                           .data.find((r) => r.users.email === s.identifier)?.private_profile_id ?? null;
                                     } else if (previewData.idType === "sid") {
-                                      const sid = (s.identifier ?? "").toString();
+                                      const sid = Number(s.identifier ?? 0);
                                       studentPrivateProfileId = courseController.getProfileBySisId(sid)?.id ?? null;
                                     }
                                     if (!studentPrivateProfileId) return null;

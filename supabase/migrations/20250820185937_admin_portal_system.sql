@@ -1085,7 +1085,7 @@ RETURNS TRIGGER AS $$
 BEGIN
     -- Only proceed if sis_user_id was just set (was NULL, now has value)
     IF OLD.sis_user_id IS NULL AND NEW.sis_user_id IS NOT NULL THEN
-        -- Find any pending invitations for this sis_user_id
+        -- Insert new enrollments for classes where user has no existing role
         INSERT INTO public.user_roles (
             user_id,
             class_id,
@@ -1113,17 +1113,31 @@ BEGIN
         WHERE i.sis_user_id = NEW.sis_user_id 
           AND i.status = 'pending'
           AND (i.expires_at IS NULL OR i.expires_at > NOW())
-        ON CONFLICT (user_id, class_id) DO UPDATE SET
+          AND NOT EXISTS (
+              SELECT 1 FROM public.user_roles ur 
+              WHERE ur.user_id = NEW.user_id AND ur.class_id = i.class_id
+          );
+
+        -- Update existing roles if the invitation has a higher priority role
+        UPDATE public.user_roles 
+        SET 
             role = CASE 
-                WHEN EXCLUDED.role = 'instructor' THEN 'instructor'
-                WHEN EXCLUDED.role = 'grader' AND user_roles.role != 'instructor' THEN 'grader'
+                WHEN i.role = 'instructor' THEN 'instructor'
+                WHEN i.role = 'grader' AND user_roles.role != 'instructor' THEN 'grader'
                 ELSE user_roles.role
             END,
-            invitation_id = EXCLUDED.invitation_id,
-            class_section_id = EXCLUDED.class_section_id,
-            lab_section_id = EXCLUDED.lab_section_id,
+            invitation_id = i.id,
+            class_section_id = i.class_section_id,
+            lab_section_id = i.lab_section_id,
             disabled = false,  -- Ensure reactivated if was disabled
-            canvas_id = EXCLUDED.canvas_id;  -- Update sync tracking ID
+            canvas_id = NEW.sis_user_id::numeric  -- Update sync tracking ID
+        FROM public.invitations i
+        WHERE user_roles.user_id = NEW.user_id 
+          AND user_roles.class_id = i.class_id
+          AND i.sis_user_id = NEW.sis_user_id 
+          AND i.status = 'pending'
+          AND (i.expires_at IS NULL OR i.expires_at > NOW())
+          AND (i.role = 'instructor' OR (i.role = 'grader' AND user_roles.role = 'student'));
 
         -- Mark invitations as accepted
         UPDATE public.invitations 

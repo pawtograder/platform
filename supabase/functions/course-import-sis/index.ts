@@ -164,7 +164,6 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
   // Process each class
   for (const classData of sisLinkedClasses) {
     try {
-
       // Check if sync is enabled for sections in this class
       const { data: syncStatus } = await adminSupabase
         .from("sis_sync_status")
@@ -172,13 +171,13 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
         .eq("course_id", classData.id);
 
       // Get enabled sections only
-      const enabledClassSections = classData.class_sections.filter(s => {
-        const status = syncStatus?.find(ss => ss.course_section_id === s.id);
+      const enabledClassSections = classData.class_sections.filter((s) => {
+        const status = syncStatus?.find((ss) => ss.course_section_id === s.id);
         return status ? status.sync_enabled : true; // Default to enabled if no status record
       });
 
-      const enabledLabSections = classData.lab_sections.filter(s => {
-        const status = syncStatus?.find(ss => ss.lab_section_id === s.id);
+      const enabledLabSections = classData.lab_sections.filter((s) => {
+        const status = syncStatus?.find((ss) => ss.lab_section_id === s.id);
         return status ? status.sync_enabled : true; // Default to enabled if no status record
       });
 
@@ -214,7 +213,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
           );
         }
 
-        const data = await response.json() as SISRosterResponse;
+        const data = (await response.json()) as SISRosterResponse;
         return { crn, roster: data[crn.toString()] };
       });
 
@@ -279,13 +278,12 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
       const { data: currentInvitations } = await adminSupabase
         .from("invitations")
         .select("id, sis_user_id, role, status, class_section_id, lab_section_id")
-        .eq("class_id", classData.id).limit(1000);
+        .eq("class_id", classData.id)
+        .limit(1000);
 
       const { data: currentEnrollments } = await adminSupabase
         .from("user_roles")
-        .select(
-          "id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)"
-        )
+        .select("id, role, class_section_id, lab_section_id, canvas_id, disabled, users!inner(sis_user_id)")
         .eq("class_id", classData.id)
         .not("users.sis_user_id", "is", null)
         .limit(1000);
@@ -450,8 +448,13 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
             category: "error",
             data: { classId: classData.id, error: error instanceof Error ? error.message : String(error) }
           });
-          Sentry.captureMessage(`Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`, scope);
-          throw new UserVisibleError(`Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`);
+          Sentry.captureMessage(
+            `Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`,
+            scope
+          );
+          throw new UserVisibleError(
+            `Failed to create invitations: ${error instanceof Error ? error.message : String(error)}`
+          );
         }
       }
 
@@ -583,7 +586,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       // Update status for class sections
       for (const section of enabledClassSections) {
-        if (rosterResults.some(r => r.crn === section.sis_crn)) {
+        if (rosterResults.some((r) => r.crn === section.sis_crn)) {
           try {
             await adminSupabase.rpc("update_sis_sync_status", {
               p_course_id: classData.id,
@@ -604,7 +607,7 @@ async function syncSISClasses(supabase: SupabaseClient<Database>, classId: numbe
 
       // Update status for lab sections
       for (const section of enabledLabSections) {
-        if (rosterResults.some(r => r.crn === section.sis_crn)) {
+        if (rosterResults.some((r) => r.crn === section.sis_crn)) {
           try {
             await adminSupabase.rpc("update_sis_sync_status", {
               p_course_id: classData.id,
@@ -1005,7 +1008,9 @@ async function handleRequest(req: Request, scope: Sentry.Scope): Promise<CourseI
     };
   } catch (error) {
     scope?.captureException(error);
-    throw error instanceof UserVisibleError ? error : new UserVisibleError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error instanceof UserVisibleError
+      ? error
+      : new UserVisibleError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

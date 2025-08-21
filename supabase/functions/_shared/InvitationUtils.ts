@@ -14,7 +14,7 @@ if (Deno.env.get("SENTRY_DSN")) {
 }
 // Types for invitation processing
 export interface InvitationRequest {
-  sis_user_id: string;
+  sis_user_id: number;
   role: "student" | "grader" | "instructor";
   email?: string;
   name?: string;
@@ -24,7 +24,7 @@ export interface InvitationRequest {
 
 export interface InvitationResult {
   id: number;
-  sis_user_id: string;
+  sis_user_id: number;
   role: string;
   email?: string;
   name?: string;
@@ -36,7 +36,7 @@ export interface InvitationResult {
 }
 
 export interface InvitationError {
-  sis_user_id: string;
+  sis_user_id: number;
   error: string;
 }
 
@@ -109,11 +109,11 @@ async function processInvitation(
 ): Promise<{ success: true; invitation: InvitationResult } | { success: false; error: InvitationError }> {
   try {
     // Validate required fields
-    if (!invitation.sis_user_id?.trim()) {
+    if (!invitation.sis_user_id) {
       return {
         success: false,
         error: {
-          sis_user_id: invitation.sis_user_id || "unknown",
+          sis_user_id: invitation.sis_user_id,
           error: "SIS User ID is required"
         }
       };
@@ -146,6 +146,13 @@ async function processInvitation(
         .single();
 
       if (existingEnrollment) {
+        //Set canvas_id to the sis_user_id
+        await supabaseClient
+          .from("user_roles")
+          .update({ canvas_id: invitation.sis_user_id })
+          .eq("user_id", existingUser.user_id)
+          .eq("class_id", courseId);
+
         return {
           success: false,
           error: {

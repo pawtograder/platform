@@ -137,7 +137,7 @@ export const signInWithMicrosoftAction = async () => {
   const supabase = await createClient();
 
   const redirectTo = `${process.env.VERCEL_PROJECT_PRODUCTION_URL ? "https://" + process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.NEXT_PUBLIC_PAWTOGRADER_WEB_URL}/auth/callback`;
-  const { data, error } = await supabase.auth.signInWithOAuth({
+  const { data: authData, error } = await supabase.auth.signInWithOAuth({
     provider: "azure",
     options: { scopes: "email", redirectTo }
   });
@@ -145,19 +145,9 @@ export const signInWithMicrosoftAction = async () => {
   if (error) {
     return encodedRedirect("error", "/sign-in", error.message);
   }
-  //Check and see if the user already has a SIS_USER_ID, if not, invoke the edge function to get from AzureAD
-  const { data: user } = await supabase.auth.getUser();
-  const { data: userData } = await supabase.from("users").select("*").eq("id", user.user?.id).single();
-  if (!userData?.sis_user_id) {
-    const { data, error } = await supabase.rpc("trigger_sis_sync");
-    if (error) {
-      return encodedRedirect("error", "/sign-in", error.message);
-    }
-  }
 
-  if (data.url) {
-    console.log(`Redirecting to ${data.url}`);
-    return redirect(data.url);
+  if (authData.url) {
+    return redirect(authData.url);
   }
 
   return redirect("/course");

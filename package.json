@@ -9,7 +9,7 @@
   },
   "license": "GPL-3.0-only",
   "scripts": {
-    "dev": "next dev --experimental-https",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "test:e2e": "npx playwright test",
