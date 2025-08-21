@@ -335,6 +335,9 @@ export class CourseController {
     this._userId = userId;
   }
 
+  get userId() {
+    return this._userId;
+  }
   /**
    * Initialize critical TableControllers immediately after construction
    * This creates them eagerly but in a controlled manner after ClassRealTimeController is stable
