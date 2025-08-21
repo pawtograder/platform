@@ -9,6 +9,7 @@ import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
 import { VStack, HStack, Text, Textarea } from "@chakra-ui/react";
 import { AdminGetClassesResponse } from "@/utils/supabase/DatabaseTypes";
+import { TermSelector } from "@/components/ui/term-selector";
 
 type Class = AdminGetClassesResponse[0];
 interface EditClassModalProps {
@@ -22,7 +23,7 @@ export default function EditClassModal({ class_, open, onOpenChange, onClassUpda
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
-    term: "",
+    term: 0,
     description: "",
     github_org_name: "",
     github_template_prefix: ""
@@ -35,7 +36,7 @@ export default function EditClassModal({ class_, open, onOpenChange, onClassUpda
     if (class_) {
       setFormData({
         name: class_.name || "",
-        term: class_.term.toString() || "",
+        term: class_.term || 0,
         description: class_.description || "",
         github_org_name: class_.github_org_name || "",
         github_template_prefix: class_.github_template_prefix || ""
@@ -49,14 +50,14 @@ export default function EditClassModal({ class_, open, onOpenChange, onClassUpda
 
     try {
       // Validate required fields
-      if (!formData.name.trim() || !formData.term.trim()) {
+      if (!formData.name.trim() || !formData.term) {
         throw new Error("Name and term are required");
       }
 
       const { error } = await supabase.rpc("admin_update_class", {
         p_class_id: class_.id,
         p_name: formData.name.trim(),
-        p_term: parseInt(formData.term.trim()),
+        p_term: formData.term,
         p_description: formData.description.trim() || undefined,
         p_github_org_name: formData.github_org_name.trim() || undefined,
         p_github_template_prefix: formData.github_template_prefix.trim() || undefined
@@ -75,7 +76,7 @@ export default function EditClassModal({ class_, open, onOpenChange, onClassUpda
         onClassUpdated({
           ...class_,
           name: formData.name.trim(),
-          term: Number(formData.term.trim() || 0),
+          term: formData.term,
           description: formData.description.trim() || "",
           github_org_name: formData.github_org_name.trim() || "",
           github_template_prefix: formData.github_template_prefix.trim() || "",
@@ -124,12 +125,10 @@ export default function EditClassModal({ class_, open, onOpenChange, onClassUpda
                   />
                 </VStack>
                 <VStack align="start" flex={1}>
-                  <Label htmlFor="term">Term *</Label>
-                  <Input
-                    id="term"
+                  <TermSelector
                     value={formData.term}
-                    onChange={(e) => handleInputChange("term", e.target.value)}
-                    placeholder="e.g., Fall"
+                    onChange={(value: number) => handleInputChange("term", value)}
+                    label="Term"
                     required
                   />
                 </VStack>

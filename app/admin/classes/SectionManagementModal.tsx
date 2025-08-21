@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { DialogBody, DialogContent, DialogHeader, DialogRoot, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { MenuContent, MenuItem, MenuRoot, MenuTrigger } from "@/components/ui/menu";
 import { toaster } from "@/components/ui/toaster";
@@ -42,16 +42,8 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
   const [editingSection, setEditingSection] = useState<Section | null>(null);
   const [editName, setEditName] = useState("");
 
-  const supabase = createClient();
-
-  // Load sections when modal opens
-  useEffect(() => {
-    if (open && class_.id) {
-      loadSections();
-    }
-  }, [open, class_.id]);
-
-  const loadSections = async () => {
+  const loadSections = useCallback(async () => {
+    const supabase = createClient();
     setIsLoading(true);
     try {
       const { data, error } = await supabase.rpc("admin_get_class_sections", {
@@ -70,123 +62,143 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleCreateSection = async (type: "class" | "lab") => {
-    if (!newSectionName.trim()) {
-      toaster.create({
-        title: "Error",
-        description: "Section name is required",
-        type: "error"
-      });
-      return;
-    }
-
-    try {
-      const functionName = type === "class" ? "admin_create_class_section" : "admin_create_lab_section";
-
-      const { error } = await supabase.rpc(functionName, {
-        p_class_id: class_.id,
-        p_name: newSectionName.trim()
-      });
-
-      if (error) throw error;
-
-      toaster.create({
-        title: "Section Created",
-        description: `${type === "class" ? "Class" : "Lab"} section "${newSectionName}" has been created.`,
-        type: "success"
-      });
-
-      // Reset form and reload sections
-      setNewSectionName("");
-      setIsCreating(null);
+  }, [class_.id]);
+  // Load sections when modal opens
+  useEffect(() => {
+    if (open && class_.id) {
       loadSections();
-    } catch (error) {
-      console.error("Error creating section:", error);
-      toaster.create({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to create section",
-        type: "error"
-      });
     }
-  };
+  }, [open, class_.id, loadSections]);
 
-  const handleUpdateSection = async (section: Section) => {
-    if (!editName.trim()) {
-      toaster.create({
-        title: "Error",
-        description: "Section name is required",
-        type: "error"
-      });
-      return;
-    }
+  const handleCreateSection = useCallback(
+    async (type: "class" | "lab") => {
+      const supabase = createClient();
+      if (!newSectionName.trim()) {
+        toaster.create({
+          title: "Error",
+          description: "Section name is required",
+          type: "error"
+        });
+        return;
+      }
 
-    try {
-      const functionName = section.section_type === "class" ? "admin_update_class_section" : "admin_update_lab_section";
+      try {
+        const functionName = type === "class" ? "admin_create_class_section" : "admin_create_lab_section";
 
-      const { error } = await supabase.rpc(functionName, {
-        p_section_id: section.section_id,
-        p_name: editName.trim()
-      });
+        const { error } = await supabase.rpc(functionName, {
+          p_class_id: class_.id,
+          p_name: newSectionName.trim()
+        });
 
-      if (error) throw error;
+        if (error) throw error;
 
-      toaster.create({
-        title: "Section Updated",
-        description: `Section has been updated to "${editName}".`,
-        type: "success"
-      });
+        toaster.create({
+          title: "Section Created",
+          description: `${type === "class" ? "Class" : "Lab"} section "${newSectionName}" has been created.`,
+          type: "success"
+        });
 
-      // Reset form and reload sections
-      setEditingSection(null);
-      setEditName("");
-      loadSections();
-    } catch (error) {
-      console.error("Error updating section:", error);
-      toaster.create({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to update section",
-        type: "error"
-      });
-    }
-  };
+        // Reset form and reload sections
+        setNewSectionName("");
+        setIsCreating(null);
+        loadSections();
+      } catch (error) {
+        console.error("Error creating section:", error);
+        toaster.create({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to create section",
+          type: "error"
+        });
+      }
+    },
+    [class_.id, newSectionName, loadSections]
+  );
 
-  const handleDeleteSection = async (section: Section) => {
-    if (section.member_count > 0) {
-      toaster.create({
-        title: "Cannot Delete",
-        description: "Cannot delete a section that has members. Please move members first.",
-        type: "error"
-      });
-      return;
-    }
+  const handleUpdateSection = useCallback(
+    async (section: Section) => {
+      const supabase = createClient();
+      if (!editName.trim()) {
+        toaster.create({
+          title: "Error",
+          description: "Section name is required",
+          type: "error"
+        });
+        return;
+      }
 
-    try {
-      const functionName = section.section_type === "class" ? "admin_delete_class_section" : "admin_delete_lab_section";
+      try {
+        const functionName =
+          section.section_type === "class" ? "admin_update_class_section" : "admin_update_lab_section";
 
-      const { error } = await supabase.rpc(functionName, {
-        p_section_id: section.section_id
-      });
+        const { error } = await supabase.rpc(functionName, {
+          p_section_id: section.section_id,
+          p_name: editName.trim()
+        });
 
-      if (error) throw error;
+        if (error) throw error;
 
-      toaster.create({
-        title: "Section Deleted",
-        description: `Section "${section.section_name}" has been deleted.`,
-        type: "success"
-      });
+        toaster.create({
+          title: "Section Updated",
+          description: `Section has been updated to "${editName}".`,
+          type: "success"
+        });
 
-      loadSections();
-    } catch (error) {
-      console.error("Error deleting section:", error);
-      toaster.create({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to delete section",
-        type: "error"
-      });
-    }
-  };
+        // Reset form and reload sections
+        setEditingSection(null);
+        setEditName("");
+        loadSections();
+      } catch (error) {
+        console.error("Error updating section:", error);
+        toaster.create({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to update section",
+          type: "error"
+        });
+      }
+    },
+    [editName, loadSections]
+  );
+
+  const handleDeleteSection = useCallback(
+    async (section: Section) => {
+      const supabase = createClient();
+      if (section.member_count > 0) {
+        toaster.create({
+          title: "Cannot Delete",
+          description: "Cannot delete a section that has members. Please move members first.",
+          type: "error"
+        });
+        return;
+      }
+
+      try {
+        const functionName =
+          section.section_type === "class" ? "admin_delete_class_section" : "admin_delete_lab_section";
+
+        const { error } = await supabase.rpc(functionName, {
+          p_section_id: section.section_id
+        });
+
+        if (error) throw error;
+
+        toaster.create({
+          title: "Section Deleted",
+          description: `Section "${section.section_name}" has been deleted.`,
+          type: "success"
+        });
+
+        loadSections();
+      } catch (error) {
+        console.error("Error deleting section:", error);
+        toaster.create({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to delete section",
+          type: "error"
+        });
+      }
+    },
+    [loadSections]
+  );
 
   const startEdit = (section: Section) => {
     setEditingSection(section);
@@ -198,13 +210,13 @@ export default function SectionManagementModal({ class_, open, onOpenChange }: S
     setEditName("");
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = useCallback((dateString: string) => {
     return new Date(dateString).toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric"
     });
-  };
+  }, []);
 
   return (
     <DialogRoot open={open} onOpenChange={(e) => onOpenChange(e.open)}>

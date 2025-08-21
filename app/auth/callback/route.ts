@@ -13,30 +13,35 @@ export async function GET(request: Request) {
   if (code) {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error && data.session) {
-      // Check if this was an Azure OAuth login and if user needs SIS ID populated
-      const provider = data.session.user?.app_metadata?.provider;
-      if (provider === "azure") {
-        try {
-          // Check if user already has sis_user_id
-          const { data: userData } = await supabase
-            .from("users")
-            .select("sis_user_id")
-            .eq("user_id", data.session.user.id)
-            .single();
+    if (!error) {
+      if (data.session) {
+        // Check if this was an Azure OAuth login and if user needs SIS ID populated
+        const provider = data.session.user?.app_metadata?.provider;
+        if (provider === "azure") {
+          try {
+            // Check if user already has sis_user_id
+            const { data: userData } = await supabase
+              .from("users")
+              .select("sis_user_id")
+              .eq("user_id", data.session.user.id)
+              .single();
 
-          // If no SIS ID, try to fetch from Azure
-          if (!userData?.sis_user_id) {
-            const accessToken = data.session.provider_token;
-            if (accessToken) {
-              await userFetchAzureProfile({ accessToken }, supabase);
+            // If no SIS ID, try to fetch from Azure
+            if (!userData?.sis_user_id) {
+              const accessToken = data.session.provider_token;
+              if (accessToken) {
+                await userFetchAzureProfile({ accessToken }, supabase);
+              }
             }
+          } catch (error) {
+            Sentry.captureException(error);
+            console.error("Error checking/updating Azure profile:", error);
+            // Continue with login even if profile check fails
           }
-        } catch (error) {
-          Sentry.captureException(error);
-          console.error("Error checking/updating Azure profile:", error);
-          // Continue with login even if profile check fails
         }
+      } else {
+        console.log("No Azure session data returned");
+        console.log(data);
       }
 
       const forwardedHost = request.headers.get("x-forwarded-host"); // original origin before load balancer

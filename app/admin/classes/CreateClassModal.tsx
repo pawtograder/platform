@@ -1,21 +1,22 @@
 "use client";
 
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  DialogRoot,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
   DialogBody,
-  DialogFooter
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogRoot,
+  DialogTitle,
+  DialogTrigger
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TermSelector } from "@/components/ui/term-selector";
 import { toaster } from "@/components/ui/toaster";
 import { createClient } from "@/utils/supabase/client";
-import { VStack, HStack, Text, Textarea } from "@chakra-ui/react";
+import { HStack, Text, Textarea, VStack } from "@chakra-ui/react";
+import { useState } from "react";
 
 interface CreateClassModalProps {
   children: React.ReactNode;
@@ -26,8 +27,7 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     name: "",
-    term: "",
-    year: new Date().getFullYear(),
+    term: parseInt(`${new Date().getFullYear()}10`), // Default to current year + fall (10)
     description: "",
     canvas_course_id: "",
     github_org_name: "",
@@ -42,13 +42,13 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
 
     try {
       // Validate required fields
-      if (!formData.name.trim() || !formData.term.trim()) {
+      if (!formData.name.trim() || !formData.term) {
         throw new Error("Name and term are required");
       }
 
       const { error } = await supabase.rpc("admin_create_class", {
         p_name: formData.name.trim(),
-        p_term: parseInt(formData.term.trim()),
+        p_term: formData.term,
         p_description: formData.description.trim() || undefined,
 
         p_github_org_name: formData.github_org_name.trim() || undefined,
@@ -66,8 +66,7 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
       // Reset form and close modal
       setFormData({
         name: "",
-        term: "",
-        year: new Date().getFullYear(),
+        term: parseInt(`${new Date().getFullYear()}10`), // Default to current year + fall (10)
         description: "",
         canvas_course_id: "",
         github_org_name: "",
@@ -115,28 +114,14 @@ export default function CreateClassModal({ children }: CreateClassModalProps) {
                   />
                 </VStack>
                 <VStack align="start" flex={1}>
-                  <Label htmlFor="term">Term *</Label>
-                  <Input
-                    id="term"
+                  <TermSelector
                     value={formData.term}
-                    onChange={(e) => handleInputChange("term", e.target.value)}
-                    placeholder="e.g., Fall"
+                    onChange={(value: number) => handleInputChange("term", value)}
+                    label="Term"
                     required
                   />
                 </VStack>
               </HStack>
-
-              <VStack align="start" w="full">
-                <Label htmlFor="year">Year</Label>
-                <Input
-                  id="year"
-                  type="number"
-                  value={formData.year}
-                  onChange={(e) => handleInputChange("year", parseInt(e.target.value))}
-                  min="2020"
-                  max="2100"
-                />
-              </VStack>
 
               <VStack align="start" w="full">
                 <Label htmlFor="description">Description</Label>
