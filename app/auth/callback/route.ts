@@ -13,6 +13,8 @@ export async function GET(request: Request) {
   if (code) {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    console.log("Data", data);
+    console.log("Error", error);
     if (!error) {
       if (data.session) {
         // Check if this was an Azure OAuth login and if user needs SIS ID populated
@@ -34,8 +36,8 @@ export async function GET(request: Request) {
               }
             }
           } catch (error) {
-            Sentry.captureException(error);
             console.error("Error checking/updating Azure profile:", error);
+            Sentry.captureException(error);
             // Continue with login even if profile check fails
           }
         }
