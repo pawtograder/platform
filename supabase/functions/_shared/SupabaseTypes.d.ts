@@ -7857,7 +7857,7 @@ export type Database = {
         Returns: boolean;
       };
       create_all_repos_for_assignment: {
-        Args: { course_id: number; assignment_id: number };
+        Args: { course_id: number; assignment_id: number } | { course_id: number; assignment_id: number };
         Returns: undefined;
       };
       create_help_request_message_notification: {
@@ -8046,6 +8046,10 @@ export type Database = {
       recalculate_discussion_thread_children_counts: {
         Args: { target_class_id?: number };
         Returns: number;
+      };
+      recalculate_gradebook_columns_in_range: {
+        Args: { start_id: number; end_id: number };
+        Returns: undefined;
       };
       release_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };

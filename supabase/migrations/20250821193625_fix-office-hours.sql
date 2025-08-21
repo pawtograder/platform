@@ -46,10 +46,6 @@ alter table "public"."notification_preferences" drop constraint "notification_pr
 
 alter table "public"."notification_preferences" drop constraint "notification_preferences_user_id_fkey";
 
-drop function if exists "public"."create_all_repos_for_assignment"(course_id integer, assignment_id integer);
-
-drop function if exists "public"."recalculate_gradebook_columns_in_range"(start_id bigint, end_id bigint);
-
 alter table "public"."notification_preferences" drop constraint "notification_preferences_pkey";
 
 drop index if exists "public"."idx_rubric_checks_criteria_ordinal";
