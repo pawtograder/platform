@@ -102,6 +102,11 @@ begin
       ),
       'is_private', p_is_private
     );
+  elsif p_notification_type is null then
+    raise exception 'create_help_request_notification: p_notification_type must not be null';
+  else
+    -- Future-proof: explicitly reject unsupported types
+    raise exception 'create_help_request_notification: unsupported p_notification_type=%', p_notification_type;
   end if;
 
   -- On creation: notify instructors and graders only (do NOT blast the entire class)
