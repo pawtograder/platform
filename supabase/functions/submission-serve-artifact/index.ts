@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Open as openZip } from "npm:unzipper";
-import { create, verify } from "https://deno.land/x/djwt@v3.0.1/mod.ts";
+import { create, Payload, verify } from "https://deno.land/x/djwt@v3.0.1/mod.ts";
 import { assertUserIsInstructorOrGrader, SecurityError, UserVisibleError } from "../_shared/HandlerUtils.ts";
 import { Database } from "../_shared/SupabaseTypes.d.ts";
 
@@ -26,6 +26,29 @@ interface ArtifactAccessToken {
   submissionId: number;
   artifactId: number;
   exp: number;
+}
+
+// Runtime type guard for ArtifactAccessToken
+const isArtifactAccessToken = (payload: unknown): payload is ArtifactAccessToken => {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const obj = payload as Record<string, unknown>;
+  return (
+    typeof obj.userId === "string" &&
+    typeof obj.courseId === "number" &&
+    typeof obj.profileId === "string" &&
+    typeof obj.submissionId === "number" &&
+    typeof obj.artifactId === "number" &&
+    typeof obj.exp === "number"
+  );
+};
+
+// Interface for zip file entries
+interface ZipFileEntry {
+  path: string;
+  buffer(): Promise<ArrayBuffer>;
 }
 
 // In-memory cache for zip buffers when function is hot
@@ -157,7 +180,7 @@ const handleAuthRequest = async (req: Request): Promise<Response> => {
 
   // Sign the JWT
   const key = await getJWTSecret();
-  const jwt = await create({ alg: "HS256", typ: "JWT" }, accessToken, key);
+  const jwt = await create({ alg: "HS256", typ: "JWT" }, accessToken as unknown as Payload, key);
 
   // Construct the base URL for serving files
   const requestUrl = new URL(req.url);
@@ -178,9 +201,16 @@ const handleAuthRequest = async (req: Request): Promise<Response> => {
 const verifyJWTFromUrl = async (jwt: string): Promise<ArtifactAccessToken> => {
   try {
     const key = await getJWTSecret();
-    console.log("Verifying JWT", jwt);
-    const payload = (await verify(jwt, key)) as ArtifactAccessToken;
-    return payload;
+    // Log only token prefix and length for security
+    console.log(`Verifying JWT (${jwt.length} chars, prefix: ${jwt.substring(0, 8)}...)`);
+
+    const verifiedPayload: unknown = await verify(jwt, key);
+
+    if (!isArtifactAccessToken(verifiedPayload)) {
+      throw new SecurityError("Invalid token payload");
+    }
+
+    return verifiedPayload;
   } catch (err) {
     console.error("Invalid or expired JWT", err);
     throw new SecurityError("Invalid or expired JWT");
@@ -266,18 +296,19 @@ async function handleRequest(req: Request): Promise<Response> {
 
       // Find the requested file in the zip
       let targetFile = zip.files.find(
-        (file: any) => file.path === filePath || file.path === `${filePath}` || file.path.endsWith(`/${filePath}`)
+        (file: ZipFileEntry) =>
+          file.path === filePath || file.path === `${filePath}` || file.path.endsWith(`/${filePath}`)
       );
 
       // If exact match not found, try without leading slash
       if (!targetFile) {
-        targetFile = zip.files.find((file: any) => file.path.replace(/^[^\/]+\//, "") === filePath);
+        targetFile = zip.files.find((file: ZipFileEntry) => file.path.replace(/^[^\/]+\//, "") === filePath);
       }
 
       // If still not found and requesting a directory, try index.html
       if (!targetFile && (filePath === "" || filePath.endsWith("/"))) {
         const indexPath = filePath + (filePath.endsWith("/") ? "" : "/") + "index.html";
-        targetFile = zip.files.find((file: any) => file.path === indexPath || file.path.endsWith(indexPath));
+        targetFile = zip.files.find((file: ZipFileEntry) => file.path === indexPath || file.path.endsWith(indexPath));
       }
 
       if (!targetFile) {

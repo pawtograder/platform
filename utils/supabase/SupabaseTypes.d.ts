@@ -1066,28 +1066,40 @@ export type Database = {
       };
       class_sections: {
         Row: {
+          campus: string | null;
           canvas_course_id: number | null;
           canvas_course_section_id: number | null;
           class_id: number;
           created_at: string;
           id: number;
+          meeting_location: string | null;
+          meeting_times: string | null;
           name: string;
+          sis_crn: number | null;
         };
         Insert: {
+          campus?: string | null;
           canvas_course_id?: number | null;
           canvas_course_section_id?: number | null;
           class_id: number;
           created_at?: string;
           id?: number;
+          meeting_location?: string | null;
+          meeting_times?: string | null;
           name: string;
+          sis_crn?: number | null;
         };
         Update: {
+          campus?: string | null;
           canvas_course_id?: number | null;
           canvas_course_section_id?: number | null;
           class_id?: number;
           created_at?: string;
           id?: number;
+          meeting_location?: string | null;
+          meeting_times?: string | null;
           name?: string;
+          sis_crn?: number | null;
         };
         Relationships: [
           {
@@ -1101,7 +1113,10 @@ export type Database = {
       };
       classes: {
         Row: {
+          archived: boolean | null;
+          course_title: string | null;
           created_at: string;
+          description: string | null;
           end_date: string | null;
           features: Json | null;
           github_org: string | null;
@@ -1110,13 +1125,16 @@ export type Database = {
           is_demo: boolean;
           late_tokens_per_student: number;
           name: string | null;
-          semester: number | null;
           slug: string | null;
           start_date: string | null;
+          term: number | null;
           time_zone: string;
         };
         Insert: {
+          archived?: boolean | null;
+          course_title?: string | null;
           created_at?: string;
+          description?: string | null;
           end_date?: string | null;
           features?: Json | null;
           github_org?: string | null;
@@ -1125,13 +1143,16 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
-          semester?: number | null;
           slug?: string | null;
           start_date?: string | null;
-          time_zone: string;
+          term?: number | null;
+          time_zone?: string;
         };
         Update: {
+          archived?: boolean | null;
+          course_title?: string | null;
           created_at?: string;
+          description?: string | null;
           end_date?: string | null;
           features?: Json | null;
           github_org?: string | null;
@@ -1140,9 +1161,9 @@ export type Database = {
           is_demo?: boolean;
           late_tokens_per_student?: number;
           name?: string | null;
-          semester?: number | null;
           slug?: string | null;
           start_date?: string | null;
+          term?: number | null;
           time_zone?: string;
         };
         Relationships: [
@@ -3357,6 +3378,120 @@ export type Database = {
           }
         ];
       };
+      invitations: {
+        Row: {
+          accepted_at: string | null;
+          class_id: number;
+          class_section_id: number | null;
+          created_at: string;
+          email: string | null;
+          expires_at: string | null;
+          id: number;
+          invited_by: string | null;
+          lab_section_id: number | null;
+          name: string | null;
+          private_profile_id: string;
+          public_profile_id: string;
+          role: Database["public"]["Enums"]["app_role"];
+          sis_user_id: number;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          accepted_at?: string | null;
+          class_id: number;
+          class_section_id?: number | null;
+          created_at?: string;
+          email?: string | null;
+          expires_at?: string | null;
+          id?: number;
+          invited_by?: string | null;
+          lab_section_id?: number | null;
+          name?: string | null;
+          private_profile_id: string;
+          public_profile_id: string;
+          role: Database["public"]["Enums"]["app_role"];
+          sis_user_id: number;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          accepted_at?: string | null;
+          class_id?: number;
+          class_section_id?: number | null;
+          created_at?: string;
+          email?: string | null;
+          expires_at?: string | null;
+          id?: number;
+          invited_by?: string | null;
+          lab_section_id?: number | null;
+          name?: string | null;
+          private_profile_id?: string;
+          public_profile_id?: string;
+          role?: Database["public"]["Enums"]["app_role"];
+          sis_user_id?: number;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "fk_invitations_class_id";
+            columns: ["class_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "fk_invitations_class_section_id";
+            columns: ["class_section_id"];
+            isOneToOne: false;
+            referencedRelation: "class_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "fk_invitations_invited_by";
+            columns: ["invited_by"];
+            isOneToOne: false;
+            referencedRelation: "users";
+            referencedColumns: ["user_id"];
+          },
+          {
+            foreignKeyName: "fk_invitations_lab_section_id";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "fk_invitations_private_profile_id";
+            columns: ["private_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "fk_invitations_private_profile_id";
+            columns: ["private_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          },
+          {
+            foreignKeyName: "fk_invitations_public_profile_id";
+            columns: ["public_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "fk_invitations_public_profile_id";
+            columns: ["public_profile_id"];
+            isOneToOne: false;
+            referencedRelation: "submissions_with_grades_for_assignment";
+            referencedColumns: ["student_private_profile_id"];
+          }
+        ];
+      };
       lab_section_meetings: {
         Row: {
           cancelled: boolean;
@@ -3404,37 +3539,49 @@ export type Database = {
       };
       lab_sections: {
         Row: {
+          campus: string | null;
           class_id: number;
           created_at: string;
-          day_of_week: Database["public"]["Enums"]["day_of_week"];
+          day_of_week: Database["public"]["Enums"]["day_of_week"] | null;
           description: string | null;
           end_time: string | null;
           id: number;
-          lab_leader_id: string;
+          lab_leader_id: string | null;
+          meeting_location: string | null;
+          meeting_times: string | null;
           name: string;
-          start_time: string;
+          sis_crn: number | null;
+          start_time: string | null;
         };
         Insert: {
+          campus?: string | null;
           class_id: number;
           created_at?: string;
-          day_of_week: Database["public"]["Enums"]["day_of_week"];
+          day_of_week?: Database["public"]["Enums"]["day_of_week"] | null;
           description?: string | null;
           end_time?: string | null;
           id?: number;
-          lab_leader_id: string;
+          lab_leader_id?: string | null;
+          meeting_location?: string | null;
+          meeting_times?: string | null;
           name: string;
-          start_time: string;
+          sis_crn?: number | null;
+          start_time?: string | null;
         };
         Update: {
+          campus?: string | null;
           class_id?: number;
           created_at?: string;
-          day_of_week?: Database["public"]["Enums"]["day_of_week"];
+          day_of_week?: Database["public"]["Enums"]["day_of_week"] | null;
           description?: string | null;
           end_time?: string | null;
           id?: number;
-          lab_leader_id?: string;
+          lab_leader_id?: string | null;
+          meeting_location?: string | null;
+          meeting_times?: string | null;
           name?: string;
-          start_time?: string;
+          sis_crn?: number | null;
+          start_time?: string | null;
         };
         Relationships: [
           {
@@ -3928,7 +4075,6 @@ export type Database = {
           is_private_profile: boolean;
           name: string | null;
           short_name: string | null;
-          sis_user_id: string | null;
           sortable_name: string | null;
           time_zone: string | null;
         };
@@ -3942,7 +4088,6 @@ export type Database = {
           is_private_profile: boolean;
           name?: string | null;
           short_name?: string | null;
-          sis_user_id?: string | null;
           sortable_name?: string | null;
           time_zone?: string | null;
         };
@@ -3956,7 +4101,6 @@ export type Database = {
           is_private_profile?: boolean;
           name?: string | null;
           short_name?: string | null;
-          sis_user_id?: string | null;
           sortable_name?: string | null;
           time_zone?: string | null;
         };
@@ -4753,6 +4897,64 @@ export type Database = {
             isOneToOne: false;
             referencedRelation: "submissions_with_grades_for_assignment_and_regression_test";
             referencedColumns: ["assignment_id"];
+          }
+        ];
+      };
+      sis_sync_status: {
+        Row: {
+          course_id: number;
+          course_section_id: number | null;
+          created_at: string;
+          id: number;
+          lab_section_id: number | null;
+          last_sync_message: string | null;
+          last_sync_status: string | null;
+          last_sync_time: string | null;
+          sync_enabled: boolean;
+        };
+        Insert: {
+          course_id: number;
+          course_section_id?: number | null;
+          created_at?: string;
+          id?: number;
+          lab_section_id?: number | null;
+          last_sync_message?: string | null;
+          last_sync_status?: string | null;
+          last_sync_time?: string | null;
+          sync_enabled?: boolean;
+        };
+        Update: {
+          course_id?: number;
+          course_section_id?: number | null;
+          created_at?: string;
+          id?: number;
+          lab_section_id?: number | null;
+          last_sync_message?: string | null;
+          last_sync_status?: string | null;
+          last_sync_time?: string | null;
+          sync_enabled?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "sis_sync_status_course_id_fkey";
+            columns: ["course_id"];
+            isOneToOne: false;
+            referencedRelation: "classes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "sis_sync_status_course_section_id_fkey";
+            columns: ["course_section_id"];
+            isOneToOne: false;
+            referencedRelation: "class_sections";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "sis_sync_status_lab_section_id_fkey";
+            columns: ["lab_section_id"];
+            isOneToOne: false;
+            referencedRelation: "lab_sections";
+            referencedColumns: ["id"];
           }
         ];
       };
@@ -6525,9 +6727,11 @@ export type Database = {
           canvas_id: number | null;
           class_id: number;
           class_section_id: number | null;
+          disabled: boolean;
           github_org_confirmed: boolean | null;
           id: number;
           invitation_date: string | null;
+          invitation_id: number | null;
           lab_section_id: number | null;
           private_profile_id: string;
           public_profile_id: string;
@@ -6538,9 +6742,11 @@ export type Database = {
           canvas_id?: number | null;
           class_id: number;
           class_section_id?: number | null;
+          disabled?: boolean;
           github_org_confirmed?: boolean | null;
           id?: number;
           invitation_date?: string | null;
+          invitation_id?: number | null;
           lab_section_id?: number | null;
           private_profile_id: string;
           public_profile_id: string;
@@ -6551,9 +6757,11 @@ export type Database = {
           canvas_id?: number | null;
           class_id?: number;
           class_section_id?: number | null;
+          disabled?: boolean;
           github_org_confirmed?: boolean | null;
           id?: number;
           invitation_date?: string | null;
+          invitation_id?: number | null;
           lab_section_id?: number | null;
           private_profile_id?: string;
           public_profile_id?: string;
@@ -6561,6 +6769,13 @@ export type Database = {
           user_id?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: "fk_user_roles_invitation_id";
+            columns: ["invitation_id"];
+            isOneToOne: false;
+            referencedRelation: "invitations";
+            referencedColumns: ["id"];
+          },
           {
             foreignKeyName: "user_roles_class_id_fkey";
             columns: ["class_id"];
@@ -6626,6 +6841,7 @@ export type Database = {
           email: string | null;
           github_username: string | null;
           name: string | null;
+          sis_user_id: number | null;
           user_id: string;
         };
         Insert: {
@@ -6634,6 +6850,7 @@ export type Database = {
           email?: string | null;
           github_username?: string | null;
           name?: string | null;
+          sis_user_id?: number | null;
           user_id?: string;
         };
         Update: {
@@ -6642,6 +6859,7 @@ export type Database = {
           email?: string | null;
           github_username?: string | null;
           name?: string | null;
+          sis_user_id?: number | null;
           user_id?: string;
         };
         Relationships: [];
@@ -7786,6 +8004,185 @@ export type Database = {
       };
     };
     Functions: {
+      admin_bulk_set_user_roles_disabled: {
+        Args: {
+          p_user_role_ids: number[];
+          p_disabled: boolean;
+          p_admin_user_id?: string;
+        };
+        Returns: number;
+      };
+      admin_create_class: {
+        Args: {
+          p_name: string;
+          p_term: number;
+          p_description?: string;
+          p_github_org_name?: string;
+          p_github_template_prefix?: string;
+          p_created_by?: string;
+          p_course_title?: string;
+          p_start_date?: string;
+          p_end_date?: string;
+        };
+        Returns: number;
+      };
+      admin_create_class_section: {
+        Args: {
+          p_class_id: number;
+          p_name: string;
+          p_created_by?: string;
+          p_meeting_location?: string;
+          p_meeting_times?: string;
+          p_campus?: string;
+          p_sis_crn?: number;
+        };
+        Returns: number;
+      };
+      admin_create_lab_section: {
+        Args: {
+          p_class_id: number;
+          p_name: string;
+          p_created_by?: string;
+          p_meeting_location?: string;
+          p_meeting_times?: string;
+          p_campus?: string;
+          p_sis_crn?: number;
+          p_day_of_week?: Database["public"]["Enums"]["day_of_week"];
+          p_start_time?: string;
+          p_end_time?: string;
+          p_description?: string;
+        };
+        Returns: number;
+      };
+      admin_delete_class: {
+        Args: { p_class_id: number; p_deleted_by?: string };
+        Returns: boolean;
+      };
+      admin_delete_class_section: {
+        Args: { p_section_id: number; p_deleted_by?: string };
+        Returns: boolean;
+      };
+      admin_delete_lab_section: {
+        Args: { p_section_id: number; p_deleted_by?: string };
+        Returns: boolean;
+      };
+      admin_get_class_sections: {
+        Args: { p_class_id: number };
+        Returns: {
+          section_id: number;
+          section_name: string;
+          section_type: string;
+          meeting_location: string;
+          meeting_times: string;
+          campus: string;
+          sis_crn: number;
+          created_at: string;
+          updated_at: string;
+          member_count: number;
+        }[];
+      };
+      admin_get_classes: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          id: number;
+          name: string;
+          term: number;
+          description: string;
+          github_org_name: string;
+          github_template_prefix: string;
+          created_at: string;
+          student_count: number;
+          instructor_count: number;
+          archived: boolean;
+        }[];
+      };
+      admin_get_disabled_users: {
+        Args: { p_class_id?: number };
+        Returns: {
+          user_role_id: number;
+          user_id: string;
+          class_id: number;
+          class_name: string;
+          user_name: string;
+          user_email: string;
+          role: Database["public"]["Enums"]["app_role"];
+          disabled_at: string;
+          profile_name: string;
+        }[];
+      };
+      admin_get_sis_sync_status: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          class_id: number;
+          class_name: string;
+          term: string;
+          sis_sections_count: number;
+          last_sync_time: string;
+          last_sync_status: string;
+          last_sync_message: string;
+          sync_enabled: boolean;
+          total_invitations: number;
+          pending_invitations: number;
+          expired_invitations: number;
+        }[];
+      };
+      admin_set_section_sync_enabled: {
+        Args: {
+          p_course_id: number;
+          p_enabled: boolean;
+          p_course_section_id?: number;
+          p_lab_section_id?: number;
+          p_admin_user_id?: string;
+        };
+        Returns: boolean;
+      };
+      admin_set_sis_sync_enabled: {
+        Args: {
+          p_class_id: number;
+          p_enabled: boolean;
+          p_admin_user_id?: string;
+        };
+        Returns: boolean;
+      };
+      admin_set_user_role_disabled: {
+        Args: {
+          p_user_role_id: number;
+          p_disabled: boolean;
+          p_admin_user_id?: string;
+        };
+        Returns: boolean;
+      };
+      admin_trigger_sis_sync: {
+        Args: { p_class_id?: number };
+        Returns: Json;
+      };
+      admin_update_class: {
+        Args: {
+          p_class_id: number;
+          p_name?: string;
+          p_term?: number;
+          p_description?: string;
+          p_github_org_name?: string;
+          p_github_template_prefix?: string;
+          p_updated_by?: string;
+          p_course_title?: string;
+          p_start_date?: string;
+          p_end_date?: string;
+        };
+        Returns: boolean;
+      };
+      admin_update_class_section: {
+        Args: { p_section_id: number; p_name: string; p_updated_by?: string };
+        Returns: boolean;
+      };
+      admin_update_lab_section: {
+        Args: { p_section_id: number; p_name: string; p_updated_by?: string };
+        Returns: boolean;
+      };
+      authorize_for_admin: {
+        Args: { p_user_id?: string };
+        Returns: boolean;
+      };
       authorize_for_private_discussion_thread: {
         Args: { root: number };
         Returns: boolean;
@@ -7941,6 +8338,19 @@ export type Database = {
           p_action?: string;
         };
         Returns: undefined;
+      };
+      create_invitation: {
+        Args: {
+          p_class_id: number;
+          p_role: Database["public"]["Enums"]["app_role"];
+          p_sis_user_id: number;
+          p_email?: string;
+          p_name?: string;
+          p_invited_by?: string;
+          p_class_section_id?: number;
+          p_lab_section_id?: number;
+        };
+        Returns: number;
       };
       create_regrade_request: {
         Args: {
@@ -8140,6 +8550,10 @@ export type Database = {
           inserts_per_second: number;
         }[];
       };
+      trigger_sis_sync: {
+        Args: { p_class_id?: number };
+        Returns: Json;
+      };
       unrelease_all_grading_reviews_for_assignment: {
         Args: { assignment_id: number };
         Returns: number;
@@ -8162,6 +8576,16 @@ export type Database = {
           closed_points?: number;
         };
         Returns: boolean;
+      };
+      update_sis_sync_status: {
+        Args: {
+          p_course_id: number;
+          p_course_section_id?: number;
+          p_lab_section_id?: number;
+          p_sync_status?: string;
+          p_sync_message?: string;
+        };
+        Returns: number;
       };
       user_is_in_help_request: {
         Args: { p_help_request_id: number; p_user_id?: string };
